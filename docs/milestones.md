@@ -6,7 +6,7 @@
 
 ## M0 骨組み
 
-状態: 完了（2026-10-09）。ただし会話の保存の形（ADR 0006）が承認待ち
+状態: 完了（2026-10-09）
 
 中身: `go.mod` に kairo の SDK（`github.com/r-hashi01/kairo` v0.3.0 以上）と `modernc.org/sqlite` を足す。`internal/runtime`（`kairo.Open`、ツールの作用の写し）。サーバー、CLI、セッションとターンのワークフロー、モデル（Anthropic と fake）、読むツール（read、glob、grep、list）、メッセージの保存（`kc_message`）。
 
