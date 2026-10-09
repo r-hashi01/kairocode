@@ -1,7 +1,9 @@
 package workflows
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 )
@@ -58,7 +60,7 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 				// Checked one by one, outside Parallel: a wait for approval
 				// inside a Parallel branch is not reached by its signal
 				// (kairo-gap #18).
-				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i])
+				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil)
 				if err != nil {
 					return TurnOutput{}, err
 				}
@@ -97,20 +99,58 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 // model loop runs there; the tool calls it makes come back over MCP and are
 // recorded as MCPCall runs. The conversation is Claude Code's; the history
 // here keeps the prompt and the final reply.
+//
+// A call that needs the user does not keep claude waiting (ADR 0007, 4): it
+// is answered "waiting for approval" and claude ends the round. The turn
+// waits for each answer here (the process may stop meanwhile), records it,
+// and resumes claude with the answers; the call made again then goes by
+// the recorded answer.
 func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, error) {
-	r, err := kairo.Call[ClaudeTurnOutput](ctx, ActClaudeTurn, ClaudeTurnInput{
-		Session: in.Session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
-		System: agent.System, Tools: agent.Names, Message: in.Message,
-		Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},
-	})
+	out := TurnOutput{}
+	note := ""
+	for round := 0; ; round++ {
+		r, err := kairo.Call[ClaudeTurnOutput](ctx, ActClaudeTurn, ClaudeTurnInput{
+			Note: note, Round: round,
+			Session: in.Session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
+			System: agent.System, Tools: agent.Names, Message: in.Message,
+			Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},
+		})
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		out.Usage.Add(r.Usage)
+		out.Steps += r.Turns
+		out.Reply = r.Message
+		if len(r.Asks) == 0 {
+			break
+		}
+		var answers []string
+		for _, a := range r.Asks {
+			ap, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+MCPCallPrefix+a.Key)
+			if err != nil {
+				return TurnOutput{}, err
+			}
+			if _, err := kairo.Call[bool](ctx, ActMCPGrant, MCPGrantInput{Turn: ctx.ID(), Key: a.Key, Approval: ap}); err != nil {
+				return TurnOutput{}, err
+			}
+			verdict := "approved"
+			if !ap.OK {
+				verdict = "declined"
+			}
+			if ap.Reason != "" {
+				verdict += " (" + ap.Reason + ")"
+			}
+			answers = append(answers, fmt.Sprintf("- %s %q: %s", a.Tool, a.Subject, verdict))
+		}
+		note = "The user answered the calls that waited for approval:\n" + strings.Join(answers, "\n") +
+			"\nMake the approved calls again now, and go on with the task. Do not make the declined ones."
+	}
+	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: []string{in.Message, out.Reply}})
 	if err != nil {
 		return TurnOutput{}, err
 	}
-	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: []string{in.Message, r.Message}})
-	if err != nil {
-		return TurnOutput{}, err
-	}
-	return TurnOutput{Head: head, Reply: r.Message, Steps: r.Turns, Usage: r.Usage}, nil
+	out.Head = head
+	return out, nil
 }
 
 // Gate is what a tool call may do once checked: run Action (a tool, or one
@@ -120,13 +160,14 @@ type Gate struct {
 	Action  string       `json:"action"`
 	Planned bool         `json:"planned,omitempty"`
 	Denied  *DeniedInput `json:"denied,omitempty"`
+	Ask     *AskRequest  `json:"ask,omitempty"`
 }
 
 // gateTool checks a tool call against the policy. A call the rules say to
 // ask about waits for an answer as a signal: the process can stop meanwhile,
 // and the answer can come from any client, any time later (FR-11).
-func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in ToolInput) (Gate, error) {
-	d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{Policy: policy, Tool: tool, Call: in})
+func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in ToolInput, mcp *MCPRef) (Gate, error) {
+	d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{Policy: policy, Tool: tool, Call: in, MCP: mcp})
 	if err != nil {
 		return Gate{}, err
 	}
@@ -135,11 +176,14 @@ func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in T
 	}
 	switch d.Action {
 	case "deny":
+		if d.Reason != "" {
+			return deny(d.Reason)
+		}
 		return deny("denied by " + d.Rule)
 	case "ask":
-		if in.Call == "" {
-			// A call over MCP (ADR 0007): its approval is not waited on yet.
-			return deny("this call needs the user's approval (" + d.Rule + "); stop here and ask the user")
+		if mcp != nil {
+			// Over MCP, claude is not kept waiting: the turn waits instead.
+			return Gate{Action: ActMCPAsk, Ask: &AskRequest{Key: mcp.Key, Tool: tool, Subject: d.Subject, Rule: d.Rule}}, nil
 		}
 		a, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+in.Call)
 		if err != nil {
@@ -162,6 +206,9 @@ func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in T
 func runGated(ctx *kairo.Context, g Gate, in ToolInput) (ToolOutput, error) {
 	if g.Denied != nil {
 		return kairo.Call[ToolOutput](ctx, ActToolDenied, *g.Denied)
+	}
+	if g.Ask != nil {
+		return kairo.Call[ToolOutput](ctx, ActMCPAsk, MCPAskInput{Request: *g.Ask})
 	}
 	if !g.Planned {
 		return kairo.Call[ToolOutput](ctx, g.Action, in)

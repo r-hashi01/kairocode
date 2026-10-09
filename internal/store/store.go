@@ -43,8 +43,24 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS kc_claude_proc (
 			session TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL)`,
-		// MCP calls whose result was handed back to Claude Code (ADR 0007).
-		`CREATE TABLE IF NOT EXISTS kc_mcp_delivered (run TEXT PRIMARY KEY)`,
+		// The tool calls Claude Code made over MCP (ADR 0007): which run each
+		// is, from which claude run (proc), and whether its result is known
+		// to have reached Claude Code. Kept here as well as in kairo, which
+		// may remove a finished run before its turn ends (kairo-gap #17).
+		`CREATE TABLE IF NOT EXISTS kc_mcp_call (
+			run TEXT PRIMARY KEY,
+			turn TEXT NOT NULL,
+			key TEXT NOT NULL,
+			n INTEGER NOT NULL,
+			proc TEXT NOT NULL,
+			acknowledged INTEGER NOT NULL DEFAULT 0)`,
+		// The user's answers to MCP calls that asked (ADR 0007, 4).
+		`CREATE TABLE IF NOT EXISTS kc_mcp_grant (
+			turn TEXT NOT NULL,
+			key TEXT NOT NULL,
+			ok INTEGER NOT NULL,
+			reason TEXT NOT NULL,
+			PRIMARY KEY (turn, key))`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)
@@ -178,13 +194,66 @@ func (s *Store) SetClaudeProc(ctx context.Context, session string, pid int) erro
 	return err
 }
 
-func (s *Store) MarkDelivered(ctx context.Context, run string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_mcp_delivered (run) VALUES (?) ON CONFLICT (run) DO NOTHING`, run)
+// MCPCall is one recorded MCP call.
+type MCPCall struct {
+	Run          string
+	N            int
+	Proc         string
+	Acknowledged bool
+}
+
+// MCPCalls are the recorded calls of content key in turn, by occurrence.
+func (s *Store) MCPCalls(ctx context.Context, turn, key string) ([]MCPCall, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT run, n, proc, acknowledged FROM kc_mcp_call WHERE turn = ? AND key = ? ORDER BY n`, turn, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MCPCall
+	for rows.Next() {
+		var c MCPCall
+		var ack int
+		if err := rows.Scan(&c.Run, &c.N, &c.Proc, &ack); err != nil {
+			return nil, err
+		}
+		c.Acknowledged = ack != 0
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddMCPCall(ctx context.Context, run, turn, key string, n int, proc string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO kc_mcp_call (run, turn, key, n, proc) VALUES (?, ?, ?, ?, ?) ON CONFLICT (run) DO NOTHING`,
+		run, turn, key, n, proc)
 	return err
 }
 
-func (s *Store) Delivered(ctx context.Context, run string) (bool, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM kc_mcp_delivered WHERE run = ?`, run).Scan(&n)
-	return n > 0, err
+// AcknowledgeMCPCall records that run's result reached Claude Code.
+func (s *Store) AcknowledgeMCPCall(ctx context.Context, run string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE kc_mcp_call SET acknowledged = 1 WHERE run = ?`, run)
+	return err
+}
+
+// Grant records the user's answer to the MCP call of content key in turn.
+func (s *Store) Grant(ctx context.Context, turn, key string, ok bool, reason string) error {
+	v := 0
+	if ok {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO kc_mcp_grant (turn, key, ok, reason) VALUES (?, ?, ?, ?) ON CONFLICT (turn, key) DO NOTHING`,
+		turn, key, v, reason)
+	return err
+}
+
+// Granted is the user's answer to the call of content key in turn, if any.
+func (s *Store) Granted(ctx context.Context, turn, key string) (found, ok bool, reason string, err error) {
+	var v int
+	err = s.db.QueryRowContext(ctx, `SELECT ok, reason FROM kc_mcp_grant WHERE turn = ? AND key = ?`, turn, key).Scan(&v, &reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, "", nil
+	}
+	return err == nil, v != 0, reason, err
 }

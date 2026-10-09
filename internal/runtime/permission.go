@@ -105,6 +105,26 @@ func subject(args json.RawMessage) string {
 // permissionCheck decides a call from the rules recorded at the start of the
 // turn (invariant 2): a change to the settings meanwhile does not change it.
 func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionInput) (workflows.PermissionOutput, error) {
+	out, err := r.decide(t, in)
+	if err != nil || out.Action != string(permission.Ask) || in.MCP == nil {
+		return out, err
+	}
+	// An MCP call the user has answered already (ADR 0007, 4).
+	found, ok, reason, err := r.Store.Granted(t, in.MCP.Turn, in.MCP.Key)
+	if err != nil || !found {
+		return out, err
+	}
+	if ok {
+		return workflows.PermissionOutput{Action: string(permission.Allow), Rule: "the user approved it", Subject: out.Subject}, nil
+	}
+	rule := "the user declined it"
+	if reason != "" {
+		rule += ": " + reason
+	}
+	return workflows.PermissionOutput{Action: string(permission.Deny), Rule: rule, Reason: rule, Subject: out.Subject}, nil
+}
+
+func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (workflows.PermissionOutput, error) {
 	var rules []permission.Rule
 	if err := r.Store.GetJSON(t, in.Policy.Rules, store.KindPermissions, &rules); err != nil {
 		return workflows.PermissionOutput{}, err
@@ -120,6 +140,13 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	}
 	if in.Policy.ReadOnly && d.Effect != tools.Read {
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "plan mode: only tools that read", Subject: subj}, nil
+	}
+	if in.MCP != nil && in.MCP.Repeat {
+		// The same real call ran before Claude Code was cut off, and Claude
+		// Code makes it again: it may not have kept the result. Running it
+		// again could act twice; the user says (ADR 0007, invariant 4).
+		return workflows.PermissionOutput{Action: string(permission.Ask),
+			Rule: "the same call ran before an interruption; run it again?", Subject: subj}, nil
 	}
 	if in.Tool == tools.GitPushTool.Name {
 		// It reaches outside the machine and runs outside the sandbox: asked
@@ -146,6 +173,17 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 
 func (r *Runtime) toolDenied(t *kairo.TaskContext, in workflows.DeniedInput) (workflows.ToolOutput, error) {
 	return r.toolResult(t, in.Call, tools.Result{Output: "not run: " + in.Reason, IsError: true})
+}
+
+func (r *Runtime) mcpAsk(t *kairo.TaskContext, in workflows.MCPAskInput) (workflows.ToolOutput, error) {
+	out, err := r.toolResult(t, "", tools.Result{IsError: true, Output: "Not run yet: this call waits for the user's approval (" +
+		in.Request.Rule + "). End your turn now, without other calls; you will be told the answer and can make the call again."})
+	out.Ask = &in.Request
+	return out, err
+}
+
+func (r *Runtime) mcpGrant(t *kairo.TaskContext, in workflows.MCPGrantInput) (bool, error) {
+	return true, r.Store.Grant(t, in.Turn, in.Key, in.Approval.OK, in.Approval.Reason)
 }
 
 // Pending is a tool call waiting for the user: for approval before it runs
@@ -179,6 +217,17 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		checks := map[string]workflows.PermissionOutput{}
 		tool := map[string]string{}
 		for _, c := range calls {
+			if c.Plan == "kairo.call/"+workflows.ActClaudeTurn && c.Finished() {
+				var o workflows.ClaudeTurnOutput
+				if json.Unmarshal(c.Output, &o) == nil {
+					for _, a := range o.Asks {
+						call := workflows.MCPCallPrefix + a.Key
+						checks[call] = workflows.PermissionOutput{Rule: a.Rule, Subject: a.Subject}
+						tool[call] = a.Tool
+					}
+				}
+				continue
+			}
 			if c.Plan != "kairo.call/"+workflows.ActPermissionCheck || !c.Finished() {
 				continue
 			}

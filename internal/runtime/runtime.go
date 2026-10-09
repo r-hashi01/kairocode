@@ -194,6 +194,8 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
 	kairo.Action(r.K, workflows.ActToolDenied, kairo.Unprotected, r.toolDenied)
+	kairo.Action(r.K, workflows.ActMCPAsk, kairo.Unprotected, r.mcpAsk)
+	kairo.Action(r.K, workflows.ActMCPGrant, kairo.Unprotected, r.mcpGrant)
 
 	kairo.Action(r.K, workflows.ActAgentLoad, kairo.Unprotected, r.agentLoad)
 	kairo.Action(r.K, workflows.ActModel, kairo.Unprotected, r.model, kairo.Timeout(10*time.Minute))

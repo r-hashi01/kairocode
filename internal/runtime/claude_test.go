@@ -105,6 +105,7 @@ func fakeClaude() {
 	var got []string
 	for i, c := range r.Calls {
 		if r.Die && i == len(r.Calls)-1 {
+			os.Remove(os.Getenv("KC_FAKE_STARTED")) // an earlier call's mark
 			go cs.CallTool(ctx, &mcp.CallToolParams{Name: c.Tool, Arguments: c.Args})
 			for {
 				if _, err := os.Stat(os.Getenv("KC_FAKE_STARTED")); err == nil {
@@ -347,4 +348,108 @@ func allowCount(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// waitStarts waits until claude has been started n times.
+func (e fakeEnv) waitStarts(t *testing.T, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); len(e.starts(t)) < n; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("claude started %d times, want %d", len(e.starts(t)), n)
+		}
+	}
+}
+
+func countRuns(t *testing.T, e fakeEnv) int {
+	b, _ := os.ReadFile(e.counted)
+	return strings.Count(string(b), "\n")
+}
+
+// A real call over MCP that needs approval does not keep claude waiting:
+// claude is told to end its turn, the turn waits for the answer, and claude
+// is resumed with it; the call made again then runs once, or, declined, not
+// at all (ADR 0007, 4).
+func TestClaudeEngineAsksForApproval(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(fmt.Sprint("approve=", approve), func(t *testing.T) {
+			e := setupFakeClaude(t,
+				fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "asked"},
+				fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "done"},
+			)
+			r := openClaude(t, e)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			ws := repo(t)
+			os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"count": "ask"}}`), 0o644)
+			s, _ := r.CreateSession(ctx, "ask", workflows.SessionInput{Dir: ws})
+			n, _ := r.Send(ctx, s, "count once")
+			p := waitPending(t, r, s, 1)
+			if p[0].Kind != "approval" || p[0].Tool != "count" || !strings.Contains(p[0].Rule, "ask") {
+				t.Fatalf("pending %+v", p[0])
+			}
+			if got := countRuns(t, e); got != 0 {
+				t.Fatalf("the tool ran %d times before the approval", got)
+			}
+			if err := r.Approve(ctx, p[0].Key, approve, ""); err != nil {
+				t.Fatal(err)
+			}
+			out, err := r.WaitTurn(ctx, s, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text, _ := r.Reply(ctx, out.Reply)
+			st := e.starts(t)
+			answer := ": declined"
+			if approve {
+				answer = ": approved"
+			}
+			if len(st) != 2 || st[1].Mode != "--resume" || !strings.Contains(st[1].Prompt, answer) {
+				t.Fatalf("claude was started as %+v", st)
+			}
+			want, runs := "done | counted", 1
+			if !approve {
+				want, runs = "done | not run: the user declined it", 0
+			}
+			if text != want || countRuns(t, e) != runs {
+				t.Fatalf("reply %q, %d runs; want %q, %d", text, countRuns(t, e), want, runs)
+			}
+		})
+	}
+}
+
+// Claude Code dies after a real call's result reached it (it called again
+// since) but, say, before it kept that result. Resumed, it makes the call
+// again. That is not run silently: the user is asked first. The call that
+// was under way when it died meets its earlier run and is not run again
+// (ADR 0007, invariant 4).
+func TestClaudeEngineRepeatAfterInterruptionAsks(t *testing.T) {
+	e := setupFakeClaude(t,
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 1}},
+			{Tool: "count", Args: map[string]any{"n": 2}},
+		}, Die: true},
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 2}},
+			{Tool: "count", Args: map[string]any{"n": 1}},
+		}, Reply: "resumed"},
+		fakeClaudeRun{Reply: "ok"},
+	)
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "rep", workflows.SessionInput{Dir: allowCount(t)})
+	n, _ := r.Send(ctx, s, "count")
+	p := waitPending(t, r, s, 1)
+	if p[0].Tool != "count" || !strings.Contains(p[0].Rule, "ran before an interruption") {
+		t.Fatalf("pending %+v", p[0])
+	}
+	if err := r.Approve(ctx, p[0].Key, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRuns(t, e); got != 2 {
+		t.Fatalf("the tool ran %d times, want 2 (n=1 and n=2 once each)", got)
+	}
 }

@@ -31,6 +31,13 @@ const (
 	// answers one that may not.
 	ActPermissionCheck = "permission.check"
 	ActToolDenied      = "tool.denied"
+	// ActMCPAsk answers an MCP call that needs the user with a request for
+	// approval; ActMCPGrant records the answer (ADR 0007, 4).
+	ActMCPAsk   = "mcp.ask"
+	ActMCPGrant = "mcp.grant"
+	// MCPCallPrefix + a call's content key names an MCP call in approval
+	// signals and keys.
+	MCPCallPrefix = "mcp-"
 	// SignalApprovePrefix + a call's id is the signal that answers its
 	// request for approval.
 	SignalApprovePrefix = "approve/"
@@ -140,12 +147,42 @@ type PermissionInput struct {
 	Policy Policy    `json:"policy"`
 	Tool   string    `json:"tool"`
 	Call   ToolInput `json:"call"`
+	// MCP, for a call over MCP: where the user's answer to it is recorded,
+	// and whether it repeats a real call made before an interruption.
+	MCP *MCPRef `json:"mcp,omitempty"`
+}
+
+type MCPRef struct {
+	Turn   string `json:"turn"`
+	Key    string `json:"key"`
+	Repeat bool   `json:"repeat,omitempty"`
+}
+
+// AskRequest is an MCP call waiting for the user (ADR 0007, 4).
+type AskRequest struct {
+	Key     string `json:"key"`
+	Tool    string `json:"tool"`
+	Subject string `json:"subject"`
+	Rule    string `json:"rule"`
+}
+
+type MCPAskInput struct {
+	Request AskRequest `json:"request"`
+}
+
+type MCPGrantInput struct {
+	Turn     string   `json:"turn"`
+	Key      string   `json:"key"`
+	Approval Approval `json:"approval"`
 }
 
 type PermissionOutput struct {
 	Action  string `json:"action"` // allow, ask, deny
 	Rule    string `json:"rule"`
 	Subject string `json:"subject,omitempty"`
+	// Reason, for a deny that is not a rule's (the user's answer), is what
+	// the model is told.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Approval answers a request for approval, from any client, any time later.
@@ -205,6 +242,8 @@ type ToolOutput struct {
 	// Message is the stored tool_result message.
 	Message string `json:"message"`
 	IsError bool   `json:"is_error,omitempty"`
+	// Ask: the call did not run; it waits for the user (MCP only).
+	Ask *AskRequest `json:"ask,omitempty"`
 }
 
 type HistoryExtendInput struct {
@@ -215,6 +254,10 @@ type HistoryExtendInput struct {
 // ClaudeTurnInput is a turn as Claude Code runs it: the prompt and the
 // agent, by hash, and where the turn's tool calls are to be recorded.
 type ClaudeTurnInput struct {
+	// Note, from the second round on, tells Claude Code what the user
+	// answered; Round tells the rounds apart.
+	Note    string   `json:"note,omitempty"`
+	Round   int      `json:"round,omitempty"`
 	Policy  Policy   `json:"policy"`
 	Session string   `json:"session"`
 	Turn    string   `json:"turn"` // the turn's run id
@@ -226,6 +269,8 @@ type ClaudeTurnInput struct {
 }
 
 type ClaudeTurnOutput struct {
+	// Asks are the calls of this round that wait for the user.
+	Asks []AskRequest `json:"asks,omitempty"`
 	// Message is the stored final reply.
 	Message string    `json:"message"`
 	Turns   int       `json:"turns"`
@@ -239,6 +284,7 @@ type MCPCallInput struct {
 	Args    json.RawMessage `json:"args"`
 	Planned bool            `json:"planned,omitempty"`
 	Policy  Policy          `json:"policy"`
+	MCP     MCPRef          `json:"mcp"`
 }
 
 // PlanOutput is a planned write, or (Done) the result to give the model at

@@ -20,8 +20,8 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// mcpServer serves KairoCode's tools to Claude Code (ADR 0007). Each Claude
-// Code run gets a token, and the token says which turn its calls belong to.
+// mcpServer serves KairoCode's tools to Claude Code (ADR 0007). Each claude
+// run gets a token, and the token says which turn its calls belong to.
 type mcpServer struct {
 	rt   *Runtime
 	ln   net.Listener
@@ -31,8 +31,10 @@ type mcpServer struct {
 	turns map[string]*mcpTurn
 }
 
+// mcpTurn is one claude run of a turn.
 type mcpTurn struct {
 	turn   string // the turn's run id
+	proc   string // this claude run (its token)
 	dir    string
 	policy workflows.Policy
 	tools  map[string]tools.Def
@@ -42,11 +44,13 @@ type mcpTurn struct {
 	// live: calls a handler of this run is waiting on. A call never meets
 	// one of them: two identical calls under way at once are two calls.
 	live map[string]bool
-	// handed: results handed to this Claude Code run and not yet known to
-	// have reached it. They are acknowledged when the run makes its next
-	// call, or ends with a result (Claude Code calls again only after it
-	// has the results it waited for).
+	// handed: results handed to this claude run and not yet known to have
+	// reached it. They are acknowledged when the run makes its next call,
+	// or ends with a result (Claude Code calls again only after it has the
+	// results it waited for).
 	handed []string
+	// asks: calls of this run that wait for the user (ADR 0007, 4).
+	asks []workflows.AskRequest
 }
 
 // MCPServerName is how Claude Code names KairoCode's tools: mcp__kairocode__<tool>.
@@ -74,17 +78,16 @@ func startMCP(rt *Runtime) (*mcpServer, error) {
 
 func (s *mcpServer) close() error { return s.http.Close() }
 
-// open makes an endpoint for one Claude Code run of turn, serving the named
-// tools. It returns its URL, a function that acknowledges every result handed
-// to the run (call it once the run ended with a result), and one that closes
+// open makes an endpoint for one claude run of turn, serving the named
+// tools. It returns its URL, the run's state, and a function that closes
 // the endpoint.
-func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy) (string, func(context.Context) error, func(), error) {
+func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy) (string, *mcpTurn, func(), error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", nil, nil, err
 	}
 	token := hex.EncodeToString(b)
-	t := &mcpTurn{turn: turn, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{}}
+	t := &mcpTurn{turn: turn, proc: token, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{}}
 	t.srv = mcp.NewServer(&mcp.Implementation{Name: MCPServerName, Version: "0"}, nil)
 	for _, name := range names {
 		d, ok := s.rt.tool(name)
@@ -105,13 +108,11 @@ func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Poli
 	s.mu.Lock()
 	s.turns[token] = t
 	s.mu.Unlock()
-	return fmt.Sprintf("http://%s/mcp/%s", s.ln.Addr(), token),
-		func(ctx context.Context) error { return s.acknowledge(ctx, t) },
-		func() {
-			s.mu.Lock()
-			delete(s.turns, token)
-			s.mu.Unlock()
-		}, nil
+	return fmt.Sprintf("http://%s/mcp/%s", s.ln.Addr(), token), t, func() {
+		s.mu.Lock()
+		delete(s.turns, token)
+		s.mu.Unlock()
+	}, nil
 }
 
 // acknowledge records that the results handed to t's run reached it.
@@ -121,11 +122,27 @@ func (s *mcpServer) acknowledge(ctx context.Context, t *mcpTurn) error {
 	t.handed = nil
 	t.mu.Unlock()
 	for _, id := range handed {
-		if err := s.rt.Store.MarkDelivered(ctx, id); err != nil {
+		if err := s.rt.Store.AcknowledgeMCPCall(ctx, id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// takeAsks are the calls of the run that wait for the user, each once.
+func (t *mcpTurn) takeAsks() []workflows.AskRequest {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	seen := map[string]bool{}
+	var out []workflows.AskRequest
+	for _, a := range t.asks {
+		if !seen[a.Key] {
+			seen[a.Key] = true
+			out = append(out, a)
+		}
+	}
+	t.asks = nil
+	return out
 }
 
 // callKey names a call by its content. Claude Code makes a call that was under
@@ -146,12 +163,9 @@ func callKey(tool string, args json.RawMessage) (string, error) {
 	return hex.EncodeToString(h[:12]), nil
 }
 
-// call runs a tool call as a kairo run. A call meets the first earlier run of
-// the same content whose result was never handed back (it was under way when
-// Claude Code stopped); otherwise it is the next occurrence.
-//
-// A new run is started with Submit and every run is waited on with Await, so
-// a run is driven only by the runtime, never by two handlers at once.
+// call runs a tool call as a kairo run. A new run is started with Submit and
+// every run is waited on with Await, so a run is driven only by the
+// runtime, never by two handlers at once.
 func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json.RawMessage) (*mcp.CallToolResult, error) {
 	key, err := callKey(tool, args)
 	if err != nil {
@@ -164,7 +178,7 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 	if err := s.acknowledge(ctx, t); err != nil {
 		return nil, err
 	}
-	id, blocked, err := s.claim(ctx, t, key, workflows.MCPCallInput{Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy})
+	id, blocked, err := s.claim(ctx, t, tool, key, args)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +199,11 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 		if ctx.Err() != nil {
 			return nil, err
 		}
+		if errors.Is(err, kairo.ErrUnknownRun) {
+			// kairo-gap #17: kairo removed the run before its turn ended.
+			return errorResult("The result of this call is lost (it ran long ago, before an interruption). " +
+				"Do not make it again; tell the user."), nil
+		}
 		return errorResult(err.Error()), nil
 	}
 	m, err := s.rt.Store.Message(ctx, out.Message)
@@ -195,57 +214,71 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 	if len(m.Parts) > 0 {
 		text = m.Parts[0].Text
 	}
+	t.mu.Lock()
+	if out.Ask != nil {
+		t.asks = append(t.asks, *out.Ask)
+	}
 	// Not acknowledged yet: if the run dies before it calls again, a resumed
 	// run that makes this call again meets this result.
-	t.mu.Lock()
 	t.handed = append(t.handed, id)
 	t.mu.Unlock()
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}, IsError: out.IsError}, nil
 }
 
-// claim picks the run a call is: the first run of its content that is not
-// acknowledged and not waited on by another handler, or a new one, started
-// here. blocked says the run it met stopped for review.
-func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, key string, in workflows.MCPCallInput) (id string, blocked bool, err error) {
+// claim picks the run a call is, from KairoCode's own record of the turn's
+// MCP calls (kairo may have removed old runs: kairo-gap #17):
+//
+//   - the first run of its content whose result is not known to have
+//     reached Claude Code and that no other handler waits on: the call is
+//     that one, made again after an interruption;
+//   - else a new run, started here. If the content's last run was a real
+//     tool's, from an earlier claude run, the new one asks the user first:
+//     Claude Code may be making again a call whose result it lost (ADR
+//     0007, invariant 4).
+//
+// blocked says the run it met stopped for review.
+func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, args json.RawMessage) (id string, blocked bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for n := 0; ; n++ {
-		id := fmt.Sprintf("%s/mcp/%s.%d", t.turn, key, n)
-		if t.live[id] {
-			continue
-		}
-		_, err := s.rt.K.Get(ctx, id)
-		if errors.Is(err, kairo.ErrUnknownRun) {
-			// kairo-gap #17: the run is a root of its own, not a child of the
-			// turn, so kairo may remove it once it is old enough.
-			if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
-				return "", false, err
-			}
-			t.live[id] = true
-			return id, false, nil
-		}
-		if err != nil {
-			return "", false, err
-		}
-		delivered, err := s.rt.Store.Delivered(ctx, id)
-		if err != nil {
-			return "", false, err
-		}
-		if delivered {
-			continue
-		}
-		calls, err := s.rt.K.Children(ctx, id)
-		if err != nil {
-			return "", false, err
-		}
-		for _, c := range calls {
-			if c.Status == "blocked" {
-				return id, true, nil
-			}
-		}
-		t.live[id] = true
-		return id, false, nil
+	calls, err := s.rt.Store.MCPCalls(ctx, t.turn, key)
+	if err != nil {
+		return "", false, err
 	}
+	for _, c := range calls {
+		if c.Acknowledged || t.live[c.Run] {
+			continue
+		}
+		kids, err := s.rt.K.Children(ctx, c.Run)
+		if err != nil {
+			return "", false, err
+		}
+		for _, k := range kids {
+			if k.Status == "blocked" {
+				return c.Run, true, nil
+			}
+		}
+		t.live[c.Run] = true
+		return c.Run, false, nil
+	}
+	n := len(calls)
+	repeat := false
+	if n > 0 && t.tools[tool].Effect == tools.Real && calls[n-1].Proc != t.proc {
+		repeat = true
+	}
+	id = fmt.Sprintf("%s/mcp/%s.%d", t.turn, key, n)
+	if err := s.rt.Store.AddMCPCall(ctx, id, t.turn, key, n, t.proc); err != nil {
+		return "", false, err
+	}
+	in := workflows.MCPCallInput{
+		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy,
+		MCP: workflows.MCPRef{Turn: t.turn, Key: key, Repeat: repeat},
+	}
+	// kairo-gap #17: the run is a root of its own, not a child of the turn.
+	if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
+		return "", false, err
+	}
+	t.live[id] = true
+	return id, false, nil
 }
 
 func errorResult(text string) *mcp.CallToolResult {

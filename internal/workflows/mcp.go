@@ -7,7 +7,8 @@ import kairo "github.com/r-hashi01/kairo/sdk/go"
 // call's content, makes a repeated call meet its earlier run.
 func RunMCPCall(ctx *kairo.Context, in MCPCallInput) (ToolOutput, error) {
 	ti := ToolInput{Dir: in.Dir, Args: in.Args}
-	g, err := gateTool(ctx, in.Policy, in.Tool, in.Planned, ti)
+	mcp := in.MCP
+	g, err := gateTool(ctx, in.Policy, in.Tool, in.Planned, ti, &mcp)
 	if err != nil {
 		return ToolOutput{}, err
 	}

@@ -146,9 +146,14 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	mark := turnMark(in.Turn)
 	prompt := user.Text() + "\n\n" + mark
 	if transcript != "" && fileContains(transcript, mark) {
+		// Claude Code has the prompt: tell it the user's answers, or just
+		// to go on after being cut short.
 		prompt = continuePrompt
+		if in.Note != "" {
+			prompt = in.Note
+		}
 	}
-	url, acknowledge, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy)
+	url, mt, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy)
 	if err != nil {
 		return workflows.ClaudeTurnOutput{}, err
 	}
@@ -225,7 +230,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(fmt.Errorf("claude: %v: %s", errors.Join(waitErr, sc.Err()), tail(stderr.String(), 200)))
 	}
 	// The run ended with a result: every tool result it was handed reached it.
-	if err := acknowledge(t); err != nil {
+	if err := r.mcp.acknowledge(t, mt); err != nil {
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
 	text := result.Result
@@ -237,6 +242,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
 	return workflows.ClaudeTurnOutput{
+		Asks:    mt.takeAsks(),
 		Message: h,
 		Turns:   result.NumTurns,
 		Usage: msg.Usage{Input: result.Usage.Input, Output: result.Usage.Output,
