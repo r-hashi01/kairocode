@@ -53,8 +53,7 @@ func crashChild() {
 	if err != nil {
 		panic(err)
 	}
-	lease, _ := time.ParseDuration(os.Getenv("KC_LEASE"))
-	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash", Lease: lease})
+	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash"})
 	if err != nil {
 		panic(err)
 	}

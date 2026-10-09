@@ -254,8 +254,9 @@ func Secrets(roots ...string) ([]string, error) {
 }
 
 // commandStarters are the files allowed to start a command (ADR 0005):
-// the sandbox, and the Claude Code engine's start of claude (ADR 0007).
-var commandStarters = []string{"internal/sandbox/", "internal/runtime/claude.go"}
+// the sandbox, the Claude Code engine's start of claude (ADR 0007), and a
+// client's start of the daemon (ADR 0008).
+var commandStarters = []string{"internal/sandbox/", "internal/runtime/claude.go", "internal/daemon/spawn.go"}
 
 // fullAccessUsers may name sandbox.FullAccess: the tools that run outside
 // the sandbox only once the user approved (escalated bash, git_push).

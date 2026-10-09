@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -178,63 +177,6 @@ func TestPlanModeOnlyReads(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-// TestApprovalFromAnotherProcess: a turn waits for approval in one process;
-// another process gives it; the turn goes on and the write is made (FR-11).
-func TestApprovalFromAnotherProcess(t *testing.T) {
-	if testing.Short() {
-		t.Skip("starts a second process")
-	}
-	dir := t.TempDir()
-	db := filepath.Join(dir, "k.db")
-	ws := workspaceWith(t, `{"write": "ask"}`)
-	fake := filepath.Join(dir, "fake.json")
-	b, _ := json.Marshal(provider.Fake{Script: writeScript, HoldAt: -1})
-	if err := os.WriteFile(fake, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	// SQLite tells no process what another did: each finds out at its sweep,
-	// once a lease period (kairo-gap #15). A short lease keeps the test short.
-	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fake, "KC_LEASE=1s")
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	other, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{Script: writeScript, HoldAt: -1}, Owner: "other", Lease: time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	s := SessionID("crash")
-	// The child creates the session; wait for its request.
-	var p []Pending
-	for deadline := time.Now().Add(30 * time.Second); len(p) == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("no pending approval")
-		}
-		p, _ = other.Pending(ctx, s)
-	}
-	start := time.Now()
-	if err := other.Approve(ctx, p[0].Key, true, ""); err != nil {
-		t.Fatal(err)
-	}
-	out, err := other.WaitTurn(ctx, s, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("the turn went on %v after the approval", time.Since(start).Round(time.Millisecond))
-	if text, _ := other.Reply(ctx, out.Reply); text != "done" {
-		t.Fatalf("reply %q", text)
-	}
-	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "hello\n" {
-		t.Fatalf("the approved write was not made: %q %v", b, err)
 	}
 }
 

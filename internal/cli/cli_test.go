@@ -7,11 +7,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/provider"
 )
+
+// The test binary is also the daemon the commands start (KC_CLI_DAEMON).
+func TestMain(m *testing.M) {
+	if os.Getenv("KC_CLI_DAEMON") == "1" {
+		os.Exit(Main(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	}
+	daemonArgv = func(data string) ([]string, error) {
+		return []string{os.Args[0], "-test.run=^$", "daemon", "-data", data}, nil
+	}
+	os.Setenv("KC_CLI_DAEMON", "1") // the daemons' environment; this process ignores it now
+	os.Exit(m.Run())
+}
+
+// dataDir is a data directory whose daemon is killed when the test ends.
+func dataDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() {
+		if info, err := daemon.ReadInfo(dir); err == nil {
+			syscall.Kill(info.PID, syscall.SIGKILL)
+		}
+	})
+	return dir
+}
 
 func fakeScript(t *testing.T, dir string, replies ...provider.FakeReply) string {
 	t.Helper()
@@ -44,7 +70,7 @@ func TestRunWithFakeProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	code := Main(ctx, []string{"run", "-dir", ws, "-db", filepath.Join(dir, "k.db"), "what", "module", "is", "this?"}, &stdout, &stderr)
+	code := Main(ctx, []string{"run", "-dir", ws, "-data", dataDir(t), "what", "module", "is", "this?"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}

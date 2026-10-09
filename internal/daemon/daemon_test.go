@@ -1,0 +1,427 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/runtime"
+)
+
+// The test binary is also the daemon a client starts (KC_DAEMON_CHILD).
+func TestMain(m *testing.M) {
+	if os.Getenv("KC_DAEMON_CHILD") == "1" {
+		err := Serve(context.Background(), Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// openFake opens the runtime with the fake provider KC_FAKE names.
+func openFake(ctx context.Context, cfg runtime.Config) (*runtime.Runtime, error) {
+	p, err := provider.LoadFake(os.Getenv("KC_FAKE"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Provider = p
+	return runtime.Open(ctx, cfg)
+}
+
+var writeScript = []provider.FakeReply{
+	{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hello\n"}`)}}},
+	{Text: "done"},
+}
+
+// dataDir is a data directory whose daemon is killed when the test ends.
+func dataDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() { killDaemon(dir) })
+	return dir
+}
+
+func killDaemon(dir string) {
+	if info, err := ReadInfo(dir); err == nil {
+		syscall.Kill(info.PID, syscall.SIGKILL)
+	}
+}
+
+// writeFake writes a fake provider's script and returns its path.
+func writeFake(t *testing.T, path string, f provider.Fake) string {
+	t.Helper()
+	b, _ := json.Marshal(f)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// childStart starts this test binary as the daemon of data.
+func childStart(data, fake string) Start {
+	return Start{
+		Argv: []string{os.Args[0], "-test.run=^$"},
+		Env:  append(os.Environ(), "KC_DAEMON_CHILD=1", "KC_DATA="+data, "KC_FAKE="+fake),
+	}
+}
+
+// workspace is a directory whose kairocode.json holds permission.
+func workspace(t *testing.T, permission string) string {
+	t.Helper()
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, runtime.ConfigFile), []byte(`{"permission": `+permission+`}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ws
+}
+
+func waitPending(t *testing.T, ctx context.Context, c *Client, session string) []runtime.Pending {
+	t.Helper()
+	for {
+		p, err := c.Pending(ctx, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p) > 0 {
+			return p
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("nothing came to wait for approval")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// A second daemon for the same data directory does not start.
+func TestSecondDaemonDoesNotStart(t *testing.T) {
+	data := t.TempDir()
+	fake := writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1})
+	t.Setenv("KC_FAKE", fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, Options{Dir: data, Open: openFake, Idle: -1, Ready: signalWriter(ready)})
+	}()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	if err := Serve(ctx, Options{Dir: data, Open: openFake, Idle: -1}); !errors.Is(err, ErrRunning) {
+		t.Fatalf("a second daemon: %v", err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(data, infoFile)); !os.IsNotExist(err) {
+		t.Errorf("server.json left behind: %v", err)
+	}
+}
+
+// signalWriter closes ch at the first write.
+type signalWriter chan struct{}
+
+func (w signalWriter) Write(b []byte) (int, error) {
+	close(w)
+	return len(b), nil
+}
+
+// A client starts the daemon when none runs; the next client finds it.
+// server.json can be read only by its owner.
+func TestClientStartsTheDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	start := childStart(data, writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1}))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if a.PID() != b.PID() || a.PID() == os.Getpid() {
+		t.Fatalf("pids %d and %d (test %d)", a.PID(), b.PID(), os.Getpid())
+	}
+	st, err := os.Stat(filepath.Join(data, infoFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("server.json mode %v", st.Mode().Perm())
+	}
+}
+
+// TestApprovalFromAnotherClient: one client waits for a turn that waits for
+// approval; another gives it. The turn goes on as an event in the daemon,
+// well inside kairo's lease (30s), which is left at its default: the sweep
+// did not find it (ADR 0008).
+func TestApprovalFromAnotherClient(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	ws := workspace(t, `{"write": "ask"}`)
+	start := childStart(data, writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{Script: writeScript, HoldAt: -1}))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	s, err := a.CreateSession(ctx, ws, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.Send(ctx, s, "write the notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		turn Turn
+		err  error
+	}
+	waited := make(chan result, 1)
+	go func() {
+		out, err := a.WaitTurn(ctx, s, n)
+		waited <- result{out, err}
+	}()
+
+	b, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	p := waitPending(t, ctx, b, s)
+	approved := time.Now()
+	if err := b.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	r := <-waited
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	took := time.Since(approved)
+	t.Logf("the turn went on %v after the approval", took.Round(time.Millisecond))
+	if took > 2*time.Second {
+		t.Errorf("the turn went on %v after the approval: found by a sweep, not told", took)
+	}
+	if r.turn.Reply != "done" {
+		t.Fatalf("reply %q", r.turn.Reply)
+	}
+	if got, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(got) != "hello\n" {
+		t.Fatalf("the approved write was not made: %q %v", got, err)
+	}
+}
+
+// TestCrashDaemonRestart: the daemon is killed in the middle of a model call;
+// the next client starts a new one, which takes over at once (the same
+// owner, no lease to wait out) and finishes the turn.
+func TestCrashDaemonRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("kills a daemon process")
+	}
+	data := dataDir(t)
+	ws := workspace(t, `{}`)
+	dir := t.TempDir()
+	hold := filepath.Join(dir, "held")
+	script := []provider.FakeReply{{Text: "done"}}
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: script, HoldAt: 0, HoldFile: hold})
+	start := childStart(data, fake)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := a.CreateSession(ctx, ws, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.Send(ctx, s, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(hold); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the model call never started")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	old := a.PID()
+	a.Close()
+	if err := syscall.Kill(old, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	// Gone (reaped by the client that started it), so the next client
+	// cannot reach it on its way out.
+	for syscall.Kill(old, 0) == nil {
+		select {
+		case <-ctx.Done():
+			t.Fatal("the killed daemon did not go")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	writeFake(t, fake, provider.Fake{Script: script, HoldAt: -1})
+	restarted := time.Now()
+	b, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if b.PID() == old {
+		t.Fatal("reached the killed daemon")
+	}
+	out, err := b.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(restarted)
+	t.Logf("the turn finished %v after the restart", took.Round(time.Millisecond))
+	if out.Reply != "done" {
+		t.Fatalf("reply %q", out.Reply)
+	}
+	if took > 20*time.Second {
+		t.Errorf("took %v: waited out the killed daemon's lease", took)
+	}
+}
+
+// startServe runs a daemon in this process and returns once it is ready,
+// with the channel its end is sent to.
+func startServe(t *testing.T, ctx context.Context, o Options) <-chan error {
+	t.Helper()
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	o.Ready = signalWriter(ready)
+	go func() { done <- Serve(ctx, o) }()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	return done
+}
+
+// A daemon started while the last one is on its way out waits for its lock
+// and takes over, instead of failing (ADR 0008).
+func TestDaemonWaitsForTheOneOnItsWayOut(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("KC_FAKE", writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1}))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	oldCtx, stopOld := context.WithCancel(ctx)
+	old := startServe(t, oldCtx, Options{Dir: data, Open: openFake, Idle: -1})
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, Options{Dir: data, Open: openFake, Idle: -1, Ready: signalWriter(ready), WaitLock: 20 * time.Second})
+	}()
+	stopOld()
+	if err := <-old; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("the new daemon did not take over: %v", err)
+	}
+	cancel()
+	<-done
+}
+
+// A daemon does not stop while a client waits on it, even with nothing to
+// run (a turn waiting for approval), and stops once the client goes.
+func TestDaemonStaysWhileAClientWaits(t *testing.T) {
+	data := t.TempDir()
+	ws := workspace(t, `{"write": "ask"}`)
+	t.Setenv("KC_FAKE", writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{Script: writeScript, HoldAt: -1}))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := startServe(t, ctx, Options{Dir: data, Open: openFake, Idle: 200 * time.Millisecond})
+	c, err := dial(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := c.CreateSession(ctx, ws, "")
+	n, _ := c.Send(ctx, s, "write the notes")
+	waitPending(t, ctx, c, s)
+	wctx, stopWaiting := context.WithCancel(ctx)
+	go c.WaitTurn(wctx, s, n)
+	select {
+	case err := <-done:
+		t.Fatalf("stopped while a client waited: %v", err)
+	case <-time.After(time.Second): // five idle periods
+	}
+	stopWaiting()
+	c.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("did not stop once the client went")
+	}
+}
+
+// A data directory whose path is too long for a socket puts the socket in a
+// directory only this user can enter.
+func TestLongDataDirSocket(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 100))
+	p, err := socketPath(long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) >= 100 {
+		t.Fatalf("socket path still long: %s", p)
+	}
+	st, err := os.Stat(filepath.Dir(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Errorf("%s has mode %v", filepath.Dir(p), st.Mode().Perm())
+	}
+}
+
+// A daemon with nothing to run and no client stops by itself.
+func TestIdleDaemonStops(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("KC_FAKE", writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1}))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := Serve(ctx, Options{Dir: data, Open: openFake, Idle: 100 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("did not stop when idle")
+	}
+}

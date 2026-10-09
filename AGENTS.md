@@ -28,8 +28,9 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/tools` | 組み込みのツール。1 ファイル 1 ツールで、`tools.Def` に作用の型を書く | ここで I/O する |
 | `internal/provider` | モデルのプロバイダーのアダプター（Anthropic と、テスト用の fake） | ここで I/O する |
 | `internal/store` | メッセージの保存（`kc_message`、内容のハッシュで引く。1 度だけ書く） | ここで I/O する |
+| `internal/daemon` | データの置き場ごとに 1 つのデーモン（ADR 0008）。ロック、`server.json`、Unix ソケットの上の HTTP、何もしないときの終了。ほかのプロセスが使うクライアントと、デーモンの自動の起動 | ここで I/O する |
 | `internal/server` | HTTP + SSE の API（設計 8.1 節）。ライブの出力は `k.Subscribe(<セッションの ID>)` から流す（ID の前方一致で、子孫の出力も届く） | ここで I/O する |
-| `internal/cli` | `kairocode run / resume / approve / replay`、TUI | ここで I/O する |
+| `internal/cli` | `kairocode run / approvals / approve / daemon`、後で `acp`、`chat`、`replay`。DB を自分で開かず、デーモンにつなぐ | ここで I/O する |
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
 | `cmd/kairocode` | エントリーポイント | — |
 

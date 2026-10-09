@@ -1,5 +1,6 @@
-// Package server is KairoCode's HTTP API (design 8.1). M0 has sessions,
-// messages and turns; the event stream (SSE), approvals and undo come later.
+// Package server is KairoCode's HTTP API (design 8.1): sessions, messages,
+// turns and approvals. The daemon serves it (ADR 0008); the event stream
+// (SSE) and undo come later.
 package server
 
 import (
@@ -23,9 +24,11 @@ type Server struct {
 
 func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s := &Server{rt: rt, token: token, mux: http.NewServeMux(), newID: newID}
+	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("POST /sessions", s.createSession)
 	s.mux.HandleFunc("POST /sessions/{id}/messages", s.sendMessage)
 	s.mux.HandleFunc("GET /sessions/{id}/turns/{n}", s.getTurn)
+	s.mux.HandleFunc("POST /sessions/{id}/close", s.closeSession)
 	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
 	s.mux.HandleFunc("POST /approvals", s.approve)
 	return s
@@ -86,6 +89,14 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
+	if err := s.rt.CloseSession(r.Context(), sessionOf(r)); err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // getTurn waits for the turn to finish (the request's context bounds the

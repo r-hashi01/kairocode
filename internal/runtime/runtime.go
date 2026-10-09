@@ -46,6 +46,9 @@ type Config struct {
 	// when zero).
 	Lease  time.Duration
 	Logger *slog.Logger
+	// Observe, if set, is also given what kairo observes here (the daemon
+	// tells from it whether a step runs, ADR 0008).
+	Observe func(kairo.Observation)
 	// Now is kairo's clock (tests; the real clock when nil).
 	Now func() time.Time
 }
@@ -63,14 +66,21 @@ type Runtime struct {
 	changed chan struct{} // closed and replaced whenever a run starts or settles here
 }
 
-// DefaultDB is where a user's sessions live.
-func DefaultDB() string {
+// DefaultDataDir is where a user's sessions live, and where their daemon
+// runs (ADR 0008).
+func DefaultDataDir() string {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "kairocode", "kairo.db")
+		return filepath.Join(d, "kairocode")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "kairocode", "kairo.db")
+	return filepath.Join(home, ".local", "share", "kairocode")
 }
+
+// DBIn is the database in data directory dir.
+func DBIn(dir string) string { return filepath.Join(dir, "kairo.db") }
+
+// DefaultDB is the database in the default data directory.
+func DefaultDB() string { return DBIn(DefaultDataDir()) }
 
 func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	switch cfg.Engine {
@@ -162,6 +172,9 @@ func (r *Runtime) tool(name string) (tools.Def, bool) {
 }
 
 func (r *Runtime) observe(o kairo.Observation) {
+	if r.cfg.Observe != nil {
+		r.cfg.Observe(o)
+	}
 	if o.Kind != kairo.ObsRunStarted && o.Kind != kairo.ObsRunSettled {
 		return
 	}

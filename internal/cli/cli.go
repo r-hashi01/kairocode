@@ -3,29 +3,35 @@ package cli
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
-	"github.com/r-hashi01/kairocode/internal/server"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 const usage = `usage:
-  kairocode run [-dir DIR] [-db FILE] "<request>"   answer one request, then exit
-  kairocode serve [-addr ADDR] [-db FILE]            run the HTTP API
-  kairocode approvals [-db FILE] <session>           list the calls waiting for approval
-  kairocode approve [-db FILE] [-deny] [-reason R] <key>   answer one
+  kairocode run [-dir DIR] [-data DIR] "<request>"   answer one request, then exit
+  kairocode approvals [-data DIR] <session>          list the calls waiting for a person
+  kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
+  kairocode daemon [-data DIR]                       run the daemon in the foreground
 
+One daemon per data directory runs the sessions (ADR 0008); the commands
+above start it when it is not running, and it stops after 10 minutes with
+nothing to do (KAIROCODE_DAEMON_IDLE). The data directory defaults to
+$XDG_DATA_HOME/kairocode or ~/.local/share/kairocode.
+
+The daemon takes its settings from the environment it starts in:
 KAIROCODE_ENGINE picks who runs the model loop:
   api (default)   the Claude API (credentials as the Anthropic SDK resolves them)
   claude-code     your own Claude Code, signed in with your plan (ADR 0007);
@@ -45,8 +51,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "run":
 		err = run(ctx, args[1:], stdout, stderr)
-	case "serve":
-		err = serve(ctx, args[1:], stderr)
+	case "daemon":
+		err = runDaemon(ctx, args[1:], stdout, stderr)
 	case "approvals":
 		err = approvals(ctx, args[1:], stdout, stderr)
 	case "approve":
@@ -80,8 +86,10 @@ func newProvider() (provider.Provider, error) {
 	}
 }
 
-func openRuntime(ctx context.Context, db string) (*runtime.Runtime, error) {
-	cfg := runtime.Config{DB: db, Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL")}
+// openRuntime opens the daemon's runtime with the engine and the model the
+// environment names.
+func openRuntime(ctx context.Context, cfg runtime.Config) (*runtime.Runtime, error) {
+	cfg.Engine, cfg.Model = os.Getenv("KAIROCODE_ENGINE"), os.Getenv("KAIROCODE_MODEL")
 	if cfg.Engine == workflows.EngineClaudeCode {
 		cfg.ClaudePath = os.Getenv("KAIROCODE_CLAUDE")
 		return runtime.Open(ctx, cfg)
@@ -94,17 +102,51 @@ func openRuntime(ctx context.Context, db string) (*runtime.Runtime, error) {
 	return runtime.Open(ctx, cfg)
 }
 
-func newID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+// daemonArgv is how a client starts the daemon: this program, in the
+// foreground, writing "ready" to its standard output.
+var daemonArgv = func(data string) ([]string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return []string{exe, "daemon", "-data", data}, nil
+}
+
+// connect reaches the daemon of data, starting it if none runs.
+func connect(ctx context.Context, data string) (*daemon.Client, error) {
+	argv, err := daemonArgv(data)
+	if err != nil {
+		return nil, err
+	}
+	return daemon.Connect(ctx, data, daemon.Start{Argv: argv, Env: os.Environ()})
+}
+
+func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	var idle time.Duration
+	if v := os.Getenv("KAIROCODE_DAEMON_IDLE"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("KAIROCODE_DAEMON_IDLE: %w", err)
+		}
+		idle = d
+	}
+	// The client that started it closes the pipe after "ready": a later
+	// write there must fail, not kill the daemon.
+	signal.Ignore(syscall.SIGPIPE)
+	return daemon.Serve(ctx, daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, WaitLock: 10 * time.Second})
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", ".", "working directory")
-	db := fs.String("db", runtime.DefaultDB(), "session database")
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -112,91 +154,53 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if request == "" {
 		return errors.New(`run needs a request: kairocode run "<request>"`)
 	}
-	rt, err := openRuntime(ctx, *db)
+	abs, err := filepath.Abs(*dir) // the daemon runs elsewhere
 	if err != nil {
 		return err
 	}
-	defer rt.Close()
-	s, err := rt.CreateSession(ctx, newID(), workflows.SessionInput{Dir: *dir})
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	s, err := c.CreateSession(ctx, abs, "")
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stderr, "session %s\n", s)
-	n, err := rt.Send(ctx, s, request)
+	n, err := c.Send(ctx, s, request)
 	if err != nil {
 		return err
 	}
-	out, err := rt.WaitTurn(ctx, s, n)
+	out, err := c.WaitTurn(ctx, s, n)
 	if err != nil {
 		return err
 	}
-	text, err := rt.Reply(ctx, out.Reply)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(stdout, text)
+	fmt.Fprintln(stdout, out.Reply)
 	if out.Stopped != "" {
 		fmt.Fprintf(stderr, "stopped: %s\n", out.Stopped)
 	}
 	fmt.Fprintf(stderr, "steps %d, tokens in %d out %d (cache read %d)\n",
 		out.Steps, out.Usage.Input, out.Usage.Output, out.Usage.CacheRead)
-	return rt.CloseSession(ctx, s)
-}
-
-func serve(ctx context.Context, args []string, stderr io.Writer) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	addr := fs.String("addr", "127.0.0.1:4097", "listen address")
-	db := fs.String("db", runtime.DefaultDB(), "session database")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	rt, err := openRuntime(ctx, *db)
-	if err != nil {
-		return err
-	}
-	defer rt.Close()
-	token := os.Getenv("KAIROCODE_SERVER_TOKEN")
-	if token == "" {
-		token = newID() + newID()
-	}
-	ln, err := net.Listen("tcp", *addr)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stderr, "listening on http://%s (token in KAIROCODE_SERVER_TOKEN, or: %s)\n", ln.Addr(), token)
-	srv := &http.Server{Handler: server.New(rt, token, newID)}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
-}
-
-// openForAnswers opens the runtime only to read and answer: it runs no model.
-func openForAnswers(ctx context.Context, db string) (*runtime.Runtime, error) {
-	return runtime.Open(ctx, runtime.Config{DB: db, Engine: workflows.EngineClaudeCode})
+	return c.CloseSession(ctx, s)
 }
 
 func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("approvals", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	db := fs.String("db", runtime.DefaultDB(), "session database")
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
 		return errors.New("approvals needs a session: kairocode approvals s/<id>")
 	}
-	rt, err := openForAnswers(ctx, *db)
+	c, err := connect(ctx, *data)
 	if err != nil {
 		return err
 	}
-	defer rt.Close()
-	p, err := rt.Pending(ctx, fs.Arg(0))
+	defer c.Close()
+	p, err := c.Pending(ctx, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -212,7 +216,7 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 func approve(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	db := fs.String("db", runtime.DefaultDB(), "session database")
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	deny := fs.Bool("deny", false, "decline the call")
 	reason := fs.String("reason", "", "why (given to the model)")
 	if err := fs.Parse(args); err != nil {
@@ -221,10 +225,10 @@ func approve(ctx context.Context, args []string, stderr io.Writer) error {
 	if fs.NArg() != 1 {
 		return errors.New("approve needs a key: see kairocode approvals")
 	}
-	rt, err := openForAnswers(ctx, *db)
+	c, err := connect(ctx, *data)
 	if err != nil {
 		return err
 	}
-	defer rt.Close()
-	return rt.Approve(ctx, fs.Arg(0), !*deny, *reason)
+	defer c.Close()
+	return c.Approve(ctx, fs.Arg(0), !*deny, *reason)
 }

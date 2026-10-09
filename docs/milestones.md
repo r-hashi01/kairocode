@@ -2,7 +2,7 @@
 
 設計 10 節の段階を、受け入れ条件のテストに落としたものです。段階の作業は `/milestone` スキルで進めます。受け入れ条件は、実装の前にテストとして書きます（最初は落ちる）。すべて通ったら、その段階の「状態」を「完了（日付）」にします。
 
-今の段階: **M2（未着手）**
+今の段階: **M2（作業中）**
 
 ## M0 骨組み
 
@@ -31,7 +31,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 - 実のツールの handler で、作用の後に起きたエラー（tool_result の保存の失敗など）は `kairo.Unknown` で包む。`tools.Def.Run` から「効いたかわからない」を返せるようにする（不変条件 4）。
 - 書くツールは、`resolve` の後の差し替え（TOCTOU）に備え、`os.OpenRoot` か `O_NOFOLLOW` でたどる。
-- `kairocode serve` が自動で作ったトークンを stderr に出している。ADR 0004 の `server.json`（0600）に置き換える。 → ADR 0008（デーモン）と一緒に M2 で行う。
+- `kairocode serve` が自動で作ったトークンを stderr に出している。ADR 0004 の `server.json`（0600）に置き換える。 → M2 の始めに、ADR 0008 のデーモンで解決（`kairocode serve` は無くなり、トークンは `server.json` に置く）。
 
 中身: edit、write、bash、git（commit、push）、作用の型、権限の規則と判定（`permission.check`）、承認の待ち、要確認、コマンドの sandbox（ADR 0005）。
 
@@ -62,13 +62,15 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 ## M2 クライアント、ストリーミング、取り消し、dspchr
 
-状態: 未着手
+状態: 作業中
 
 中身: ACP のエージェント（ADR 0002。`kairocode acp`、v1）、端末の対話（`kairocode chat`、ACP のクライアントとして）、Claude Code のエンジン（ADR 0007）、トークンのストリーミング（`TaskContext.Emit` と `k.Subscribe`）、スナップショットと `/undo`・`/redo`、LSP の診断、エージェントとコマンドの Markdown の定義、dspchr との統合の段階 1（ADR 0004）。
 
-前提: ADR 0002、0004、0007 の承認。
+前提: ADR 0002、0004、0007、0008 の承認。
 
 受け入れ条件:
+
+- [x] データの置き場ごとのデーモン（ADR 0008）: 2 つ目は起動しない（`TestSecondDaemonDoesNotStart`）。クライアントが自動で起動し、`server.json` は 0600（`TestClientStartsTheDaemon`）。別のクライアントからの承認で、待っているターンがすぐ続く（`TestApprovalFromAnotherClient`。借用の期間は既定の 30 秒のまま、数ミリ秒で続く）。落ちたデーモンを起動し直すと、借用の期間を待たずにターンが続く（`TestCrashDaemonRestart`）。何もしないと止まり（`TestIdleDaemonStops`）、クライアントが待っている間は止まらない（`TestDaemonStaysWhileAClientWaits`）。終わる途中のデーモンの後に起動したデーモンは、ロックを待って引き継ぐ（`TestDaemonWaitsForTheOneOnItsWayOut`）。
 
 - [ ] SSE で、トークン、ツールの開始と終了、承認の求め、要確認、ターンの終わりが届く。
 - [ ] `TestACPContract`: 実装した ACP のメソッドの要求と応答が、固定した版の ACP の JSON Schema に合う。
