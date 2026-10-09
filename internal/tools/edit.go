@@ -46,6 +46,9 @@ func planEdit(_ context.Context, env Env, input json.RawMessage) Planned {
 	if err != nil {
 		return fail("%v", err)
 	}
+	if protected(p) {
+		return fail("%s is protected: it holds git's or the agents' settings (use the git tools for the repository)", p)
+	}
 	b, err := env.Root.ReadFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return fail("%s does not exist; use write to create it", p)

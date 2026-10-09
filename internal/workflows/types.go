@@ -14,13 +14,13 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "1"
+	SessionVersion = "2"
 	Turn           = "turn"
-	TurnVersion    = "1"
+	TurnVersion    = "2"
 	// MCPCall runs one tool call that Claude Code made through KairoCode's
 	// MCP server (ADR 0007).
 	MCPCall        = "mcp.call"
-	MCPCallVersion = "1"
+	MCPCallVersion = "2"
 
 	ActAgentLoad     = "agent.load"
 	ActModel         = "model"
@@ -153,14 +153,21 @@ type PermissionInput struct {
 }
 
 type MCPRef struct {
-	Turn   string `json:"turn"`
+	Turn string `json:"turn"`
+	// Run is the call's run; Key its content; Ask names a request this run
+	// makes (one per run).
+	Run    string `json:"run"`
 	Key    string `json:"key"`
+	Ask    string `json:"ask"`
 	Repeat bool   `json:"repeat,omitempty"`
 }
 
 // AskRequest is an MCP call waiting for the user (ADR 0007, 4).
 type AskRequest struct {
+	// Key names the request (one per run that asks); Content the calls it
+	// is about.
 	Key     string `json:"key"`
+	Content string `json:"content"`
 	Tool    string `json:"tool"`
 	Subject string `json:"subject"`
 	Rule    string `json:"rule"`
@@ -172,7 +179,8 @@ type MCPAskInput struct {
 
 type MCPGrantInput struct {
 	Turn     string   `json:"turn"`
-	Key      string   `json:"key"`
+	Ask      string   `json:"ask"`
+	Content  string   `json:"content"`
 	Approval Approval `json:"approval"`
 }
 

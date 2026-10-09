@@ -54,13 +54,16 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			n INTEGER NOT NULL,
 			proc TEXT NOT NULL,
 			acknowledged INTEGER NOT NULL DEFAULT 0)`,
-		// The user's answers to MCP calls that asked (ADR 0007, 4).
+		// The user's answers to MCP calls that asked (ADR 0007, 4): one per
+		// request (ask), for calls of content key, each used by one run.
 		`CREATE TABLE IF NOT EXISTS kc_mcp_grant (
 			turn TEXT NOT NULL,
+			ask TEXT NOT NULL,
 			key TEXT NOT NULL,
 			ok INTEGER NOT NULL,
 			reason TEXT NOT NULL,
-			PRIMARY KEY (turn, key))`,
+			used_by TEXT,
+			PRIMARY KEY (turn, ask))`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)
@@ -236,24 +239,65 @@ func (s *Store) AcknowledgeMCPCall(ctx context.Context, run string) error {
 	return err
 }
 
-// Grant records the user's answer to the MCP call of content key in turn.
-func (s *Store) Grant(ctx context.Context, turn, key string, ok bool, reason string) error {
+// Grant records the user's answer to request ask, about calls of content
+// key in turn.
+func (s *Store) Grant(ctx context.Context, turn, ask, key string, ok bool, reason string) error {
 	v := 0
 	if ok {
 		v = 1
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO kc_mcp_grant (turn, key, ok, reason) VALUES (?, ?, ?, ?) ON CONFLICT (turn, key) DO NOTHING`,
-		turn, key, v, reason)
+		`INSERT INTO kc_mcp_grant (turn, ask, key, ok, reason) VALUES (?, ?, ?, ?, ?) ON CONFLICT (turn, ask) DO NOTHING`,
+		turn, ask, key, v, reason)
 	return err
 }
 
-// Granted is the user's answer to the call of content key in turn, if any.
-func (s *Store) Granted(ctx context.Context, turn, key string) (found, ok bool, reason string, err error) {
-	var v int
-	err = s.db.QueryRowContext(ctx, `SELECT ok, reason FROM kc_mcp_grant WHERE turn = ? AND key = ?`, turn, key).Scan(&v, &reason)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, false, "", nil
+// UseGrant gives run an answer about calls of content key in turn: the one
+// it was given before, or else the oldest one no run has used. An answer
+// lets one run, never two: a call made again later, after an interruption,
+// is asked about again (ADR 0005, 0007).
+func (s *Store) UseGrant(ctx context.Context, turn, key, run string) (found, ok bool, reason string, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, false, "", err
 	}
-	return err == nil, v != 0, reason, err
+	defer tx.Rollback()
+	var ask string
+	var v int
+	err = tx.QueryRowContext(ctx, `SELECT ask, ok, reason FROM kc_mcp_grant WHERE turn = ? AND key = ? AND used_by = ?`,
+		turn, key, run).Scan(&ask, &v, &reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `SELECT ask, ok, reason FROM kc_mcp_grant WHERE turn = ? AND key = ? AND used_by IS NULL ORDER BY rowid LIMIT 1`,
+			turn, key).Scan(&ask, &v, &reason)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, false, "", nil
+		}
+		if err != nil {
+			return false, false, "", err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kc_mcp_grant SET used_by = ? WHERE turn = ? AND ask = ?`, run, turn, ask); err != nil {
+			return false, false, "", err
+		}
+	} else if err != nil {
+		return false, false, "", err
+	}
+	return true, v != 0, reason, tx.Commit()
+}
+
+// MCPRuns are the runs of every MCP call recorded for turn.
+func (s *Store) MCPRuns(ctx context.Context, turn string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT run FROM kc_mcp_call WHERE turn = ? ORDER BY rowid`, turn)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

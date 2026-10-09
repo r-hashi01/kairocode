@@ -453,3 +453,46 @@ func TestClaudeEngineRepeatAfterInterruptionAsks(t *testing.T) {
 		t.Fatalf("the tool ran %d times, want 2 (n=1 and n=2 once each)", got)
 	}
 }
+
+// An approval lets one run of the call. Claude Code, resumed after an
+// interruption, makes the approved real call again: it is asked about
+// again, not run on the old approval (review M1, item 1).
+func TestClaudeEngineApprovalServesOneRun(t *testing.T) {
+	e := setupFakeClaude(t,
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "asked"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 1}},
+			{Tool: "count", Args: map[string]any{"n": 9}},
+		}, Die: true},
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 9}},
+			{Tool: "count", Args: map[string]any{"n": 1}},
+		}, Reply: "again"},
+		fakeClaudeRun{Reply: "ok"},
+	)
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ws := repo(t)
+	os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"count": {"*": "allow", "{\"n\":1}": "ask"}}}`), 0o644)
+	s, _ := r.CreateSession(ctx, "one", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "count")
+	p := waitPending(t, r, s, 1)
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.waitStarts(t, 3)
+	p = waitPending(t, r, s, 1)
+	if !strings.Contains(p[0].Rule, "ran before an interruption") {
+		t.Fatalf("the repeat was not asked about: %+v", p[0])
+	}
+	if err := r.Approve(ctx, p[0].Key, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRuns(t, e); got != 2 {
+		t.Fatalf("the tool ran %d times, want 2 (n=1 once on its approval, n=9 once)", got)
+	}
+}

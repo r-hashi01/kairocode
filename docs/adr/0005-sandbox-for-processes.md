@@ -102,6 +102,8 @@ Codex CLI は、実行するコマンドを OS の sandbox に入れ、作業デ
 - **書き込める root が入れ子になる場合:** 作業ディレクトリが `$TMPDIR` の下にあると、`$TMPDIR` の許可の規則が、作業ディレクトリの `.git` を書けるようにしてしまいました（macOS のテストで見つけた）。各 root の許可から、その下にあるすべての root の守る名前を除外します。
 - **Linux:** 自分自身を補助のプロセスとして起動し直す形はやめました。bubblewrap の `--seccomp <fd>` に、`go-seccomp-bpf` で作ったフィルタを直接渡します。拒むのは `ptrace`、`process_vm_readv`、`process_vm_writev`、`io_uring_*` です（Codex と同じ）。ネットワークは `--unshare-net` で切ります。
 - **Linux の既知の限界:** まだ存在しない守る名前（たとえば `.kairocode`）が作られることは防げません。読み取り専用で bind するには、その名前が存在している必要があります。存在しない名前の場所に読み取り専用のものを置くと、ホストの側に空のディレクトリが残ります（空の `.git` は git を混乱させる）。存在している守る名前は守れます。macOS では、存在しない名前も作れません。Codex にも同じ未解決の issue（#40685）があります。
+- **Linux で `kairocode.json` が無いとき:** プロジェクトの直下に `kairocode.json` が無いと（よくある場合）、sandbox の中の bash がそれを作り、次のターンから自分の権限を広げられます。上の限界の、最も影響の大きい例です。write と edit のツールは、この名前を拒みます。bash については、利用者が Linux で使うときに手当てを決めます（たとえば、ターンの始めに作られた `kairocode.json` を読まない）。
+- **write、edit と git のツール（2026-10-09、M1 のレビュー）:** write と edit も、守る名前を拒みます。sandbox の外で動く `git_push` は、リポジトリの hook を動かしません（`-c core.hooksPath=/dev/null push --no-verify`）。コマンドを sandbox の外で始める道（`exec.Command`、`exec.Cmd` の直接の組み立て、`os.StartProcess`、`sandbox.FullAccess`）は、決まったファイルの外では使えないことを、検査（`internal/invariants`）で確かめます。
 - **テスト:** macOS と、Linux（Docker の `golang:1.27` のイメージに bubblewrap を入れ、`--privileged` で動かしたもの）の両方で通しました。CI が無いので、Linux のテストは手で流しています。
 
 ## 結果

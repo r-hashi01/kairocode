@@ -165,6 +165,9 @@ func (r *Runtime) observe(o kairo.Observation) {
 	if o.Kind != kairo.ObsRunStarted && o.Kind != kairo.ObsRunSettled {
 		return
 	}
+	if o.Kind == kairo.ObsRunSettled && o.Status == "blocked" && r.mcp != nil {
+		r.mcp.blocked(o.Parent)
+	}
 	r.mu.Lock()
 	close(r.changed)
 	r.changed = make(chan struct{})

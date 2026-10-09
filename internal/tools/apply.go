@@ -42,6 +42,12 @@ var AfterWrite func(path string)
 // so no half-written file is ever seen. Done again, Apply does not write
 // twice.
 func Apply(env Env, p, before, after string, content []byte, summary string) Result {
+	if protected(p) {
+		return failed("%s is protected", p)
+	}
+	if st, err := env.Root.Lstat(p); err == nil && st.Mode()&fs.ModeSymlink != 0 {
+		return failed("%s is a symbolic link; edit the file it points to", p)
+	}
 	now, err := current(env, p)
 	if err != nil {
 		return Result{Output: err.Error(), Unknown: true}
@@ -68,6 +74,11 @@ func Apply(env Env, p, before, after string, content []byte, summary string) Res
 		mode = st.Mode().Perm()
 	}
 	if err := env.Root.WriteFile(tmp, content, mode); err != nil {
+		_ = env.Root.Remove(tmp)
+		return failed("cannot write %s: %v", p, err)
+	}
+	// WriteFile's mode is cut by the umask; the file keeps its own.
+	if err := env.Root.Chmod(tmp, mode); err != nil {
 		_ = env.Root.Remove(tmp)
 		return failed("cannot write %s: %v", p, err)
 	}

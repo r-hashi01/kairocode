@@ -103,7 +103,10 @@ func TestCommandsCheckerFindsAStartOutsideTheSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bad) != 1 || !strings.Contains(bad[0], "runs.go:5") {
-		t.Fatalf("want the exec.Command in runs.go, got %q", bad)
+	all := strings.Join(bad, "\n")
+	for _, want := range []string{"exec.Command", "os.StartProcess", "an exec.Cmd literal", "sandbox.FullAccess"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missed %s; got:\n%s", want, all)
+		}
 	}
 }

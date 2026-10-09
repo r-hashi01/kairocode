@@ -93,6 +93,8 @@ Anthropic の文書には、次のように書かれています（2026-10-09 �
 - 代わりに、承認待ちを示す結果を返し、システムプロンプトの指示に従って、モデルにターンを終えさせます。
 - ワークフローは承認を `kairo.WaitFor` で待ちます。答えは `kc_mcp_grant`（ターンと、呼び出しの内容のキーごと）に記録し、次の `claude.turn` で、答えを伝えて `--resume` します。`claude` が同じ呼び出しを出し直すと、記録された答えで通るか、拒まれます。
 
+- 追記（2026-10-09、M1 のレビュー）: 1 つの答えは、1 つの MCP の呼び出しの実行にだけ使われます（`kc_mcp_grant.used_by`）。同じ内容の呼び出しを、`claude` がもう一度出したら、もう一度利用者に尋ねます。また、途中で切れて「人の確認待ち」になった MCP の呼び出しは、ターンが終わった後も `kairocode approvals` に並び、`kairocode approve` で決着します（`TestCrashClaudeEngine`）。
+
 ### 5. このエンジンでは使えないもの
 
 - 会話は Claude Code の記録（transcript）が持ちます。ADR 0006 の会話の鎖は、`api` のエンジンだけのものです。`kc_message` には、利用者のメッセージと、ターンの最終の応答だけを置きます。
@@ -114,7 +116,7 @@ Anthropic の文書には、次のように書かれています（2026-10-09 �
   - 落ちた後に新しい ID で呼び直された実のツールが、二重に動かないこと（`TestClaudeEngineResumeDoesNotRepeatARealCall`。300 回まわして確かめた）。
   - 同じプロセスが同じ呼び出しを 2 回したら、2 回動くこと（`TestClaudeEngineRepeatedCallRunsAgain`）。
   - KairoCode を実のツールの実行中に SIGKILL して開き直すと、残った `claude` を止めて `--resume` し、「続けて」を送る。同じ呼び出しは要確認の実行に合流して、もう一度は動かず、「人の確認待ち」がモデルに返る（`TestCrashClaudeEngine`）。
-  - 承認待ちでターンが終わり、承認の後に再開すること（承認は M1 で入るので、そのときに足す）。
+  - 承認待ちでターンが終わり、承認の後に再開すること（`TestClaudeEngineAsksForApproval`）。
 - 本物の `claude` を使う確かめは、手で行います（利用者のサブスクリプションの枠を使うため）。
 
 ## 検討した代替案

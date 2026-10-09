@@ -132,6 +132,11 @@ func applyCommit(ctx context.Context, env Env, data json.RawMessage) Result {
 	}
 	if h != p.Parent {
 		if done, err := isPlanned(ctx, env, h, p); err == nil && done {
+			// Made before an interruption, perhaps before the index followed
+			// HEAD: bring it along if it still holds the parent's tree.
+			if err := syncIndex(ctx, env, p, h); err != nil {
+				return failed("committed %s, but the index was not updated: %v", short(h), err)
+			}
 			return Result{Output: "committed " + short(h)}
 		}
 		return failed("HEAD moved since the commit was planned (now %s); look at the history and plan again", short(h))
@@ -163,6 +168,31 @@ func applyCommit(ctx context.Context, env Env, data json.RawMessage) Result {
 		return failed("committed %s, but the index was not updated: %v", short(c), err)
 	}
 	return Result{Output: "committed " + short(c)}
+}
+
+// syncIndex sets the index to commit's tree if it holds the parent's: what
+// git commit leaves. An index someone changed since is left alone.
+func syncIndex(ctx context.Context, env Env, p commitPlan, commit string) error {
+	idx, err := git(ctx, env, sandbox.WorkspaceWrite, nil, "write-tree")
+	if err != nil {
+		return err
+	}
+	parentTree := ""
+	if p.Parent != "" {
+		if parentTree, err = git(ctx, env, sandbox.WorkspaceWrite, nil, "rev-parse", p.Parent+"^{tree}"); err != nil {
+			return err
+		}
+	}
+	if idx != parentTree && !(p.Parent == "" && idx == emptyTree(ctx, env)) {
+		return nil
+	}
+	_, err = git(ctx, env, sandbox.WorkspaceWrite, nil, "read-tree", commit)
+	return err
+}
+
+func emptyTree(ctx context.Context, env Env) string {
+	t, _ := git(ctx, env, sandbox.WorkspaceWrite, nil, "hash-object", "-t", "tree", "/dev/null")
+	return t
 }
 
 // isPlanned says whether commit (HEAD if "") is the planned one: its tree,
@@ -231,8 +261,15 @@ func applyPush(ctx context.Context, env Env, data json.RawMessage) Result {
 	if out, err := git(ctx, env, sandbox.FullAccess, nil, "ls-remote", p.Remote, ref); err == nil && strings.HasPrefix(out, p.Commit) {
 		return Result{Output: fmt.Sprintf("%s/%s is at %s", p.Remote, p.Branch, short(p.Commit))}
 	}
-	if _, err := git(ctx, env, sandbox.FullAccess, nil, "push", p.Remote, p.Commit+":"+ref); err != nil {
-		return failed("%v", err)
+	// Outside the sandbox: no hook of the repository runs (one could have
+	// been planted to run there).
+	if _, err := git(ctx, env, sandbox.FullAccess, nil, "-c", "core.hooksPath=/dev/null", "push", "--no-verify", p.Remote, p.Commit+":"+ref); err != nil {
+		if strings.Contains(err.Error(), "rejected") {
+			return failed("%v", err)
+		}
+		// It may have landed: checked again, with ls-remote, before any
+		// second push (idempotent).
+		return Result{Output: err.Error(), Unknown: true}
 	}
 	return Result{Output: fmt.Sprintf("pushed %s to %s/%s", short(p.Commit), p.Remote, p.Branch)}
 }

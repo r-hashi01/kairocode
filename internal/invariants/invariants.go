@@ -257,9 +257,14 @@ func Secrets(roots ...string) ([]string, error) {
 // the sandbox, and the Claude Code engine's start of claude (ADR 0007).
 var commandStarters = []string{"internal/sandbox/", "internal/runtime/claude.go"}
 
-// Commands reports every call of exec.Command or exec.CommandContext in the
-// non-test Go files under root outside commandStarters: anything else that
-// starts a command would run it outside the sandbox.
+// fullAccessUsers may name sandbox.FullAccess: the tools that run outside
+// the sandbox only once the user approved (escalated bash, git_push).
+var fullAccessUsers = []string{"internal/sandbox/", "internal/tools/bash.go", "internal/tools/git.go"}
+
+// Commands reports, in the non-test Go files under root, every way to start
+// a command outside the sandbox: exec.Command, exec.CommandContext or an
+// exec.Cmd literal outside commandStarters, os.StartProcess anywhere, and
+// sandbox.FullAccess outside fullAccessUsers.
 func Commands(root string) ([]string, error) {
 	var out []string
 	fset := token.NewFileSet()
@@ -275,34 +280,46 @@ func Commands(root string) ([]string, error) {
 		}
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
-		for _, ok := range commandStarters {
-			if strings.HasPrefix(rel, ok) {
-				return nil
-			}
+		within := func(list []string) bool {
+			return slices.ContainsFunc(list, func(prefix string) bool { return strings.HasPrefix(rel, prefix) })
 		}
 		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}
-		name := ""
+		names := map[string]string{} // local name -> import path
 		for _, imp := range f.Imports {
-			if path, _ := strconv.Unquote(imp.Path.Value); path == "os/exec" {
-				name = "exec"
-				if imp.Name != nil {
-					name = imp.Name.Name
-				}
+			path, _ := strconv.Unquote(imp.Path.Value)
+			name := path[strings.LastIndex(path, "/")+1:]
+			if imp.Name != nil {
+				name = imp.Name.Name
 			}
+			names[name] = path
 		}
-		if name == "" {
-			return nil
+		report := func(pos token.Pos, what string) {
+			out = append(out, fmt.Sprintf("%s: %s outside the sandbox (use internal/sandbox.Command)", fset.Position(pos), what))
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if id, ok := sel.X.(*ast.Ident); ok && id.Name == name && (sel.Sel.Name == "Command" || sel.Sel.Name == "CommandContext") {
-				out = append(out, fmt.Sprintf("%s: exec.%s outside the sandbox (use internal/sandbox.Command)", fset.Position(sel.Pos()), sel.Sel.Name))
+			switch n := n.(type) {
+			case *ast.SelectorExpr:
+				id, ok := n.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				switch {
+				case names[id.Name] == "os/exec" && (n.Sel.Name == "Command" || n.Sel.Name == "CommandContext") && !within(commandStarters):
+					report(n.Pos(), "exec."+n.Sel.Name)
+				case names[id.Name] == "os" && n.Sel.Name == "StartProcess":
+					report(n.Pos(), "os.StartProcess")
+				case strings.HasSuffix(names[id.Name], "/internal/sandbox") && n.Sel.Name == "FullAccess" && !within(fullAccessUsers):
+					report(n.Pos(), "sandbox.FullAccess")
+				}
+			case *ast.CompositeLit:
+				if sel, ok := n.Type.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && names[id.Name] == "os/exec" && sel.Sel.Name == "Cmd" && !within(commandStarters) {
+						report(n.Pos(), "an exec.Cmd literal")
+					}
+				}
 			}
 			return true
 		})

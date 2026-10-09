@@ -88,8 +88,9 @@ func loadRules(dir string) ([]permission.Rule, error) {
 	return rules, nil
 }
 
-// subject is what a call's patterns are matched against: its command, or
-// else its path.
+// subject is what a call's patterns are matched against and what the user
+// is shown: its command, or else its path, or else its arguments as compact
+// JSON with sorted keys (a push's remote and branch, say).
 func subject(args json.RawMessage) string {
 	var in struct {
 		Command string `json:"command"`
@@ -99,7 +100,15 @@ func subject(args json.RawMessage) string {
 	if in.Command != "" {
 		return in.Command
 	}
-	return in.Path
+	if in.Path != "" {
+		return in.Path
+	}
+	var v any
+	if json.Unmarshal(args, &v) != nil {
+		return string(args)
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 // permissionCheck decides a call from the rules recorded at the start of the
@@ -109,8 +118,9 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	if err != nil || out.Action != string(permission.Ask) || in.MCP == nil {
 		return out, err
 	}
-	// An MCP call the user has answered already (ADR 0007, 4).
-	found, ok, reason, err := r.Store.Granted(t, in.MCP.Turn, in.MCP.Key)
+	// An MCP call the user has answered (ADR 0007, 4). An answer serves one
+	// run: a repeat, an escalation or a push made again is asked again.
+	found, ok, reason, err := r.Store.UseGrant(t, in.MCP.Turn, in.MCP.Key, in.MCP.Run)
 	if err != nil || !found {
 		return out, err
 	}
@@ -183,7 +193,7 @@ func (r *Runtime) mcpAsk(t *kairo.TaskContext, in workflows.MCPAskInput) (workfl
 }
 
 func (r *Runtime) mcpGrant(t *kairo.TaskContext, in workflows.MCPGrantInput) (bool, error) {
-	return true, r.Store.Grant(t, in.Turn, in.Key, in.Approval.OK, in.Approval.Reason)
+	return true, r.Store.Grant(t, in.Turn, in.Ask, in.Content, in.Approval.OK, in.Approval.Reason)
 }
 
 // Pending is a tool call waiting for the user: for approval before it runs
@@ -207,12 +217,17 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 	}
 	var out []Pending
 	for _, turn := range turns {
-		if turn.Workflow != workflows.Turn || turn.Finished() {
+		if turn.Workflow != workflows.Turn {
 			continue
 		}
-		calls, err := r.K.Children(ctx, turn.RunID)
-		if err != nil {
-			return nil, err
+		// A finished turn waits for nothing, but an MCP call of it that was
+		// cut off may still wait to be reviewed.
+		var calls []kairo.RunInfo
+		if !turn.Finished() {
+			var err error
+			if calls, err = r.K.Children(ctx, turn.RunID); err != nil {
+				return nil, err
+			}
 		}
 		checks := map[string]workflows.PermissionOutput{}
 		tool := map[string]string{}
@@ -241,6 +256,19 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 			}
 			checks[in.In.Call.Call] = o
 			tool[in.In.Call.Call] = in.In.Tool
+		}
+		// The MCP calls of the turn are runs of their own (kairo-gap #17):
+		// their cut-off steps are listed with the turn's.
+		mcpRuns, err := r.Store.MCPRuns(ctx, turn.RunID)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range mcpRuns {
+			steps, err := r.K.Children(ctx, m)
+			if err != nil && !errors.Is(err, kairo.ErrUnknownRun) {
+				return nil, err
+			}
+			calls = append(calls, steps...)
 		}
 		for _, c := range calls {
 			if c.Status == "blocked" {

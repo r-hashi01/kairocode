@@ -83,6 +83,10 @@ func runBash(ctx context.Context, env Env, input json.RawMessage) Result {
 	}
 	var exit *exec.ExitError
 	switch {
+	case ctx.Err() == context.Canceled:
+		// Stopped from outside (the step, the process): whatever it did so
+		// far is unknown, and a real command is never taken for done.
+		return Result{Output: "the command was stopped before it ended\n" + text, Unknown: true}
 	case ctx.Err() == context.DeadlineExceeded:
 		return Result{Output: fmt.Sprintf("timed out after %v; the command was stopped\n%s", timeout, text), IsError: true}
 	case errors.As(err, &exit):

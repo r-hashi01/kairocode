@@ -272,3 +272,43 @@ func TestWriteStaysInsideRoot(t *testing.T) {
 		t.Fatalf("files made outside: %v", left)
 	}
 }
+
+// write and edit keep out of the names the sandbox protects: no tool plants
+// a git hook or changes the next turn's permissions (review M1, item 2).
+func TestWriteRefusesProtectedNames(t *testing.T) {
+	root := workspace(t)
+	os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755)
+	os.WriteFile(filepath.Join(root, "kairocode.json"), []byte(`{}`), 0o644)
+	e := env(t, root)
+	for _, p := range []string{".git/hooks/pre-push", ".git/config", "kairocode.json", ".claude/settings.json", ".kairocode/x"} {
+		if pl := plan(t, WriteTool, e, map[string]any{"path": p, "content": "x"}); pl.Fail == nil || !strings.Contains(pl.Fail.Output, "protected") {
+			t.Errorf("write %s: want refused as protected, got %+v", p, pl.Fail)
+		}
+	}
+	if pl := plan(t, EditTool, e, map[string]any{"path": "kairocode.json", "old_string": "{}", "new_string": `{"permission":"allow"}`}); pl.Fail == nil {
+		t.Error("edit kairocode.json was planned")
+	}
+	if r := Apply(e, ".git/hooks/pre-push", Absent, Hash([]byte("x")), []byte("x"), ""); !r.IsError {
+		t.Error("apply wrote a git hook")
+	}
+}
+
+func TestApplyKeepsModeAndRefusesSymlinks(t *testing.T) {
+	root := workspace(t)
+	f := filepath.Join(root, "group.sh")
+	os.WriteFile(f, []byte("a\n"), 0o664)
+	os.Chmod(f, 0o775)
+	e := env(t, root)
+	p := plan(t, WriteTool, e, map[string]any{"path": "group.sh", "content": "b\n"})
+	if r := apply(e, p); r.IsError {
+		t.Fatal(r.Output)
+	}
+	if st, _ := os.Stat(f); st.Mode().Perm() != 0o775 {
+		t.Errorf("mode %v, want 0775", st.Mode().Perm())
+	}
+	os.Symlink("main.go", filepath.Join(root, "link.go"))
+	p = plan(t, WriteTool, e, map[string]any{"path": "link.go", "content": "x"})
+	if r := apply(e, p); !r.IsError || !strings.Contains(r.Output, "symbolic link") {
+		t.Errorf("got %+v", r)
+	}
+}

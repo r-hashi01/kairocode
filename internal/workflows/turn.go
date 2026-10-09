@@ -130,7 +130,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 			if err != nil {
 				return TurnOutput{}, err
 			}
-			if _, err := kairo.Call[bool](ctx, ActMCPGrant, MCPGrantInput{Turn: ctx.ID(), Key: a.Key, Approval: ap}); err != nil {
+			if _, err := kairo.Call[bool](ctx, ActMCPGrant, MCPGrantInput{Turn: ctx.ID(), Ask: a.Key, Content: a.Content, Approval: ap}); err != nil {
 				return TurnOutput{}, err
 			}
 			verdict := "approved"
@@ -183,7 +183,7 @@ func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in T
 	case "ask":
 		if mcp != nil {
 			// Over MCP, claude is not kept waiting: the turn waits instead.
-			return Gate{Action: ActMCPAsk, Ask: &AskRequest{Key: mcp.Key, Tool: tool, Subject: d.Subject, Rule: d.Rule}}, nil
+			return Gate{Action: ActMCPAsk, Ask: &AskRequest{Key: mcp.Ask, Content: mcp.Key, Tool: tool, Subject: d.Subject, Rule: d.Rule}}, nil
 		}
 		a, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+in.Call)
 		if err != nil {

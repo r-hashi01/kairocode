@@ -29,6 +29,19 @@ type mcpServer struct {
 
 	mu    sync.Mutex
 	turns map[string]*mcpTurn
+	// watch: MCP call runs a handler waits on, to be told if a step of one
+	// stops for review.
+	watch map[string]func()
+}
+
+// blocked is told that a step of run stopped for review.
+func (s *mcpServer) blocked(run string) {
+	s.mu.Lock()
+	stop := s.watch[run]
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // mcpTurn is one claude run of a turn.
@@ -61,7 +74,7 @@ func startMCP(rt *Runtime) (*mcpServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &mcpServer{rt: rt, ln: ln, turns: map[string]*mcpTurn{}}
+	s := &mcpServer{rt: rt, ln: ln, turns: map[string]*mcpTurn{}, watch: map[string]func(){}}
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		token := strings.TrimPrefix(r.URL.Path, "/mcp/")
 		s.mu.Lock()
@@ -183,19 +196,39 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 		return nil, err
 	}
 	if blocked {
-		// The call was under way when KairoCode stopped, and whether it took
-		// effect is unknown: a person has to say (invariant 4). Waiting here
-		// would keep claude running meanwhile (invariant 7).
-		return errorResult(fmt.Sprintf("Not run again: an earlier run of this %s call was cut off and may have taken effect. "+
-			"It waits for a person to say whether it did. Stop here and tell the user.", tool)), nil
+		return reviewResult(tool), nil
 	}
 	defer func() {
 		t.mu.Lock()
 		delete(t.live, id)
 		t.mu.Unlock()
 	}()
-	out, err := kairo.Await[workflows.ToolOutput](ctx, s.rt.K, id)
+	// A step that stops for review is not waited for: that would keep claude
+	// running until a person answers (invariant 7).
+	actx, stop := context.WithCancel(ctx)
+	defer stop()
+	var stoppedForReview bool
+	s.mu.Lock()
+	s.watch[id] = func() {
+		s.mu.Lock()
+		stoppedForReview = true
+		s.mu.Unlock()
+		stop()
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.watch, id)
+		s.mu.Unlock()
+	}()
+	out, err := kairo.Await[workflows.ToolOutput](actx, s.rt.K, id)
 	if err != nil {
+		s.mu.Lock()
+		review := stoppedForReview
+		s.mu.Unlock()
+		if review {
+			return reviewResult(tool), nil
+		}
 		if ctx.Err() != nil {
 			return nil, err
 		}
@@ -271,7 +304,7 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	}
 	in := workflows.MCPCallInput{
 		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy,
-		MCP: workflows.MCPRef{Turn: t.turn, Key: key, Repeat: repeat},
+		MCP: workflows.MCPRef{Turn: t.turn, Run: id, Key: key, Ask: fmt.Sprintf("%s.%d", key, n), Repeat: repeat},
 	}
 	// kairo-gap #17: the run is a root of its own, not a child of the turn.
 	if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
@@ -279,6 +312,13 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	}
 	t.live[id] = true
 	return id, false, nil
+}
+
+// reviewResult answers a call whose run stopped for review: whether it took
+// effect is unknown, and a person has to say (invariant 4).
+func reviewResult(tool string) *mcp.CallToolResult {
+	return errorResult(fmt.Sprintf("Not run again: a run of this %s call was cut off and may have taken effect. "+
+		"It waits for a person to say whether it did. Stop here and tell the user.", tool))
 }
 
 func errorResult(text string) *mcp.CallToolResult {

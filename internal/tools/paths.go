@@ -5,7 +5,10 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/r-hashi01/kairocode/internal/sandbox"
 )
 
 // skipDirs are not walked by list, glob and grep.
@@ -44,6 +47,16 @@ func within(dir, p string) (string, bool) {
 		return "", false
 	}
 	return r, true
+}
+
+// protected says whether p (relative to the working directory) is one of
+// the names kept out of reach directly under it, or under one: .git, the
+// agents' settings, kairocode.json (ADR 0005). write and edit refuse them
+// as the sandbox does, so no tool can change what the next turn may do or
+// plant a git hook.
+func protected(p string) bool {
+	first, _, _ := strings.Cut(p, "/")
+	return slices.Contains(sandbox.Protected, first)
 }
 
 // walkFiles calls fn with the slash-separated path of each regular file under

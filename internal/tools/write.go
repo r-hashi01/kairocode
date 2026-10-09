@@ -30,6 +30,9 @@ func planWrite(_ context.Context, env Env, input json.RawMessage) Planned {
 	if err != nil {
 		return Planned{Fail: &Result{Output: err.Error(), IsError: true}}
 	}
+	if protected(p) {
+		return Planned{Fail: &Result{Output: p + " is protected: it holds git's or the agents' settings (use the git tools for the repository)", IsError: true}}
+	}
 	before, err := current(env, p)
 	if err != nil {
 		return Planned{Fail: &Result{Output: err.Error(), IsError: true}}

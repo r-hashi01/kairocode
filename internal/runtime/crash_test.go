@@ -233,6 +233,16 @@ func TestCrashClaudeEngine(t *testing.T) {
 	if len(st) != 2 || st[0].Mode != "--session-id" || st[1].Mode != "--resume" || st[1].Prompt != continuePrompt {
 		t.Fatalf("claude was started as %+v", st)
 	}
+	// The cut-off call is offered for review, and the answer settles it
+	// (review M1, item 4).
+	p := waitPending(t, r, SessionID("cc"), 1)
+	if p[0].Kind != "review" || p[0].Tool != "count" {
+		t.Fatalf("pending %+v", p[0])
+	}
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitPending(t, r, SessionID("cc"), 0)
 }
 
 // crashWrite runs an edit that appends a line in a child process, kills it
@@ -458,5 +468,9 @@ func TestCrashGitCommitOnce(t *testing.T) {
 	}
 	if n := git("rev-list", "--count", "HEAD"); n != "2" {
 		t.Fatalf("%s commits, want 2", n)
+	}
+	// The index followed HEAD, as git commit leaves it (review M1, item 3).
+	if st := git("status", "--porcelain"); st != "" {
+		t.Fatalf("not clean after the resumed commit:\n%s", st)
 	}
 }
