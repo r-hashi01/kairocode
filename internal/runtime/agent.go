@@ -10,6 +10,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/store"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -39,9 +40,22 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if err != nil {
 		return workflows.Agent{}, err
 	}
+	rules, err := loadRules(in.Dir)
+	if err != nil {
+		return workflows.Agent{}, err
+	}
+	rulesHash, err := r.Store.PutJSON(t, store.KindPermissions, rules)
+	if err != nil {
+		return workflows.Agent{}, err
+	}
+	// The plan agent only reads (FR-12): it is not even shown the others.
+	readOnly := in.Agent == "plan"
 	var specs []provider.ToolSpec
 	var names, planned []string
 	for _, d := range r.toolDefs() {
+		if readOnly && d.Effect != tools.Read {
+			continue
+		}
 		specs = append(specs, provider.ToolSpec{Name: d.Name, Description: d.Description, Schema: d.Schema})
 		names = append(names, d.Name)
 		if d.Plan != nil {
@@ -53,13 +67,15 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		return workflows.Agent{}, err
 	}
 	return workflows.Agent{
-		Name:     in.Agent,
-		Engine:   r.cfg.Engine,
-		Model:    r.cfg.Model,
-		MaxSteps: r.cfg.MaxSteps,
-		System:   system,
-		Tools:    toolsHash,
-		Names:    names,
-		Planned:  planned,
+		Name:        in.Agent,
+		Engine:      r.cfg.Engine,
+		Model:       r.cfg.Model,
+		MaxSteps:    r.cfg.MaxSteps,
+		System:      system,
+		Tools:       toolsHash,
+		Names:       names,
+		Planned:     planned,
+		Permissions: rulesHash,
+		ReadOnly:    readOnly,
 	}, nil
 }

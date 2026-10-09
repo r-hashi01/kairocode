@@ -32,6 +32,7 @@ var workflowImports = map[string]bool{
 	"crypto/sha256":                     true,
 	"github.com/r-hashi01/kairo/sdk/go": true, // the workflow context: Call, Parallel, WaitFor, Child
 	module + "/internal/msg":            true,
+	module + "/internal/permission":     true,
 	module + "/internal/plan":           true,
 	module + "/internal/tools":          true, // for the Def and Effect types
 }

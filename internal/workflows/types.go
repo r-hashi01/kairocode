@@ -27,6 +27,13 @@ const (
 	ActHistoryExtend = "history.extend"
 	// ActClaudeTurn runs a turn in the user's Claude Code (ADR 0007).
 	ActClaudeTurn = "claude.turn"
+	// ActPermissionCheck decides whether a tool call may run; ActToolDenied
+	// answers one that may not.
+	ActPermissionCheck = "permission.check"
+	ActToolDenied      = "tool.denied"
+	// SignalApprovePrefix + a call's id is the signal that answers its
+	// request for approval.
+	SignalApprovePrefix = "approve/"
 	// ActToolPrefix + a tool's name is that tool's action. A tool that writes
 	// a file has two instead (design 3.1): ActToolPrefix + name +
 	// ActPlanSuffix works the write out, and ActFileApply makes it.
@@ -115,6 +122,40 @@ type Agent struct {
 	Names    []string `json:"names"`  // the tools it has
 	// Planned are the tools among Names that plan a write and apply it.
 	Planned []string `json:"planned,omitempty"`
+	// Permissions are the rules as they were when the turn started, by hash.
+	Permissions string `json:"permissions"`
+	// ReadOnly: the agent may only read (plan mode, FR-12).
+	ReadOnly bool `json:"read_only,omitempty"`
+}
+
+// Policy is what a tool call is checked against: the rules recorded at the
+// start of the turn, and whether the agent may only read.
+type Policy struct {
+	Rules    string `json:"rules"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+type PermissionInput struct {
+	Policy Policy    `json:"policy"`
+	Tool   string    `json:"tool"`
+	Call   ToolInput `json:"call"`
+}
+
+type PermissionOutput struct {
+	Action  string `json:"action"` // allow, ask, deny
+	Rule    string `json:"rule"`
+	Subject string `json:"subject,omitempty"`
+}
+
+// Approval answers a request for approval, from any client, any time later.
+type Approval struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type DeniedInput struct {
+	Call   string `json:"call,omitempty"`
+	Reason string `json:"reason"`
 }
 
 // ModelInput names everything a model call sees by hash (design 2.2,
@@ -173,6 +214,7 @@ type HistoryExtendInput struct {
 // ClaudeTurnInput is a turn as Claude Code runs it: the prompt and the
 // agent, by hash, and where the turn's tool calls are to be recorded.
 type ClaudeTurnInput struct {
+	Policy  Policy   `json:"policy"`
 	Session string   `json:"session"`
 	Turn    string   `json:"turn"` // the turn's run id
 	Dir     string   `json:"dir"`
@@ -195,6 +237,7 @@ type MCPCallInput struct {
 	Dir     string          `json:"dir"`
 	Args    json.RawMessage `json:"args"`
 	Planned bool            `json:"planned,omitempty"`
+	Policy  Policy          `json:"policy"`
 }
 
 // PlanOutput is a planned write, or (Done) the result to give the model at

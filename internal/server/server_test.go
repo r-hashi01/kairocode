@@ -67,4 +67,7 @@ func TestSessionMessageTurn(t *testing.T) {
 	if resp, out := call("POST", "/sessions/one/messages", "secret", map[string]string{}); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out["error"].(string), "text") {
 		t.Fatalf("empty message: %d %v", resp.StatusCode, out)
 	}
+	if resp, _ := call("POST", "/approvals", "secret", map[string]any{"key": "no-hash", "ok": true}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a malformed approval key got %d", resp.StatusCode)
+	}
 }

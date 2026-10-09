@@ -49,7 +49,8 @@ func crashChild() {
 	if err != nil {
 		panic(err)
 	}
-	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash"})
+	lease, _ := time.ParseDuration(os.Getenv("KC_LEASE"))
+	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash", Lease: lease})
 	if err != nil {
 		panic(err)
 	}
@@ -192,7 +193,7 @@ func TestCrashClaudeEngine(t *testing.T) {
 	if err := os.WriteFile(e.hold, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ws := repo(t)
+	ws := allowCount(t)
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), "KC_CRASH_CLAUDE_CHILD=1", "KC_DIR_ENV="+e.dir, "KC_DIR="+ws)
 	cmd.Stderr = os.Stderr

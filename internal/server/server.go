@@ -26,6 +26,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions", s.createSession)
 	s.mux.HandleFunc("POST /sessions/{id}/messages", s.sendMessage)
 	s.mux.HandleFunc("GET /sessions/{id}/turns/{n}", s.getTurn)
+	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
+	s.mux.HandleFunc("POST /approvals", s.approve)
 	return s
 }
 
@@ -107,4 +109,35 @@ func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"reply": text, "steps": out.Steps, "usage": out.Usage, "stopped": out.Stopped,
 	})
+}
+
+func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request) {
+	p, err := s.rt.Pending(r.Context(), sessionOf(r))
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	if p == nil {
+		p = []runtime.Pending{}
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// approve answers a request for approval (FR-11): from any client, any time
+// after it was made.
+func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Key    string `json:"key"`
+		OK     bool   `json:"ok"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Key == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"key": "...", "ok": true|false, "reason": "..."}`))
+		return
+	}
+	if err := s.rt.Approve(r.Context(), in.Key, in.OK, in.Reason); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -22,6 +22,8 @@ const (
 	KindTools   = "tools"
 	// KindContent is a file's content as a planned write leaves it.
 	KindContent = "content"
+	// KindPermissions is the permission rules as a turn started with them.
+	KindPermissions = "permissions"
 )
 
 var ErrNotFound = errors.New("store: no such content")

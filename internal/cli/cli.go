@@ -23,6 +23,8 @@ import (
 const usage = `usage:
   kairocode run [-dir DIR] [-db FILE] "<request>"   answer one request, then exit
   kairocode serve [-addr ADDR] [-db FILE]            run the HTTP API
+  kairocode approvals [-db FILE] <session>           list the calls waiting for approval
+  kairocode approve [-db FILE] [-deny] [-reason R] <key>   answer one
 
 KAIROCODE_ENGINE picks who runs the model loop:
   api (default)   the Claude API (credentials as the Anthropic SDK resolves them)
@@ -45,6 +47,10 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = run(ctx, args[1:], stdout, stderr)
 	case "serve":
 		err = serve(ctx, args[1:], stderr)
+	case "approvals":
+		err = approvals(ctx, args[1:], stdout, stderr)
+	case "approve":
+		err = approve(ctx, args[1:], stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -168,4 +174,57 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+// openForAnswers opens the runtime only to read and answer: it runs no model.
+func openForAnswers(ctx context.Context, db string) (*runtime.Runtime, error) {
+	return runtime.Open(ctx, runtime.Config{DB: db, Engine: workflows.EngineClaudeCode})
+}
+
+func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("approvals", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := fs.String("db", runtime.DefaultDB(), "session database")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("approvals needs a session: kairocode approvals s/<id>")
+	}
+	rt, err := openForAnswers(ctx, *db)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	p, err := rt.Pending(ctx, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if len(p) == 0 {
+		fmt.Fprintln(stdout, "nothing waits for approval")
+	}
+	for _, x := range p {
+		fmt.Fprintf(stdout, "%s\n  %s %q (%s)\n", x.Key, x.Tool, x.Subject, x.Rule)
+	}
+	return nil
+}
+
+func approve(ctx context.Context, args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	db := fs.String("db", runtime.DefaultDB(), "session database")
+	deny := fs.Bool("deny", false, "decline the call")
+	reason := fs.String("reason", "", "why (given to the model)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("approve needs a key: see kairocode approvals")
+	}
+	rt, err := openForAnswers(ctx, *db)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	return rt.Approve(ctx, fs.Arg(0), !*deny, *reason)
 }

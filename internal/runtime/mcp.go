@@ -32,10 +32,11 @@ type mcpServer struct {
 }
 
 type mcpTurn struct {
-	turn  string // the turn's run id
-	dir   string
-	tools map[string]tools.Def
-	srv   *mcp.Server
+	turn   string // the turn's run id
+	dir    string
+	policy workflows.Policy
+	tools  map[string]tools.Def
+	srv    *mcp.Server
 
 	mu sync.Mutex
 	// live: calls a handler of this run is waiting on. A call never meets
@@ -77,13 +78,13 @@ func (s *mcpServer) close() error { return s.http.Close() }
 // tools. It returns its URL, a function that acknowledges every result handed
 // to the run (call it once the run ended with a result), and one that closes
 // the endpoint.
-func (s *mcpServer) open(turn, dir string, names []string) (string, func(context.Context) error, func(), error) {
+func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy) (string, func(context.Context) error, func(), error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", nil, nil, err
 	}
 	token := hex.EncodeToString(b)
-	t := &mcpTurn{turn: turn, dir: dir, tools: map[string]tools.Def{}, live: map[string]bool{}}
+	t := &mcpTurn{turn: turn, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{}}
 	t.srv = mcp.NewServer(&mcp.Implementation{Name: MCPServerName, Version: "0"}, nil)
 	for _, name := range names {
 		d, ok := s.rt.tool(name)
@@ -163,7 +164,7 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 	if err := s.acknowledge(ctx, t); err != nil {
 		return nil, err
 	}
-	id, blocked, err := s.claim(ctx, t, key, workflows.MCPCallInput{Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil})
+	id, blocked, err := s.claim(ctx, t, key, workflows.MCPCallInput{Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy})
 	if err != nil {
 		return nil, err
 	}

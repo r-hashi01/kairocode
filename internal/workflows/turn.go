@@ -44,21 +44,32 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		// A cut-off reply's tool calls may be incomplete: none of them runs,
 		// and each is answered "not run" so the conversation stays valid.
 		cut := reply.Stop == "refusal" || reply.Stop == "max_tokens"
-		results := make([]ToolOutput, len(reply.Calls))
-		calls := make([]func(*kairo.Context) error, len(reply.Calls))
+		policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}
+		inputs := make([]ToolInput, len(reply.Calls))
+		gates := make([]Gate, len(reply.Calls))
 		for i, c := range reply.Calls {
-			action, planned := ActToolMissing, false
+			inputs[i] = ToolInput{Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i}
 			switch {
 			case cut:
-				action = ActToolSkipped
-			case slices.Contains(agent.Names, c.Name):
-				action = ActToolPrefix + c.Name
-				planned = slices.Contains(agent.Planned, c.Name)
+				gates[i] = Gate{Action: ActToolSkipped}
+			case !slices.Contains(agent.Names, c.Name):
+				gates[i] = Gate{Action: ActToolMissing}
+			default:
+				// Checked one by one, outside Parallel: a wait for approval
+				// inside a Parallel branch is not reached by its signal
+				// (kairo-gap #18).
+				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i])
+				if err != nil {
+					return TurnOutput{}, err
+				}
+				gates[i] = g
 			}
+		}
+		results := make([]ToolOutput, len(reply.Calls))
+		calls := make([]func(*kairo.Context) error, len(reply.Calls))
+		for i := range reply.Calls {
 			calls[i] = func(ctx *kairo.Context) error {
-				r, err := callTool(ctx, action, planned, ToolInput{
-					Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i,
-				})
+				r, err := runGated(ctx, gates[i], inputs[i])
 				results[i] = r
 				return err
 			}
@@ -90,6 +101,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	r, err := kairo.Call[ClaudeTurnOutput](ctx, ActClaudeTurn, ClaudeTurnInput{
 		Session: in.Session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 		System: agent.System, Tools: agent.Names, Message: in.Message,
+		Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},
 	})
 	if err != nil {
 		return TurnOutput{}, err
@@ -101,14 +113,60 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	return TurnOutput{Head: head, Reply: r.Message, Steps: r.Turns, Usage: r.Usage}, nil
 }
 
-// callTool runs a tool's action. A tool that writes a file is two calls
+// Gate is what a tool call may do once checked: run Action (a tool, or one
+// of the actions that answer a call that does not run), and whether it is a
+// planned write.
+type Gate struct {
+	Action  string       `json:"action"`
+	Planned bool         `json:"planned,omitempty"`
+	Denied  *DeniedInput `json:"denied,omitempty"`
+}
+
+// gateTool checks a tool call against the policy. A call the rules say to
+// ask about waits for an answer as a signal: the process can stop meanwhile,
+// and the answer can come from any client, any time later (FR-11).
+func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in ToolInput) (Gate, error) {
+	d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{Policy: policy, Tool: tool, Call: in})
+	if err != nil {
+		return Gate{}, err
+	}
+	deny := func(reason string) (Gate, error) {
+		return Gate{Action: ActToolDenied, Denied: &DeniedInput{Call: in.Call, Reason: reason}}, nil
+	}
+	switch d.Action {
+	case "deny":
+		return deny("denied by " + d.Rule)
+	case "ask":
+		if in.Call == "" {
+			// A call over MCP (ADR 0007): its approval is not waited on yet.
+			return deny("this call needs the user's approval (" + d.Rule + "); stop here and ask the user")
+		}
+		a, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+in.Call)
+		if err != nil {
+			return Gate{}, err
+		}
+		if !a.OK {
+			reason := "the user declined this call"
+			if a.Reason != "" {
+				reason += ": " + a.Reason
+			}
+			return deny(reason)
+		}
+	}
+	return Gate{Action: ActToolPrefix + tool, Planned: planned}, nil
+}
+
+// runGated runs a checked call. A tool that writes a file is two calls
 // (design 3.1): the plan, recorded, then the write it describes, which is
 // safe to make again because it compares before it replaces.
-func callTool(ctx *kairo.Context, action string, planned bool, in ToolInput) (ToolOutput, error) {
-	if !planned {
-		return kairo.Call[ToolOutput](ctx, action, in)
+func runGated(ctx *kairo.Context, g Gate, in ToolInput) (ToolOutput, error) {
+	if g.Denied != nil {
+		return kairo.Call[ToolOutput](ctx, ActToolDenied, *g.Denied)
 	}
-	p, err := kairo.Call[PlanOutput](ctx, action+ActPlanSuffix, in)
+	if !g.Planned {
+		return kairo.Call[ToolOutput](ctx, g.Action, in)
+	}
+	p, err := kairo.Call[PlanOutput](ctx, g.Action+ActPlanSuffix, in)
 	if err != nil {
 		return ToolOutput{}, err
 	}

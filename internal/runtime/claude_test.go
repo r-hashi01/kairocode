@@ -266,7 +266,7 @@ func TestClaudeEngineResumeDoesNotRepeatARealCall(t *testing.T) {
 	r := openClaude(t, e)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	s, err := r.CreateSession(ctx, "die", workflows.SessionInput{Dir: repo(t)})
+	s, err := r.CreateSession(ctx, "die", workflows.SessionInput{Dir: allowCount(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestClaudeEngineRepeatedCallRunsAgain(t *testing.T) {
 	)
 	r := openClaude(t, e)
 	ctx := context.Background()
-	s, err := r.CreateSession(ctx, "rep", workflows.SessionInput{Dir: repo(t)})
+	s, err := r.CreateSession(ctx, "rep", workflows.SessionInput{Dir: allowCount(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,4 +337,14 @@ func TestClaudeEngineRepeatedCallRunsAgain(t *testing.T) {
 	if got := strings.Count(string(b), "\n"); got != 2 {
 		t.Fatalf("the tool ran %d times, want 2", got)
 	}
+}
+
+// allowCount is a working directory whose settings let the count tool run.
+func allowCount(t *testing.T) string {
+	t.Helper()
+	dir := repo(t)
+	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte(`{"permission": {"count": "allow"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

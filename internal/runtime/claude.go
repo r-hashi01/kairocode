@@ -148,7 +148,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	if transcript != "" && fileContains(transcript, mark) {
 		prompt = continuePrompt
 	}
-	url, acknowledge, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools)
+	url, acknowledge, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy)
 	if err != nil {
 		return workflows.ClaudeTurnOutput{}, err
 	}
