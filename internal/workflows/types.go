@@ -37,10 +37,10 @@ const (
 	// ActToolPrefix + a tool's name is that tool's action. A tool that writes
 	// a file has two instead (design 3.1): ActToolPrefix + name +
 	// ActPlanSuffix works the write out, and ActFileApply makes it.
-	ActToolPrefix = "tool."
+	ActToolPrefix  = "tool."
 	ActPlanSuffix  = ".plan"
 	ActApplySuffix = ".apply"
-	ActFileApply  = "file.apply"
+	ActFileApply   = "file.apply"
 	// ActToolMissing answers a call of a tool the agent does not have.
 	ActToolMissing = "tool.missing"
 	// ActToolSkipped answers a call of a reply that was cut off (refusal,

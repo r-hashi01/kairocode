@@ -50,7 +50,9 @@ func gitRepo(t *testing.T) string {
 	return dir
 }
 
-func commits(t *testing.T, dir string) string { return sh(t, dir, "git", "rev-list", "--count", "HEAD") }
+func commits(t *testing.T, dir string) string {
+	return sh(t, dir, "git", "rev-list", "--count", "HEAD")
+}
 
 func TestGitCommitAppliedTwiceCommitsOnce(t *testing.T) {
 	needGit(t)
