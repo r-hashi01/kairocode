@@ -185,7 +185,7 @@ func (e fakeEnv) countTool() tools.Def {
 		Description: "count a run",
 		Schema:      json.RawMessage(`{"properties":{"n":{"type":"integer"}}}`),
 		Effect:      tools.Real,
-		Run: func(ctx context.Context, _ string, _ json.RawMessage) tools.Result {
+		Run: func(ctx context.Context, _ tools.Env, _ json.RawMessage) tools.Result {
 			f, _ := os.OpenFile(e.counted, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 			f.WriteString("x\n")
 			f.Close()

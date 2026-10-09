@@ -214,17 +214,38 @@ func (r *Runtime) declare() {
 	for _, d := range r.toolDefs() {
 		eff, opts := effect(d.Effect)
 		kairo.Action(r.K, workflows.ActToolPrefix+d.Name, eff, func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {
-			args := in.Args
-			if args == nil {
-				call, err := r.toolCall(t, in)
-				if err != nil {
-					return workflows.ToolOutput{}, err
-				}
-				args = call.Input
-			}
-			return r.toolResult(t, in.Call, d.Run(t, in.Dir, args))
+			return r.runTool(t, d, in)
 		}, opts...)
 	}
+}
+
+// runTool runs one tool call in the working directory and stores its result.
+// For a tool that acts (not Read), anything that goes wrong once it may have
+// acted is an unknown outcome, never a plain failure (invariant 4): kairo
+// stops a real tool for review and checks an idempotent one again.
+func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolInput) (workflows.ToolOutput, error) {
+	args := in.Args
+	if args == nil {
+		call, err := r.toolCall(t, in)
+		if err != nil {
+			return workflows.ToolOutput{}, err
+		}
+		args = call.Input
+	}
+	root, err := os.OpenRoot(in.Dir)
+	if err != nil {
+		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
+	}
+	defer root.Close()
+	res := d.Run(t, tools.Env{Root: root, Dir: in.Dir}, args)
+	if res.Unknown && d.Effect != tools.Read {
+		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
+	}
+	out, err := r.toolResult(t, in.Call, res)
+	if err != nil && d.Effect != tools.Read {
+		return out, kairo.Unknown(fmt.Errorf("the tool ran, its result was not stored: %w", err))
+	}
+	return out, err
 }
 
 // toolCall finds the tool_use the input names in its assistant message.

@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -21,43 +20,45 @@ var ListTool = Def{
 	Run:    runList,
 }
 
-func runList(_ context.Context, root string, input json.RawMessage) Result {
+func runList(_ context.Context, env Env, input json.RawMessage) Result {
 	var in struct {
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &in); err != nil {
 		return failed("invalid input: %v", err)
 	}
-	dir, err := resolve(root, in.Path)
+	dir, err := rel(env, in.Path)
 	if err != nil {
 		return failed("%v", err)
 	}
-	if st, err := os.Stat(dir); err != nil {
+	if st, err := fs.Stat(env.Root.FS(), dir); err != nil {
 		return failed("%v", err)
 	} else if !st.IsDir() {
 		return failed("%s is not a directory", in.Path)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s/\n", rel(root, dir))
+	fmt.Fprintf(&b, "%s/\n", dir)
 	n := 0
-	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(env.Root.FS(), dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == dir {
 			return nil
 		}
 		if d.IsDir() && skipDirs[d.Name()] {
-			return filepath.SkipDir
+			return fs.SkipDir
 		}
 		if n == listMax {
 			return fs.SkipAll
 		}
 		n++
-		r, _ := filepath.Rel(dir, p)
-		depth := strings.Count(r, string(os.PathSeparator))
-		name := d.Name()
+		r := strings.TrimPrefix(p, dir+"/")
+		if dir == "." {
+			r = p
+		}
+		name := path.Base(p)
 		if d.IsDir() {
 			name += "/"
 		}
-		fmt.Fprintf(&b, "%s%s\n", strings.Repeat("  ", depth+1), name)
+		fmt.Fprintf(&b, "%s%s\n", strings.Repeat("  ", strings.Count(r, "/")+1), name)
 		return nil
 	})
 	if err != nil {

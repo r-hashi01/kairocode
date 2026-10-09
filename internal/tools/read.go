@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -26,7 +25,7 @@ var ReadTool = Def{
 	Run:    runRead,
 }
 
-func runRead(_ context.Context, root string, input json.RawMessage) Result {
+func runRead(_ context.Context, env Env, input json.RawMessage) Result {
 	var in struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
@@ -35,11 +34,11 @@ func runRead(_ context.Context, root string, input json.RawMessage) Result {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return failed("invalid input: %v", err)
 	}
-	p, err := resolve(root, in.Path)
+	p, err := rel(env, in.Path)
 	if err != nil {
 		return failed("%v", err)
 	}
-	f, err := os.Open(p)
+	f, err := env.Root.Open(p)
 	if err != nil {
 		return failed("%v", err)
 	}

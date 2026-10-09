@@ -21,7 +21,7 @@ var GlobTool = Def{
 	Run:    runGlob,
 }
 
-func runGlob(_ context.Context, root string, input json.RawMessage) Result {
+func runGlob(_ context.Context, env Env, input json.RawMessage) Result {
 	var in struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -32,16 +32,19 @@ func runGlob(_ context.Context, root string, input json.RawMessage) Result {
 	if _, err := path.Match(strings.ReplaceAll(in.Pattern, "**", "*"), ""); err != nil {
 		return failed("invalid pattern %q: %v", in.Pattern, err)
 	}
-	dir, err := resolve(root, in.Path)
+	dir, err := rel(env, in.Path)
 	if err != nil {
 		return failed("%v", err)
 	}
 	pat := strings.Split(strings.Trim(in.Pattern, "/"), "/")
 	var out []string
-	err = walkFiles(dir, func(p string) bool {
-		r := rel(dir, p)
+	err = walkFiles(env, dir, func(p string) bool {
+		r := strings.TrimPrefix(p, dir+"/")
+		if dir == "." {
+			r = p
+		}
 		if globMatch(pat, strings.Split(r, "/")) {
-			out = append(out, rel(root, p))
+			out = append(out, p)
 		}
 		return len(out) < globMax
 	})

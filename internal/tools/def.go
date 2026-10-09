@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 )
 
 // Effect is what a tool does to the world. The zero value is Real, so a tool
@@ -47,15 +48,30 @@ type Def struct {
 	// Schema is the JSON schema of the input: {"properties": ..., "required": [...]}.
 	Schema json.RawMessage
 	Effect Effect
-	// Run does the work in the session's working directory, root. A failure
-	// the model should see (a missing file, a path outside root) is a Result
-	// with IsError, not an error.
-	Run func(ctx context.Context, root string, input json.RawMessage) Result
+	// Run does the work in the session's working directory. A failure the
+	// model should see (a missing file, a path outside the directory) is a
+	// Result with IsError, not an error.
+	Run func(ctx context.Context, env Env, input json.RawMessage) Result
+}
+
+// Env is where a tool works.
+type Env struct {
+	// Root is the working directory. Every file a tool touches is reached
+	// through it, so no path, symbolic link or race leads outside it.
+	Root *os.Root
+	// Dir is the working directory's absolute path, to read the absolute
+	// paths a model may give.
+	Dir string
 }
 
 type Result struct {
 	Output  string
 	IsError bool
+	// Unknown: the tool may have acted on the world but cannot say whether
+	// it did (it was cut off after it began). Such a result is never taken
+	// for success (invariant 4): a real tool stops for review, an idempotent
+	// one is checked and tried again.
+	Unknown bool
 }
 
 func failed(format string, args ...any) Result {

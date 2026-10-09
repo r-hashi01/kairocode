@@ -33,27 +33,37 @@ func workspace(t *testing.T) string {
 	return root
 }
 
-func run(t *testing.T, d Def, root string, in any) Result {
+func env(t *testing.T, dir string) Env {
+	t.Helper()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Close() })
+	return Env{Root: root, Dir: dir}
+}
+
+func run(t *testing.T, d Def, dir string, in any) Result {
 	t.Helper()
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return d.Run(context.Background(), root, b)
+	return d.Run(context.Background(), env(t, dir), b)
 }
 
 func TestPathsStayInsideRoot(t *testing.T) {
 	root := workspace(t)
 	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("s"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("outside-secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"../x", "/etc/passwd", "link/secret", "pkg/../../x"} {
-		if r := run(t, ReadTool, root, map[string]any{"path": p}); !r.IsError || !strings.Contains(r.Output, "outside") {
-			t.Errorf("read %q: want refused as outside the working directory, got %+v", p, r)
+		if r := run(t, ReadTool, root, map[string]any{"path": p}); !r.IsError || strings.Contains(r.Output, "outside-secret") {
+			t.Errorf("read %q: want refused, got %+v", p, r)
 		}
 	}
 	if r := run(t, ReadTool, root, map[string]any{"path": "pkg/../main.go"}); r.IsError {
@@ -133,12 +143,17 @@ func TestDanglingSymlinkIsRefused(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "dangling")); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"dangling", "dangling/x"} {
-		if _, err := resolve(root, p); err == nil {
-			t.Errorf("resolve(%q) accepted a link to nothing outside root", p)
-		}
+	e := env(t, root)
+	if err := e.Root.WriteFile("dangling", []byte("x"), 0o644); err == nil {
+		t.Error("a write through a link to nothing outside the directory was let through")
 	}
-	if _, err := resolve(root, "new/file.go"); err != nil {
-		t.Errorf("a new path inside root was refused: %v", err)
+	if _, err := os.Stat(outside); err == nil {
+		t.Error("a file was made outside the working directory")
+	}
+	if err := e.Root.MkdirAll("new", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Root.WriteFile("new/file.go", []byte("x"), 0o644); err != nil {
+		t.Errorf("a new file inside the directory was refused: %v", err)
 	}
 }

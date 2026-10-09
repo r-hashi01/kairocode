@@ -25,7 +25,7 @@
 
 ## M1 書くツールと承認
 
-状態: 未着手
+状態: 作業中
 
 M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
@@ -34,6 +34,18 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - `kairocode serve` が自動で作ったトークンを stderr に出している。ADR 0004 の `server.json`（0600）に置き換える。
 
 中身: edit、write、bash、git（commit、push）、作用の型、権限の規則と判定（`permission.check`）、承認の待ち、要確認、コマンドの sandbox（ADR 0005）。
+
+作業の順番（2026-10-09）:
+
+1. ツールの契約: 「効いたかわからない」を返せるようにする。作用の後のエラーは `kairo.Unknown` で包む。
+2. ファイルの操作を `os.Root` に移す（TOCTOU を塞ぐ）。
+3. edit と write: 「計画」（読むだけ。書く前と書いた後のハッシュを記録する）と「適用」（冪等。比べて置き換える）の 2 段にする（設計 3.1 節）。`TestCrashWriteOnce`。
+4. 権限の規則、`permission.check`、承認の待ち、plan のモード（ADR 0002 の第 1 部の承認が要る）。
+5. sandbox（ADR 0005）。macOS と Linux。
+6. bash と要確認。`TestCrashBashNeedsReview`。
+7. git の commit と push。`TestCrashGitCommitOnce`。
+8. Claude Code のエンジンで、実のツールを MCP に通す。自前の表に結果を記録する（kairo の不足 #17 の手当て）。前のプロセスで終わった実の呼び出しと同じものが来たら、人に確かめる。
+9. `TestResumeAfterLongApproval`。サーバーのトークンを `server.json` に移す。
 
 受け入れ条件:
 

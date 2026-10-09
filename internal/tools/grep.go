@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -30,7 +29,7 @@ var GrepTool = Def{
 	Run:    runGrep,
 }
 
-func runGrep(ctx context.Context, root string, input json.RawMessage) Result {
+func runGrep(ctx context.Context, env Env, input json.RawMessage) Result {
 	var in struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -48,13 +47,20 @@ func runGrep(ctx context.Context, root string, input json.RawMessage) Result {
 			return failed("invalid include %q: %v", in.Include, err)
 		}
 	}
-	start, err := resolve(root, in.Path)
+	start, err := rel(env, in.Path)
 	if err != nil {
 		return failed("%v", err)
 	}
 	var b strings.Builder
 	n := 0
-	err = walkFiles(start, func(p string) bool {
+	if st, serr := env.Root.Stat(start); serr == nil && st.Mode().IsRegular() {
+		n = grepFile(&b, env, start, re, grepMax)
+		if n == 0 {
+			return Result{Output: "(no matches)"}
+		}
+		return Result{Output: b.String()}
+	}
+	err = walkFiles(env, start, func(p string) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -63,16 +69,11 @@ func runGrep(ctx context.Context, root string, input json.RawMessage) Result {
 				return true
 			}
 		}
-		n += grepFile(&b, root, p, re, grepMax-n)
+		n += grepFile(&b, env, p, re, grepMax-n)
 		return n < grepMax
 	})
 	if err != nil {
-		// A single file is not a directory to walk.
-		if st, serr := os.Stat(start); serr == nil && st.Mode().IsRegular() {
-			n += grepFile(&b, root, start, re, grepMax)
-		} else {
-			return failed("%v", err)
-		}
+		return failed("%v", err)
 	}
 	if n == 0 {
 		return Result{Output: "(no matches)"}
@@ -83,8 +84,8 @@ func runGrep(ctx context.Context, root string, input json.RawMessage) Result {
 	return Result{Output: b.String()}
 }
 
-func grepFile(b *strings.Builder, root, p string, re *regexp.Regexp, room int) int {
-	data, err := os.ReadFile(p)
+func grepFile(b *strings.Builder, env Env, p string, re *regexp.Regexp, room int) int {
+	data, err := env.Root.ReadFile(p)
 	if err != nil || len(data) > grepMaxFile || bytes.IndexByte(data[:min(len(data), 8000)], 0) >= 0 {
 		return 0
 	}
@@ -99,7 +100,7 @@ func grepFile(b *strings.Builder, root, p string, re *regexp.Regexp, room int) i
 		if len(t) > grepMaxShown {
 			t = t[:grepMaxShown] + "…"
 		}
-		fmt.Fprintf(b, "%s:%d: %s\n", rel(root, p), line, t)
+		fmt.Fprintf(b, "%s:%d: %s\n", p, line, t)
 		n++
 	}
 	return n
