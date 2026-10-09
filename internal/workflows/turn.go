@@ -47,15 +47,16 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		results := make([]ToolOutput, len(reply.Calls))
 		calls := make([]func(*kairo.Context) error, len(reply.Calls))
 		for i, c := range reply.Calls {
-			action := ActToolMissing
+			action, planned := ActToolMissing, false
 			switch {
 			case cut:
 				action = ActToolSkipped
 			case slices.Contains(agent.Names, c.Name):
 				action = ActToolPrefix + c.Name
+				planned = slices.Contains(agent.Planned, c.Name)
 			}
 			calls[i] = func(ctx *kairo.Context) error {
-				r, err := kairo.Call[ToolOutput](ctx, action, ToolInput{
+				r, err := callTool(ctx, action, planned, ToolInput{
 					Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i,
 				})
 				results[i] = r
@@ -98,4 +99,21 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 		return TurnOutput{}, err
 	}
 	return TurnOutput{Head: head, Reply: r.Message, Steps: r.Turns, Usage: r.Usage}, nil
+}
+
+// callTool runs a tool's action. A tool that writes a file is two calls
+// (design 3.1): the plan, recorded, then the write it describes, which is
+// safe to make again because it compares before it replaces.
+func callTool(ctx *kairo.Context, action string, planned bool, in ToolInput) (ToolOutput, error) {
+	if !planned {
+		return kairo.Call[ToolOutput](ctx, action, in)
+	}
+	p, err := kairo.Call[PlanOutput](ctx, action+ActPlanSuffix, in)
+	if err != nil {
+		return ToolOutput{}, err
+	}
+	if p.Done {
+		return p.Result, nil
+	}
+	return kairo.Call[ToolOutput](ctx, ActFileApply, p.Apply)
 }

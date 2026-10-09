@@ -212,11 +212,84 @@ func (r *Runtime) declare() {
 			return r.toolResult(t, in.Call, tools.Result{Output: "not run: the reply that asked for it was cut off", IsError: true})
 		})
 	for _, d := range r.toolDefs() {
+		if d.Plan != nil {
+			kairo.Action(r.K, workflows.ActToolPrefix+d.Name+workflows.ActPlanSuffix, kairo.Unprotected,
+				func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.PlanOutput, error) {
+					return r.planTool(t, d, in)
+				})
+			continue
+		}
 		eff, opts := effect(d.Effect)
 		kairo.Action(r.K, workflows.ActToolPrefix+d.Name, eff, func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {
 			return r.runTool(t, d, in)
 		}, opts...)
 	}
+	eff, opts := effect(tools.Idempotent)
+	kairo.Action(r.K, workflows.ActFileApply, eff, r.applyWrite, opts...)
+}
+
+// toolArgs is a call's arguments: given (MCP), or read from its message.
+func (r *Runtime) toolArgs(ctx context.Context, in workflows.ToolInput) (json.RawMessage, error) {
+	if in.Args != nil {
+		return in.Args, nil
+	}
+	call, err := r.toolCall(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return call.Input, nil
+}
+
+// planTool works a write out without making it. It only reads; the content
+// it would write is stored by hash, so the record of the plan stays small.
+func (r *Runtime) planTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolInput) (workflows.PlanOutput, error) {
+	args, err := r.toolArgs(t, in)
+	if err != nil {
+		return workflows.PlanOutput{}, err
+	}
+	root, err := os.OpenRoot(in.Dir)
+	if err != nil {
+		out, err := r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
+		return workflows.PlanOutput{Done: true, Result: out}, err
+	}
+	defer root.Close()
+	p := d.Plan(t, tools.Env{Root: root, Dir: in.Dir}, args)
+	if p.Fail != nil {
+		out, err := r.toolResult(t, in.Call, *p.Fail)
+		return workflows.PlanOutput{Done: true, Result: out}, err
+	}
+	content, err := r.Store.Put(t, store.KindContent, p.Content)
+	if err != nil {
+		return workflows.PlanOutput{}, err
+	}
+	return workflows.PlanOutput{Apply: workflows.ApplyInput{
+		Dir: in.Dir, Call: in.Call, Path: p.Path, Before: p.Before, After: p.After, Content: content, Summary: p.Summary,
+	}}, nil
+}
+
+// applyWrite makes a planned write (idempotent: compare, then replace).
+func (r *Runtime) applyWrite(t *kairo.TaskContext, in workflows.ApplyInput) (workflows.ToolOutput, error) {
+	kind, content, err := r.Store.Get(t, in.Content)
+	if err != nil {
+		return workflows.ToolOutput{}, err
+	}
+	if kind != store.KindContent {
+		return workflows.ToolOutput{}, fmt.Errorf("%s is %s, not content", in.Content, kind)
+	}
+	root, err := os.OpenRoot(in.Dir)
+	if err != nil {
+		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
+	}
+	defer root.Close()
+	res := tools.Apply(tools.Env{Root: root, Dir: in.Dir}, in.Path, in.Before, in.After, content, in.Summary)
+	if res.Unknown {
+		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
+	}
+	out, err := r.toolResult(t, in.Call, res)
+	if err != nil {
+		return out, kairo.Unknown(fmt.Errorf("the write was made, its result was not stored: %w", err))
+	}
+	return out, nil
 }
 
 // runTool runs one tool call in the working directory and stores its result.
@@ -224,13 +297,9 @@ func (r *Runtime) declare() {
 // acted is an unknown outcome, never a plain failure (invariant 4): kairo
 // stops a real tool for review and checks an idempotent one again.
 func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolInput) (workflows.ToolOutput, error) {
-	args := in.Args
-	if args == nil {
-		call, err := r.toolCall(t, in)
-		if err != nil {
-			return workflows.ToolOutput{}, err
-		}
-		args = call.Input
+	args, err := r.toolArgs(t, in)
+	if err != nil {
+		return workflows.ToolOutput{}, err
 	}
 	root, err := os.OpenRoot(in.Dir)
 	if err != nil {

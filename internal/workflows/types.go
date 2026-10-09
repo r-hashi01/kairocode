@@ -27,8 +27,12 @@ const (
 	ActHistoryExtend = "history.extend"
 	// ActClaudeTurn runs a turn in the user's Claude Code (ADR 0007).
 	ActClaudeTurn = "claude.turn"
-	// ActToolPrefix + a tool's name is that tool's action.
+	// ActToolPrefix + a tool's name is that tool's action. A tool that writes
+	// a file has two instead (design 3.1): ActToolPrefix + name +
+	// ActPlanSuffix works the write out, and ActFileApply makes it.
 	ActToolPrefix = "tool."
+	ActPlanSuffix = ".plan"
+	ActFileApply  = "file.apply"
 	// ActToolMissing answers a call of a tool the agent does not have.
 	ActToolMissing = "tool.missing"
 	// ActToolSkipped answers a call of a reply that was cut off (refusal,
@@ -109,6 +113,8 @@ type Agent struct {
 	System   string   `json:"system"` // hash
 	Tools    string   `json:"tools"`  // hash
 	Names    []string `json:"names"`  // the tools it has
+	// Planned are the tools among Names that plan a write and apply it.
+	Planned []string `json:"planned,omitempty"`
 }
 
 // ModelInput names everything a model call sees by hash (design 2.2,
@@ -185,7 +191,28 @@ type ClaudeTurnOutput struct {
 
 // MCPCallInput is one tool call made over MCP.
 type MCPCallInput struct {
-	Tool string          `json:"tool"`
-	Dir  string          `json:"dir"`
-	Args json.RawMessage `json:"args"`
+	Tool    string          `json:"tool"`
+	Dir     string          `json:"dir"`
+	Args    json.RawMessage `json:"args"`
+	Planned bool            `json:"planned,omitempty"`
+}
+
+// PlanOutput is a planned write, or (Done) the result to give the model at
+// once because there is nothing to write.
+type PlanOutput struct {
+	Done   bool       `json:"done,omitempty"`
+	Result ToolOutput `json:"result,omitempty"`
+	Apply  ApplyInput `json:"apply,omitempty"`
+}
+
+// ApplyInput is a write as it was planned: the file's hash before, and the
+// new content (stored, by hash) and its hash.
+type ApplyInput struct {
+	Dir     string `json:"dir"`
+	Call    string `json:"call,omitempty"`
+	Path    string `json:"path"`
+	Before  string `json:"before"`
+	After   string `json:"after"`
+	Content string `json:"content"`
+	Summary string `json:"summary"`
 }

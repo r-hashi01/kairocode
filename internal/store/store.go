@@ -20,6 +20,8 @@ const (
 	KindHistory = "history" // a link of the conversation: {prev, messages}
 	KindSystem  = "system"
 	KindTools   = "tools"
+	// KindContent is a file's content as a planned write leaves it.
+	KindContent = "content"
 )
 
 var ErrNotFound = errors.New("store: no such content")

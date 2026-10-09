@@ -49,7 +49,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 受け入れ条件:
 
-- [ ] `TestCrashWriteOnce`: write と edit の最中に強制終了して再開しても、ファイルの書き込みは 1 回分の結果になる。人が途中で書き換えた場合は、衝突としてモデルに返る。
+- [x] `TestCrashWriteOnce`: write と edit の最中に強制終了して再開しても、ファイルの書き込みは 1 回分の結果になる。人が途中で書き換えた場合は、衝突としてモデルに返る。
 - [ ] `TestCrashGitCommitOnce`: git commit の最中に強制終了して再開しても、commit は 1 つだけできる。
 - [ ] `TestCrashBashNeedsReview`: bash（実）の最中に強制終了すると、再開で「要確認」になり、答え（実行された／されなかった）が `k.Resolve` / `k.ResolveFailed` で返り、続く。コマンドは確かめずに再実行されない。
 - [ ] `TestApprovalFromAnotherProcess`: 承認を待っているセッションに、別のプロセスから承認を出すと、セッションが続く。

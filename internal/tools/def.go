@@ -52,6 +52,25 @@ type Def struct {
 	// model should see (a missing file, a path outside the directory) is a
 	// Result with IsError, not an error.
 	Run func(ctx context.Context, env Env, input json.RawMessage) Result
+	// Plan, for a tool that writes a file, works out the write without
+	// making it (design 3.1). The plan is recorded, and Apply makes it,
+	// comparing the file with what the plan saw: done again, it does not
+	// write twice. A tool with Plan has no Run.
+	Plan func(ctx context.Context, env Env, input json.RawMessage) Planned
+}
+
+// Planned is a write worked out by Plan, or the failure to give the model
+// (Fail) when there is nothing to write.
+type Planned struct {
+	Path string
+	// Before is the file's hash when it was planned (Absent: no file).
+	Before string
+	// Content is the file after the write; After its hash.
+	Content []byte
+	After   string
+	// Summary says what the write does, for the model.
+	Summary string
+	Fail    *Result
 }
 
 // Env is where a tool works.
@@ -80,5 +99,5 @@ func failed(format string, args ...any) Result {
 
 // Builtin is the tools every agent may be given, by name.
 func Builtin() []Def {
-	return []Def{ReadTool, ListTool, GlobTool, GrepTool}
+	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool}
 }

@@ -37,6 +37,14 @@ func TestMain(m *testing.M) {
 
 func crashChild() {
 	ctx := context.Background()
+	if hold := os.Getenv("KC_HOLD_AFTER_WRITE"); hold != "" {
+		// Stop the process with the write in place and its result not yet
+		// recorded.
+		tools.AfterWrite = func(string) {
+			os.WriteFile(hold, nil, 0o600)
+			select {}
+		}
+	}
 	fake, err := provider.LoadFake(os.Getenv("KC_FAKE"))
 	if err != nil {
 		panic(err)
@@ -219,5 +227,99 @@ func TestCrashClaudeEngine(t *testing.T) {
 	st := e.starts(t)
 	if len(st) != 2 || st[0].Mode != "--session-id" || st[1].Mode != "--resume" || st[1].Prompt != continuePrompt {
 		t.Fatalf("claude was started as %+v", st)
+	}
+}
+
+// crashWrite runs an edit that appends a line in a child process, kills it
+// right after the write is in place (its result not recorded), lets change
+// run on the file, and resumes in this process. It returns the file and the
+// tool result the model was given.
+func crashWrite(t *testing.T, change func(path string)) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	db := filepath.Join(dir, "k.db")
+	hold := filepath.Join(dir, "written")
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "edit", Input: json.RawMessage(`{"path":"main.go","old_string":"}\n","new_string":"}\n// added\n"}`)}}},
+		{Text: "done"},
+	}
+	fakeFile := filepath.Join(dir, "fake.json")
+	b, _ := json.Marshal(provider.Fake{Script: script, HoldAt: -1})
+	if err := os.WriteFile(fakeFile, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := repo(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile, "KC_HOLD_AFTER_WRITE="+hold)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, hold, cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(ws, "main.go")
+	if change != nil {
+		change(main)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{Script: script, HoldAt: -1}, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	out, err := r.WaitTurn(ctx, SessionID("crash"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done" {
+		t.Fatalf("reply %q", text)
+	}
+	hashes, err := r.Store.Conversation(ctx, out.Head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := r.Store.Messages(ctx, hashes)
+	if err != nil || len(ms) != 4 {
+		t.Fatalf("conversation %d messages, %v", len(ms), err)
+	}
+	file, _ := os.ReadFile(main)
+	return string(file), ms[2].Parts[0].Text
+}
+
+// TestCrashWriteOnce: an edit cut off after its write is done again on
+// resume, and the file holds one write's worth (design 3.1).
+func TestCrashWriteOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	file, result := crashWrite(t, nil)
+	if strings.Count(file, "// added") != 1 {
+		t.Fatalf("file after resume:\n%s", file)
+	}
+	if !strings.HasPrefix(result, "edited main.go") {
+		t.Fatalf("tool result %q", result)
+	}
+}
+
+// A person changes the file while the process is down: the resumed write
+// does not overwrite their change, and the model is told.
+func TestCrashWriteConflict(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	file, result := crashWrite(t, func(path string) {
+		if err := os.WriteFile(path, []byte("package main // by hand\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if file != "package main // by hand\n" {
+		t.Fatalf("the change by hand was overwritten:\n%s", file)
+	}
+	if !strings.Contains(result, "changed since it was read") {
+		t.Fatalf("tool result %q", result)
 	}
 }

@@ -163,7 +163,7 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 	if err := s.acknowledge(ctx, t); err != nil {
 		return nil, err
 	}
-	id, blocked, err := s.claim(ctx, t, key, workflows.MCPCallInput{Tool: tool, Dir: t.dir, Args: args})
+	id, blocked, err := s.claim(ctx, t, key, workflows.MCPCallInput{Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil})
 	if err != nil {
 		return nil, err
 	}

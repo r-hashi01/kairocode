@@ -40,10 +40,13 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		return workflows.Agent{}, err
 	}
 	var specs []provider.ToolSpec
-	var names []string
+	var names, planned []string
 	for _, d := range r.toolDefs() {
 		specs = append(specs, provider.ToolSpec{Name: d.Name, Description: d.Description, Schema: d.Schema})
 		names = append(names, d.Name)
+		if d.Plan != nil {
+			planned = append(planned, d.Name)
+		}
 	}
 	toolsHash, err := r.Store.PutJSON(t, store.KindTools, specs)
 	if err != nil {
@@ -57,5 +60,6 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		System:   system,
 		Tools:    toolsHash,
 		Names:    names,
+		Planned:  planned,
 	}, nil
 }
