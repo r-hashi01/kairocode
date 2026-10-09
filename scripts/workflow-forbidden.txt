@@ -1,0 +1,8 @@
+# A fast first line (grep -E) for the PreToolUse hook: patterns that must not
+# appear in non-test code under internal/workflows/. The full check, with an
+# import allow list and types (map ranges), is internal/invariants
+# (TestWorkflowCodeIsDeterministic). One pattern per line.
+time\.(Now|Since|Until|Sleep|After|AfterFunc|NewTimer|NewTicker|Tick)\(
+^[[:space:]]*go[[:space:]]+[A-Za-z(]
+^[[:space:]]*select[[:space:]]*\{
+"(os|os/exec|net|net/http|io/fs|io/ioutil|bufio|syscall|math/rand|math/rand/v2|crypto/rand|runtime|sync|sync/atomic|log|log/slog)"
