@@ -86,3 +86,24 @@ func TestSecretsCheckerFindsKeys(t *testing.T) {
 		t.Errorf("want the leaked key found; got %q", bad)
 	}
 }
+
+// ADR 0005: commands start only through the sandbox.
+func TestCommandsStartOnlyInTheSandbox(t *testing.T) {
+	bad, err := Commands(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bad {
+		t.Error(b)
+	}
+}
+
+func TestCommandsCheckerFindsAStartOutsideTheSandbox(t *testing.T) {
+	bad, err := Commands("testdata/commands")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) != 1 || !strings.Contains(bad[0], "runs.go:5") {
+		t.Fatalf("want the exec.Command in runs.go, got %q", bad)
+	}
+}

@@ -235,3 +235,35 @@ func TestApprovalFromAnotherProcess(t *testing.T) {
 		t.Fatalf("the approved write was not made: %q %v", b, err)
 	}
 }
+
+// TestEscalationAlwaysAsks: running outside the sandbox is asked even when
+// the rules allow bash; a command in the sandbox is not (ADR 0005).
+func TestEscalationAlwaysAsks(t *testing.T) {
+	ws := workspaceWith(t, `{"bash": "allow"}`)
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo in > inside.txt"}`)}}},
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo out > escalated.txt","sandbox":"escalate","justification":"needs the network"}`)}}},
+		{Text: "done"},
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: script})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "esc", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "go")
+	p := waitPending(t, r, s, 1)
+	if p[0].Tool != "bash" || !strings.Contains(p[0].Rule, "runs outside the sandbox: needs the network") {
+		t.Fatalf("pending %+v", p[0])
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "inside.txt")); err != nil || string(b) != "in\n" {
+		t.Fatalf("the sandboxed command did not run without asking: %q %v", b, err)
+	}
+	if err := r.Approve(ctx, p[0].Key, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "escalated.txt")); err == nil {
+		t.Fatal("a declined escalation ran")
+	}
+}

@@ -252,3 +252,61 @@ func Secrets(roots ...string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// commandStarters are the files allowed to start a command (ADR 0005):
+// the sandbox, and the Claude Code engine's start of claude (ADR 0007).
+var commandStarters = []string{"internal/sandbox/", "internal/runtime/claude.go"}
+
+// Commands reports every call of exec.Command or exec.CommandContext in the
+// non-test Go files under root outside commandStarters: anything else that
+// starts a command would run it outside the sandbox.
+func Commands(root string) ([]string, error) {
+	var out []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "testdata" || d.Name() == ".git") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		rel = filepath.ToSlash(rel)
+		for _, ok := range commandStarters {
+			if strings.HasPrefix(rel, ok) {
+				return nil
+			}
+		}
+		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		name := ""
+		for _, imp := range f.Imports {
+			if path, _ := strconv.Unquote(imp.Path.Value); path == "os/exec" {
+				name = "exec"
+				if imp.Name != nil {
+					name = imp.Name.Name
+				}
+			}
+		}
+		if name == "" {
+			return nil
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == name && (sel.Sel.Name == "Command" || sel.Sel.Name == "CommandContext") {
+				out = append(out, fmt.Sprintf("%s: exec.%s outside the sandbox (use internal/sandbox.Command)", fset.Position(sel.Pos()), sel.Sel.Name))
+			}
+			return true
+		})
+		return nil
+	})
+	return out, err
+}

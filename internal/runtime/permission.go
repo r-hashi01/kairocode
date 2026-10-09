@@ -13,6 +13,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/permission"
+	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -32,6 +33,9 @@ var defaultRules = []permission.Rule{
 	{Tool: "grep", Action: permission.Allow},
 	{Tool: "write", Action: permission.Allow},
 	{Tool: "edit", Action: permission.Allow},
+	// In the sandbox, a command's effects stay inside the working directory
+	// (ADR 0005).
+	{Tool: "bash", Action: permission.Allow},
 }
 
 // userConfigDir is where the user's kairocode.json lives.
@@ -116,6 +120,20 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	if in.Policy.ReadOnly && d.Effect != tools.Read {
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "plan mode: only tools that read", Subject: subj}, nil
 	}
+	if in.Tool == tools.BashTool.Name {
+		// Whatever the rules say (ADR 0005): running outside the sandbox
+		// is asked every time, and so is every command where there is no
+		// sandbox to run it in.
+		if tools.Escalates(args) {
+			var b tools.BashInput
+			_ = json.Unmarshal(args, &b)
+			return workflows.PermissionOutput{Action: string(permission.Ask),
+				Rule: "runs outside the sandbox: " + b.Justification, Subject: subj}, nil
+		}
+		if err := sandbox.Available(); err != nil {
+			return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "no sandbox here: " + err.Error(), Subject: subj}, nil
+		}
+	}
 	dec := permission.Decide(rules, in.Tool, subj)
 	return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, nil
 }
@@ -124,8 +142,11 @@ func (r *Runtime) toolDenied(t *kairo.TaskContext, in workflows.DeniedInput) (wo
 	return r.toolResult(t, in.Call, tools.Result{Output: "not run: " + in.Reason, IsError: true})
 }
 
-// Pending is a tool call waiting for the user's approval.
+// Pending is a tool call waiting for the user: for approval before it runs
+// (Kind "approval"), or, cut off while it ran, to be told whether it took
+// effect (Kind "review", invariant 4).
 type Pending struct {
+	Kind string `json:"kind"`
 	// Key names the request: give it to Approve.
 	Key     string `json:"key"`
 	Turn    string `json:"turn"`
@@ -167,20 +188,60 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 			tool[in.In.Call.Call] = in.In.Tool
 		}
 		for _, c := range calls {
+			if c.Status == "blocked" {
+				name := strings.TrimPrefix(c.Plan, "kairo.call/"+workflows.ActToolPrefix)
+				var in struct {
+					In workflows.ToolInput `json:"in"`
+				}
+				_ = json.Unmarshal(c.Input, &in)
+				subj := ""
+				if args, err := r.toolArgs(ctx, in.In); err == nil {
+					subj = subject(args)
+				}
+				out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: turn.RunID, Tool: name, Subject: subj,
+					Rule: "cut off while it ran: did it take effect?"})
+				continue
+			}
 			call, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalApprovePrefix)
 			if !ok || c.Finished() {
 				continue
 			}
 			o := checks[call]
-			out = append(out, Pending{Key: turn.RunID + "#" + call, Turn: turn.RunID, Tool: tool[call], Subject: o.Subject, Rule: o.Rule})
+			out = append(out, Pending{Kind: "approval", Key: turn.RunID + "#" + call, Turn: turn.RunID, Tool: tool[call], Subject: o.Subject, Rule: o.Rule})
 		}
 	}
 	return out, nil
 }
 
+const reviewPrefix = "review:"
+
 // Approve answers the request key names (see Pending). It can come from any
 // process, any time after the request.
+//
+// For an approval, ok lets the call run. For a review, ok says the call took
+// effect: either way the call is settled with a result that tells the model
+// what the user said, and the turn goes on; the call is not run again.
 func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason string) error {
+	if run, isReview := strings.CutPrefix(key, reviewPrefix); isReview {
+		text := "The run of this call was cut off. The user says it did not take effect; it was not run again."
+		if ok {
+			text = "The run of this call was cut off. The user says it did take effect (its output is lost); it was not run again."
+		}
+		if reason != "" {
+			text += " The user adds: " + reason
+		}
+		var in struct {
+			In workflows.ToolInput `json:"in"`
+		}
+		if info, err := r.K.Get(ctx, run); err == nil {
+			_ = json.Unmarshal(info.Input, &in)
+		}
+		out, err := r.toolResult(ctx, in.In.Call, tools.Result{Output: text, IsError: !ok})
+		if err != nil {
+			return err
+		}
+		return r.K.Resolve(ctx, run, out)
+	}
 	turn, call, found := strings.Cut(key, "#")
 	if !found || turn == "" || call == "" {
 		return fmt.Errorf("not an approval key: %q", key)

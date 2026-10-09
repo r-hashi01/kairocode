@@ -324,3 +324,64 @@ func TestCrashWriteConflict(t *testing.T) {
 		t.Fatalf("tool result %q", result)
 	}
 }
+
+// TestCrashBashNeedsReview: the process dies while a command runs. Resumed,
+// the call stops for review instead of running again; the user's answer
+// settles it and the turn goes on (invariant 4).
+func TestCrashBashNeedsReview(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	dir := t.TempDir()
+	db := filepath.Join(dir, "k.db")
+	ws := repo(t)
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo ran >> count.txt; touch started; sleep 5"}`)}}},
+		{Text: "done"},
+	}
+	fakeFile := filepath.Join(dir, "fake.json")
+	b, _ := json.Marshal(provider.Fake{Script: script, HoldAt: -1})
+	if err := os.WriteFile(fakeFile, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, filepath.Join(ws, "started"), cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{Script: script, HoldAt: -1}, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("crash")
+	p := waitPending(t, r, s, 1)
+	if p[0].Kind != "review" || p[0].Tool != "bash" || !strings.Contains(p[0].Subject, "count.txt") {
+		t.Fatalf("pending %+v", p[0])
+	}
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.WaitTurn(ctx, s, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done" {
+		t.Fatalf("reply %q", text)
+	}
+	if res := toolResultText(t, r, out); !strings.Contains(res, "says it did take effect") {
+		t.Fatalf("tool result %q", res)
+	}
+	got, _ := os.ReadFile(filepath.Join(ws, "count.txt"))
+	if string(got) != "ran\n" {
+		t.Fatalf("the command ran again: %q", got)
+	}
+}
