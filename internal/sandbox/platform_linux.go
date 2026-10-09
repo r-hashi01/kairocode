@@ -65,7 +65,7 @@ func platformCommand(ctx context.Context, p Policy, root string, argv []string) 
 		args = append(args, "--bind", w, w)
 	}
 	for _, w := range roots {
-		for _, name := range Protected {
+		for _, name := range protectedNames(p) {
 			pp := filepath.Join(w, name)
 			if _, err := os.Lstat(pp); err == nil {
 				args = append(args, "--ro-bind", pp, pp)

@@ -219,6 +219,13 @@ func (r *Runtime) declare() {
 				func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.PlanOutput, error) {
 					return r.planTool(t, d, in)
 				})
+			if d.Apply != nil {
+				eff, opts := effect(d.Effect)
+				kairo.Action(r.K, workflows.ActToolPrefix+d.Name+workflows.ActApplySuffix, eff,
+					func(t *kairo.TaskContext, in workflows.PlanApplyInput) (workflows.ToolOutput, error) {
+						return r.applyPlan(t, d, in)
+					}, opts...)
+			}
 			continue
 		}
 		eff, opts := effect(d.Effect)
@@ -260,13 +267,36 @@ func (r *Runtime) planTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolI
 		out, err := r.toolResult(t, in.Call, *p.Fail)
 		return workflows.PlanOutput{Done: true, Result: out}, err
 	}
+	if d.Apply != nil {
+		apply, err := json.Marshal(workflows.PlanApplyInput{Dir: in.Dir, Call: in.Call, Data: p.Data})
+		return workflows.PlanOutput{Action: workflows.ActToolPrefix + d.Name + workflows.ActApplySuffix, Apply: apply}, err
+	}
 	content, err := r.Store.Put(t, store.KindContent, p.Content)
 	if err != nil {
 		return workflows.PlanOutput{}, err
 	}
-	return workflows.PlanOutput{Apply: workflows.ApplyInput{
+	apply, err := json.Marshal(workflows.ApplyInput{
 		Dir: in.Dir, Call: in.Call, Path: p.Path, Before: p.Before, After: p.After, Content: content, Summary: p.Summary,
-	}}, nil
+	})
+	return workflows.PlanOutput{Action: workflows.ActFileApply, Apply: apply}, err
+}
+
+// applyPlan makes a tool's own plan; done again, the tool does not act twice.
+func (r *Runtime) applyPlan(t *kairo.TaskContext, d tools.Def, in workflows.PlanApplyInput) (workflows.ToolOutput, error) {
+	root, err := os.OpenRoot(in.Dir)
+	if err != nil {
+		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
+	}
+	defer root.Close()
+	res := d.Apply(t, tools.Env{Root: root, Dir: in.Dir}, in.Data)
+	if res.Unknown {
+		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
+	}
+	out, err := r.toolResult(t, in.Call, res)
+	if err != nil {
+		return out, kairo.Unknown(fmt.Errorf("the tool acted, its result was not stored: %w", err))
+	}
+	return out, nil
 }
 
 // applyWrite makes a planned write (idempotent: compare, then replace).

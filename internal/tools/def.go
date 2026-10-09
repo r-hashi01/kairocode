@@ -57,11 +57,16 @@ type Def struct {
 	// comparing the file with what the plan saw: done again, it does not
 	// write twice. A tool with Plan has no Run.
 	Plan func(ctx context.Context, env Env, input json.RawMessage) Planned
+	// Apply makes what Plan worked out, from its Data, when it is not a file
+	// write. Done again it must not act twice.
+	Apply func(ctx context.Context, env Env, data json.RawMessage) Result
 }
 
 // Planned is a write worked out by Plan, or the failure to give the model
-// (Fail) when there is nothing to write.
+// (Fail) when there is nothing to write. A file write fills Path, Before,
+// Content, After; a tool with an Apply of its own fills Data instead.
 type Planned struct {
+	Data json.RawMessage
 	Path string
 	// Before is the file's hash when it was planned (Absent: no file).
 	Before string
@@ -99,5 +104,5 @@ func failed(format string, args ...any) Result {
 
 // Builtin is the tools every agent may be given, by name.
 func Builtin() []Def {
-	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool}
+	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, GitCommitTool, GitPushTool}
 }

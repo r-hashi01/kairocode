@@ -38,7 +38,8 @@ const (
 	// a file has two instead (design 3.1): ActToolPrefix + name +
 	// ActPlanSuffix works the write out, and ActFileApply makes it.
 	ActToolPrefix = "tool."
-	ActPlanSuffix = ".plan"
+	ActPlanSuffix  = ".plan"
+	ActApplySuffix = ".apply"
 	ActFileApply  = "file.apply"
 	// ActToolMissing answers a call of a tool the agent does not have.
 	ActToolMissing = "tool.missing"
@@ -245,7 +246,17 @@ type MCPCallInput struct {
 type PlanOutput struct {
 	Done   bool       `json:"done,omitempty"`
 	Result ToolOutput `json:"result,omitempty"`
-	Apply  ApplyInput `json:"apply,omitempty"`
+	// Action makes the plan, with Apply as its input: ActFileApply and an
+	// ApplyInput for a file write, or the tool's own apply action.
+	Action string          `json:"action,omitempty"`
+	Apply  json.RawMessage `json:"apply,omitempty"`
+}
+
+// PlanApplyInput is the input of a tool's own apply action.
+type PlanApplyInput struct {
+	Dir  string          `json:"dir"`
+	Call string          `json:"call,omitempty"`
+	Data json.RawMessage `json:"data"`
 }
 
 // ApplyInput is a write as it was planned: the file's hash before, and the

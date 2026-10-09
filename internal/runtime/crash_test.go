@@ -44,6 +44,10 @@ func crashChild() {
 			os.WriteFile(hold, nil, 0o600)
 			select {}
 		}
+		tools.AfterGitCommit = func(string) {
+			os.WriteFile(hold, nil, 0o600)
+			select {}
+		}
 	}
 	fake, err := provider.LoadFake(os.Getenv("KC_FAKE"))
 	if err != nil {
@@ -383,5 +387,76 @@ func TestCrashBashNeedsReview(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(ws, "count.txt"))
 	if string(got) != "ran\n" {
 		t.Fatalf("the command ran again: %q", got)
+	}
+}
+
+// TestCrashGitCommitOnce: the process dies right after HEAD moved to the
+// new commit, its result not recorded. Resumed, the commit is not made
+// again: HEAD is already the planned commit (design 3).
+func TestCrashGitCommitOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := t.TempDir()
+	db := filepath.Join(dir, "k.db")
+	hold := filepath.Join(dir, "committed")
+	ws := repo(t)
+	git := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "Test")
+	git("config", "user.email", "test@example.com")
+	git("add", "-A")
+	git("commit", "-q", "-m", "first")
+	os.WriteFile(filepath.Join(ws, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "git_commit", Input: json.RawMessage(`{"message":"second"}`)}}},
+		{Text: "done"},
+	}
+	fakeFile := filepath.Join(dir, "fake.json")
+	b, _ := json.Marshal(provider.Fake{Script: script, HoldAt: -1})
+	os.WriteFile(fakeFile, b, 0o600)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile, "KC_HOLD_AFTER_WRITE="+hold)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, hold, cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{Script: script, HoldAt: -1}, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	out, err := r.WaitTurn(ctx, SessionID("crash"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done" {
+		t.Fatalf("reply %q", text)
+	}
+	if res := toolResultText(t, r, out); !strings.HasPrefix(res, "committed") {
+		t.Fatalf("tool result %q", res)
+	}
+	if n := git("rev-list", "--count", "HEAD"); n != "2" {
+		t.Fatalf("%s commits, want 2", n)
 	}
 }

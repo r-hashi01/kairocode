@@ -51,6 +51,22 @@ type Policy struct {
 	Writable []string
 	// Network allows network access.
 	Network bool
+	// AllowGit lets the command write .git (the git tools only: ADR 0005).
+	AllowGit bool
+}
+
+// protectedNames are the names a policy keeps out of reach.
+func protectedNames(p Policy) []string {
+	if !p.AllowGit {
+		return Protected
+	}
+	var out []string
+	for _, n := range Protected {
+		if n != ".git" {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // Protected names, directly under a writable directory, are not written even

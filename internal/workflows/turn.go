@@ -173,5 +173,5 @@ func runGated(ctx *kairo.Context, g Gate, in ToolInput) (ToolOutput, error) {
 	if p.Done {
 		return p.Result, nil
 	}
-	return kairo.Call[ToolOutput](ctx, ActFileApply, p.Apply)
+	return kairo.Call[ToolOutput](ctx, p.Action, p.Apply)
 }

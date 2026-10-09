@@ -37,7 +37,7 @@ func seatbeltPolicy(p Policy, root string) (string, []string) {
 	// of a root inside it (the working directory under $TMPDIR, say).
 	var protected []string
 	for _, w := range roots {
-		for _, name := range Protected {
+		for _, name := range protectedNames(p) {
 			protected = append(protected, filepath.Join(w, name))
 		}
 	}

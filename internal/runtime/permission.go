@@ -36,6 +36,7 @@ var defaultRules = []permission.Rule{
 	// In the sandbox, a command's effects stay inside the working directory
 	// (ADR 0005).
 	{Tool: "bash", Action: permission.Allow},
+	{Tool: "git_commit", Action: permission.Allow},
 }
 
 // userConfigDir is where the user's kairocode.json lives.
@@ -119,6 +120,11 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	}
 	if in.Policy.ReadOnly && d.Effect != tools.Read {
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "plan mode: only tools that read", Subject: subj}, nil
+	}
+	if in.Tool == tools.GitPushTool.Name {
+		// It reaches outside the machine and runs outside the sandbox: asked
+		// every time, whatever the rules say (ADR 0005).
+		return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "pushes outside the machine", Subject: subj}, nil
 	}
 	if in.Tool == tools.BashTool.Name {
 		// Whatever the rules say (ADR 0005): running outside the sandbox

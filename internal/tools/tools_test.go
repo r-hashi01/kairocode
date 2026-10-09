@@ -129,6 +129,9 @@ func TestBuiltinToolsAreWellFormed(t *testing.T) {
 		if (d.Run == nil) == (d.Plan == nil) {
 			t.Errorf("%s: a tool has Run or Plan, not both or neither", d.Name)
 		}
+		if d.Plan == nil && d.Apply != nil {
+			t.Errorf("%s: Apply without Plan", d.Name)
+		}
 		if d.Plan != nil && d.Effect != Idempotent {
 			t.Errorf("%s: a planned write is idempotent, got %v", d.Name, d.Effect)
 		}
