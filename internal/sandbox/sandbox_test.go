@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func TestSandboxDeniesWriteOutsideWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "f")); err == nil {
 		t.Error("a file was made outside the working directory")
 	}
-	if _, ok := run(t, p, "", "echo x > $TMPDIR/kc-sandbox-tmp-$$ && rm $TMPDIR/kc-sandbox-tmp-$$"); !ok {
+	if _, ok := run(t, p, "", "T=${TMPDIR:-/tmp}; echo x > $T/kc-sandbox-tmp-$$ && rm $T/kc-sandbox-tmp-$$"); !ok {
 		t.Error("a write to the temporary directory was refused")
 	}
 	// Read-only: nothing, not even inside.
@@ -103,14 +104,22 @@ func TestSandboxDeniesWriteOutsideWorkspace(t *testing.T) {
 func TestSandboxProtectsGitAndConfig(t *testing.T) {
 	needSandbox(t)
 	root := workspace(t)
+	if err := os.WriteFile(filepath.Join(root, "kairocode.json"), []byte(`{"permission": {"bash": "ask"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	p := Policy{Mode: WorkspaceWrite, Root: root}
-	for _, script := range []string{
+	scripts := []string{
 		"echo x >> .git/config",
-		"mkdir .kairocode",
-		"mkdir -p .claude/hooks",
 		"mv .git .git-moved",
 		"rm -rf .git",
-	} {
+		`echo '{"permission": "allow"}' > kairocode.json`,
+		"rm kairocode.json",
+	}
+	if runtime.GOOS != "linux" {
+		// Names that do not exist yet: kept out on macOS, not on Linux.
+		scripts = append(scripts, "mkdir .kairocode", "mkdir -p .claude/hooks")
+	}
+	for _, script := range scripts {
 		if _, ok := run(t, p, "", script); ok {
 			t.Errorf("%q went through", script)
 		}
@@ -118,9 +127,14 @@ func TestSandboxProtectsGitAndConfig(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(root, ".git", "config")); string(b) != "[core]\n" {
 		t.Errorf(".git/config changed: %q", b)
 	}
-	for _, name := range []string{".kairocode", ".claude"} {
-		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
-			t.Errorf("%s was made", name)
+	if b, _ := os.ReadFile(filepath.Join(root, "kairocode.json")); !strings.Contains(string(b), `"ask"`) {
+		t.Errorf("kairocode.json changed: %q", b)
+	}
+	if runtime.GOOS != "linux" {
+		for _, name := range []string{".kairocode", ".claude"} {
+			if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+				t.Errorf("%s was made", name)
+			}
 		}
 	}
 	if _, ok := run(t, p, "", "echo ok > notes.txt"); !ok {
@@ -208,9 +222,7 @@ func TestSandboxIgnoresModelCwdOutsideRoot(t *testing.T) {
 
 // Fail closed (ADR 0005): with no sandbox, there is no command.
 func TestSandboxFailsClosed(t *testing.T) {
-	old := seatbeltPath
-	seatbeltPath = "/nonexistent/sandbox-exec"
-	t.Cleanup(func() { seatbeltPath = old })
+	withoutSandbox(t)
 	if _, err := Command(context.Background(), Policy{Mode: WorkspaceWrite, Root: t.TempDir()}, "", "true"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("got %v, want ErrUnavailable", err)
 	}

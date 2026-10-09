@@ -55,9 +55,12 @@ type Policy struct {
 
 // Protected names, directly under a writable directory, are not written even
 // there: they hold the repository's history and the settings, hooks and
-// permissions of KairoCode and other agents (ADR 0005). A command in the
-// sandbox cannot change what it is allowed to do.
-var Protected = []string{".git", ".kairocode", ".opencode", ".claude", ".agents"}
+// permissions of KairoCode and other agents (ADR 0005), kairocode.json among
+// them. A command in the sandbox cannot change what it is allowed to do.
+//
+// On Linux only those that exist are kept: one that does not exist yet can
+// be made (see platformCommand).
+var Protected = []string{".git", ".kairocode", ".opencode", ".claude", ".agents", "kairocode.json"}
 
 // ErrUnavailable: there is no sandbox here. The caller asks the user every
 // time instead of running without one (ADR 0005: fail closed).
