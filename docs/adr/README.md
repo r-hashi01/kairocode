@@ -14,3 +14,4 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0005](0005-sandbox-for-processes.md) | KairoCode が動かすプロセスは、Codex にならった OS の sandbox の中で動かす | 承認（2026-10-09） |
 | [0006](0006-conversation-storage.md) | 会話は、内容のハッシュで引く 1 つの表と、ターンごとのリンクの鎖で持つ。セッションはターンを子として順に動かす | 承認（2026-10-09） |
 | [0007](0007-claude-code-engine-for-local-use.md) | 手元では、利用者自身の Claude Code（サブスクリプション）をモデルのエンジンとして使える | 承認（2026-10-09） |
+| [0008](0008-one-daemon-per-data-directory.md) | データの置き場ごとに、kairo を動かすデーモンを 1 つだけ置く。ほかはすべてクライアントにする | 提案 |
