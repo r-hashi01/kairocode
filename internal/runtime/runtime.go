@@ -46,6 +46,8 @@ type Config struct {
 	// when zero).
 	Lease  time.Duration
 	Logger *slog.Logger
+	// Now is kairo's clock (tests; the real clock when nil).
+	Now func() time.Time
 }
 
 type Runtime struct {
@@ -121,6 +123,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		Lease:   cfg.Lease,
 		Logger:  cfg.Logger,
 		Observe: r.observe,
+		Now:     cfg.Now,
 	})
 	if err != nil {
 		return fail(err)

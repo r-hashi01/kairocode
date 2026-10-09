@@ -31,7 +31,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 - 実のツールの handler で、作用の後に起きたエラー（tool_result の保存の失敗など）は `kairo.Unknown` で包む。`tools.Def.Run` から「効いたかわからない」を返せるようにする（不変条件 4）。
 - 書くツールは、`resolve` の後の差し替え（TOCTOU）に備え、`os.OpenRoot` か `O_NOFOLLOW` でたどる。
-- `kairocode serve` が自動で作ったトークンを stderr に出している。ADR 0004 の `server.json`（0600）に置き換える。
+- `kairocode serve` が自動で作ったトークンを stderr に出している。ADR 0004 の `server.json`（0600）に置き換える。 → ADR 0008（デーモン）と一緒に M2 で行う。
 
 中身: edit、write、bash、git（commit、push）、作用の型、権限の規則と判定（`permission.check`）、承認の待ち、要確認、コマンドの sandbox（ADR 0005）。
 
@@ -58,7 +58,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] sandbox（ADR 0005）: `TestSandboxDeniesWriteOutsideWorkspace`、`TestSandboxProtectsGitAndConfig`、`TestSandboxDeniesNetwork`、`TestSandboxStripsSecrets`、`TestSandboxIgnoresModelCwdOutsideRoot`、`TestSandboxFailsClosed` が、macOS と Linux（Docker）の両方で通る。
 - [x] `TestEscalationAlwaysAsks`（bash の昇格。手順 6 で）。
 - [x] Claude Code のエンジンで、実のツールを MCP に通す（ADR 0007）: `TestClaudeEngineAsksForApproval`、`TestClaudeEngineRepeatAfterInterruptionAsks`、`TestCrashClaudeEngine`。
-- [ ] 24 時間を超えて承認を待ったターンが落ちて再開しても、終わった呼び出しをやり直さない（`TestResumeAfterLongApproval`。kairo 0.3.0 で解けたことを、KairoCode のターンで確かめ続ける）。
+- [x] 24 時間を超えて承認を待ったターンが落ちて再開しても、終わった呼び出しをやり直さない（`TestResumeAfterLongApproval`。kairo 0.3.0 で解けたことを、KairoCode のターンで確かめ続ける）。
 
 ## M2 クライアント、ストリーミング、取り消し、dspchr
 

@@ -7,10 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -265,5 +267,64 @@ func TestEscalationAlwaysAsks(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, "escalated.txt")); err == nil {
 		t.Fatal("a declined escalation ran")
+	}
+}
+
+// A turn waits for approval for longer than kairo keeps finished runs
+// (KeepFinished, 24h by default); the process is stopped and started again
+// meanwhile. The calls the turn finished before it waited are not made
+// again: the turn's tree is kept while it waits (kairo ADR 0054).
+func TestResumeAfterLongApproval(t *testing.T) {
+	ws := workspaceWith(t, `{"write": "ask", "count": "allow"}`)
+	e := envAt(t.TempDir())
+	calls := filepath.Join(t.TempDir(), "calls")
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "count", Input: json.RawMessage(`{"n":1}`)}}},
+		{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"x"}`)}}},
+		{Text: "done"},
+	}
+	var now atomic.Int64
+	now.Store(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
+	clock := func() time.Time { return time.UnixMilli(now.Load()) }
+	db := filepath.Join(t.TempDir(), "k.db")
+	openAt := func() *Runtime {
+		r, err := Open(context.Background(), Config{DB: db, Provider: &provider.Fake{HoldAt: -1, Script: script, CallLog: calls},
+			Owner: "long", Now: clock, ExtraTools: []tools.Def{e.countTool()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	r := openAt()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "long", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "count, then write")
+	waitPending(t, r, s, 1)
+	r.Close()
+
+	now.Add((48 * time.Hour).Milliseconds())
+	r = openAt()
+	defer r.Close()
+	if _, _, err := r.K.Tick(ctx); err != nil { // the sweep that removes old finished trees
+		t.Fatal(err)
+	}
+	p := waitPending(t, r, s, 1)
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done" {
+		t.Fatalf("reply %q", text)
+	}
+	if got := countRuns(t, e); got != 1 {
+		t.Fatalf("the real tool ran %d times, want 1", got)
+	}
+	log, _ := os.ReadFile(calls)
+	if got := strings.Join(strings.Fields(string(log)), ","); got != "0,1,2" {
+		t.Fatalf("model calls %s, want 0,1,2 (none made again)", got)
 	}
 }
