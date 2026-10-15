@@ -1,7 +1,7 @@
 # 0003 ワークフローは、人と出来事が始める。中身は Starlark で書き、TUI と CLI で見える
 
 - 状態: 提案
-- 日付: 2026-10-09（同日の「スキルとして扱う」案と「JavaScript で書く」案を、利用者の指摘で書き直した）
+- 日付: 2026-10-09（同日の「スキルとして扱う」案と「JavaScript で書く」案を、利用者の指摘で書き直した）。2026-10-15 に、開発のワークフローの例（5）を足した
 - 関連: 要件 FR-13、FR-14、FR-15、FR-24、FR-26、設計 6 節、ADR 0001、0002（コマンドとエージェントの形）、0005（sandbox）、kairo の ADR 0049、0060
 
 ## 背景
@@ -126,6 +126,61 @@ def main(input):
     - ACP のクライアントでは、ワークフローの各ノードが `plan` の項目として、状態つきで見えます（ADR 0002）。
 - **使われ方:** `kairocode workflow stats` で、どのワークフローがどの入口から何回走り、何回失敗したかを出します。使われていないものも、それと分かるようにします。
 
+### 5. 例: 開発そのもののワークフロー
+
+利用者の発案（2026-10-15）です。「起票 → テストを先に → 実装 → レビュー → 検査 → PR」という開発の進め方そのものを、ワークフローとして書けます。KairoCode のハーネスの `/milestone` スキルが手で回している手順と同じです。
+
+これを例にする理由は 3 つあります。
+
+- **落ちても続く。** 終わった段（書いたテスト、通ったレビュー）はやり直しません。
+- **人の判断が段になる。** 計画の承認や PR のレビューは `ask` と `wait` です。待っている間はプロセスを持ちません（不変条件 7）。CI の結果やレビューのコメントが、出来事として続きを始めます（M4）。
+- **見える。** 上の 4 の図と `workflow show --follow` で、どの段にいて、どこで人を待っているかが分かります。
+
+```python
+DESCRIPTION = "起票した課題を、テストを先に書いて実装し、レビューと検査を通して PR にする"
+INPUT = {"title": str, "detail": str}
+LIMITS = {"agents": 20, "tokens": 5000000}
+
+def main(input):
+    plan = agent(agent = "plan", prompt = "次の課題の計画と、受け入れ条件のテストを考える:\n" + input["detail"],
+                 schema = {"plan": str, "tests": list})
+    answer = ask(question = "この計画で進めますか？\n" + plan.value["plan"], options = ["進める", "やめる"])
+    if answer.value != "進める":
+        return {"ok": False, "message": "計画が承認されなかった"}
+
+    agent(agent = "build", prompt = "受け入れ条件をテストとして先に書く（まだ実装しない）:\n" + str(plan.value["tests"]))
+    first = tool("bash", command = "go test ./...")
+    if first.exit_code == 0:
+        return {"ok": False, "message": "書いたテストが最初から通る。条件を確かめていない"}
+
+    passed = False
+    for round in range(5):
+        agent(agent = "build", prompt = "テストが通るように実装する:\n" + plan.value["plan"])
+        if tool("bash", command = "scripts/check.sh").exit_code == 0:
+            passed = True
+            break
+    if not passed:
+        return {"ok": False, "message": "5 回直しても検査が通らない"}
+
+    for round in range(3):
+        review = agent(agent = "durability-reviewer", prompt = "差分をレビューする",
+                       schema = {"findings": list})
+        if len(review.value["findings"]) == 0:
+            break
+        agent(agent = "build", prompt = "レビューの指摘を直し、検査を通す:\n" + str(review.value["findings"]))
+
+    tool("git_commit", message = input["title"])
+    pr = tool("bash", command = "gh pr create --fill", sandbox = "escalate",
+              justification = "PR を作る（ネットワーク）")
+    ci = wait("ci.result", timeout = "2h")              # M4: 外の出来事
+    approved = wait("github.pr_review", timeout = "7d")  # M4: 人のレビュー
+    return {"ok": ci.ok and approved.ok, "message": pr.output}
+```
+
+- 入口は、人のコマンド（`/develop`）か、外の出来事（Issue に付いたラベル、M4）です。モデルが名前で選んで呼ぶことはありません（上の 1）。
+- 権限は、ふだんのツールと同じです（上の 3）。PR を作る bash は sandbox の外に出るので、そのたびに利用者に確認します（ADR 0005）。
+- M3 の確かめとして、KairoCode の M3 以降の作業の一部を、このワークフローで回すことを目指します。
+
 ### この ADR で決めないこと
 
 - ブラウザで見る画面。
@@ -142,6 +197,7 @@ def main(input):
   - `TestTurnEndHookBlocks`: `turn.end` のワークフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
   - `TestWorkflowGraph`: 静的な図が、`for`、`if`、`parallel` の入れ子を正しく表す（決まった入力に対する出力を固定して比べる）。
   - 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。
+  - 上の 5 の開発のワークフローを、偽のモデルと偽の `gh` で最後まで流す。途中（テストを書いた後、レビューの後）で強制終了して再開しても、終わった段をやり直さない。`ask` と `wait` の間はプロセスを持たない。
 
 ## 検討した代替案
 
