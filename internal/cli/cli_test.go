@@ -13,6 +13,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 // The test binary is also the daemon the commands start (KC_CLI_DAEMON).
@@ -86,5 +87,75 @@ func TestRunNeedsARequest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Main(context.Background(), []string{"run"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "needs a request") {
 		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+}
+
+// The first Ctrl-C (SIGINT) stops the daemon letting its steps finish; the
+// second stops it now, without waiting out the drain (30s).
+func TestSecondSignalStopsTheDaemonNow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	dir := t.TempDir()
+	hold := filepath.Join(dir, "held")
+	b, err := json.Marshal(provider.Fake{Script: []provider.FakeReply{{Text: "done"}}, HoldAt: 0, HoldFile: hold})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(dir, "fake.json")
+	if err := os.WriteFile(fake, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fake)
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c, err := connect(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ws := t.TempDir()
+	s, err := c.CreateSession(ctx, workflows.SessionInput{Dir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Send(ctx, s, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, ctx, "the model call starts", func() bool {
+		_, err := os.Stat(hold)
+		return err == nil
+	})
+	pid := c.PID()
+	if err := syscall.Kill(pid, syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	// server.json goes once the daemon drains: the first signal did not
+	// kill it.
+	until(t, ctx, "the daemon begins to stop", func() bool {
+		_, err := daemon.ReadInfo(data)
+		return os.IsNotExist(err)
+	})
+	if err := syscall.Kill(pid, syscall.SIGINT); err != nil {
+		t.Fatalf("the daemon ended at the first signal: %v", err)
+	}
+	quick, cancelQuick := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelQuick()
+	until(t, quick, "the daemon ends at the second signal", func() bool {
+		return syscall.Kill(pid, 0) != nil
+	})
+}
+
+// until waits for cond, looking every few milliseconds.
+func until(t *testing.T, ctx context.Context, what string, cond func() bool) {
+	t.Helper()
+	for !cond() {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s: %v", what, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }

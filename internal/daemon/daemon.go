@@ -104,6 +104,9 @@ type Options struct {
 	// finish (DefaultDrain when zero). A step still running then is cut, as
 	// in a crash: a real one waits in the next daemon for review.
 	DrainTimeout time.Duration
+	// Cut, when closed, ends the drain at once: the steps still running are
+	// cut (a second Ctrl-C).
+	Cut <-chan struct{}
 }
 
 // Serve runs the daemon until ctx ends, it has been idle for Idle, or a
@@ -155,6 +158,15 @@ func Serve(ctx context.Context, o Options) error {
 		}
 		if rt != nil {
 			dctx, cancel := context.WithTimeout(context.Background(), o.DrainTimeout)
+			if o.Cut != nil {
+				go func() {
+					select {
+					case <-o.Cut:
+						cancel()
+					case <-dctx.Done():
+					}
+				}()
+			}
 			if err := rt.Drain(dctx); err != nil {
 				slog.Warn("daemon: steps still run; they are cut", "err", err)
 			}

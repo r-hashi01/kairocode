@@ -171,9 +171,11 @@ func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	// The client that started it closes the pipe after "ready": a later
 	// write there must fail, not kill the daemon.
 	signal.Ignore(syscall.SIGPIPE)
+	ctx, cut, release := stopOnSignals(ctx)
+	defer release()
 	return daemon.Serve(ctx, daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, Version: buildVersion(),
 		// A daemon on its way out may drain its steps for up to DefaultDrain.
-		WaitLock: daemon.DefaultDrain + 10*time.Second})
+		WaitLock: daemon.DefaultDrain + 10*time.Second, Cut: cut})
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -269,4 +271,35 @@ func approve(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	defer c.Close()
 	return c.Approve(ctx, fs.Arg(0), !*deny, *reason)
+}
+
+// stopOnSignals: the first SIGINT or SIGTERM ends the returned context (the
+// daemon stops, letting the steps under way finish), and the second closes
+// cut (it stops now, cutting them). release stops catching them.
+func stopOnSignals(ctx context.Context) (context.Context, <-chan struct{}, func()) {
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := context.WithCancel(ctx)
+	cut := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		for n := 0; ; n++ {
+			select {
+			case <-sigs:
+			case <-done:
+				return
+			}
+			if n == 0 {
+				stop()
+				continue
+			}
+			close(cut)
+			return
+		}
+	}()
+	return ctx, cut, func() {
+		signal.Stop(sigs)
+		close(done)
+		stop()
+	}
 }
