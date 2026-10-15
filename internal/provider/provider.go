@@ -20,6 +20,9 @@ type Request struct {
 	System   string
 	Tools    []ToolSpec
 	Messages []msg.Message
+	// OnText, if set, is given the reply's text as it comes, piece by piece
+	// (to stream it to the user). The Response still holds all of it.
+	OnText func(text string)
 }
 
 type Response struct {

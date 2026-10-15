@@ -1,12 +1,13 @@
 // Package server is KairoCode's HTTP API (design 8.1): sessions, messages,
-// turns and approvals. The daemon serves it (ADR 0008); the event stream
-// (SSE) and undo come later.
+// turns, approvals and a session's events (SSE). The daemon serves it (ADR
+// 0008); undo comes later.
 package server
 
 import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -32,6 +33,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/close", s.closeSession)
 	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
 	s.mux.HandleFunc("POST /approvals", s.approve)
+	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	return s
 }
 
@@ -156,4 +158,41 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// events streams the session's events as server-sent events: "id" is the
+// event's seq, "event" its type, "data" the event as JSON. It first sends
+// what waits for a person in the session (runtime.Events). The stream ends
+// when the client goes, or when it falls too far behind: it then connects
+// again.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	session := sessionOf(r)
+	if _, err := s.rt.K.Get(r.Context(), session); err != nil {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		fail(w, http.StatusInternalServerError, errors.New("streaming is not supported"))
+		return
+	}
+	events, err := s.rt.Events(r.Context(), session)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+	for ev := range events {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, b); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
 }

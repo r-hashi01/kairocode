@@ -65,6 +65,7 @@ type Runtime struct {
 	db    *sql.DB
 	cfg   Config
 	mcp   *mcpServer
+	ev    *events
 
 	sendMu sync.Mutex
 
@@ -125,7 +126,9 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		return nil, err
 	}
 	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{})}
+	r.ev = newEvents(r)
 	fail := func(err error) (*Runtime, error) {
+		r.ev.close()
 		db.Close()
 		return nil, err
 	}
@@ -169,6 +172,7 @@ func (r *Runtime) Drain(ctx context.Context) error { return r.K.Drain(ctx) }
 // Close closes the runtime; closing it again does nothing.
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
+		r.ev.close()
 		err := r.mcp.close()
 		err = errors.Join(err, r.K.Close())
 		r.closeErr = errors.Join(err, r.db.Close())
@@ -194,6 +198,7 @@ func (r *Runtime) observe(o kairo.Observation) {
 	if r.cfg.Observe != nil {
 		r.cfg.Observe(o)
 	}
+	r.ev.observe(o)
 	if o.Kind != kairo.ObsRunStarted && o.Kind != kairo.ObsRunSettled {
 		return
 	}
@@ -434,7 +439,10 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	if err != nil {
 		return workflows.ModelReply{}, err
 	}
-	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, System: system, Tools: specs, Messages: ms})
+	// The text streams to those who watch the session (live output, not a
+	// record: the message is recorded once it is whole).
+	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, System: system, Tools: specs, Messages: ms,
+		OnText: func(text string) { t.Emit([]byte(text)) }})
 	if err != nil {
 		var permanent *provider.PermanentError
 		if t.Err() != nil || errors.As(err, &permanent) {
@@ -583,4 +591,9 @@ func (r *Runtime) Reply(ctx context.Context, hash string) (string, error) {
 		return "", err
 	}
 	return m.Text(), nil
+}
+
+// logf logs what the runtime could not do but goes on without.
+func (r *Runtime) logf(format string, args ...any) {
+	r.cfg.Logger.Warn(fmt.Sprintf(format, args...))
 }

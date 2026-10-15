@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
@@ -82,6 +83,11 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 	m := msg.Message{Role: msg.Assistant}
 	if s.Text != "" {
 		m.Parts = append(m.Parts, msg.Part{Type: msg.Text, Text: s.Text})
+		if r.OnText != nil {
+			for _, piece := range strings.SplitAfter(s.Text, " ") { // word by word, as a stream
+				r.OnText(piece)
+			}
+		}
 	}
 	for j, t := range s.Tools {
 		in := t.Input

@@ -23,8 +23,8 @@ type Anthropic struct {
 	// Effort is output_config.effort. Claude Opus 5.5 defaults to "medium";
 	// a coding agent asks for "high".
 	Effort string
-	// MaxTokens per reply. Non-streaming requests stay at 16000 to keep under
-	// the SDK's HTTP timeouts; streaming (M2) raises it.
+	// MaxTokens per reply. Requests stream, so the SDK's HTTP timeouts for
+	// long non-streaming requests do not apply; it stays at 16000 for now.
 	MaxTokens int64
 }
 
@@ -68,7 +68,7 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 	if r.System != "" {
 		params.System = []anthropic.BetaTextBlockParam{{Text: r.System}}
 	}
-	resp, err := a.client.Beta.Messages.New(ctx, params)
+	resp, err := a.stream(ctx, params, r.OnText)
 	if err != nil {
 		var apierr *anthropic.Error
 		if errors.As(err, &apierr) {
@@ -120,6 +120,32 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 		out.Stop = StopEnd
 	}
 	return out, nil
+}
+
+// stream makes the request as a stream, giving the text to onText as it
+// comes, and returns the whole message.
+func (a *Anthropic) stream(ctx context.Context, params anthropic.BetaMessageNewParams, onText func(string)) (*anthropic.BetaMessage, error) {
+	stream := a.client.Beta.Messages.NewStreaming(ctx, params)
+	defer stream.Close()
+	var resp anthropic.BetaMessage
+	for stream.Next() {
+		ev := stream.Current()
+		if err := resp.Accumulate(ev); err != nil {
+			return nil, err
+		}
+		if onText == nil {
+			continue
+		}
+		if d, ok := ev.AsAny().(anthropic.BetaRawContentBlockDeltaEvent); ok {
+			if t, ok := d.Delta.AsAny().(anthropic.BetaTextDelta); ok && t.Text != "" {
+				onText(t.Text)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // anthropicMessages renders a conversation for the Claude API. An assistant
