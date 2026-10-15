@@ -14,12 +14,14 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 // The test binary is also the daemon a client starts (KC_DAEMON_CHILD).
 func TestMain(m *testing.M) {
 	if os.Getenv("KC_DAEMON_CHILD") == "1" {
-		err := Serve(context.Background(), Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second})
+		err := Serve(context.Background(), Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second,
+			Version: os.Getenv("KC_VERSION")})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -191,7 +193,7 @@ func TestApprovalFromAnotherClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	s, err := a.CreateSession(ctx, ws, "")
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: ws})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +258,7 @@ func TestCrashDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := a.CreateSession(ctx, ws, "")
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: ws})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +371,7 @@ func TestDaemonStaysWhileAClientWaits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, _ := c.CreateSession(ctx, ws, "")
+	s, _ := c.CreateSession(ctx, workflows.SessionInput{Dir: ws})
 	n, _ := c.Send(ctx, s, "write the notes")
 	waitPending(t, ctx, c, s)
 	wctx, stopWaiting := context.WithCancel(ctx)
@@ -409,6 +411,140 @@ func TestLongDataDirSocket(t *testing.T) {
 	}
 	if st.Mode().Perm() != 0o700 {
 		t.Errorf("%s has mode %v", filepath.Dir(p), st.Mode().Perm())
+	}
+}
+
+// childStartAt is childStart for a build named version.
+func childStartAt(data, fake, version string) Start {
+	s := childStart(data, fake)
+	s.Env = append(s.Env, "KC_VERSION="+version)
+	s.Version = version
+	return s
+}
+
+// A client of another build stops a daemon no one else uses and starts its
+// own (Codex checks the daemon's build too).
+func TestOtherBuildReplacesTheDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts daemon processes")
+	}
+	data := dataDir(t)
+	fake := writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := a.PID()
+	a.Close()
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	st, err := b.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PID == old || st.Version != "v2" || b.Stale != "" {
+		t.Fatalf("status %+v (old pid %d), stale %q", st, old, b.Stale)
+	}
+}
+
+// A daemon of another build that other clients use is left to them, and
+// the client is told.
+func TestOtherBuildKeepsABusyDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	fake := writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close() // its connection stays open: a client that uses the daemon
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if b.PID() != a.PID() || b.Stale == "" {
+		t.Fatalf("pids %d %d, stale %q", a.PID(), b.PID(), b.Stale)
+	}
+}
+
+// A daemon of another build that runs a step is not stopped: stopping would
+// cut the step (kairo-gap #20).
+func TestOtherBuildKeepsADaemonThatRuns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	dir := t.TempDir()
+	hold := filepath.Join(dir, "held")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: []provider.FakeReply{{Text: "done"}}, HoldAt: 0, HoldFile: hold})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := a.CreateSession(ctx, workflows.SessionInput{Dir: workspace(t, `{}`)})
+	a.Send(ctx, s, "hi")
+	for {
+		if _, err := os.Stat(hold); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the model call never started")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	old := a.PID()
+	a.Close()
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if b.PID() != old || b.Stale == "" {
+		t.Fatalf("pid %d (was %d), stale %q", b.PID(), old, b.Stale)
+	}
+}
+
+// `kairocode daemon stop`: it returns once the daemon has let go of the
+// data directory.
+func TestStopTheDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	fake := writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, childStart(data, fake))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	if running, err := Stop(ctx, data); err != nil || !running {
+		t.Fatalf("stop: %v %v", running, err)
+	}
+	if _, err := ReadInfo(data); !os.IsNotExist(err) {
+		t.Fatalf("server.json after the stop: %v", err)
+	}
+	lock, err := takeLock(ctx, filepath.Join(data, lockFile), 0)
+	if err != nil {
+		t.Fatalf("the lock after the stop: %v", err)
+	}
+	lock.Close()
+	if running, err := Stop(ctx, data); err != nil || running {
+		t.Fatalf("a second stop: %v %v", running, err)
 	}
 }
 

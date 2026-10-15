@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,10 +23,39 @@ Paths are relative to the working directory. Be concise.`
 // prompt (FR-23), in this order.
 var instructionFiles = []string{"AGENTS.md", "CLAUDE.md"}
 
+// engineFor is the engine and the model a session asked for, or the
+// runtime's own.
+func (r *Runtime) engineFor(engine, model string) (string, string, error) {
+	if engine == "" {
+		engine = r.cfg.Engine
+		if model == "" {
+			model = r.cfg.Model
+		}
+	}
+	switch engine {
+	case workflows.EngineAPI:
+		if r.cfg.Provider == nil {
+			return "", "", errors.New("this KairoCode has no model provider for the api engine")
+		}
+		if model == "" {
+			model = provider.DefaultModel
+		}
+	case workflows.EngineClaudeCode:
+		// The model is Claude Code's own default unless one is named.
+	default:
+		return "", "", fmt.Errorf("unknown engine %q", engine)
+	}
+	return engine, model, nil
+}
+
 // agentLoad records an agent's definition at the start of a turn (design 5).
 // Reading the files here, in an action, is what lets a resumed turn go on
 // with what it started with even if they changed since (invariant 2).
 func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (workflows.Agent, error) {
+	engine, model, err := r.engineFor(in.Engine, in.Model)
+	if err != nil {
+		return workflows.Agent{}, err
+	}
 	var b strings.Builder
 	b.WriteString(basePrompt)
 	fmt.Fprintf(&b, "\n\nWorking directory: %s\n", in.Dir)
@@ -68,8 +98,8 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	}
 	return workflows.Agent{
 		Name:        in.Agent,
-		Engine:      r.cfg.Engine,
-		Model:       r.cfg.Model,
+		Engine:      engine,
+		Model:       model,
 		MaxSteps:    r.cfg.MaxSteps,
 		System:      system,
 		Tools:       toolsHash,

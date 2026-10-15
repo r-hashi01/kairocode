@@ -17,11 +17,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -59,9 +61,10 @@ var ErrRunning = errors.New("a daemon already runs for this data directory")
 
 // Info is server.json: how a client reaches the daemon.
 type Info struct {
-	Socket string `json:"socket"`
-	Token  string `json:"token"`
-	PID    int    `json:"pid"`
+	Socket  string `json:"socket"`
+	Token   string `json:"token"`
+	PID     int    `json:"pid"`
+	Version string `json:"version,omitempty"`
 }
 
 // ReadInfo reads the data directory's server.json.
@@ -91,10 +94,19 @@ type Options struct {
 	// when it found none answering: one that holds the lock then is one on
 	// its way out (idle, or killed and not yet gone).
 	WaitLock time.Duration
+	// Version names the build. A client of another build stops the daemon
+	// and starts its own, when no step runs and no other client uses it.
+	Version string
 }
 
-// Serve runs the daemon until ctx ends or it has been idle for Idle. It
-// returns ErrRunning if another daemon holds the data directory.
+// Serve runs the daemon until ctx ends, it has been idle for Idle, or a
+// client stops it. It returns ErrRunning if another daemon holds the data
+// directory.
+//
+// It stops as a process that stops: a step running then is cut, and a real
+// one waits in the next daemon for a person to say whether it took effect
+// (invariant 4). kairo has no way to stop between steps (kairo-gap #20), so
+// a client replaces a daemon of another build only when no step runs.
 func Serve(ctx context.Context, o Options) error {
 	if o.Idle == 0 {
 		o.Idle = DefaultIdle
@@ -106,42 +118,97 @@ func Serve(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close() // releases the lock
+	// shutdown is the only cleanup, so nothing is removed after the lock is
+	// released (a removal then could hit the next daemon's files). It lets
+	// go in the order a client sees it: no server.json (a new client starts
+	// a daemon, which waits for the lock), no listener, the runtime closed,
+	// the socket removed, the lock released.
+	var (
+		rt             *runtime.Runtime
+		ln             net.Listener
+		sock, infoPath string
+	)
+	shutdown := sync.OnceFunc(func() {
+		if infoPath != "" {
+			os.Remove(infoPath)
+		}
+		if ln != nil {
+			ln.Close()
+		}
+		if rt != nil {
+			if err := rt.Close(); err != nil {
+				slog.Warn("daemon: closing the runtime", "err", err)
+			}
+		}
+		if sock != "" {
+			os.Remove(sock)
+		}
+		lock.Close()
+	})
+	defer shutdown()
 
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	idle := newIdleTimer(o.Idle, stop)
 	defer idle.close()
 
-	rt, err := o.Open(ctx, runtime.Config{DB: runtime.DBIn(o.Dir), Owner: Owner, Observe: idle.observe})
-	if err != nil {
+	if rt, err = o.Open(ctx, runtime.Config{DB: runtime.DBIn(o.Dir), Owner: Owner, Observe: idle.observe}); err != nil {
 		return err
 	}
-	defer rt.Close()
-
-	sock, err := socketPath(o.Dir)
-	if err != nil {
+	if sock, err = socketPath(o.Dir); err != nil {
 		return err
 	}
 	os.Remove(sock) // left by a daemon that was killed; the lock says it is gone
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
+	if ln, err = net.Listen("unix", sock); err != nil {
+		sock = "" // not ours to remove
 		return err
 	}
-	defer os.Remove(sock)
 	if err := os.Chmod(sock, 0o600); err != nil {
-		ln.Close()
 		return err
 	}
 	token := newToken()
-	info, _ := json.Marshal(Info{Socket: sock, Token: token, PID: os.Getpid()})
-	if err := writeFile0600(filepath.Join(o.Dir, infoFile), info); err != nil {
-		ln.Close()
+	info, _ := json.Marshal(Info{Socket: sock, Token: token, PID: os.Getpid(), Version: o.Version})
+	infoPath = filepath.Join(o.Dir, infoFile)
+	if err := writeFile0600(infoPath, info); err != nil {
 		return err
 	}
-	defer os.Remove(filepath.Join(o.Dir, infoFile))
 
-	srv := &http.Server{Handler: server.New(rt, token, newToken), ConnState: idle.connState}
+	api := server.New(rt, token, newToken)
+	mux := http.NewServeMux()
+	mux.Handle("/", api)
+	mux.Handle("GET /daemon/status", api.Authorized(func(w http.ResponseWriter, r *http.Request) {
+		steps, clients := idle.counts()
+		writeJSON(w, Status{Version: o.Version, PID: os.Getpid(), Steps: steps, Clients: clients})
+	}))
+	// answered is closed once a stop asked for over the API has been
+	// answered: the process must not end before (the client would see the
+	// connection drop instead).
+	answered := make(chan struct{})
+	var stopping atomic.Bool
+	mux.Handle("POST /daemon/stop", api.Authorized(func(w http.ResponseWriter, r *http.Request) {
+		// ?idle: only if no step runs and no other client is connected (a
+		// client of another build replacing the daemon). Checked here, not
+		// from an earlier status, but still only at this moment: a step can
+		// start before the runtime closes (kairo-gap #20).
+		if r.URL.Query().Has("idle") {
+			if steps, clients := idle.counts(); steps > 0 || clients > 1 {
+				http.Error(w, "busy", http.StatusConflict)
+				return
+			}
+		}
+		if !stopping.CompareAndSwap(false, true) {
+			http.Error(w, "stopping", http.StatusConflict)
+			return
+		}
+		defer close(answered)
+		shutdown()
+		w.WriteHeader(http.StatusNoContent)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		stop()
+	}))
+	srv := &http.Server{Handler: mux, ConnState: idle.connState}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
@@ -150,7 +217,14 @@ func Serve(ctx context.Context, o Options) error {
 	if o.Ready != nil {
 		fmt.Fprintln(o.Ready, "ready")
 	}
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	err = srv.Serve(ln)
+	if stopping.Load() {
+		select {
+		case <-answered:
+		case <-time.After(10 * time.Second):
+		}
+	}
+	if !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		return err
 	}
 	return nil
@@ -241,6 +315,21 @@ func socketPath(dir string) (string, error) {
 	return filepath.Join(d, name), nil
 }
 
+// Status is what GET /daemon/status says.
+type Status struct {
+	Version string `json:"version"`
+	PID     int    `json:"pid"`
+	// Steps is the number of steps running; Clients the number of
+	// connections, the asking one included.
+	Steps   int `json:"steps"`
+	Clients int `json:"clients"`
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // writeFile0600 writes a file only its owner can read, in place atomically.
 func writeFile0600(path string, b []byte) error {
 	tmp := path + ".tmp"
@@ -293,6 +382,12 @@ func (i *idleTimer) connState(_ net.Conn, s http.ConnState) {
 	case http.StateClosed, http.StateHijacked:
 		i.add(&i.conns, -1)
 	}
+}
+
+func (i *idleTimer) counts() (steps, conns int) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.steps, i.conns
 }
 
 func (i *idleTimer) add(n *int, d int) {

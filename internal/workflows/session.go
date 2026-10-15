@@ -21,7 +21,7 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 			return SessionOutput{Turns: n, Head: head}, nil
 		}
 		out, err := kairo.Child[TurnOutput](ctx, Turn, TurnInput{
-			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, History: head, Message: ev.Message,
+			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, History: head, Message: ev.Message,
 		})
 		if err != nil {
 			// A turn whose failure or cancellation is recorded leaves the

@@ -3,6 +3,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,19 +28,21 @@ const usage = `usage:
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode daemon [-data DIR]                       run the daemon in the foreground
+  kairocode daemon [-data DIR] stop                  stop it (a step running is cut, as in a crash)
 
 One daemon per data directory runs the sessions (ADR 0008); the commands
 above start it when it is not running, and it stops after 10 minutes with
-nothing to do (KAIROCODE_DAEMON_IDLE). The data directory defaults to
+nothing to do (KAIROCODE_DAEMON_IDLE). A command of another build replaces
+it when it runs no step and no other client uses it. The data directory defaults to
 $XDG_DATA_HOME/kairocode or ~/.local/share/kairocode.
 
-The daemon takes its settings from the environment it starts in:
-KAIROCODE_ENGINE picks who runs the model loop:
+KAIROCODE_ENGINE picks who runs the model loop of the sessions you start:
   api (default)   the Claude API (credentials as the Anthropic SDK resolves them)
   claude-code     your own Claude Code, signed in with your plan (ADR 0007);
                   KAIROCODE_CLAUDE names the claude command (default: claude)
-KAIROCODE_MODEL picks the model. KAIROCODE_PROVIDER=fake with
-KAIROCODE_FAKE=<script.json> scripts the API engine's replies (tests).
+KAIROCODE_MODEL picks the model. The daemon takes the rest from the
+environment it starts in: KAIROCODE_CLAUDE, and KAIROCODE_PROVIDER=fake with
+KAIROCODE_FAKE=<script.json> to script the API engine's replies (tests).
 `
 
 // Main runs the command with args (without the program name) and returns the
@@ -86,14 +91,11 @@ func newProvider() (provider.Provider, error) {
 	}
 }
 
-// openRuntime opens the daemon's runtime with the engine and the model the
-// environment names.
+// openRuntime opens the daemon's runtime. Both engines are there; the
+// environment names the default, which a session's own choice overrides.
 func openRuntime(ctx context.Context, cfg runtime.Config) (*runtime.Runtime, error) {
 	cfg.Engine, cfg.Model = os.Getenv("KAIROCODE_ENGINE"), os.Getenv("KAIROCODE_MODEL")
-	if cfg.Engine == workflows.EngineClaudeCode {
-		cfg.ClaudePath = os.Getenv("KAIROCODE_CLAUDE")
-		return runtime.Open(ctx, cfg)
-	}
+	cfg.ClaudePath = os.Getenv("KAIROCODE_CLAUDE")
 	p, err := newProvider()
 	if err != nil {
 		return nil, err
@@ -118,14 +120,44 @@ func connect(ctx context.Context, data string) (*daemon.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return daemon.Connect(ctx, data, daemon.Start{Argv: argv, Env: os.Environ()})
+	c, err := daemon.Connect(ctx, data, daemon.Start{Argv: argv, Env: os.Environ(), Version: buildVersion()})
+	if err == nil && c.Stale != "" {
+		fmt.Fprintf(os.Stderr, "kairocode: %s\n", c.Stale)
+	}
+	return c, err
 }
+
+// buildVersion names this build of kairocode: the hash of its executable, so
+// that a rebuilt binary does not talk to the daemon an older one started.
+var buildVersion = sync.OnceValue(func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil)[:12])
+})
 
 func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.Arg(0) == "stop" {
+		running, err := daemon.Stop(ctx, *data)
+		if err == nil && !running {
+			fmt.Fprintln(stderr, "no daemon runs for", *data)
+		}
 		return err
 	}
 	var idle time.Duration
@@ -139,7 +171,8 @@ func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	// The client that started it closes the pipe after "ready": a later
 	// write there must fail, not kill the daemon.
 	signal.Ignore(syscall.SIGPIPE)
-	return daemon.Serve(ctx, daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, WaitLock: 10 * time.Second})
+	return daemon.Serve(ctx, daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, Version: buildVersion(),
+		WaitLock: 10 * time.Second})
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -163,7 +196,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer c.Close()
-	s, err := c.CreateSession(ctx, abs, "")
+	// The session runs with this client's choice of engine and model, not
+	// whatever the daemon was started with.
+	s, err := c.CreateSession(ctx, workflows.SessionInput{
+		Dir: abs, Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
+	})
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -35,14 +36,21 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.token != "" {
-		want := "Bearer " + s.token
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(want)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+	s.Authorized(s.mux.ServeHTTP).ServeHTTP(w, r)
+}
+
+// Authorized serves h only to requests that carry the token.
+func (s *Server) Authorized(h http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.token != "" {
+			want := "Bearer " + s.token
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(want)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
-	}
-	s.mux.ServeHTTP(w, r)
+		h(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -56,17 +64,14 @@ func fail(w http.ResponseWriter, code int, err error) {
 }
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Dir   string `json:"dir"`
-		Agent string `json:"agent"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" {
-		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "agent": "..."}`))
+	var in workflows.SessionInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" || !filepath.IsAbs(in.Dir) {
+		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "<absolute path>", "agent", "engine", "model"}`))
 		return
 	}
-	id, err := s.rt.CreateSession(r.Context(), s.newID(), workflows.SessionInput{Dir: in.Dir, Agent: in.Agent})
+	id, err := s.rt.CreateSession(r.Context(), s.newID(), in)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err)
+		fail(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})

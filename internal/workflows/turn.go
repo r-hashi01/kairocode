@@ -12,7 +12,7 @@ import (
 // stops asking for tools. Every decision is made from recorded values: the
 // agent's definition as loaded at the start, and the model's replies.
 func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
-	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent})
+	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model})
 	if err != nil {
 		return TurnOutput{}, err
 	}

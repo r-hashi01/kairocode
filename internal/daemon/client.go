@@ -17,12 +17,16 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 // Client talks to a data directory's daemon.
 type Client struct {
 	info Info
 	http *http.Client
+	// Stale is set when the daemon is of another build than the client and
+	// could not be replaced (other clients use it): what to tell the user.
+	Stale string
 }
 
 // Start says how a client starts the daemon when none runs: the command
@@ -31,6 +35,9 @@ type Client struct {
 type Start struct {
 	Argv []string
 	Env  []string
+	// Version is the client's build. A daemon of another build is stopped
+	// and started again from Argv, if no other client uses it.
+	Version string
 }
 
 // Connect reaches the daemon of data directory dir, starting it with start
@@ -39,7 +46,23 @@ type Start struct {
 // started.
 func Connect(ctx context.Context, dir string, start Start) (*Client, error) {
 	if c, err := dial(ctx, dir); err == nil {
-		return c, nil
+		if start.Version == "" || c.info.Version == start.Version {
+			return c, nil
+		}
+		// Stopping cuts what runs (kairo-gap #20): only a daemon that runs
+		// no step and that no other client uses is replaced. The daemon
+		// checks it as it stops (?idle), and says 409 if it is busy.
+		err := c.do(ctx, "POST", "/daemon/stop?idle", nil, nil)
+		var se *statusError
+		if errors.As(err, &se) && se.code == http.StatusConflict {
+			c.Stale = fmt.Sprintf("the daemon (pid %d) is of another build of kairocode and is in use; it goes on. "+
+				"Run `kairocode daemon stop` when it is idle to start a new one", c.info.PID)
+			return c, nil
+		}
+		c.Close()
+		if err != nil {
+			return nil, fmt.Errorf("stopping the daemon of another build: %w", err)
+		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -100,6 +123,47 @@ func waitReady(ctx context.Context, stdout io.ReadCloser, dir string) error {
 	}
 }
 
+// Stop stops the daemon of dir, if one runs, and returns once it has let go
+// of the data directory. A step running then is cut, as in a crash: a real
+// one waits in the next daemon for a person (invariant 4). It reports
+// whether a daemon was running.
+func Stop(ctx context.Context, dir string) (bool, error) {
+	c, err := dial(ctx, dir)
+	if err != nil {
+		return false, nil
+	}
+	defer c.Close()
+	return true, c.stop(ctx)
+}
+
+// stop asks the daemon to stop. It answers once it has let go of the data
+// directory: its lock is released, and a new daemon can start.
+func (c *Client) stop(ctx context.Context) error {
+	err := c.do(ctx, "POST", "/daemon/stop", nil, nil)
+	c.Close()
+	return err
+}
+
+// Status is the daemon's build, process and number of clients.
+func (c *Client) Status(ctx context.Context) (Status, error) {
+	var st Status
+	err := c.do(ctx, "GET", "/daemon/status", nil, &st)
+	return st, err
+}
+
+// statusError is a reply other than success.
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (e *statusError) Error() string {
+	if e.msg == "" {
+		return http.StatusText(e.code)
+	}
+	return e.msg
+}
+
 // PID is the daemon's process.
 func (c *Client) PID() int { return c.info.PID }
 
@@ -133,10 +197,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 			Error string `json:"error"`
 		}
 		b, _ := io.ReadAll(resp.Body)
+		msg := strings.TrimSpace(string(b))
 		if json.Unmarshal(b, &e) == nil && e.Error != "" {
-			return errors.New(e.Error)
+			msg = e.Error
 		}
-		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
+		return &statusError{code: resp.StatusCode, msg: msg}
 	}
 	if out == nil {
 		return nil
@@ -149,12 +214,13 @@ func sessionPath(session string) string {
 	return "/sessions/" + url.PathEscape(strings.TrimPrefix(session, "s/"))
 }
 
-// CreateSession starts a session in dir and returns its id.
-func (c *Client) CreateSession(ctx context.Context, dir, agent string) (string, error) {
+// CreateSession starts a session and returns its id. in.Dir must be
+// absolute: the daemon runs elsewhere.
+func (c *Client) CreateSession(ctx context.Context, in workflows.SessionInput) (string, error) {
 	var out struct {
 		ID string `json:"id"`
 	}
-	err := c.do(ctx, "POST", "/sessions", map[string]string{"dir": dir, "agent": agent}, &out)
+	err := c.do(ctx, "POST", "/sessions", in, &out)
 	return out.ID, err
 }
 

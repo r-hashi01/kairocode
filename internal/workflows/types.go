@@ -14,9 +14,16 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "2"
+	SessionVersion = "3"
 	Turn           = "turn"
-	TurnVersion    = "2"
+	TurnVersion    = "3"
+	// SessionVersion2 and TurnVersion2 are the versions before sessions
+	// carried their engine and model. Their runs are finished by the same
+	// functions (the fields are empty there); a build that knows only "2"
+	// does not drive a session of "3", which it would read without them and
+	// so start its turns again under other ids.
+	SessionVersion2 = "2"
+	TurnVersion2    = "2"
 	// MCPCall runs one tool call that Claude Code made through KairoCode's
 	// MCP server (ADR 0007).
 	MCPCall        = "mcp.call"
@@ -68,6 +75,12 @@ type SessionInput struct {
 	// Dir is the working directory every tool of the session works in.
 	Dir   string `json:"dir"`
 	Agent string `json:"agent"`
+	// Engine and Model, if set, are the session's choice of who runs the
+	// model loop and with which model (the client's settings, ADR 0008);
+	// empty: the daemon's. Empty fields stay out of the JSON, so runs
+	// recorded before they existed keep their ids.
+	Engine string `json:"engine,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 type SessionOutput struct {
@@ -95,6 +108,12 @@ type TurnInput struct {
 	N     int    `json:"n"`
 	Dir   string `json:"dir"`
 	Agent string `json:"agent"`
+	// Engine and Model, if set, are the session's choice of who runs the
+	// model loop and with which model (the client's settings, ADR 0008);
+	// empty: the daemon's. Empty fields stay out of the JSON, so runs
+	// recorded before they existed keep their ids.
+	Engine string `json:"engine,omitempty"`
+	Model  string `json:"model,omitempty"`
 	// History is the conversation before this turn, by its last link.
 	History string `json:"history,omitempty"`
 	Message string `json:"message"`
@@ -115,6 +134,12 @@ type TurnOutput struct {
 type AgentLoadInput struct {
 	Dir   string `json:"dir"`
 	Agent string `json:"agent"`
+	// Engine and Model, if set, are the session's choice of who runs the
+	// model loop and with which model (the client's settings, ADR 0008);
+	// empty: the daemon's. Empty fields stay out of the JSON, so runs
+	// recorded before they existed keep their ids.
+	Engine string `json:"engine,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 // Agent is an agent's definition as it was when a turn started; the turn

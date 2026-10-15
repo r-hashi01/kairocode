@@ -27,8 +27,10 @@ import (
 type Config struct {
 	// DB is the SQLite file kairo and the message store share.
 	DB string
-	// Engine runs the model loop: workflows.EngineAPI (the default) or
-	// workflows.EngineClaudeCode (ADR 0007).
+	// Engine runs the model loop of a session that names none:
+	// workflows.EngineAPI (the default) or workflows.EngineClaudeCode (ADR
+	// 0007). A session may name the other: the API engine then needs
+	// Provider.
 	Engine string
 	// Provider is the model provider of the API engine.
 	Provider provider.Provider
@@ -51,6 +53,10 @@ type Config struct {
 	Observe func(kairo.Observation)
 	// Now is kairo's clock (tests; the real clock when nil).
 	Now func() time.Time
+
+	// onlyV2 declares the session and the turn at version 2 only, as a
+	// build before version 3 did (tests).
+	onlyV2 bool
 }
 
 type Runtime struct {
@@ -61,6 +67,9 @@ type Runtime struct {
 	mcp   *mcpServer
 
 	sendMu sync.Mutex
+
+	closeOnce sync.Once
+	closeErr  error
 
 	mu      sync.Mutex
 	changed chan struct{} // closed and replaced whenever a run starts or settles here
@@ -94,11 +103,11 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		}
 	case workflows.EngineClaudeCode:
 		// The model is Claude Code's own default unless one is named.
-		if cfg.ClaudePath == "" {
-			cfg.ClaudePath = "claude"
-		}
 	default:
 		return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+	}
+	if cfg.ClaudePath == "" { // a session may ask for Claude Code whatever the default
+		cfg.ClaudePath = "claude"
 	}
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = 50
@@ -151,10 +160,14 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	return r, nil
 }
 
+// Close closes the runtime; closing it again does nothing.
 func (r *Runtime) Close() error {
-	err := r.mcp.close()
-	err = errors.Join(err, r.K.Close())
-	return errors.Join(err, r.db.Close())
+	r.closeOnce.Do(func() {
+		err := r.mcp.close()
+		err = errors.Join(err, r.K.Close())
+		r.closeErr = errors.Join(err, r.db.Close())
+	})
+	return r.closeErr
 }
 
 // toolDefs is every tool this runtime offers.
@@ -207,8 +220,15 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 }
 
 func (r *Runtime) declare() {
-	kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
-	kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+	if r.cfg.onlyV2 {
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion2))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion2))
+	} else {
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion2), kairo.Draining())
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion2), kairo.Draining())
+	}
 	kairo.Workflow(r.K, workflows.MCPCall, workflows.RunMCPCall, kairo.WorkflowVersion(workflows.MCPCallVersion))
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
@@ -438,6 +458,11 @@ func SessionID(id string) string { return "s/" + id }
 func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.SessionInput) (string, error) {
 	if in.Agent == "" {
 		in.Agent = "build"
+	}
+	if in.Engine != "" {
+		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {
+			return "", err
+		}
 	}
 	abs, err := filepath.Abs(in.Dir)
 	if err != nil {
