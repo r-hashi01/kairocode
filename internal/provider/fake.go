@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -24,6 +25,9 @@ type Fake struct {
 	// It applies only when HoldFile is set.
 	HoldAt   int    `json:"hold_at"`
 	HoldFile string `json:"hold_file,omitempty"`
+	// ReleaseFile, if set, ends the hold when it appears: the call then
+	// answers from the script, so a test can let a held call finish.
+	ReleaseFile string `json:"release_file,omitempty"`
 }
 
 type FakeReply struct {
@@ -67,8 +71,9 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 		if err := os.WriteFile(f.HoldFile, nil, 0o600); err != nil {
 			return Response{}, err
 		}
-		<-ctx.Done()
-		return Response{}, ctx.Err()
+		if err := f.hold(ctx); err != nil {
+			return Response{}, err
+		}
 	}
 	if i >= len(f.Script) {
 		return Response{}, fmt.Errorf("fake provider: no reply %d in a script of %d", i, len(f.Script))
@@ -105,4 +110,25 @@ func appendLine(path, line string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// hold waits until ctx ends (its error) or ReleaseFile appears (nil). A
+// test fake: it looks for the file every few milliseconds.
+func (f *Fake) hold(ctx context.Context) error {
+	if f.ReleaseFile == "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	t := time.NewTicker(5 * time.Millisecond)
+	defer t.Stop()
+	for {
+		if _, err := os.Stat(f.ReleaseFile); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
 }

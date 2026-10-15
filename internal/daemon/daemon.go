@@ -54,6 +54,9 @@ const (
 	// DefaultIdle is how long a daemon with nothing to run and no client
 	// stays up.
 	DefaultIdle = 10 * time.Minute
+	// DefaultDrain is how long a daemon that stops waits for the steps under
+	// way to finish.
+	DefaultDrain = 30 * time.Second
 )
 
 // ErrRunning: another daemon runs for the data directory.
@@ -97,19 +100,27 @@ type Options struct {
 	// Version names the build. A client of another build stops the daemon
 	// and starts its own, when no step runs and no other client uses it.
 	Version string
+	// DrainTimeout is how long a daemon that stops lets the steps under way
+	// finish (DefaultDrain when zero). A step still running then is cut, as
+	// in a crash: a real one waits in the next daemon for review.
+	DrainTimeout time.Duration
 }
 
 // Serve runs the daemon until ctx ends, it has been idle for Idle, or a
 // client stops it. It returns ErrRunning if another daemon holds the data
 // directory.
 //
-// It stops as a process that stops: a step running then is cut, and a real
+// It stops between steps: no new step starts, and the steps under way
+// finish with their outcomes recorded (kairo's Drain), for up to
+// DrainTimeout. A step still running then is cut, as in a crash, and a real
 // one waits in the next daemon for a person to say whether it took effect
-// (invariant 4). kairo has no way to stop between steps (kairo-gap #20), so
-// a client replaces a daemon of another build only when no step runs.
+// (invariant 4).
 func Serve(ctx context.Context, o Options) error {
 	if o.Idle == 0 {
 		o.Idle = DefaultIdle
+	}
+	if o.DrainTimeout == 0 {
+		o.DrainTimeout = DefaultDrain
 	}
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return err
@@ -129,6 +140,13 @@ func Serve(ctx context.Context, o Options) error {
 		sock, infoPath string
 	)
 	shutdown := sync.OnceFunc(func() {
+		if rt != nil {
+			// Draining begins before server.json goes, so a client that
+			// finds it gone knows no new step starts here.
+			done, cancel := context.WithCancel(context.Background())
+			cancel()
+			rt.Drain(done)
+		}
 		if infoPath != "" {
 			os.Remove(infoPath)
 		}
@@ -136,6 +154,11 @@ func Serve(ctx context.Context, o Options) error {
 			ln.Close()
 		}
 		if rt != nil {
+			dctx, cancel := context.WithTimeout(context.Background(), o.DrainTimeout)
+			if err := rt.Drain(dctx); err != nil {
+				slog.Warn("daemon: steps still run; they are cut", "err", err)
+			}
+			cancel()
 			if err := rt.Close(); err != nil {
 				slog.Warn("daemon: closing the runtime", "err", err)
 			}
@@ -188,8 +211,8 @@ func Serve(ctx context.Context, o Options) error {
 	mux.Handle("POST /daemon/stop", api.Authorized(func(w http.ResponseWriter, r *http.Request) {
 		// ?idle: only if no step runs and no other client is connected (a
 		// client of another build replacing the daemon). Checked here, not
-		// from an earlier status, but still only at this moment: a step can
-		// start before the runtime closes (kairo-gap #20).
+		// from an earlier status; a step that starts after the check is
+		// drained.
 		if r.URL.Query().Has("idle") {
 			if steps, clients := idle.counts(); steps > 0 || clients > 1 {
 				http.Error(w, "busy", http.StatusConflict)
@@ -221,7 +244,7 @@ func Serve(ctx context.Context, o Options) error {
 	if stopping.Load() {
 		select {
 		case <-answered:
-		case <-time.After(10 * time.Second):
+		case <-time.After(o.DrainTimeout + 10*time.Second): // the drain is in the handler
 		}
 	}
 	if !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {

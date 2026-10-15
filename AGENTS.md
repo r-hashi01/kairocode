@@ -15,7 +15,7 @@
 
 KairoCode は、kairo（耐久ワークフローのランタイム）の上に作るコーディングエージェントです。opencode や Claude Code と同じ種類の道具ですが、セッションを kairo のワークフローとして動かします。目標は「落ちても、待っても、並べても壊れない」ことです。
 
-- Go 1.27.1。kairo は、Go の SDK `github.com/r-hashi01/kairo/sdk/go`（v0.3.0 以上、パッケージ名 `kairo`）の埋め込みのランタイム（`kairo.Open`）で使います（ADR 0001）。
+- Go 1.27.1。kairo は、Go の SDK `github.com/r-hashi01/kairo/sdk/go`（v0.4.1 以上、パッケージ名 `kairo`）の埋め込みのランタイム（`kairo.Open`）で使います（ADR 0001）。
 - 保存先は、手元では SQLite（`modernc.org/sqlite`）、サーバーレスとチームでは PostgreSQL です。手元のサーバーは待ちモード、サーバーレスはサスペンドモードです。
 - サーバー（HTTP + SSE）と、それにつなぐクライアント（TUI と CLI）に分けます。配り方は単一のバイナリ（`cmd/kairocode`）です。
 

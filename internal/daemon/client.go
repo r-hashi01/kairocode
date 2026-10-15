@@ -49,9 +49,11 @@ func Connect(ctx context.Context, dir string, start Start) (*Client, error) {
 		if start.Version == "" || c.info.Version == start.Version {
 			return c, nil
 		}
-		// Stopping cuts what runs (kairo-gap #20): only a daemon that runs
-		// no step and that no other client uses is replaced. The daemon
-		// checks it as it stops (?idle), and says 409 if it is busy.
+		// Only a daemon that runs no step and that no other client uses is
+		// replaced: a stop would make this client wait for the steps under
+		// way (a Claude Code run can take minutes), and cut one that runs
+		// longer than the drain. The daemon checks it as it stops (?idle),
+		// and says 409 if it is busy.
 		err := c.do(ctx, "POST", "/daemon/stop?idle", nil, nil)
 		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {

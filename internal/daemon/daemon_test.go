@@ -21,7 +21,7 @@ import (
 func TestMain(m *testing.M) {
 	if os.Getenv("KC_DAEMON_CHILD") == "1" {
 		err := Serve(context.Background(), Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second,
-			Version: os.Getenv("KC_VERSION")})
+			Version: os.Getenv("KC_VERSION"), DrainTimeout: drainTimeout()})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -29,6 +29,12 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// drainTimeout is the child daemon's DrainTimeout (KC_DRAIN; default when unset).
+func drainTimeout() time.Duration {
+	d, _ := time.ParseDuration(os.Getenv("KC_DRAIN"))
+	return d
 }
 
 // openFake opens the runtime with the fake provider KC_FAKE names.
@@ -477,8 +483,8 @@ func TestOtherBuildKeepsABusyDaemon(t *testing.T) {
 	}
 }
 
-// A daemon of another build that runs a step is not stopped: stopping would
-// cut the step (kairo-gap #20).
+// A daemon of another build that runs a step is not stopped: the client
+// would wait for the step, or cut it if it outlasts the drain.
 func TestOtherBuildKeepsADaemonThatRuns(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a daemon process")
@@ -545,6 +551,128 @@ func TestStopTheDaemon(t *testing.T) {
 	lock.Close()
 	if running, err := Stop(ctx, data); err != nil || running {
 		t.Fatalf("a second stop: %v %v", running, err)
+	}
+}
+
+// A daemon that stops lets the step under way finish and records its
+// outcome: the next daemon goes on from it, and does not run it again.
+func TestStopLetsTheRunningStepFinish(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	dir := t.TempDir()
+	hold, release, calls := filepath.Join(dir, "held"), filepath.Join(dir, "release"), filepath.Join(dir, "calls")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: []provider.FakeReply{{Text: "done"}},
+		HoldAt: 0, HoldFile: hold, ReleaseFile: release, CallLog: calls})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, childStart(data, fake))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: workspace(t, `{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.Send(ctx, s, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, ctx, hold)
+	a.Close()
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := Stop(ctx, data)
+		stopped <- err
+	}()
+	// server.json goes once draining has begun: the model call is released
+	// only then, so it finishes while the daemon drains.
+	for {
+		if _, err := ReadInfo(data); os.IsNotExist(err) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the daemon did not begin to stop")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	b, err := Connect(ctx, data, childStart(data, fake))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	turn, err := b.WaitTurn(ctx, s, n)
+	if err != nil || turn.Reply != "done" {
+		t.Fatalf("turn: %+v %v", turn, err)
+	}
+	log, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(log), "\n"); got != 1 {
+		t.Fatalf("the model was called %d times, want 1:\n%s", got, log)
+	}
+}
+
+// A step that outlasts the drain is cut, and the stop is still answered
+// once the daemon has let go: the daemon does not end before its reply.
+// The drain runs past 10s, the wait the daemon had for its reply before.
+func TestStopCutsAStepThatOutlastsTheDrain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process and drains for 11s")
+	}
+	data := dataDir(t)
+	dir := t.TempDir()
+	hold := filepath.Join(dir, "held")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: []provider.FakeReply{{Text: "done"}},
+		HoldAt: 0, HoldFile: hold})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	start := childStart(data, fake)
+	start.Env = append(start.Env, "KC_DRAIN=11s")
+	a, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: workspace(t, `{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Send(ctx, s, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, ctx, hold)
+	a.Close()
+	if running, err := Stop(ctx, data); err != nil || !running {
+		t.Fatalf("stop: %v %v", running, err)
+	}
+	lock, err := takeLock(ctx, filepath.Join(data, lockFile), 0)
+	if err != nil {
+		t.Fatalf("the lock after the stop: %v", err)
+	}
+	lock.Close()
+}
+
+// waitFile waits for path to appear.
+func waitFile(t *testing.T, ctx context.Context, path string) {
+	t.Helper()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s never appeared", path)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

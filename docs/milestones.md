@@ -73,7 +73,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] データの置き場ごとのデーモン（ADR 0008）: 2 つ目は起動しない（`TestSecondDaemonDoesNotStart`）。クライアントが自動で起動し、`server.json` は 0600（`TestClientStartsTheDaemon`）。別のクライアントからの承認で、待っているターンがすぐ続く（`TestApprovalFromAnotherClient`。借用の期間は既定の 30 秒のまま、数ミリ秒で続く）。落ちたデーモンを起動し直すと、借用の期間を待たずにターンが続く（`TestCrashDaemonRestart`）。何もしないと止まり（`TestIdleDaemonStops`）、クライアントが待っている間は止まらない（`TestDaemonStaysWhileAClientWaits`）。終わる途中のデーモンの後に起動したデーモンは、ロックを待って引き継ぐ（`TestDaemonWaitsForTheOneOnItsWayOut`）。
 - [x] デーモンの版の確かめ（ADR 0008 の追記）: 版の違うクライアントは、ステップが走っておらずほかに使われていないデーモンを入れ替え（`TestOtherBuildReplacesTheDaemon`）、そうでなければ使い続けて利用者に伝える（`TestOtherBuildKeepsABusyDaemon`、`TestOtherBuildKeepsADaemonThatRuns`）。
 - [x] エンジンとモデルをセッションごとに選ぶ（ADR 0008 の追記）: `TestEngineAndModelPerSession`。
-- [x] `kairocode daemon stop`: デーモンがデータの置き場を手放してから応答する（`TestStopTheDaemon`）。走っていたステップは、落ちたときと同じく切られる（ステップの間で止めるのは kairo の不足 #20）。
+- [x] `kairocode daemon stop`: デーモンがデータの置き場を手放してから応答する（`TestStopTheDaemon`）。走っているステップは、最大 30 秒、終わるまで待ってから止まる（kairo 0.4.1 の `Drain`、`TestStopLetsTheRunningStepFinish`）。
 - [ ] 待っている承認を、複数のクライアントで扱う（ADR 0008 の追記）: 同じセッションを見ているクライアント全員に承認の求めが届き、最初の答えが通り、ほかのクライアントには「答えが出た」が届く。後からつないだクライアント（ACP の `session/load` を含む）には、待っている承認が送り直される。
 
 - [ ] SSE で、トークン、ツールの開始と終了、承認の求め、要確認、ターンの終わりが届く。

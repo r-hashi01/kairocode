@@ -6,7 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.79.1
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/r-hashi01/kairo v0.3.0
+	github.com/r-hashi01/kairo v0.4.1
 	golang.org/x/net v0.41.0
 	modernc.org/sqlite v1.60.1
 )

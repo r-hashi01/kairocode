@@ -57,9 +57,10 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			case !slices.Contains(agent.Names, c.Name):
 				gates[i] = Gate{Action: ActToolMissing}
 			default:
-				// Checked one by one, outside Parallel: a wait for approval
-				// inside a Parallel branch is not reached by its signal
-				// (kairo-gap #18).
+				// Checked one by one, outside Parallel: before kairo 0.4.0, a
+				// wait for approval inside a Parallel branch was not reached
+				// by its signal (kairo-gap #18). It stays so, so the turn's
+				// calls keep their ids.
 				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil)
 				if err != nil {
 					return TurnOutput{}, err

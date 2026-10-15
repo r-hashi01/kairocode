@@ -160,6 +160,12 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	return r, nil
 }
 
+// Drain stops the runtime at the edges of its steps (kairo's Drain): no new
+// step starts, and the steps under way finish with their outcomes recorded,
+// so a real one needs no review in the next process. It returns once they
+// have, or when ctx ends; draining has begun either way. Close after it.
+func (r *Runtime) Drain(ctx context.Context) error { return r.K.Drain(ctx) }
+
 // Close closes the runtime; closing it again does nothing.
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {

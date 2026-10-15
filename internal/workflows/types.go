@@ -254,11 +254,12 @@ type ToolCall struct {
 // ToolInput names a tool call by the assistant message that holds it, so the
 // call's arguments (a whole file, for a write) are not recorded again.
 //
-// Step and Index place the call in its turn. kairo.Parallel numbers each
-// call afresh, so without them a second Parallel that repeats a call (the
-// same message and call id, which a provider with sequential ids could
-// produce) would get the first one's record instead of running
-// (invariant 8, kairo-gap #13).
+// Step and Index place the call in its turn. Before kairo 0.4.0,
+// kairo.Parallel numbered each call afresh, so without them a second
+// Parallel that repeated a call (the same message and call id, which a
+// provider with sequential ids could produce) got the first one's record
+// instead of running (invariant 8, kairo-gap #13). They stay, so the calls
+// keep their ids.
 //
 // A call that came over MCP (ADR 0007) has no stored message: its
 // arguments are in Args instead.

@@ -172,7 +172,8 @@ func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	// write there must fail, not kill the daemon.
 	signal.Ignore(syscall.SIGPIPE)
 	return daemon.Serve(ctx, daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, Version: buildVersion(),
-		WaitLock: 10 * time.Second})
+		// A daemon on its way out may drain its steps for up to DefaultDrain.
+		WaitLock: daemon.DefaultDrain + 10*time.Second})
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
