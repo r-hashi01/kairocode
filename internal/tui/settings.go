@@ -34,7 +34,7 @@ type setMsg struct{ err error }
 func settingCommand(text string) (id, value string, ok bool) {
 	name, rest, _ := strings.Cut(text, " ")
 	switch name {
-	case "/provider", "/model":
+	case "/provider", "/model", "/effort":
 		return name[1:], strings.TrimSpace(rest), true
 	}
 	return "", "", false
@@ -65,10 +65,14 @@ func (m *model) settings() string {
 			model = provider + "'s default model"
 		}
 	}
-	if model == "" {
-		return provider
+	out := provider
+	if model != "" {
+		out += " · " + model
 	}
-	return provider + " · " + model
+	if o, ok := m.option("effort"); ok && o.CurrentValue != "" && o.CurrentValue != "default" {
+		out += " · " + o.CurrentValue
+	}
+	return out
 }
 
 // usable reports whether v can be chosen as it is (no install, nothing
@@ -119,7 +123,7 @@ func resolve(o acp.ConfigOption, typed string) (v acp.ConfigValue, ok, many bool
 			return v, true, false
 		}
 	}
-	if o.ID != "provider" { // a model is taken as typed: no part of a name
+	if o.ID != "provider" { // a model or an effort is taken as typed
 		return acp.ConfigValue{}, false, false
 	}
 	var found []acp.ConfigValue

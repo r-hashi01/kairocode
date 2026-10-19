@@ -25,6 +25,9 @@ type Request struct {
 	OnText func(text string)
 	// Force, if set, names the tool the model must call (a typed answer).
 	Force string
+	// Effort, if set, is the model's effort for this call, in place of
+	// the provider's own (ADR 0014, 追記).
+	Effort string
 }
 
 type Response struct {

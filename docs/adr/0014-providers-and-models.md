@@ -186,3 +186,41 @@ KairoCode が ACP（ADR 0002）のクライアントになり、各エージェ�
   - **コマンドを起動するファイル:** `internal/runtime/acpengine.go`（エージェント）と、`internal/runtime/cliengines.go` です。後者は、モデルの一覧を読むために `codex debug models` と `copilot help config` を、sandbox の外で起動します。どちらも読むだけのコマンドです。
   - **残した点:** 残ったエージェントを止める判定は、記録した PID のコマンドの名前（`codex-acp`、`copilot`）で行います。PID が使い回されていると、利用者の別の copilot を止め得ます（ADR 0007 の claude は、セッションの ID で見分けている）。
 - **まだ:** 段 2（`openai`、`github-copilot` の API）。`codex-acp` での確認。
+
+## 追記（2026-10-19）: 切り替えたときのモデル、effort
+
+利用者の要望（2026-10-19）は、次の 2 つです。
+
+- モデルは、そのプロバイダーの既定か、前のセッションで使っていたものにする。
+- effort があるものは、effort も変えられるようにする。
+
+- **モデルと effort を覚える**
+  - プロバイダーごとに、最後に選んだモデルと effort を、新しい表 `kc_provider_pref` に残します。残るのは、`/model`、`/effort`、`/provider <id>` で明示して選んだときです。
+  - モデルや effort を言わずに、あるプロバイダーへ切り替えたときは、残っているものを使います。無ければ、そのプロバイダーの既定です。これは、別のセッションで選んだものでも同じです。
+  - モデルや effort を言わずにセッションを作るときも同じで、残っているものを `SessionInput` に入れます。
+  - 値は、切り替えの出来事かセッションの入力として記録されてから使われます（不変条件 2）。
+- **effort**
+  - `Switch.Effort`、`SessionInput.Effort`、`TurnInput.Effort`、`AgentLoadInput.Effort`、`Agent.Effort`、`ModelInput.Effort`、`ClaudeTurnInput.Effort` を足しました。どれも空なら JSON に出ないので、今までの記録の呼び出しの ID は変わりません。
+  - プロバイダーを替えると、effort は空（既定）に戻ります。言わなければ、そのプロバイダーで覚えているものを使います。
+  - 渡し方は、プロバイダーごとに次のとおりです。
+    - API: リクエストの `output_config.effort`（`provider.Request.Effort`。無ければプロバイダーの既定の `high`）。
+    - Claude Code: `claude --effort`。
+    - copilot: 起動の `--reasoning-effort`（ACP のセッションの設定には無い）。
+    - そのほかの ACP のエージェント: セッションの設定のうち、分類が `thought_level`（または ID に `effort` を含む）ものに `session/set_config_option` で渡します。codex-acp は `reasoning_effort` です。
+  - 選べる値は、次のとおりです。
+    - API と Claude Code は `low`、`medium`、`high`、`xhigh`、`max` です。
+    - ACP のエージェントは、`session/new` で知らせてきたモデルと effort の一覧を `kc_provider_pref` に残し、それを使います（一度動かすまでは、codex と copilot は決めた一覧）。
+  - effort が無いプロバイダーには、effort の選択肢を出しません。
+- **画面:** ACP の設定に `effort`（分類 `thought_level`）を足し、`/effort` で選べるようにしました。TUI の状態の行は「プロバイダー · モデル · effort」です。
+- **テスト:**
+  - `TestModelAndEffortKept`: 次のことを確かめます。切り替え先で覚えているものを使う処理を外すと、落ちることを確かめました。
+    - API と codex で選んだものが、戻ったときと、新しいセッションで使われること。
+    - effort が API の呼び出しと codex のセッションに届くこと。
+    - codex が知らせた一覧が使われること。
+  - `TestProviderAndModel`（`/effort`）。
+- **レビューで直したこと:**
+  - 今と同じプロバイダーを選び直したときは、切り替えの出来事を送りません。既定のエンジンのセッションで、画面の effort と次のターンの effort が食い違うのを防ぎます。
+  - そのプロバイダーの effort の一覧に無い値は受けず、覚えもしません。打ち間違いが、ほかのセッションに残り続けないようにするためです。
+  - claude には `--effort=<値>` の形で渡します。
+  - `task` のサブエージェントにも effort を渡します。フローのエージェントには渡しません（フローの入力に effort は無い）。
+- **残した点:** 設定を知らせない ACP のセッションには、`reasoning_effort` を送ってみて、失敗しても知らせません。

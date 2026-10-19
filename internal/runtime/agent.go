@@ -194,6 +194,7 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		Name:        in.Agent,
 		Engine:      engine,
 		Model:       model,
+		Effort:      in.Effort,
 		MaxSteps:    maxSteps,
 		System:      system,
 		Tools:       toolsHash,

@@ -43,6 +43,14 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS kc_claude_proc (
 			session TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL)`,
+		// Per provider (ADR 0014, 追記): the model and effort last chosen,
+		// and the models and efforts its agent said it has (JSON lists).
+		`CREATE TABLE IF NOT EXISTS kc_provider_pref (
+			provider TEXT PRIMARY KEY,
+			model TEXT NOT NULL DEFAULT '',
+			effort TEXT NOT NULL DEFAULT '',
+			models TEXT NOT NULL DEFAULT '[]',
+			efforts TEXT NOT NULL DEFAULT '[]')`,
 		// The sessions of the Codex and Copilot CLIs (ADR 0014): theirs are
 		// ids the CLI makes, kept by the name KairoCode gives each.
 		`CREATE TABLE IF NOT EXISTS kc_engine_session (
@@ -199,6 +207,54 @@ func (s *Store) SetClaudeProc(ctx context.Context, session string, pid int) erro
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO kc_claude_proc (session, pid) VALUES (?, ?) ON CONFLICT (session) DO UPDATE SET pid = excluded.pid`,
 		session, pid)
+	return err
+}
+
+// ProviderPref is what is kept of a provider: the model and effort last
+// chosen, and the models and efforts its agent said it has.
+type ProviderPref struct {
+	Model, Effort   string
+	Models, Efforts []string
+}
+
+// ProviderPref is provider's (zero if nothing is kept).
+func (s *Store) ProviderPref(ctx context.Context, provider string) (ProviderPref, error) {
+	var p ProviderPref
+	var models, efforts string
+	err := s.db.QueryRowContext(ctx, `SELECT model, effort, models, efforts FROM kc_provider_pref WHERE provider = ?`, provider).
+		Scan(&p.Model, &p.Effort, &models, &efforts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProviderPref{}, nil
+	}
+	if err != nil {
+		return ProviderPref{}, err
+	}
+	_ = json.Unmarshal([]byte(models), &p.Models)
+	_ = json.Unmarshal([]byte(efforts), &p.Efforts)
+	return p, nil
+}
+
+// SetProviderChoice keeps the model and the effort chosen for provider
+// ("" leaves one as it is).
+func (s *Store) SetProviderChoice(ctx context.Context, provider, model, effort string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_provider_pref (provider, model, effort) VALUES (?, ?, ?)
+		ON CONFLICT (provider) DO UPDATE SET
+			model = CASE WHEN excluded.model = '' THEN kc_provider_pref.model ELSE excluded.model END,
+			effort = CASE WHEN excluded.effort = '' THEN kc_provider_pref.effort ELSE excluded.effort END`,
+		provider, model, effort)
+	return err
+}
+
+// SetProviderOptions keeps the models and efforts provider's agent said
+// it has (nil leaves one as it is).
+func (s *Store) SetProviderOptions(ctx context.Context, provider string, models, efforts []string) error {
+	m, _ := json.Marshal(models)
+	e, _ := json.Marshal(efforts)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_provider_pref (provider, models, efforts) VALUES (?, ?, ?)
+		ON CONFLICT (provider) DO UPDATE SET
+			models = CASE WHEN excluded.models = 'null' THEN kc_provider_pref.models ELSE excluded.models END,
+			efforts = CASE WHEN excluded.efforts = 'null' THEN kc_provider_pref.efforts ELSE excluded.efforts END`,
+		provider, string(m), string(e))
 	return err
 }
 

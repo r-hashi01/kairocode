@@ -54,6 +54,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /flows/stats", s.flowStats)
 	s.mux.HandleFunc("GET /providers", s.providers)
 	s.mux.HandleFunc("GET /providers/{id}/models", s.models)
+	s.mux.HandleFunc("GET /providers/{id}/efforts", s.efforts)
 	s.mux.HandleFunc("POST /providers/{id}/install", s.installProvider)
 	s.mux.HandleFunc("GET /sessions/{id}/settings", s.settings)
 	s.mux.HandleFunc("POST /sessions/{id}/settings", s.switchSettings)
@@ -190,6 +191,23 @@ func (s *Server) installProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// efforts are a provider's efforts to choose from (none: it has none).
+func (s *Server) efforts(w http.ResponseWriter, r *http.Request) {
+	es, err := s.rt.Efforts(r.Context(), r.PathValue("id"))
+	if errors.Is(err, runtime.ErrNoProvider) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	if es == nil {
+		es = []string{}
+	}
+	writeJSON(w, http.StatusOK, es)
+}
+
 // models are a provider's models to choose from.
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	ms, err := s.rt.Models(r.Context(), r.PathValue("id"))
@@ -227,12 +245,13 @@ func (s *Server) switchSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
+		Effort   string `json:"effort"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Provider == "" && in.Model == "" {
-		fail(w, http.StatusBadRequest, errors.New(`want {"provider": "...", "model": "..."}`))
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Provider == "" && in.Model == "" && in.Effort == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"provider": "...", "model": "...", "effort": "..."}`))
 		return
 	}
-	st, err := s.rt.Switch(r.Context(), sessionOf(r), in.Provider, in.Model)
+	st, err := s.rt.Switch(r.Context(), sessionOf(r), in.Provider, in.Model, in.Effort)
 	switch {
 	case errors.Is(err, kairo.ErrUnknownRun), errors.Is(err, runtime.ErrNoProvider):
 		fail(w, http.StatusNotFound, err)

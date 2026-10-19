@@ -112,9 +112,11 @@ func (l *local) Settings(ctx context.Context, s string) (runtime.Settings, error
 	return l.r.Settings(ctx, s)
 }
 
-func (l *local) Switch(ctx context.Context, s, provider, model string) (runtime.Settings, error) {
-	return l.r.Switch(ctx, s, provider, model)
+func (l *local) Switch(ctx context.Context, s, provider, model, effort string) (runtime.Settings, error) {
+	return l.r.Switch(ctx, s, provider, model, effort)
 }
+
+func (l *local) Efforts(ctx context.Context, p string) ([]string, error) { return l.r.Efforts(ctx, p) }
 
 func (l *local) RunFlow(ctx context.Context, s, name, args string) (int, error) {
 	return l.r.RunFlow(ctx, s, name, args)

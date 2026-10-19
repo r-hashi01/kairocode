@@ -194,12 +194,42 @@ var (
 	ErrNotInstalled = errors.New("not installed")
 )
 
+// efforts are the efforts of the providers that have them, where the
+// provider does not say (an agent of ACP says, once it has run).
+var efforts = map[string][]string{
+	workflows.EngineAPI:        {"low", "medium", "high", "xhigh", "max"},
+	workflows.EngineClaudeCode: {"low", "medium", "high", "xhigh", "max"},
+	codexAgent:                 {"low", "medium", "high", "xhigh", "max", "ultra"}, // as codex-acp 2.2.2 says
+	copilotAgent:               {"low", "medium", "high", "xhigh", "max"},
+}
+
+// Efforts are the efforts of provider id to choose from; none if it has
+// no effort to set (or has not said).
+func (r *Runtime) Efforts(ctx context.Context, id string) ([]string, error) {
+	engine, ok := engineOf(id)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoProvider, id)
+	}
+	if a := registryAgent(engine); a != "" {
+		if p, err := r.Store.ProviderPref(ctx, a); err == nil && len(p.Efforts) > 0 {
+			return p.Efforts, nil
+		}
+		return efforts[a], nil
+	}
+	return efforts[engine], nil
+}
+
 // Models are the models of provider id to choose from; any other name may
 // be given too.
 func (r *Runtime) Models(ctx context.Context, id string) ([]string, error) {
 	engine, ok := engineOf(id)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoProvider, id)
+	}
+	if a := registryAgent(engine); a != "" { // what its agent said it has
+		if p, err := r.Store.ProviderPref(ctx, a); err == nil && len(p.Models) > 0 {
+			return p.Models, nil
+		}
 	}
 	switch engine {
 	case workflows.EngineAPI:
@@ -225,6 +255,7 @@ func (r *Runtime) Models(ctx context.Context, id string) ([]string, error) {
 type Settings struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"` // "": the provider's default
 }
 
 // Settings are what the session's next turn runs with: its latest turn's,
@@ -238,7 +269,7 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 	if err := json.Unmarshal(input(info), &in); err != nil {
 		return Settings{}, err
 	}
-	engine, model := in.Engine, in.Model
+	engine, model, effort := in.Engine, in.Model, in.Effort
 	if n, ok, err := r.LastTurn(ctx, session); err != nil {
 		return Settings{}, err
 	} else if ok {
@@ -248,7 +279,7 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 		}
 		var tin workflows.TurnInput
 		if json.Unmarshal(input(run), &tin) == nil {
-			engine, model = tin.Engine, tin.Model
+			engine, model, effort = tin.Engine, tin.Model, tin.Effort
 		}
 	}
 	if engine == "" {
@@ -262,30 +293,36 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 	r.switchMu.Unlock()
 	if sw != nil {
 		if sw.Engine != "" && sw.Engine != engine {
-			engine, model = sw.Engine, ""
+			engine, model, effort = sw.Engine, "", ""
 		}
 		if sw.Model != "" {
 			model = sw.Model
+		}
+		if sw.Effort != "" {
+			effort = sw.Effort
 		}
 	}
 	if engine == workflows.EngineAPI && model == "" {
 		model = provider.DefaultModel
 	}
-	return Settings{Provider: providerOf(engine), Model: model}, nil
+	return Settings{Provider: providerOf(engine), Model: model, Effort: effort}, nil
 }
 
 // ErrUnavailable: the provider cannot run here.
 var ErrUnavailable = errors.New("not available here")
 
-// Switch sets the provider (id, "" to keep it) and the model ("" for the
-// provider's default, when the provider changes; else to keep it) of the
-// session's turns from its next one on (ADR 0014). The switch goes to the
-// session with its next message, and is recorded there.
-func (r *Runtime) Switch(ctx context.Context, session, id, model string) (Settings, error) {
-	if _, err := r.K.Get(ctx, session); err != nil {
+// Switch sets the provider (id, "" to keep it), the model and the effort
+// ("" to keep them) of the session's turns from its next one on (ADR
+// 0014). A provider switched to without a model or an effort gets those
+// last chosen for it, in this session or another, else its defaults; what
+// is chosen is kept for the next time. The switch goes to the session
+// with its next message, and is recorded there.
+func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string) (Settings, error) {
+	cur, err := r.Settings(ctx, session)
+	if err != nil {
 		return Settings{}, err
 	}
-	sw := workflows.Switch{Model: model}
+	sw := workflows.Switch{Model: model, Effort: effort}
 	if id != "" {
 		engine, _ := engineOf(id)
 		ps := r.Providers(ctx)
@@ -299,7 +336,43 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model string) (Settin
 		case !ps[i].Available:
 			return Settings{}, fmt.Errorf("%w: %s %s", ErrUnavailable, id, ps[i].Reason)
 		}
+		if providerOf(engine) == cur.Provider {
+			engine = "" // no switch: the session stays as it is
+		}
 		sw.Engine = engine
+		if engine != "" {
+			pref, err := r.Store.ProviderPref(ctx, providerOf(engine))
+			if err != nil {
+				return Settings{}, err
+			}
+			if sw.Model == "" {
+				sw.Model = pref.Model
+			}
+			if sw.Effort == "" {
+				sw.Effort = pref.Effort
+			}
+		}
+	}
+	target := cur.Provider
+	if sw.Engine != "" {
+		target = providerOf(sw.Engine)
+	}
+	if effort != "" { // one the provider has: a typo is not kept
+		es, err := r.Efforts(ctx, target)
+		if err != nil {
+			return Settings{}, err
+		}
+		if !slices.Contains(es, effort) {
+			if len(es) == 0 {
+				return Settings{}, fmt.Errorf("%w: %s has no effort to set", ErrUnavailable, target)
+			}
+			return Settings{}, fmt.Errorf("%w: %s's efforts are %s, not %q", ErrUnavailable, target, strings.Join(es, ", "), effort)
+		}
+	}
+	if model != "" || effort != "" { // kept for the next time
+		if err := r.Store.SetProviderChoice(ctx, target, model, effort); err != nil {
+			return Settings{}, err
+		}
 	}
 	r.switchMu.Lock()
 	if prev := r.switches[session]; prev != nil {
@@ -309,6 +382,9 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model string) (Settin
 			}
 			if sw.Model == "" {
 				sw.Model = prev.Model
+			}
+			if sw.Effort == "" {
+				sw.Effort = prev.Effort
 			}
 		}
 	}

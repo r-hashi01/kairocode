@@ -64,7 +64,8 @@ func runUndo(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 // recorded values: the agent's definition as loaded at the start, and the
 // model's replies.
 func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
-	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent, Sub: in.Sub, Engine: in.Engine, Model: in.Model})
+	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent, Sub: in.Sub, Engine: in.Engine, Model: in.Model,
+		Effort: in.Effort})
 	if err != nil {
 		return TurnOutput{}, err
 	}
@@ -146,7 +147,7 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 		}
 		out.Steps++
 		reply, err := kairo.Call[ModelReply](ctx, ActModel, ModelInput{
-			Model: agent.Model, System: agent.System, Tools: agent.Tools,
+			Model: agent.Model, Effort: agent.Effort, System: agent.System, Tools: agent.Tools,
 			History: in.History, Turn: turn,
 		})
 		if err != nil {
@@ -256,7 +257,7 @@ func runTask(ctx *kairo.Context, in TurnInput, call ToolInput) (ToolOutput, erro
 	}
 	res := TaskResultInput{Call: call.Call}
 	out, err := kairo.Child[TurnOutput](ctx, Turn, TurnInput{
-		Session: in.Session, N: in.N, Dir: in.Dir, Agent: args.Agent, Engine: in.Engine, Model: in.Model,
+		Session: in.Session, N: in.N, Dir: in.Dir, Agent: args.Agent, Engine: in.Engine, Model: in.Model, Effort: in.Effort,
 		Message: prompt, Sub: true, At: "task:" + call.Call,
 	})
 	var failed *kairo.WorkflowError
@@ -379,7 +380,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	}
 	for round := 0; ; round++ {
 		r, err := kairo.Call[ClaudeTurnOutput](ctx, act, ClaudeTurnInput{
-			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine,
+			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine, Effort: agent.Effort,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message,
 			Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},

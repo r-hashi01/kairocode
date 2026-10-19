@@ -259,6 +259,13 @@ func (c *Client) InstallProvider(ctx context.Context, id, version string) (runti
 	return out, err
 }
 
+// Efforts are provider id's efforts to choose from.
+func (c *Client) Efforts(ctx context.Context, id string) ([]string, error) {
+	var out []string
+	err := c.do(ctx, "GET", "/providers/"+url.PathEscape(id)+"/efforts", nil, &out)
+	return out, err
+}
+
 // Models are provider id's models to choose from.
 func (c *Client) Models(ctx context.Context, id string) ([]string, error) {
 	var out []string
@@ -275,9 +282,9 @@ func (c *Client) Settings(ctx context.Context, session string) (runtime.Settings
 
 // Switch switches the session's provider or model ("": keep it) from its
 // next turn on, and returns the settings it then has.
-func (c *Client) Switch(ctx context.Context, session, provider, model string) (runtime.Settings, error) {
+func (c *Client) Switch(ctx context.Context, session, provider, model, effort string) (runtime.Settings, error) {
 	var out runtime.Settings
-	err := c.do(ctx, "POST", sessionPath(session)+"/settings", map[string]string{"provider": provider, "model": model}, &out)
+	err := c.do(ctx, "POST", sessionPath(session)+"/settings", map[string]string{"provider": provider, "model": model, "effort": effort}, &out)
 	return out, err
 }
 

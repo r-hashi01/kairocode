@@ -52,6 +52,10 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 			InputSchema: anthropic.BetaToolInputSchemaParam{Properties: schema.Properties, Required: schema.Required},
 		}})
 	}
+	effort := a.Effort
+	if r.Effort != "" {
+		effort = r.Effort
+	}
 	params := anthropic.BetaMessageNewParams{
 		Model:     r.Model,
 		MaxTokens: a.MaxTokens,
@@ -59,7 +63,7 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 		Tools:     tools,
 		// The conversation only grows (append-only), so the whole prefix caches.
 		CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
-		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffort(a.Effort)},
+		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffort(effort)},
 		// A request a safety classifier declines is answered by a fallback
 		// model in the same call, routed by the refusal's category.
 		Fallbacks: anthropic.BetaFallbacksParamOfDefault(),

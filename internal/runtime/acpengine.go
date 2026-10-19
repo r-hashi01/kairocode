@@ -33,7 +33,7 @@ import (
 // acpArgv is how to start engine's agent, and whether it then has no
 // tools of its own: Copilot is told KairoCode's are its only ones
 // (checked with copilot 1.0.54, ADR 0014). Env is the registry's for it.
-func (r *Runtime) acpArgv(engine string, tools []string) ([]string, map[string]string, bool, error) {
+func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]string, map[string]string, bool, error) {
 	argv, env, err := r.agentCommand(engine)
 	if err != nil {
 		return nil, nil, false, err
@@ -45,7 +45,11 @@ func (r *Runtime) acpArgv(engine string, tools []string) ([]string, map[string]s
 	for i, n := range tools {
 		names[i] = MCPServerName + "-" + n
 	}
-	return append(argv, "--available-tools="+strings.Join(names, ",")), env, true, nil
+	argv = append(argv, "--available-tools="+strings.Join(names, ","))
+	if effort != "" { // Copilot's session has no setting for it: a flag
+		argv = append(argv, "--reasoning-effort="+effort)
+	}
+	return argv, env, true, nil
 }
 
 // lockedBuffer is a strings.Builder for a process's stderr, read while the
@@ -83,7 +87,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			return workflows.ClaudeTurnOutput{}, err
 		}
 		defer closeMCP()
-		argv, agentEnv, bare, err := r.acpArgv(engine, in.Tools)
+		argv, agentEnv, bare, err := r.acpArgv(engine, in.Tools, in.Effort)
 		if err != nil { // not there to run: the user is told
 			return r.finishCLITurn(t, mt, fmt.Sprintf("[%s cannot run: %v]", registryAgent(engine), err), 0, msg.Usage{})
 		}
@@ -210,6 +214,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			}
 		}
 		c.session = id
+		r.keepACPOptions(t, engine, opts)
 		// A model the agent's session does not have (its list changes
 		// with the account) does not stop the turn: the agent's own runs
 		// it, and the reply says so.
@@ -217,6 +222,16 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		if in.Model != "" {
 			if err := setACPModel(t, conn, id, opts, in.Model); err != nil {
 				note = fmt.Sprintf("[%s did not take the model %s (%v): its own model answered]\n", engine, in.Model, err)
+			}
+		}
+		if in.Effort != "" && registryAgent(engine) != copilotAgent {
+			err := setACPOption(t, conn, id, opts, "thought_level", "effort", in.Effort)
+			switch {
+			case err != nil && len(opts) == 0:
+				// A loaded session may not say its settings: the usual id.
+				_ = conn.Call(t, "session/set_config_option", map[string]any{"sessionId": id, "configId": "reasoning_effort", "value": in.Effort}, nil)
+			case err != nil:
+				note += fmt.Sprintf("[%s did not take the effort %s (%v)]\n", engine, in.Effort, err)
 			}
 		}
 		prompt, err := r.cliPrompt(t, in, !loaded)
@@ -267,6 +282,40 @@ func (r *Runtime) finishCLITurn(t *kairo.TaskContext, mt *mcpTurn, text string, 
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
 	return workflows.ClaudeTurnOutput{Asks: mt.takeAsks(), Message: h, Turns: turns, Usage: usage}, nil
+}
+
+// keepACPOptions keeps the models and efforts the agent's session says it
+// has, for /model and /effort (ADR 0014, 追記).
+func (r *Runtime) keepACPOptions(ctx context.Context, engine string, opts []acpOption) {
+	var models, efforts []string
+	for _, o := range opts {
+		var vs []string
+		for _, v := range o.Options {
+			vs = append(vs, v.Value)
+		}
+		switch {
+		case o.Category == "model" || o.ID == "model":
+			models = vs
+		case o.Category == "thought_level" || strings.Contains(o.ID, "effort"):
+			efforts = vs
+		}
+	}
+	if models != nil || efforts != nil {
+		if err := r.Store.SetProviderOptions(ctx, providerOf(engine), models, efforts); err != nil {
+			r.logf("keeping %s's options: %v", engine, err)
+		}
+	}
+}
+
+// setACPOption sets the agent's session setting of category (or whose id
+// has name) to value.
+func setACPOption(ctx context.Context, conn *jsonrpc.Conn, session string, opts []acpOption, category, name, value string) error {
+	for _, o := range opts {
+		if o.Category == category || strings.Contains(o.ID, name) {
+			return conn.Call(ctx, "session/set_config_option", map[string]any{"sessionId": session, "configId": o.ID, "value": value}, nil)
+		}
+	}
+	return fmt.Errorf("the agent has no setting for its %s", name)
 }
 
 // acpOption is one of an ACP session's settings.

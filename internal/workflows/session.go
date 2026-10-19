@@ -75,7 +75,7 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 // too RunSession.
 func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool) (SessionOutput, error) {
 	head := ""
-	engine, model, epoch := in.Engine, in.Model, 0
+	engine, model, effort, epoch := in.Engine, in.Model, in.Effort, 0
 	// applied: turns in effect, the last undone first; undone: turns undone,
 	// the last redone first. A new turn clears undone.
 	var applied, undone []done
@@ -89,16 +89,19 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool)
 		}
 		if switches && ev.Switch != nil {
 			if ev.Switch.Engine != "" && ev.Switch.Engine != engine {
-				engine, model = ev.Switch.Engine, ""
+				engine, model, effort = ev.Switch.Engine, "", ""
 				epoch++
 			}
 			if ev.Switch.Model != "" {
 				model = ev.Switch.Model
 			}
+			if ev.Switch.Effort != "" {
+				effort = ev.Switch.Effort
+			}
 		}
 		tin := TurnInput{
 			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: engine, Model: model, History: head, Message: ev.Message,
-			Epoch: epoch,
+			Epoch: epoch, Effort: effort,
 		}
 		if ev.Agent != "" {
 			tin.Agent = ev.Agent

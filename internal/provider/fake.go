@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
@@ -20,6 +21,8 @@ import (
 // a crash gets the same reply.
 type Fake struct {
 	Script []FakeReply `json:"script"`
+
+	efforts []string // under fakeMu
 	// CallLog, if set, gets one line per call ("<index>\n"), appended, so a
 	// test can count calls across processes.
 	CallLog string `json:"call_log,omitempty"`
@@ -71,7 +74,23 @@ func LoadFake(path string) (*Fake, error) {
 	return f, nil
 }
 
+// Efforts are the efforts the calls asked for, in order (those that asked
+// for one).
+func (f *Fake) Efforts() []string {
+	fakeMu.Lock()
+	defer fakeMu.Unlock()
+	return slices.Clone(f.efforts)
+}
+
+// fakeMu guards what fakes record (a Fake is a value tests copy).
+var fakeMu sync.Mutex
+
 func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
+	if r.Effort != "" {
+		fakeMu.Lock()
+		f.efforts = append(f.efforts, r.Effort)
+		fakeMu.Unlock()
+	}
 	i := 0
 	for _, m := range r.Messages {
 		if m.Role == msg.Assistant {

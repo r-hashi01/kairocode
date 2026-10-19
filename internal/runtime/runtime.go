@@ -575,7 +575,7 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	}
 	// The text streams to those who watch the session (live output, not a
 	// record: the message is recorded once it is whole).
-	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, System: system, Tools: specs, Messages: ms,
+	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: system, Tools: specs, Messages: ms,
 		OnText: func(text string) { t.Emit([]byte(text)) }})
 	if err != nil {
 		var permanent *provider.PermanentError
@@ -614,6 +614,24 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 		}
 		if id := registryAgent(in.Engine); id != "" && !r.knownAgent(ctx, id) {
 			return "", fmt.Errorf("%w: %s", ErrNoProvider, id)
+		}
+	}
+	// A session that names no model or effort gets those last chosen for
+	// its provider (ADR 0014, 追記).
+	engine := in.Engine
+	if engine == "" {
+		engine = r.cfg.Engine
+	}
+	if in.Model == "" || in.Effort == "" {
+		pref, err := r.Store.ProviderPref(ctx, providerOf(engine))
+		if err != nil {
+			return "", err
+		}
+		if in.Model == "" && pref.Model != "" {
+			in.Model, in.Engine = pref.Model, engine
+		}
+		if in.Effort == "" && pref.Effort != "" {
+			in.Effort, in.Engine = pref.Effort, engine
 		}
 	}
 	abs, err := filepath.Abs(in.Dir)

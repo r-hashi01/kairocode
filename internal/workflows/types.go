@@ -163,6 +163,8 @@ type SessionInput struct {
 	// recorded before they existed keep their ids.
 	Engine string `json:"engine,omitempty"`
 	Model  string `json:"model,omitempty"`
+	// Effort, if set, is the model's effort (ADR 0014, 追記).
+	Effort string `json:"effort,omitempty"`
 }
 
 type SessionOutput struct {
@@ -192,6 +194,9 @@ type SessionEvent struct {
 type Switch struct {
 	Engine string `json:"engine,omitempty"`
 	Model  string `json:"model,omitempty"`
+	// Effort is how hard the model thinks (its reasoning effort), where
+	// the provider has one (ADR 0014, 追記).
+	Effort string `json:"effort,omitempty"`
 }
 
 const (
@@ -223,6 +228,7 @@ type TurnInput struct {
 	// (ADR 0014): a CLI engine starts a session of its own in each, given
 	// the conversation so far.
 	Epoch   int    `json:"epoch,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 	Message string `json:"message"`
 	// Undo, if set, makes the turn an undo or a redo: it restores the
 	// working files instead of asking the model (design 7).
@@ -395,6 +401,7 @@ type AgentLoadInput struct {
 	// recorded before they existed keep their ids.
 	Engine string `json:"engine,omitempty"`
 	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // Agent is an agent's definition as it was when a turn started; the turn
@@ -404,6 +411,7 @@ type Agent struct {
 	// Engine is EngineAPI or a CLI engine (CLIEngine).
 	Engine   string   `json:"engine"`
 	Model    string   `json:"model"`
+	Effort   string   `json:"effort,omitempty"`
 	MaxSteps int      `json:"max_steps"`
 	System   string   `json:"system"` // hash
 	Tools    string   `json:"tools"`  // hash
@@ -574,6 +582,7 @@ type DeniedInput struct {
 // invariant 5): no message text is recorded with the call.
 type ModelInput struct {
 	Model   string   `json:"model"`
+	Effort  string   `json:"effort,omitempty"`
 	System  string   `json:"system"`
 	Tools   string   `json:"tools"`
 	History string   `json:"history,omitempty"`
@@ -649,6 +658,7 @@ type ClaudeTurnInput struct {
 	History string `json:"history,omitempty"`
 	// Engine, for ActACPTurn, is the agent's (acp:<id>).
 	Engine  string   `json:"engine,omitempty"`
+	Effort  string   `json:"effort,omitempty"`
 	Round   int      `json:"round,omitempty"`
 	Policy  Policy   `json:"policy"`
 	Session string   `json:"session"`

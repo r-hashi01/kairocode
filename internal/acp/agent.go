@@ -45,7 +45,8 @@ type Backend interface {
 	InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error)
 	Models(ctx context.Context, provider string) ([]string, error)
 	Settings(ctx context.Context, session string) (runtime.Settings, error)
-	Switch(ctx context.Context, session, provider, model string) (runtime.Settings, error)
+	Switch(ctx context.Context, session, provider, model, effort string) (runtime.Settings, error)
+	Efforts(ctx context.Context, provider string) ([]string, error)
 }
 
 // builtinCommands are the slash commands KairoCode itself has.
@@ -55,6 +56,7 @@ var builtinCommands = []map[string]any{
 	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them)", "input": map[string]any{"hint": "<name> [what to give it]"}},
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
+	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -128,12 +130,36 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 	for _, m := range ms {
 		models = append(models, map[string]any{"value": m, "name": m})
 	}
-	return []map[string]any{
+	opts := []map[string]any{
 		{"id": "provider", "name": "Provider", "category": "_provider", "type": "select",
 			"description": "Who runs the model loop, from the next turn on", "currentValue": st.Provider, "options": providers},
 		{"id": "model", "name": "Model", "category": "model", "type": "select",
 			"description": "The model, from the next turn on", "currentValue": current, "options": models},
-	}, nil
+	}
+	es, err := a.b.Efforts(ctx, st.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if len(es) > 0 { // only a provider that has one
+		cur := st.Effort
+		if cur == "" {
+			cur = defaultModel
+		}
+		efforts := []map[string]any{}
+		if !slices.Contains(es, cur) {
+			name := cur
+			if cur == defaultModel {
+				name = "Default (" + st.Provider + "'s)"
+			}
+			efforts = append(efforts, map[string]any{"value": cur, "name": name})
+		}
+		for _, e := range es {
+			efforts = append(efforts, map[string]any{"value": e, "name": e})
+		}
+		opts = append(opts, map[string]any{"id": "effort", "name": "Effort", "category": "thought_level", "type": "select",
+			"description": "How hard the model thinks, from the next turn on", "currentValue": cur, "options": efforts})
+	}
+	return opts, nil
 }
 
 // setConfig switches the session's provider or model (ADR 0014) and gives
@@ -142,10 +168,14 @@ func (a *agent) setConfig(ctx context.Context, session, id, value string) ([]map
 	var err error
 	switch id {
 	case "provider":
-		_, err = a.b.Switch(ctx, session, value, "")
+		_, err = a.b.Switch(ctx, session, value, "", "")
 	case "model":
 		if value != defaultModel {
-			_, err = a.b.Switch(ctx, session, "", value)
+			_, err = a.b.Switch(ctx, session, "", value, "")
+		}
+	case "effort":
+		if value != defaultModel {
+			_, err = a.b.Switch(ctx, session, "", "", value)
 		}
 	default:
 		return nil, invalid(fmt.Errorf("no setting %q", id))
@@ -165,7 +195,7 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		a.o.Logger.Warn("acp: the project's commands", "err", err)
 	}
 	for _, c := range cs {
-		if c.Name == "undo" || c.Name == "redo" || c.Name == "flow" || c.Name == "provider" || c.Name == "model" {
+		if c.Name == "undo" || c.Name == "redo" || c.Name == "flow" || c.Name == "provider" || c.Name == "model" || c.Name == "effort" {
 			continue // KairoCode's own
 		}
 		desc := c.Description
@@ -375,7 +405,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
 		return map[string]any{"stopReason": "end_turn"}, nil
-	case name == "/provider" || name == "/model":
+	case name == "/provider" || name == "/model" || name == "/effort":
 		// Without a turn: the settings change, or are listed (ADR 0014).
 		return a.settingsCommand(ctx, p.SessionID, name[1:], strings.TrimSpace(args))
 	case name == "/flow":

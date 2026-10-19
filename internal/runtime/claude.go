@@ -206,6 +206,9 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	if in.Model != "" {
 		args = append(args, "--model", in.Model)
 	}
+	if in.Effort != "" {
+		args = append(args, "--effort="+in.Effort)
+	}
 	cmd := exec.CommandContext(t, r.cfg.ClaudePath, args...)
 	cmd.Dir = in.Dir
 	cmd.Env = claudeEnv()

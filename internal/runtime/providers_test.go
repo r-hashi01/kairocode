@@ -45,6 +45,7 @@ type fakeCLIStart struct {
 type fakeACPSession struct {
 	Cwd     string   `json:"cwd"`
 	Model   string   `json:"model"`
+	Effort  string   `json:"effort"`
 	Prompts []string `json:"prompts"`
 }
 
@@ -76,6 +77,7 @@ func fakeCLI() {
 			SessionID string `json:"sessionId"`
 			Cwd       string `json:"cwd"`
 			Value     string `json:"value"`
+			ConfigID  string `json:"configId"`
 			Prompt    []struct {
 				Text string `json:"text"`
 			} `json:"prompt"`
@@ -88,8 +90,11 @@ func fakeCLI() {
 		case "session/new":
 			id := fmt.Sprintf("%s-%d", engine, time.Now().UnixNano())
 			save(id, fakeACPSession{Cwd: p.Cwd})
-			return map[string]any{"sessionId": id, "configOptions": []any{map[string]any{"id": "model", "name": "Model",
-				"category": "model", "type": "select", "currentValue": "default", "options": []any{}}}}, nil
+			return map[string]any{"sessionId": id, "configOptions": []any{
+				map[string]any{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "m1",
+					"options": []any{map[string]any{"value": "m1", "name": "M1"}, map[string]any{"value": "m2", "name": "M2"}}},
+				map[string]any{"id": "reasoning_effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "high",
+					"options": []any{map[string]any{"value": "low", "name": "low"}, map[string]any{"value": "ultra", "name": "ultra"}}}}}, nil
 		case "session/load":
 			s := load(p.SessionID)
 			for _, pr := range s.Prompts {
@@ -99,7 +104,11 @@ func fakeCLI() {
 			return map[string]any{}, nil
 		case "session/set_config_option":
 			s := load(p.SessionID)
-			s.Model = p.Value
+			if p.ConfigID == "reasoning_effort" {
+				s.Effort = p.Value
+			} else {
+				s.Model = p.Value
+			}
 			save(p.SessionID, s)
 			return map[string]any{"configOptions": []any{}}, nil
 		case "session/prompt":
@@ -186,7 +195,11 @@ func fakeCLI() {
 					result += ", written"
 				}
 			}
-			update(p.SessionID, "agent_message_chunk", fmt.Sprintf("%s %s: %s", engine, s.Model, result))
+			model := s.Model
+			if s.Effort != "" {
+				model += "@" + s.Effort
+			}
+			update(p.SessionID, "agent_message_chunk", fmt.Sprintf("%s %s: %s", engine, model, result))
 			return map[string]any{"stopReason": "end_turn"}, nil
 		}
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: method}
@@ -251,7 +264,7 @@ func TestSwitchProviderAndModel(t *testing.T) {
 	if got := reply("hello"); got != "api says hi" {
 		t.Fatalf("turn 0: %q", got)
 	}
-	if st, err := r.Switch(ctx, s, "codex", "gpt-x"); err != nil || st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
+	if st, err := r.Switch(ctx, s, "codex", "gpt-x", ""); err != nil || st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
 		t.Fatalf("switch to codex: %+v %v", st, err)
 	}
 	if got := reply("write notes"); got != "codex gpt-x: write yes, written" {
@@ -263,13 +276,13 @@ func TestSwitchProviderAndModel(t *testing.T) {
 	if st, _ := r.Settings(ctx, s); st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
 		t.Fatalf("settings: %+v", st)
 	}
-	if _, err := r.Switch(ctx, s, "copilot", ""); err != nil {
+	if _, err := r.Switch(ctx, s, "copilot", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := reply("your turn"); got != "copilot : write yes, written" {
 		t.Fatalf("turn 3: %q", got)
 	}
-	if _, err := r.Switch(ctx, s, "anthropic", ""); err != nil {
+	if _, err := r.Switch(ctx, s, "anthropic", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := reply("back"); got != "api again" {
@@ -310,10 +323,10 @@ func TestSwitchProviderAndModel(t *testing.T) {
 			t.Errorf("no %q in\n%s", want, conv)
 		}
 	}
-	if _, err := r.Switch(ctx, s, "gpt", ""); err == nil {
+	if _, err := r.Switch(ctx, s, "gpt", "", ""); err == nil {
 		t.Error("switched to a provider that is not there")
 	}
-	if _, err := r.Switch(ctx, s, "claude-code", ""); err == nil {
+	if _, err := r.Switch(ctx, s, "claude-code", "", ""); err == nil {
 		t.Error("switched to a CLI that is not installed")
 	}
 }
@@ -333,7 +346,7 @@ func TestSwitchToClaudeCode(t *testing.T) {
 	defer r.Close()
 	s, _ := r.CreateSession(ctx, "to-claude", workflows.SessionInput{Dir: repo(t)})
 	turn(t, r, s, "hello")
-	if _, err := r.Switch(ctx, s, "claude-code", ""); err != nil {
+	if _, err := r.Switch(ctx, s, "claude-code", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if out := turn(t, r, s, "and you?"); out.Stopped != "" {
@@ -499,13 +512,13 @@ func TestInstallProviderFromRegistry(t *testing.T) {
 		t.Fatalf("before installing: %+v", p)
 	}
 	s, _ := r.CreateSession(ctx, "reg", workflows.SessionInput{Dir: repo(t)})
-	if _, err := r.Switch(ctx, s, "fake-agent", ""); !errors.Is(err, ErrNotInstalled) {
+	if _, err := r.Switch(ctx, s, "fake-agent", "", ""); !errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("switched to it before it was installed: %v", err)
 	}
 	if p, err := r.InstallProvider(ctx, "fake-agent", "1.0.0"); err != nil || !p.Available {
 		t.Fatalf("install: %+v %v", p, err)
 	}
-	if st, err := r.Switch(ctx, s, "fake-agent", ""); err != nil || st.Provider != "fake-agent" {
+	if st, err := r.Switch(ctx, s, "fake-agent", "", ""); err != nil || st.Provider != "fake-agent" {
 		t.Fatalf("switch: %+v %v", st, err)
 	}
 	out := turn(t, r, s, "hello")
@@ -593,5 +606,67 @@ func TestCrashAgentToolAnswerUsedOnce(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(ran); strings.Count(string(b), "ran") != 1 {
 		t.Fatalf("the agent's tool ran %d times", strings.Count(string(b), "ran"))
+	}
+}
+
+// A provider switched back to gets the model and effort last chosen for
+// it, and so does a new session of it; an effort reaches the API's model
+// call and an agent's session (ADR 0014, 追記). An agent's models and
+// efforts, as it said them, are the lists to choose from.
+func TestModelAndEffortKept(t *testing.T) {
+	setupFakeCLI(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	fake := &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "api"}, {Text: "api"}, {Text: "api"}, {Text: "api"}}}
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0], Provider: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ws := repo(t)
+	s, _ := r.CreateSession(ctx, "keep", workflows.SessionInput{Dir: ws})
+	if _, err := r.Switch(ctx, s, "", "", "max"); err != nil {
+		t.Fatal(err)
+	}
+	turn(t, r, s, "one")
+	if got := fake.Efforts(); len(got) != 1 || got[0] != "max" {
+		t.Fatalf("the API's efforts %q", got)
+	}
+	if _, err := r.Switch(ctx, s, "codex", "m2", "ultra"); err != nil {
+		t.Fatal(err)
+	}
+	reply := func(text string) string {
+		out := turn(t, r, s, text)
+		got, _ := r.Reply(ctx, out.Reply)
+		return got
+	}
+	if got := reply("two"); got != "codex m2@ultra: no call" {
+		t.Fatalf("codex: %q", got)
+	}
+	if ms, _ := r.Models(ctx, "codex-acp"); strings.Join(ms, ",") != "m1,m2" {
+		t.Fatalf("codex's models %q", ms)
+	}
+	if es, _ := r.Efforts(ctx, "codex-acp"); strings.Join(es, ",") != "low,ultra" {
+		t.Fatalf("codex's efforts %q", es)
+	}
+	// Away and back: what was chosen for each comes back.
+	if st, _ := r.Switch(ctx, s, "anthropic", "", ""); st.Effort != "max" {
+		t.Fatalf("back on the API: %+v", st)
+	}
+	if st, _ := r.Switch(ctx, s, "codex", "", ""); st.Model != "m2" || st.Effort != "ultra" {
+		t.Fatalf("back on codex: %+v", st)
+	}
+	// An effort the provider does not have is refused, not kept.
+	if _, err := r.Switch(ctx, s, "", "", "hgih"); err == nil {
+		t.Fatal("took an effort codex does not have")
+	}
+	// The same provider again is no switch: nothing is reset.
+	if st, _ := r.Switch(ctx, s, "codex-acp", "", ""); st.Model != "m2" || st.Effort != "ultra" {
+		t.Fatalf("codex again: %+v", st)
+	}
+	// A new session of codex too.
+	s2, _ := r.CreateSession(ctx, "keep2", workflows.SessionInput{Dir: ws, Engine: "codex"})
+	if st, _ := r.Settings(ctx, s2); st.Model != "m2" || st.Effort != "ultra" {
+		t.Fatalf("a new session: %+v", st)
 	}
 }

@@ -551,6 +551,18 @@ func TestProviderAndModel(t *testing.T) {
 	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5") {
 		t.Fatalf("status\n%s", v)
 	}
+	// An effort, where the provider has one: shown, and set by /effort.
+	d.send(updateMsg{Kind: "config_option_update", Config: append(d.m.config, acp.ConfigOption{ID: "effort", Name: "Effort",
+		CurrentValue: "max", Options: []acp.ConfigValue{{Value: "low", Name: "low"}, {Value: "max", Name: "max"}}})})
+	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5 · max") {
+		t.Fatalf("status with the effort\n%s", v)
+	}
+	d.m.input.SetValue("/effort low")
+	d.send(key("enter"))
+	if strings.Join(a.set, ",") != "effort=low" {
+		t.Fatalf("set %q", a.set)
+	}
+	a.set = nil
 	d.m.input.SetValue("/provider")
 	d.send(key("enter"))
 	v := d.view()
