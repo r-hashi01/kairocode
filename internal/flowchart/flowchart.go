@@ -55,6 +55,8 @@ type Node struct {
 	// Mark: how the node differs from the flow before a change: "+"
 	// added, "~" changed ("" the same). Set by Diff.
 	Mark string `json:"mark,omitempty"`
+	// Edit: where in the script the node is, to change it there (a call's).
+	Edit *Edit `json:"-"`
 
 	Cond     string   `json:"cond,omitempty"`
 	Then     []Node   `json:"then,omitempty"`
@@ -108,6 +110,10 @@ func Build(name string, src []byte) (*Chart, error) {
 type builder struct {
 	src  []string
 	defs map[string]*syntax.DefStmt
+	// at: the statement being read, its block, and the call that is the
+	// whole of it (if one is).
+	at    *place
+	whole *syntax.CallExpr
 	// expanding: the defs being drawn, so a call of one inside itself (not
 	// allowed when it runs) does not go round.
 	expanding map[string]bool
@@ -172,11 +178,84 @@ func short(s string) string {
 }
 
 func (b *builder) stmts(list []syntax.Stmt) []Node {
+	block := make([]Lines, len(list))
+	for i, stmt := range list {
+		start, end := stmt.Span()
+		block[i] = Lines{First: int(start.Line), Last: int(end.Line)}
+	}
+	saved, savedWhole := b.at, b.whole
+	defer func() { b.at, b.whole = saved, savedWhole }()
 	var out []Node
-	for _, stmt := range list {
+	for i, stmt := range list {
+		b.at = &place{block: block, index: i}
+		b.whole = nil
+		switch s := stmt.(type) {
+		case *syntax.ExprStmt:
+			b.whole = callOf(s.X)
+		case *syntax.AssignStmt:
+			b.whole = callOf(s.RHS)
+		}
 		out = append(out, b.stmt(stmt)...)
 	}
 	return out
+}
+
+// callOf is the call an expression is, or reads a field of (agent(...).output).
+func callOf(e syntax.Expr) *syntax.CallExpr {
+	switch x := e.(type) {
+	case *syntax.CallExpr:
+		return x
+	case *syntax.DotExpr:
+		return callOf(x.X)
+	}
+	return nil
+}
+
+// place is where a statement is: its block's statements' lines, and its
+// index among them.
+type place struct {
+	block []Lines
+	index int
+}
+
+// edit is where n, made from the call x whose text is the literal lit (nil
+// if it is code), is in the script.
+func (b *builder) edit(x *syntax.CallExpr, lit *syntax.Literal) *Edit {
+	if b.at == nil {
+		return nil
+	}
+	e := &Edit{Stmt: b.at.block[b.at.index], Block: b.at.block, Index: b.at.index, Whole: x == b.whole}
+	if lit != nil {
+		start, end := lit.Span()
+		e.Lit = &Span{Line: int(start.Line), Col: int(start.Col), EndLine: int(end.Line), EndCol: int(end.Col)}
+	}
+	return e
+}
+
+// literal is the string literal an argument is, or nil.
+func literal(e syntax.Expr) *syntax.Literal {
+	if lit, ok := e.(*syntax.Literal); ok && lit.Token == syntax.STRING {
+		return lit
+	}
+	return nil
+}
+
+// argExpr is a call's argument (by place or by name), or nil.
+func argExpr(x *syntax.CallExpr, place int, name string) syntax.Expr {
+	i := 0
+	for _, a := range x.Args {
+		if bin, ok := a.(*syntax.BinaryExpr); ok && bin.Op == syntax.EQ {
+			if id, ok := bin.X.(*syntax.Ident); ok && id.Name == name {
+				return bin.Y
+			}
+			continue
+		}
+		if i == place {
+			return a
+		}
+		i++
+	}
+	return nil
 }
 
 func (b *builder) stmt(stmt syntax.Stmt) []Node {
@@ -288,23 +367,25 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 	switch fn {
 	case "agent":
 		text, code := b.argOf(x, 1, "prompt")
-		return at(Node{Kind: Agent, Title: b.arg(x, 0, "agent"), Text: text, Code: code})
+		return at(Node{Kind: Agent, Title: b.arg(x, 0, "agent"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 1, "prompt")))})
 	case "tool":
 		name := b.arg(x, 0, "")
 		text, code := "", false
+		var lit *syntax.Literal
 		for _, a := range x.Args[min(1, len(x.Args)):] {
 			if bin, ok := a.(*syntax.BinaryExpr); ok && bin.Op == syntax.EQ {
 				text, code = b.valueOf(bin.Y) // the first named argument: the command, the path
+				lit = literal(bin.Y)
 				break
 			}
 		}
-		return at(Node{Kind: Tool, Title: name, Text: text, Code: code})
+		return at(Node{Kind: Tool, Title: name, Text: text, Code: code, Edit: b.edit(x, lit)})
 	case "ask":
 		text, code := b.argOf(x, 0, "question")
-		return at(Node{Kind: Ask, Text: text, Code: code})
+		return at(Node{Kind: Ask, Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "question")))})
 	case "decide":
 		text, code := b.argOf(x, 0, "prompt")
-		return at(Node{Kind: Decide, Title: b.arg(x, 1, "type"), Text: text, Code: code})
+		return at(Node{Kind: Decide, Title: b.arg(x, 1, "type"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "prompt")))})
 	case "phase":
 		return []Node{{Kind: Phase, Text: b.arg(x, 0, "name")}}
 	}
@@ -395,6 +476,7 @@ func (b *builder) parallel(x *syntax.CallExpr) []Node {
 					a.Title = b.value(entry.Value)
 				case "prompt":
 					a.Text, a.Code = b.valueOf(entry.Value)
+					a.Edit = b.edit(x, literal(entry.Value))
 				}
 			}
 		} else {

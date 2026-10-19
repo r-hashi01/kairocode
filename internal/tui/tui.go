@@ -142,6 +142,8 @@ type model struct {
 	cmds    []acp.Command
 	compSel int
 	tokens  int64
+	// edit: a flow being changed on its chart (/flow edit).
+	edit *flowEdit
 	// flowsBefore: the project's flows when the turn began, to draw those
 	// it made or changed when it ends.
 	flowsBefore map[string]string
@@ -661,6 +663,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case len(m.asks) > 0:
 		return m.askKey(key)
+	case m.edit != nil:
+		return m.editKey(k)
 	}
 	switch key {
 	case "ctrl+c":
@@ -722,6 +726,15 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			m.print(m.help())
 			return nil
 		}
+		if name, ok := strings.CutPrefix(text, "/flow edit "); ok { // changed here, on its chart
+			e, err := openFlowEdit(m.o.Dir, strings.TrimSpace(name))
+			if err != nil {
+				m.print(bad.Render("  ⎿  " + err.Error()))
+			} else {
+				m.edit = e
+			}
+			return nil
+		}
 		if name, ok := strings.CutPrefix(text, "/flow graph "); ok { // drawn here, from the script
 			out, err := FlowGraph(m.o.Dir, strings.TrimSpace(name), m.width-1)
 			if err != nil {
@@ -776,6 +789,7 @@ func (m *model) help() string {
 	lines = append(lines, bold.Render("Keys"),
 		"  enter          send (during a turn: after it)",
 		"  esc            stop the turn",
+		"  /flow edit <name>   change a flow on its chart; /flow graph <name> draws it",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
 		"  tab            complete a command",
 		"  ctrl+c         clear the input; twice to leave",
@@ -841,6 +855,17 @@ func (m *model) View() tea.View {
 	switch {
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
+	case m.edit != nil:
+		b.WriteString("\n" + m.editView(w) + "\n")
+		if m.edit.words {
+			line := accent.Render(strings.Repeat("─", w))
+			b.WriteString(line + "\n")
+			if c := m.input.Cursor(); c != nil {
+				c.Y += strings.Count(b.String(), "\n")
+				cursor = c
+			}
+			b.WriteString(m.input.View() + "\n" + line + "\n")
+		}
 	default:
 		for _, id := range m.calls {
 			b.WriteString("\n" + accent.Render("⏺ ") + bold.Render(cut(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")

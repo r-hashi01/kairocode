@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,5 +132,60 @@ func TestFlowLive(t *testing.T) {
 	}
 	if out := d.out(); !strings.Contains(out, "✓ agent build") || !strings.Contains(out, "○ agent docs") {
 		t.Fatalf("scrollback\n%s", out)
+	}
+}
+
+// /flow edit: a box is chosen with the arrows; its words are changed in
+// the input, it is deleted, or moved; each change is checked and written
+// to the script, and only that part of it changes. One the check refuses
+// is not written.
+func TestEditOnTheChart(t *testing.T) {
+	dir := t.TempDir()
+	flows := filepath.Join(dir, ".kairocode", "workflows")
+	os.MkdirAll(flows, 0o755)
+	script := filepath.Join(flows, "fix.star")
+	src := "# Fix it.\ndef main(input):\n    agent(agent = \"plan\", prompt = \"look\")\n    r = tool(\"bash\", command = \"go test ./...\")\n    agent(agent = \"build\", prompt = \"fix it\")\n    return r.output\n"
+	os.WriteFile(script, []byte(src), 0o644)
+	d, a := start(t, Options{Dir: dir})
+	typed(d, "/flow edit fix")
+	if v := d.view(); !strings.Contains(v, "⏺ agent plan") || !strings.Contains(v, "enter change its words") {
+		t.Fatalf("view\n%s", v)
+	}
+	read := func() string { b, _ := os.ReadFile(script); return string(b) }
+
+	d.send(key("down")) // the tool
+	d.send(key("enter"))
+	d.m.input.SetValue("go vet ./...")
+	d.send(key("enter"))
+	if got := read(); got != strings.Replace(src, `"go test ./..."`, `"go vet ./..."`, 1) {
+		t.Fatalf("after changing the words:\n%s", got)
+	}
+
+	d.send(key("down")) // agent build
+	d.send(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift})
+	if got := read(); !strings.Contains(got, "    agent(agent = \"build\", prompt = \"fix it\")\n    r = tool(") {
+		t.Fatalf("after moving it up:\n%s", got)
+	}
+
+	d.send(key("up")) // agent plan... the tool now
+	d.send(key("up"))
+	d.send(key("d")) // agent plan goes
+	if got := read(); strings.Contains(got, "look") || !strings.Contains(got, "# Fix it.") {
+		t.Fatalf("after deleting:\n%s", got)
+	}
+
+	// Deleting the tool would leave r undefined: not written.
+	before := read()
+	for i := 0; i < 3; i++ {
+		d.send(key("down"))
+	}
+	d.send(key("d"))
+	if read() != before || !strings.Contains(d.view(), "not changed") {
+		t.Fatalf("a change the check refuses was written:\n%s\n%s", read(), d.view())
+	}
+
+	d.send(key("esc"))
+	if d.m.edit != nil || !strings.Contains(d.out(), "✎ flow fix") || len(a.prompts) != 0 {
+		t.Fatalf("leaving: edit %v, prompts %q\n%s", d.m.edit, a.prompts, d.out())
 	}
 }

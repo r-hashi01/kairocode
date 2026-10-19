@@ -331,4 +331,10 @@ def main(input):
   - `flow_check` は、書かずに検査だけするツールです（読むだけ。既定で許可）。
   - TUI は、ターンの始めと終わりで `.kairocode/workflows` を比べ、作られたフローや変わったフローの図を描きます。変わった箱には `~`、足した箱には `+` を付けます（`flowchart.Diff`）。言葉で直したときも同じです。
   - テスト: `TestNewFlow`（書けない台本を直して、承認されて書かれ、`/flow hello` で動く）、`TestFlowWrite`、`TestCheck`、`TestDiff`、`TestFlowsTheTurnMade`。
-- **まだ:** 図の上での変更（箱を選んで書き換える・消す・入れ替える）、`kairocode flow show --follow`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **図の上での変更（6 歩目）:** TUI の `/flow edit <name>` で、フローの図を開いて変えます。
+  - ↑↓ で箱を選び、Enter で言葉（プロンプト、コマンド、問い）を入力欄で書き換え、`d` で消し、Shift+↑↓ で同じ段の中で入れ替えます。Esc で終えると、変わった図が端末の流れに残ります。
+  - 書き換えるのは台本のその部分だけです（`flowchart.SetText`、`Delete`、`Move`）。言葉はその文字列の値だけを、消すと入れ替えはその文の行だけを変え、ほかの行（コメントを含む）はそのままです。
+  - 変えた台本が検査（`flowchart.Check`）を通らなければ書きません（たとえば、後で使う値を作る文を消すと「定義されていない」になる）。言葉がコードで書かれた箱や、大きな文の一部の呼び出しは、図の上では変えられず、言葉で頼むように知らせます。
+  - これは利用者自身の操作なので、TUI が台本を直接書きます（モデルの `flow_write` ではない）。
+  - テスト: `TestSetText`、`TestDeleteAndMove`、`TestEditOnTheChart`（検査を通さずに書く形に壊すと落ちることを確かめた）。
+- **まだ:** `kairocode flow show --follow`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
