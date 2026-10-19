@@ -107,6 +107,11 @@ type events struct {
 	// charts: their charts, built once.
 	flows  map[string]map[string]string
 	charts map[string]*flowchart.Chart
+	// held: a review's resolved event, by its call's run, kept until the
+	// call's end is told (the call ends, then it is resolved, in that
+	// order); ended: calls under review whose end was told first.
+	held   map[string]map[string]Event
+	ended  map[string]map[string]bool
 	queue  []item
 	wake   chan struct{}
 	closed bool
@@ -140,6 +145,7 @@ func newEvents(r *Runtime) *events {
 	e := &events{r: r, watchers: map[string]map[*watcher]bool{}, seq: map[string]int64{},
 		pending: map[string]map[string]Pending{}, answers: map[string]map[string]bool{}, calls: map[string]map[string]string{}, tokens: map[string]*tokens{},
 		flows: map[string]map[string]string{}, charts: map[string]*flowchart.Chart{},
+		held: map[string]map[string]Event{}, ended: map[string]map[string]bool{},
 		wake: make(chan struct{}, 1), ctx: ctx, stop: stop, done: make(chan struct{})}
 	go e.run()
 	return e
@@ -232,6 +238,8 @@ func (e *events) drop(w *watcher) {
 			delete(e.charts, run)
 		}
 		delete(e.flows, w.session)
+		delete(e.held, w.session)
+		delete(e.ended, w.session)
 		if t := e.tokens[w.session]; t != nil {
 			t.stop()
 			delete(e.tokens, w.session)
@@ -496,10 +504,41 @@ func (e *events) refresh(session string) bool {
 			ev.OK = &ok
 			delete(e.answers[session], k)
 		}
+		run, review := strings.CutPrefix(k, reviewPrefix)
+		hold := review && !inMCPCall(run) && !e.ended[session][run]
+		if hold { // told once the call's end is
+			if e.held[session] == nil {
+				e.held[session] = map[string]Event{}
+			}
+			e.held[session][run] = ev
+		}
+		delete(e.ended[session], run)
 		e.mu.Unlock()
-		e.emit(session, ev)
+		if !hold {
+			e.emit(session, ev)
+		}
 	}
 	return true
+}
+
+// callEnded: the end of the call run has been told. A review of it that
+// was resolved is told now; one still listed is told when it goes.
+func (e *events) callEnded(session, run string) {
+	e.mu.Lock()
+	ev, held := e.held[session][run]
+	delete(e.held[session], run)
+	if !held {
+		if _, listed := e.pending[session][reviewPrefix+run]; listed {
+			if e.ended[session] == nil {
+				e.ended[session] = map[string]bool{}
+			}
+			e.ended[session][run] = true
+		}
+	}
+	e.mu.Unlock()
+	if held {
+		e.emit(session, ev)
+	}
 }
 
 // input is the input a run was given. kairo keeps a call's as
@@ -679,7 +718,16 @@ func toolOfAction(action string) string {
 // toolEnd: a call that answers a tool call settled.
 func (e *events) toolEnd(session, run, action string) {
 	info, err := e.r.K.Get(e.ctx, run)
-	if err != nil || info.Status != "completed" {
+	if err != nil {
+		return
+	}
+	switch info.Status {
+	case "completed", "failed", "cancelled":
+		// However it ended (cancelled under review too), its review may
+		// now be told resolved; not when it only stopped for review.
+		defer e.callEnded(session, run)
+	}
+	if info.Status != "completed" {
 		return
 	}
 	var out struct {

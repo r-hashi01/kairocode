@@ -850,24 +850,28 @@ def main(input):
 	if _, err := r.WaitTurn(ctx, s, n); !errors.Is(err, kairo.ErrCancelled) {
 		t.Fatalf("the turn: %v", err)
 	}
+	// The flow and its agents are cancelled with the turn (kairo cancels
+	// them as it reaches them: they are waited for, not looked at once).
 	turnRun, _, _ := r.TurnRun(ctx, s, n)
-	kids, _ := r.K.Children(ctx, turnRun.RunID)
-	flows := 0
-	for _, k := range kids {
-		if k.Workflow != workflows.Flow {
-			continue
-		}
-		flows++
-		agents, _ := r.K.Children(ctx, k.RunID)
-		for _, a := range append(agents, k) {
-			if (a.Workflow == workflows.Flow || a.Workflow == workflows.Turn) && a.Status != "cancelled" {
-				t.Errorf("%s %s is %s", a.Workflow, a.RunID, a.Status)
+	var still []string
+	waitUntil(t, ctx, "the flow and its agents cancelled", func() bool {
+		still = nil
+		kids, _ := r.K.Children(ctx, turnRun.RunID)
+		flows := 0
+		for _, k := range kids {
+			if k.Workflow != workflows.Flow {
+				continue
+			}
+			flows++
+			agents, _ := r.K.Children(ctx, k.RunID)
+			for _, a := range append(agents, k) {
+				if (a.Workflow == workflows.Flow || a.Workflow == workflows.Turn) && a.Status != "cancelled" {
+					still = append(still, a.Workflow+" "+a.Status)
+				}
 			}
 		}
-	}
-	if flows != 1 {
-		t.Fatalf("%d flows", flows)
-	}
+		return flows == 1 && len(still) == 0
+	})
 }
 
 // TestWorkflowScriptDivergence: a flow taken up again by code that makes
