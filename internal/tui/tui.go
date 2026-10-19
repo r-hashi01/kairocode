@@ -629,6 +629,15 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			m.print(m.help())
 			return nil
 		}
+		if name, ok := strings.CutPrefix(text, "/flow graph "); ok { // drawn here, from the script
+			out, err := FlowGraph(m.o.Dir, strings.TrimSpace(name), m.width-1)
+			if err != nil {
+				m.print(bad.Render("  ⎿  " + err.Error()))
+			} else {
+				m.block(out)
+			}
+			return nil
+		}
 		if m.running {
 			m.queued = append(m.queued, text)
 			m.print(faint.Render("  (sent when this turn ends) ") + you.Render(text))

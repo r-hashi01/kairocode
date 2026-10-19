@@ -305,4 +305,10 @@ def main(input):
   - 数の判断は、2^53 より小さい整数だけを Starlark の整数にします。それより大きいものは小数のままです（整数への変換が、機械によって変わらないように）。
   - 判断のための `claude` は、落ちた後に残ったものを止める仕組み（`SetClaudeProc`）に乗っていません。ツールを持たず、何も残さないので、二重に効く作用はなく、増えるのは費用だけです。
 - `kairocode run "/flow <name> …"` でも、フローを非対話で動かせます（`TestRunAFlowThatAsks`）。
-- **まだ:** `wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **フローの図（3 歩目、動かす前の図）:**
+  - `internal/flowchart` がスクリプトの構文の木から形を作ります（`main` から、プリミティブの呼び出しを順番どおりに。`if`、`for`・`while`、`parallel`（一覧と内包表記）、`phase`、`return`、`break`。スクリプトの中の関数は、その場に展開して描き、その `return` はフローの終わりにしない）。
+  - `internal/tui` が、Dify のように上から下へ箱と線で描きます。分岐と並べたエージェントは横に並べて合流させ、繰り返しと「各要素に同時に」は枠で囲みます。幅に収まらなければ、木の形の文字の図にします。
+  - 箱の印と色は状態から決めます（`○` まだ、`⏺` 動いている、`✓` 終わり、`✗` 失敗、`⏸` 人を待っている）。動いている間の状態を重ねるのは次の歩です。
+  - 見る入口は `kairocode flow graph <name>` と、TUI の `/flow graph <name>` です。どちらもデーモンを通さず、手元のスクリプトから描きます。`graph` という名前のフローは作れません。
+  - テスト: `TestBuild`（形）、`TestChartLooks`、`TestChartStates`、`TestChartTooNarrow`、`TestFlowGraph`、`TestFlowGraphCommand`。
+- **まだ:** 動いている間の図、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。

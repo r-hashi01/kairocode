@@ -9,28 +9,27 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 	"go.starlark.net/syntax"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 // FlowsDir is where a project's flows are (ADR 0003): <name>.star.
-const FlowsDir = ".kairocode/workflows"
+const FlowsDir = flowchart.Dir
 
-// flowName is what a flow may be called: what /flow can type. "new" is
-// taken by /flow new.
-var flowName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+// FlowName reports whether name can be a flow's.
+func FlowName(name string) bool { return flowchart.ValidName(name) }
 
 // flowLoad reads a flow's script, to be recorded: the run goes on with it
 // whatever the file becomes (invariant 2).
 func flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (workflows.FlowSource, error) {
-	if !flowName.MatchString(in.Name) || in.Name == "new" {
+	if !FlowName(in.Name) {
 		return workflows.FlowSource{Error: fmt.Sprintf("%q is not a flow's name (letters, digits, - and _)", in.Name)}, nil
 	}
 	root, err := os.OpenRoot(in.Dir)
@@ -96,7 +95,7 @@ func (r *Runtime) Flows(ctx context.Context, session string) ([]FlowInfo, error)
 	var out []FlowInfo
 	for _, e := range entries {
 		name, ok := strings.CutSuffix(e.Name(), ".star")
-		if !ok || e.IsDir() || !flowName.MatchString(name) || name == "new" {
+		if !ok || e.IsDir() || !FlowName(name) {
 			continue
 		}
 		f := FlowInfo{Name: name}

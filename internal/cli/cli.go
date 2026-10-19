@@ -19,11 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/tui"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -33,6 +36,7 @@ const usage = `usage:
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
+  kairocode flow graph [-dir DIR] [-width N] <name>   draw a flow of .kairocode/workflows (ADR 0003)
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
   kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
@@ -103,6 +107,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = approve(ctx, args, stderr)
 	case "answer":
 		err = answer(ctx, args, stderr)
+	case "flow":
+		err = flowCommand(args, stdout, stderr)
 	case "usage":
 		err = showUsage(ctx, args, stdout, stderr)
 	case "acp":
@@ -543,4 +549,28 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	line("total", u.Total)
 	return nil
+}
+
+// flowCommand: kairocode flow graph <name>, the chart of a flow, from its
+// script (nothing runs, and the daemon is not needed).
+func flowCommand(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "graph" {
+		return errors.New("kairocode flow graph [-dir DIR] [-width N] <name>")
+	}
+	fs := flag.NewFlagSet("flow graph", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", ".", "working directory")
+	width := fs.Int("width", 100, "columns to draw in")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("kairocode flow graph [-dir DIR] [-width N] <name>")
+	}
+	out, err := tui.FlowGraph(*dir, fs.Arg(0), *width)
+	if err != nil {
+		return err
+	}
+	_, err = lipgloss.Fprintln(stdout, out)
+	return err
 }

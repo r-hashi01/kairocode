@@ -407,3 +407,28 @@ func TestRunAFlowThatAsks(t *testing.T) {
 		t.Fatalf("stdout %q", got)
 	}
 }
+
+// kairocode flow graph <name> draws a flow from its script, with no
+// daemon; a flow that is not there says so.
+func TestFlowGraph(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "fix.star"),
+		[]byte("DESCRIPTION = \"Fix it\"\ndef main(input):\n    agent(agent = \"build\", prompt = \"fix it\")\n    return \"done\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if code := Main(context.Background(), []string{"flow", "graph", "-dir", ws, "fix"}, &out, &errs); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	for _, want := range []string{"fix  Fix it", "▶ start", "agent build", "fix it", "return"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no %q in\n%s", want, out.String())
+		}
+	}
+	if code := Main(context.Background(), []string{"flow", "graph", "-dir", ws, "absent"}, &out, &errs); code == 0 {
+		t.Fatal("drew a flow that is not there")
+	}
+}

@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -453,5 +455,26 @@ func TestFlowQuestion(t *testing.T) {
 	d.send(key("2"))
 	if got := <-reply; got != "answer_1" {
 		t.Fatalf("chose %q", got)
+	}
+}
+
+// /flow graph <name> draws the flow here, from its script; nothing is sent.
+func TestFlowGraphCommand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".kairocode", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".kairocode", "workflows", "fix.star"),
+		[]byte("def main(input):\n    agent(agent = \"build\", prompt = \"fix it\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, a := start(t, Options{Dir: dir})
+	typed(d, "/flow graph fix")
+	if len(a.prompts) != 0 || !strings.Contains(d.out(), "○ agent build") {
+		t.Fatalf("prompts %q\n%s", a.prompts, d.out())
+	}
+	typed(d, "/flow graph nothing")
+	if !strings.Contains(d.out(), `the flow "nothing"`) {
+		t.Fatalf("out\n%s", d.out())
 	}
 }
