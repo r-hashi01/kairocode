@@ -62,18 +62,29 @@ type override struct {
 	Initialization json.RawMessage   `json:"initialization"`
 }
 
-// Servers are the servers for the working directory dir: the built-in ones
-// as kairocode.json's "lsp" (the user's, then the project's) changes them.
-// "lsp": false starts none; {"<id>": {"disabled": true}} not that one;
-// {"<id>": {"command", "extensions", "env", "initialization"}} adds one or
-// changes it (one not built in needs its extensions).
-func Servers(dir string, files ...string) ([]Server, error) {
+// Servers are the servers to use: the built-in ones as kairocode.json's
+// "lsp" changes them, the user's file (user), then the project's
+// (project). Either may say "lsp": false, to start none, or
+// {"<id>": {"disabled": true}}, not that one; and set an existing
+// server's "initialization". Only the user's own file may add a server or
+// change one's "command", "extensions" or "env" (one not built in needs
+// its command and extensions): a project does not choose the commands run
+// on every write (ADR 0009, 追記). What a project sets that it may not is
+// left out, and said in the error, with the servers still given.
+func Servers(user, project string) ([]Server, error) {
 	if os.Getenv(Off) == "off" {
 		return nil, nil
 	}
 	servers := slices.Clone(Builtin)
-	for _, path := range files {
-		b, err := os.ReadFile(path)
+	var refused []string
+	for _, f := range []struct {
+		path string
+		own  bool
+	}{{user, true}, {project, false}} {
+		if f.path == "" {
+			continue
+		}
+		b, err := os.ReadFile(f.path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -84,17 +95,17 @@ func Servers(dir string, files ...string) ([]Server, error) {
 			LSP json.RawMessage `json:"lsp"`
 		}
 		if err := json.Unmarshal(b, &cfg); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s: %w", f.path, err)
 		}
-		if len(cfg.LSP) == 0 || string(cfg.LSP) == "null" || string(bytes.TrimSpace(cfg.LSP)) == "true" {
+		switch v := string(bytes.TrimSpace(cfg.LSP)); v {
+		case "", "null", "true":
 			continue
-		}
-		if string(bytes.TrimSpace(cfg.LSP)) == "false" {
+		case "false":
 			return nil, nil
 		}
 		var entries map[string]override
 		if err := json.Unmarshal(cfg.LSP, &entries); err != nil {
-			return nil, fmt.Errorf("%s: lsp: want false or {\"<id>\": {...}}: %w", path, err)
+			return nil, fmt.Errorf("%s: lsp: want false or {\"<id>\": {...}}: %w", f.path, err)
 		}
 		for _, id := range slices.Sorted(func(yield func(string) bool) {
 			for id := range entries {
@@ -111,9 +122,16 @@ func Servers(dir string, files ...string) ([]Server, error) {
 				}
 				continue
 			}
+			if !f.own && (len(o.Command) > 0 || len(o.Extensions) > 0 || o.Env != nil) {
+				refused = append(refused, id)
+				o.Command, o.Extensions, o.Env = nil, nil, nil
+			}
 			if i < 0 {
 				if len(o.Command) == 0 || len(o.Extensions) == 0 {
-					return nil, fmt.Errorf("%s: lsp: %s is not built in: it needs a command and extensions", path, id)
+					if f.own {
+						return nil, fmt.Errorf("%s: lsp: %s is not built in: it needs a command and extensions", f.path, id)
+					}
+					continue
 				}
 				servers = append(servers, Server{ID: id})
 				i = len(servers) - 1
@@ -132,6 +150,10 @@ func Servers(dir string, files ...string) ([]Server, error) {
 				s.Initialization = o.Initialization
 			}
 		}
+	}
+	if len(refused) > 0 {
+		return servers, fmt.Errorf("%s: lsp: %s: a project's settings do not set a server's command, extensions or env; "+
+			"set them in your own kairocode.json", project, strings.Join(refused, ", "))
 	}
 	return servers, nil
 }

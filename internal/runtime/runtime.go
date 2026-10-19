@@ -447,10 +447,9 @@ func (r *Runtime) lspErrors(ctx context.Context, dir, path string, content []byt
 	if err != nil {
 		return ""
 	}
-	servers, err := lsp.Servers(real, filepath.Join(userConfigDir(), ConfigFile), filepath.Join(real, ConfigFile))
+	servers, err := lsp.Servers(filepath.Join(userConfigDir(), ConfigFile), filepath.Join(real, ConfigFile))
 	if err != nil {
-		r.logf("lsp: %v", err)
-		return ""
+		r.logf("lsp: %v", err) // what is left out; the servers given are used
 	}
 	return r.lsp.Errors(ctx, servers, real, filepath.Join(real, filepath.FromSlash(path)), content)
 }

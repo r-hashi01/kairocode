@@ -149,7 +149,8 @@ func TestIdleServerStops(t *testing.T) {
 	}
 }
 
-// kairocode.json's "lsp": false, a server disabled, one added, one changed.
+// kairocode.json's "lsp": false, a server disabled, one added, one
+// changed; a project may not set a server's command.
 func TestServers(t *testing.T) {
 	dir := t.TempDir()
 	user, project := filepath.Join(dir, "user.json"), filepath.Join(dir, "project.json")
@@ -161,30 +162,44 @@ func TestServers(t *testing.T) {
 	ids := func(ss []Server) string {
 		var out []string
 		for _, s := range ss {
-			out = append(out, s.ID+":"+strings.Join(s.Command, " "))
+			out = append(out, s.ID+":"+strings.Join(s.Command, " ")+string(s.Initialization))
 		}
 		return strings.Join(out, ",")
 	}
 	t.Setenv(Off, "")
-	write(user, `{"lsp": {"gopls": {"command": ["gopls", "-v"]}}}`)
-	write(project, `{"lsp": {"rust": {"disabled": true}, "clangd": {"disabled": true}, "typescript": {"disabled": true}, "zig": {"command": ["zls"], "extensions": [".zig"]}}}`)
-	ss, err := Servers(dir, user, project)
+	write(user, `{"lsp": {"gopls": {"command": ["gopls", "-v"]}, "zig": {"command": ["zls"], "extensions": [".zig"]}}}`)
+	write(project, `{"lsp": {"rust": {"disabled": true}, "clangd": {"disabled": true}, "typescript": {"disabled": true}, "zig": {"initialization": {"a": 1}}}}`)
+	ss, err := Servers(user, project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ids(ss); got != "gopls:gopls -v,pyright:pyright-langserver --stdio,zig:zls" {
+	if got := ids(ss); got != `gopls:gopls -v,pyright:pyright-langserver --stdio,zig:zls{"a": 1}` {
 		t.Fatal(got)
 	}
+	// A project's command, extensions or env are left out, and said.
+	write(project, `{"lsp": {"gopls": {"command": ["sh", "-c", "evil"]}, "evil": {"command": ["evil"], "extensions": [".go"]}, "pyright": {"env": {"A": "1"}}}}`)
+	ss, err = Servers(user, project)
+	if err == nil || !strings.Contains(err.Error(), "evil, gopls, pyright") {
+		t.Fatalf("no error for a project's commands: %v", err)
+	}
+	if got := ids(ss); got != "gopls:gopls -v,typescript:typescript-language-server --stdio,pyright:pyright-langserver --stdio,rust:rust-analyzer,clangd:clangd,zig:zls" {
+		t.Fatal(got)
+	}
+	for _, s := range ss {
+		if s.Env != nil {
+			t.Fatalf("%s has the project's env", s.ID)
+		}
+	}
 	write(project, `{"lsp": false}`)
-	if ss, err := Servers(dir, user, project); err != nil || len(ss) != 0 {
+	if ss, err := Servers(user, project); err != nil || len(ss) != 0 {
 		t.Fatal(ss, err)
 	}
-	write(project, `{"lsp": {"zig": {"command": ["zls"]}}}`)
-	if _, err := Servers(dir, user, project); err == nil {
+	write(user, `{"lsp": {"zig": {"command": ["zls"]}}}`)
+	if _, err := Servers(user, ""); err == nil {
 		t.Fatal("a server not built in, with no extensions")
 	}
 	t.Setenv(Off, "off")
-	if ss, _ := Servers(dir); len(ss) != 0 {
+	if ss, _ := Servers(user, ""); len(ss) != 0 {
 		t.Fatal("servers with KAIROCODE_LSP=off")
 	}
 }
