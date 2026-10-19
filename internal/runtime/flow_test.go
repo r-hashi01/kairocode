@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -470,5 +471,155 @@ func TestFlowDecide(t *testing.T) {
 		if _, text, _ := flowTurn(t, r, ws, name, ""); text != c.want {
 			t.Errorf("%s: %q, want %q", name, text, c.want)
 		}
+	}
+}
+
+// keyOf is the key of the chart's first node of kind.
+func keyOf(t *testing.T, c *flowchart.Chart, kind string) string {
+	t.Helper()
+	for _, n := range c.Nodes {
+		if n.Kind == kind {
+			return n.Key()
+		}
+	}
+	t.Fatalf("no %s in %+v", kind, c.Nodes)
+	return ""
+}
+
+// nextFlow is the next flow event that has cond.
+func nextFlow(t *testing.T, ctx context.Context, events <-chan Event, cond func(*flowchart.View) bool) *flowchart.View {
+	t.Helper()
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("the events ended")
+			}
+			if ev.Type == EventFlow && ev.Flow != nil && ev.Flow.Chart != nil && cond(ev.Flow) {
+				return ev.Flow
+			}
+		case <-ctx.Done():
+			t.Fatal("no such flow event")
+		}
+	}
+}
+
+// A running flow is told as its chart and each call's state: done, waiting
+// for the user, and done again once answered; one who watches from midway
+// is told how far it has gone (ADR 0003).
+func TestFlowEvents(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/steps.star": `
+def main(input):
+    agent(agent = "build", prompt = "first")
+    a = ask("Go on?", options = ["yes", "no"])
+    tool("read", path = "main.go")
+    return "ok"
+`})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "did it"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "steps", workflows.SessionInput{Dir: ws})
+	events, err := r.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := r.RunFlow(ctx, s, "steps", "")
+	v := nextFlow(t, ctx, events, func(v *flowchart.View) bool {
+		return len(v.Chart.Nodes) > 0 && v.States[keyOf(t, v.Chart, flowchart.Ask)] == FlowWaiting
+	})
+	agent, ask, tool := keyOf(t, v.Chart, flowchart.Agent), keyOf(t, v.Chart, flowchart.Ask), keyOf(t, v.Chart, flowchart.Tool)
+	if v.Chart.Name != "steps" || v.States[agent] != FlowDone || v.States[tool] != "" || v.Done {
+		t.Fatalf("while asking: %+v", v)
+	}
+	// Watching from midway: told at once.
+	late, err := r.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lv := nextFlow(t, ctx, late, func(*flowchart.View) bool { return true }); lv.States[ask] != FlowWaiting {
+		t.Fatalf("the late watcher was told %+v", lv)
+	}
+	p, _ := r.Pending(ctx, s)
+	if len(p) != 1 {
+		t.Fatalf("pending %+v", p)
+	}
+	if err := r.Answer(ctx, p[0].Key, "yes"); err != nil {
+		t.Fatal(err)
+	}
+	v = nextFlow(t, ctx, events, func(v *flowchart.View) bool { return v.Done })
+	for _, key := range []string{agent, ask, tool} {
+		if v.States[key] != FlowDone {
+			t.Fatalf("at the end: %s is %q (%+v)", key, v.States[key], v.States)
+		}
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An agent of a flow whose tool call waits for approval is shown waiting
+// for the user, not running.
+func TestFlowAgentWaiting(t *testing.T) {
+	ws := workspaceWith(t, `{"write": "ask"}`)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/w.star": "def main(input):\n    agent(agent = \"build\", prompt = \"write notes\")\n"})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "w", workflows.SessionInput{Dir: ws})
+	events, _ := r.Events(ctx, s)
+	r.RunFlow(ctx, s, "w", "")
+	nextFlow(t, ctx, events, func(v *flowchart.View) bool {
+		return len(v.Chart.Nodes) > 0 && v.States[keyOf(t, v.Chart, flowchart.Agent)] == FlowWaiting
+	})
+}
+
+// A flow of version 1, started before calls carried where they are, goes
+// on after the upgrade as version 1: the agent it had finished is not run
+// again (kairo ADR 0060).
+func TestFlowVersion1GoesOn(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/two.star": `
+def main(input):
+    a = agent(agent = "build", prompt = "first")
+    b = agent(agent = "build", prompt = "second")
+    return a.output + " " + b.output
+`})
+	dir := t.TempDir()
+	db, hold, calls := filepath.Join(dir, "k.db"), filepath.Join(dir, "held"), filepath.Join(dir, "calls")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	old, err := Open(ctx, Config{DB: db, Owner: "v1", onlyFlowVersion: workflows.FlowVersion1,
+		Provider: &provider.Fake{HoldAt: -1, HoldOn: "second", HoldFile: hold, Script: []provider.FakeReply{{Text: "done"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := old.CreateSession(ctx, "v1", workflows.SessionInput{Dir: ws})
+	n, _ := old.RunFlow(ctx, s, "two", "")
+	waitUntil(t, ctx, "the second agent", func() bool { return exists(hold) })
+	turn, _, _ := old.TurnRun(ctx, s, n)
+	kids, _ := old.K.Children(ctx, turn.RunID)
+	for _, k := range kids {
+		if k.Workflow == workflows.Flow && k.Version != workflows.FlowVersion1 {
+			t.Fatalf("the flow is of version %q", k.Version)
+		}
+	}
+	old.Close()
+
+	r, err := Open(ctx, Config{DB: db, Owner: "v1", Provider: &provider.Fake{HoldAt: -1, CallLog: calls, Script: []provider.FakeReply{{Text: "done"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	out, err := r.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done done" {
+		t.Fatalf("reply %q", text)
+	}
+	b, _ := os.ReadFile(calls)
+	if got := len(strings.Fields(string(b))); got != 1 {
+		t.Fatalf("%d model calls after the upgrade, want 1 (the second agent)", got)
 	}
 }

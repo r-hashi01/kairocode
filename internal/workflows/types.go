@@ -36,7 +36,11 @@ const (
 	// Flow runs a flow (ADR 0003): a Starlark script of
 	// .kairocode/workflows, recorded when it starts.
 	Flow        = "flow"
-	FlowVersion = "1"
+	FlowVersion = "2"
+	// FlowVersion1 is the version before a flow's calls carried where in
+	// the script they are (At, for its chart). Its runs finish with
+	// RunFlowV1.
+	FlowVersion1 = "1"
 	// MCPCall runs one tool call that Claude Code made through KairoCode's
 	// MCP server (ADR 0007).
 	MCPCall        = "mcp.call"
@@ -56,6 +60,7 @@ const (
 	// (design 6.3).
 	ActFlowAsk    = "flow.ask"
 	ActFlowDecide = "flow.decide"
+
 	// ActHistoryCancelled adds a turn the user stopped to the
 	// conversation: what they asked, and a note that it was stopped (ADR
 	// 0011).
@@ -170,6 +175,9 @@ type TurnInput struct {
 	// Sub: the turn is an agent of a flow. It starts with no history,
 	// takes no snapshots (the flow's turn does), and may be a subagent.
 	Sub bool `json:"sub,omitempty"`
+	// At: for a flow's agent, where in the script it is called
+	// ("line:col"), for the flow's chart (flow version 2 on).
+	At string `json:"at,omitempty"`
 }
 
 // FlowCall is what /flow asks for: a flow by name, and the words after it.
@@ -385,6 +393,7 @@ type Approval struct {
 // FlowAskInput is a question a flow puts to the user: one of Options is
 // the answer.
 type FlowAskInput struct {
+	At       string   `json:"at,omitempty"`
 	ID       string   `json:"id"`
 	Question string   `json:"question"`
 	Options  []string `json:"options"`
@@ -406,6 +415,7 @@ const (
 // choice. Prompt is the stored message that asks it, by hash (as a model
 // call's input is, invariant 5).
 type DecideInput struct {
+	At      string   `json:"at,omitempty"`
 	Dir     string   `json:"dir"`
 	Engine  string   `json:"engine,omitempty"`
 	Model   string   `json:"model,omitempty"`
@@ -462,6 +472,8 @@ type ToolCall struct {
 // A call that came over MCP (ADR 0007) has no stored message: its
 // arguments are in Args instead.
 type ToolInput struct {
+	// At: for a call a flow makes, where in the script ("line:col").
+	At      string          `json:"at,omitempty"`
 	Dir     string          `json:"dir"`
 	Message string          `json:"message,omitempty"`
 	Call    string          `json:"call,omitempty"`

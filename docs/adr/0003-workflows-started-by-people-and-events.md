@@ -311,4 +311,15 @@ def main(input):
   - 箱の印と色は状態から決めます（`○` まだ、`⏺` 動いている、`✓` 終わり、`✗` 失敗、`⏸` 人を待っている）。動いている間の状態を重ねるのは次の歩です。
   - 見る入口は `kairocode flow graph <name>` と、TUI の `/flow graph <name>` です。どちらもデーモンを通さず、手元のスクリプトから描きます。`graph` という名前のフローは作れません。
   - テスト: `TestBuild`（形）、`TestChartLooks`、`TestChartStates`、`TestChartTooNarrow`、`TestFlowGraph`、`TestFlowGraphCommand`。
-- **まだ:** 動いている間の図、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **動いている間の図（4 歩目）:**
+  - フローの版を 2 に上げました（版 1 は `Draining` で残す）。版 2 では、プリミティブの呼び出しが、スクリプトのどこで呼ばれたか（`At`、`"行:列"`。Starlark が呼び出しに記録する開き括弧の位置）を入力に持ちます。エージェントのターン、ツールの入力、`flow.ask`、`flow.decide` です。
+  - 呼び出しの直前に印の呼び出しを記録する案はやめました。kairo の子の一覧は、作られた時刻（ミリ秒）と ID の順で、同じミリ秒の中の順番が保たれないためです。
+  - `Runtime.FlowView` が、記録したスクリプトから図を作り、フローの子の実行の状態（入力の `At` で箱に結ぶ）から、各箱の状態（動いている、終わり、失敗、人を待っている）と回数を出します。エージェントのターンの中で承認を待っているときも「人を待っている」です。
+  - 出来事のハブは、フローが進むたびに `flow` の出来事（図と状態）を出します。後からつないだクライアントにも、今の状態を送ります。
+  - ACP では `plan` の更新になります。項目は呼び出しごとで、図と状態は `_meta` の `kairocode/flow` にあります。Zed は項目の一覧として、kairo の TUI は図として見せます。
+  - TUI は、動いている間の図を入力の枠の上に出します。画面に収まらなければ木の図に、それでも長ければ動いている所の周りだけを出します。終わったら、印つきの木の図を端末の流れに残します。
+  - **Bubble Tea の描画の注意:** 端末の流れに行を書き足すのと同時に画面が縮むと、前の画面の行が残ります（Bubble Tea は、描いた高さで書き足す位置を決めるため）。TUI は、書き足している間は画面の高さを縮めません（`TestScreenKeepsItsHeightWhilePrinting`）。信頼の質問の消し残しも、同じ原因でした。
+  - 図は実行ごとに 1 度だけ作ってとっておき、状態は、そのフローの下の実行の観測のときだけ計算し直します（durability-reviewer の指摘。出来事のハブは 1 本の goroutine なので、重い計算はすべてのセッションの出来事を遅らせる）。
+  - 版 1 で始まったフローは、新しいコードでも版 1 の関数で続き、終わったエージェントをやり直しません（`TestFlowVersion1GoesOn`。版 2 の関数で動かすと落ちることを確かめた）。
+  - テスト: `TestFlowEvents`、`TestFlowAgentWaiting`、`TestFlowVersion1GoesOn`、`TestACPFlowPlan`、`TestClientReadsAFlowPlan`、`TestFlowLive`。
+- **まだ:** `/flow new`（言葉から作る、図の上での変更）、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。

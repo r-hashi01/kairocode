@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
 
 // Agent is what the UI needs of the ACP client.
@@ -141,6 +142,10 @@ type model struct {
 	cmds    []acp.Command
 	compSel int
 	tokens  int64
+	// flow: the flow running in the turn, as it has gone (its chart and
+	// states); height: the terminal's.
+	flow    *flowchart.View
+	height  int
 	note    string    // a hint under the input, until the next key
 	ctrlC   time.Time // the first Ctrl-C of two
 	leaving bool
@@ -152,6 +157,11 @@ type model struct {
 	// The lines to write, in order: one batch is out at a time.
 	toPrint  []string
 	printing bool
+	// shown: the height of the screen drawn last. While lines are being
+	// written above it, it does not shrink: Bubble Tea places the lines by
+	// the height it drew, and a screen that shrinks at that moment leaves
+	// lines of the old one behind.
+	shown int
 }
 
 func newModel(ctx context.Context, a Agent, o Options) *model {
@@ -287,6 +297,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			m.width = msg.Width
 			m.input.SetWidth(max(msg.Width-2, 10))
 		}
+		m.height = msg.Height
 		return nil
 	case tea.BackgroundColorMsg:
 		m.isDark = msg.IsDark()
@@ -324,6 +335,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case turnDoneMsg:
 		m.running = false
 		m.flushLive()
+		m.endFlow()
 		m.inReply = false
 		for len(m.calls) > 0 { // their end was not told: written as they are
 			id := m.calls[0]
@@ -404,7 +416,76 @@ func (m *model) take(u acp.Update) {
 		m.endCall(u.ToolCallID, u.Status == "failed", u.Text)
 	case "available_commands_update":
 		m.cmds = u.Commands
+	case "plan":
+		if u.Flow == nil {
+			return
+		}
+		m.flow = u.Flow
+		if u.Flow.Done {
+			m.endFlow()
+		}
 	}
+}
+
+// endFlow writes how the flow went into the scrollback, as a tree with the
+// marks, and takes its chart off the screen.
+func (m *model) endFlow() {
+	if m.flow == nil {
+		return
+	}
+	v := m.flow
+	m.flow = nil
+	m.block(flowchart.Tree(v.Chart, func(n flowchart.Node) string {
+		return treeMark(v, n)
+	}))
+}
+
+// treeMark is a node's mark in the tree of a run: its state's, for a call;
+// none for what is not a call (a phase, a branch, a return).
+func treeMark(v *flowchart.View, n flowchart.Node) string {
+	if n.Key() == "" {
+		return ""
+	}
+	mark, style := stateMark(v.States[n.Key()])
+	return style.Render(mark)
+}
+
+// flowView is the running flow's chart for the screen: the boxes, or, if
+// they would not leave room, the tree; and of a tree too tall, the part
+// around what runs.
+func (m *model) flowView(w int) string {
+	room := max(m.height-12, 8)
+	if m.height == 0 {
+		room = 40
+	}
+	out := ChartOf(m.flow, w)
+	lines := strings.Split(out, "\n")
+	if len(lines) <= room {
+		return out
+	}
+	v := m.flow
+	tree := strings.Split(flowchart.Tree(v.Chart, func(n flowchart.Node) string {
+		return treeMark(v, n)
+	}), "\n")
+	if len(tree) <= room {
+		return strings.Join(tree, "\n")
+	}
+	at := 0 // the first line of what runs, or waits
+	for i, l := range tree {
+		if strings.Contains(l, "⏺") || strings.Contains(l, "⏸") {
+			at = i
+			break
+		}
+	}
+	from := max(min(at-room/2, len(tree)-room), 0)
+	part := tree[from : from+room]
+	if from > 0 {
+		part[0] = faint.Render("  ⋮")
+	}
+	if from+room < len(tree) {
+		part[len(part)-1] = faint.Render("  ⋮")
+	}
+	return strings.Join(part, "\n")
 }
 
 // endCall writes a tool call that ended: green, or red when it failed,
@@ -742,6 +823,9 @@ func (m *model) View() tea.View {
 		b.WriteString(reply(live, w, !m.inReply) + "\n")
 	}
 	var cursor *tea.Cursor
+	if m.flow != nil {
+		b.WriteString("\n" + m.flowView(w) + "\n")
+	}
 	switch {
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
@@ -774,7 +858,16 @@ func (m *model) View() tea.View {
 		}
 	}
 	b.WriteString(m.status(w))
-	v := tea.NewView(b.String())
+	content := b.String()
+	if n := strings.Count(content, "\n") + 1; m.printing && n < m.shown {
+		pad := m.shown - n
+		content = strings.Repeat("\n", pad) + content
+		if cursor != nil {
+			cursor.Y += pad
+		}
+	}
+	m.shown = strings.Count(content, "\n") + 1
+	v := tea.NewView(content)
 	v.Cursor = cursor
 	return v
 }

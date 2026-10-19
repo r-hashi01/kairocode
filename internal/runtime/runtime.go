@@ -58,6 +58,9 @@ type Config struct {
 	// onlyVersion, in tests, declares the session and the turn at that old
 	// version only ("2", "3" or "4"), as a build of that version did.
 	onlyVersion string
+	// onlyFlowVersion, in tests, declares the flow at that old version
+	// only ("1").
+	onlyFlowVersion string
 }
 
 type Runtime struct {
@@ -255,7 +258,13 @@ func (r *Runtime) declare() {
 		}
 	}
 	kairo.Workflow(r.K, workflows.MCPCall, workflows.RunMCPCall, kairo.WorkflowVersion(workflows.MCPCallVersion))
-	kairo.Workflow(r.K, workflows.Flow, workflows.RunFlow, kairo.WorkflowVersion(workflows.FlowVersion))
+	if r.cfg.onlyFlowVersion == workflows.FlowVersion1 {
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1))
+	} else {
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlow, kairo.WorkflowVersion(workflows.FlowVersion))
+		// Version 1 finishes as it started: its calls carry no At.
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1), kairo.Draining())
+	}
 	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, flowLoad)
 	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)

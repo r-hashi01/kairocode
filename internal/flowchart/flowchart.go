@@ -47,7 +47,8 @@ type Node struct {
 	Text  string `json:"text,omitempty"`
 	// Code: Text is the script's code, not a string it gives.
 	Code bool `json:"code,omitempty"`
-	// Line and Col: where the call is, to give the box a run's state.
+	// Line and Col: where the call is (its opening parenthesis, where
+	// Starlark puts a call), to give the box a run's state (Key).
 	Line int `json:"line,omitempty"`
 	Col  int `json:"col,omitempty"`
 
@@ -275,7 +276,7 @@ func dropEmptyIfs(nodes []Node) []Node {
 // call is the box of a call of fn: a primitive's, or what a def of the
 // script calls, drawn in its place.
 func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
-	pos, _ := x.Fn.Span()
+	pos := x.Lparen
 	at := func(n Node) []Node {
 		n.Line, n.Col = int(pos.Line), int(pos.Col)
 		return []Node{n}
@@ -372,7 +373,7 @@ func (b *builder) argOf(x *syntax.CallExpr, place int, name string) (string, boo
 // parallel is the box of agents at once: one per item of a list of dicts,
 // or one drawn for each of a comprehension.
 func (b *builder) parallel(x *syntax.CallExpr) []Node {
-	pos, _ := x.Fn.Span()
+	pos := x.Lparen
 	n := Node{Kind: Parallel, Line: int(pos.Line), Col: int(pos.Col)}
 	if len(x.Args) == 0 {
 		return []Node{n}
@@ -419,4 +420,29 @@ func (b *builder) parallel(x *syntax.CallExpr) []Node {
 		n.Body = []Node{{Kind: Agent, Line: n.Line, Col: n.Col}}
 	}
 	return []Node{n}
+}
+
+// Key names a call of the script by where it is: what a run of the flow
+// records before it makes the call (flow.at), and a box's state is looked
+// up by.
+func Key(line, col int) string { return fmt.Sprintf("%d:%d", line, col) }
+
+// Key is the node's call's key ("" for a node that is not a call).
+func (n Node) Key() string {
+	if n.Line == 0 {
+		return ""
+	}
+	return Key(n.Line, n.Col)
+}
+
+// View is a run of a flow as far as it has gone: its chart, from the
+// script it recorded, and the state of each call (by Key): running, done,
+// failed or waiting (for the user); a call not made yet has none. Rounds
+// counts how often a call was made (in a loop).
+type View struct {
+	Turn   string            `json:"turn"`
+	Chart  *Chart            `json:"chart"`
+	States map[string]string `json:"states"`
+	Rounds map[string]int    `json:"rounds,omitempty"`
+	Done   bool              `json:"done,omitempty"`
 }

@@ -478,3 +478,18 @@ func TestFlowGraphCommand(t *testing.T) {
 		t.Fatalf("out\n%s", d.out())
 	}
 }
+
+// While lines are written above it, the screen keeps its height: Bubble
+// Tea places them by the height it drew, and a screen shrunk at that moment
+// leaves lines of the old one behind.
+func TestScreenKeepsItsHeightWhilePrinting(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.printing, d.m.shown = true, 40
+	if n := strings.Count(d.m.View().Content, "\n") + 1; n != 40 {
+		t.Fatalf("%d lines while printing, want 40", n)
+	}
+	d.m.printing = false
+	if n := strings.Count(d.m.View().Content, "\n") + 1; n >= 40 {
+		t.Fatalf("%d lines once printed: it did not shrink", n)
+	}
+}

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"maps"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +12,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -28,6 +31,8 @@ const (
 	// A flow's question (ADR 0003): Pending has it, and its options.
 	EventQuestionRequested = "question.requested"
 	EventQuestionResolved  = "question.resolved"
+	// A flow ran on (ADR 0003): Flow is its chart and its calls' states.
+	EventFlow = "flow"
 )
 
 // Event is something that happened in a session, told to those who watch
@@ -67,6 +72,8 @@ type Event struct {
 	Stopped string     `json:"stopped,omitempty"`
 	Usage   *msg.Usage `json:"usage,omitempty"`
 	Error   string     `json:"error,omitempty"`
+	// Flow: a flow's chart and how far it has gone (flow).
+	Flow *flowchart.View `json:"flow,omitempty"`
 }
 
 // Events delivers the events of session until ctx ends, when the channel
@@ -96,9 +103,13 @@ type events struct {
 	answers  map[string]map[string]bool    // answers given, not yet told
 	calls    map[string]map[string]string  // tool calls started, by call: their tool
 	tokens   map[string]*tokens            // a session's token stream
-	queue    []item
-	wake     chan struct{}
-	closed   bool
+	// flows: the flows running in a session, by run: the last view told;
+	// charts: their charts, built once.
+	flows  map[string]map[string]string
+	charts map[string]*flowchart.Chart
+	queue  []item
+	wake   chan struct{}
+	closed bool
 
 	ctx  context.Context
 	stop context.CancelFunc
@@ -128,6 +139,7 @@ func newEvents(r *Runtime) *events {
 	ctx, stop := context.WithCancel(context.Background())
 	e := &events{r: r, watchers: map[string]map[*watcher]bool{}, seq: map[string]int64{},
 		pending: map[string]map[string]Pending{}, answers: map[string]map[string]bool{}, calls: map[string]map[string]string{}, tokens: map[string]*tokens{},
+		flows: map[string]map[string]string{}, charts: map[string]*flowchart.Chart{},
 		wake: make(chan struct{}, 1), ctx: ctx, stop: stop, done: make(chan struct{})}
 	go e.run()
 	return e
@@ -216,6 +228,10 @@ func (e *events) drop(w *watcher) {
 		delete(e.answers, w.session)
 		delete(e.calls, w.session)
 		delete(e.seq, w.session)
+		for run := range e.flows[w.session] {
+			delete(e.charts, run)
+		}
+		delete(e.flows, w.session)
 		if t := e.tokens[w.session]; t != nil {
 			t.stop()
 			delete(e.tokens, w.session)
@@ -341,6 +357,8 @@ func (e *events) make(it item) {
 // join tells a new watcher what waits in its session, then lets it have
 // the events that follow.
 func (e *events) join(w *watcher) {
+	e.findFlows(w.session)
+	e.flowsOn(w.session, "")
 	ok := e.refresh(w.session)
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -369,7 +387,52 @@ func (e *events) join(w *watcher) {
 			return
 		}
 	}
+	// And how the flows running in it have gone, so far.
+	for _, run := range slices.Sorted(maps.Keys(e.flows[w.session])) {
+		var v flowchart.View
+		if json.Unmarshal([]byte(e.flows[w.session][run]), &v) != nil {
+			continue
+		}
+		e.seq[w.session]++
+		select {
+		case w.ch <- Event{Seq: e.seq[w.session], Type: EventFlow, Turn: v.Turn, Flow: &v}:
+		default:
+			e.drop(w)
+			return
+		}
+	}
 	w.ready = true
+}
+
+// findFlows looks for the flows running in the session's running turns:
+// a watcher that joins while one runs is told of it.
+func (e *events) findFlows(session string) {
+	turns, err := e.r.K.Children(e.ctx, session)
+	if err != nil {
+		return
+	}
+	for _, t := range turns {
+		if t.Workflow != workflows.Turn || t.Finished() {
+			continue
+		}
+		kids, err := e.r.K.Children(e.ctx, t.RunID)
+		if err != nil {
+			continue
+		}
+		for _, k := range kids {
+			if k.Workflow != workflows.Flow || k.Finished() {
+				continue
+			}
+			e.mu.Lock()
+			if e.flows[session] == nil {
+				e.flows[session] = map[string]string{}
+			}
+			if _, known := e.flows[session][k.RunID]; !known {
+				e.flows[session][k.RunID] = ""
+			}
+			e.mu.Unlock()
+		}
+	}
 }
 
 func requested(p Pending) string {
@@ -472,6 +535,13 @@ func (e *events) observed(session string, o kairo.Observation) {
 		e.turn(session, o.RunID, started)
 	case o.Workflow == workflows.MCPCall:
 		e.mcpCall(session, o.RunID, started)
+	case o.Workflow == workflows.Flow && started:
+		e.mu.Lock()
+		if e.flows[session] == nil {
+			e.flows[session] = map[string]string{}
+		}
+		e.flows[session][o.RunID] = ""
+		e.mu.Unlock()
 	case !started && o.Action == workflows.ActModel:
 		e.modelReply(session, o.RunID)
 	case !started && (strings.HasPrefix(o.Action, workflows.ActToolPrefix) || o.Action == workflows.ActFileApply) &&
@@ -480,6 +550,55 @@ func (e *events) observed(session string, o kairo.Observation) {
 	}
 	if !started || strings.HasPrefix(o.Plan, "kairo.wait/") {
 		e.refresh(session)
+	}
+	e.flowsOn(session, o.RunID)
+}
+
+// flowsOn tells how the session's running flows have gone on, if they
+// have: a view each time one changes, the last when it ends. Of the flows
+// of the session, it looks at those of which run is part ("": at all).
+func (e *events) flowsOn(session, run string) {
+	e.mu.Lock()
+	var runs []string
+	for f := range e.flows[session] {
+		if run == "" || run == f || strings.HasPrefix(run, f+"/") {
+			runs = append(runs, f)
+		}
+	}
+	e.mu.Unlock()
+	slices.Sort(runs)
+	for _, run := range runs {
+		info, err := e.r.K.Get(e.ctx, run)
+		if err != nil {
+			e.logf("flow %s: %v", run, err)
+			continue
+		}
+		e.mu.Lock()
+		chart := e.charts[run]
+		e.mu.Unlock()
+		v, err := e.r.FlowView(e.ctx, info, chart)
+		if err != nil {
+			e.logf("flow %s: %v", run, err)
+			continue
+		}
+		b, _ := json.Marshal(v)
+		e.mu.Lock()
+		same := e.flows[session][run] == string(b)
+		if v.Done {
+			delete(e.flows[session], run)
+			delete(e.charts, run)
+		} else {
+			if e.flows[session] != nil {
+				e.flows[session][run] = string(b)
+			}
+			if len(v.Chart.Nodes) > 0 {
+				e.charts[run] = v.Chart // read from the recorded script: it stays
+			}
+		}
+		e.mu.Unlock()
+		if !same {
+			e.emit(session, Event{Type: EventFlow, Turn: v.Turn, Flow: v})
+		}
 	}
 }
 

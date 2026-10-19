@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -455,6 +456,10 @@ func (a *agent) event(session string, ev runtime.Event) {
 		a.update(session, toolResult(ev.Call, ev.Tool, ev.Output, ev.IsError))
 	case runtime.EventApprovalRequested, runtime.EventReviewRequested, runtime.EventQuestionRequested:
 		a.ask(session, *ev.Pending)
+	case runtime.EventFlow:
+		if ev.Flow != nil {
+			a.update(session, flowPlan(ev.Flow))
+		}
 	case runtime.EventApprovalResolved, runtime.EventReviewResolved, runtime.EventQuestionResolved:
 		a.mu.Lock()
 		if cancel := a.asks[ev.Key]; cancel != nil {
@@ -564,6 +569,44 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
 		}
 	}()
+}
+
+// FlowMeta is the key of a plan update's _meta that holds the flow's chart
+// and states (flowchart.View), for a client that draws it (kairo's TUI).
+const FlowMeta = "kairocode/flow"
+
+// flowPlan is a running flow as an ACP plan (ADR 0003): an entry per call
+// of its script, in order, with its state. A client that knows the chart
+// finds it in _meta.
+func flowPlan(v *flowchart.View) map[string]any {
+	entries := []any{}
+	var walk func([]flowchart.Node)
+	walk = func(nodes []flowchart.Node) {
+		for _, n := range nodes {
+			if n.Line != 0 && n.Kind != flowchart.Parallel {
+				content := flowchart.Label(n)
+				if n.Text != "" {
+					content += ": " + n.Text
+				}
+				status := "pending"
+				switch v.States[n.Key()] {
+				case runtime.FlowRunning, runtime.FlowWaiting:
+					status = "in_progress"
+				case runtime.FlowDone, runtime.FlowFailed:
+					status = "completed"
+				}
+				entries = append(entries, map[string]any{"content": content, "priority": "medium", "status": status})
+			}
+			walk(n.Then)
+			walk(n.Else)
+			walk(n.Body)
+			for _, b := range n.Branches {
+				walk(b)
+			}
+		}
+	}
+	walk(v.Chart.Nodes)
+	return map[string]any{"sessionUpdate": "plan", "entries": entries, "_meta": map[string]any{FlowMeta: v}}
 }
 
 // toolKind is ACP's kind of a tool.

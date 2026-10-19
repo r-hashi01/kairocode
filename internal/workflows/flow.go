@@ -55,7 +55,19 @@ const (
 // the finished ones from the record. What the script gets wrong (an error,
 // a limit) ends the flow with that message, as a value; what kairo says
 // (suspended, cancelled) stops it as an error.
+//
+// Version 2: each call carries where in the script it is (At), for the
+// chart of the run.
 func RunFlow(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
+	return runFlow(ctx, in, true)
+}
+
+// RunFlowV1 is a flow of version 1: RunFlow without At.
+func RunFlowV1(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
+	return runFlow(ctx, in, false)
+}
+
+func runFlow(ctx *kairo.Context, in FlowInput, marks bool) (FlowOutput, error) {
 	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name})
 	if err != nil {
 		return FlowOutput{}, err
@@ -63,7 +75,7 @@ func RunFlow(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
 	if src.Error != "" {
 		return FlowOutput{Message: src.Error}, nil
 	}
-	r := &flowRun{ctx: ctx, in: in, maxAgents: flowAgents}
+	r := &flowRun{ctx: ctx, in: in, maxAgents: flowAgents, marks: marks}
 	return r.run(src.Source)
 }
 
@@ -82,6 +94,19 @@ type flowRun struct {
 
 	maxAgents int
 	maxTokens int64
+	// marks: calls carry where they are (version 2 on).
+	marks bool
+}
+
+// at is where the primitive being called is called from ("line:col", as
+// flowchart.Key): the position of its call in the script, Starlark's own,
+// the same every time the script runs. "" before version 2.
+func (r *flowRun) at(thread *starlark.Thread) string {
+	if !r.marks {
+		return ""
+	}
+	pos := thread.CallFrame(1).Pos
+	return fmt.Sprintf("%d:%d", pos.Line, pos.Col)
 }
 
 func (r *flowRun) run(source string) (FlowOutput, error) {
@@ -249,7 +274,7 @@ func (r *flowRun) ask(thread *starlark.Thread, b *starlark.Builtin, args starlar
 		return nil, fmt.Errorf("ask: give at least two options")
 	}
 	r.asks++
-	in := FlowAskInput{ID: fmt.Sprintf("ask_%d_%d", r.in.N, r.asks), Question: question, Options: options}
+	in := FlowAskInput{At: r.at(thread), ID: fmt.Sprintf("ask_%d_%d", r.in.N, r.asks), Question: question, Options: options}
 	if _, err := kairo.Call[bool](r.ctx, ActFlowAsk, in); err != nil {
 		return nil, r.fail(err)
 	}
@@ -282,6 +307,7 @@ func (r *flowRun) decide(thread *starlark.Thread, b *starlark.Builtin, args star
 	default:
 		return nil, fmt.Errorf("decide: type is bool, number or choice, not %q", in.Type)
 	}
+	in.At = r.at(thread)
 	// The prompt is stored, and travels by hash (invariant 5).
 	h, err := kairo.Call[string](r.ctx, ActFlowPut, FlowPutInput{Role: string(msg.User), Text: in.Prompt})
 	if err != nil {
@@ -321,6 +347,7 @@ func (r *flowRun) decide(thread *starlark.Thread, b *starlark.Builtin, args star
 // agentSpec is one agent to run: its definition's name and its prompt.
 type agentSpec struct {
 	agent, prompt, model string
+	at                   string // where in the script
 }
 
 // agentDone is how one agent ended.
@@ -360,7 +387,7 @@ func (r *flowRun) runAgent(ctx *kairo.Context, s agentSpec) (agentDone, error) {
 		model = r.in.Model
 	}
 	out, err := kairo.Child[TurnOutput](ctx, Turn, TurnInput{
-		Session: r.in.Session, N: r.in.N, Dir: r.in.Dir, Agent: s.agent, Engine: r.in.Engine, Model: model, Message: prompt, Sub: true,
+		Session: r.in.Session, N: r.in.N, Dir: r.in.Dir, Agent: s.agent, Engine: r.in.Engine, Model: model, Message: prompt, Sub: true, At: s.at,
 	})
 	var failed *kairo.WorkflowError
 	if errors.As(err, &failed) {
@@ -385,6 +412,7 @@ func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starl
 	if err := r.countAgents(1); err != nil {
 		return nil, err
 	}
+	s.at = r.at(thread)
 	d, err := r.runAgent(r.ctx, s)
 	if err != nil {
 		return nil, r.fail(err)
@@ -435,6 +463,10 @@ func (r *flowRun) parallel(thread *starlark.Thread, b *starlark.Builtin, args st
 	}
 	if err := r.countAgents(len(specs)); err != nil {
 		return nil, err
+	}
+	at := r.at(thread)
+	for i := range specs {
+		specs[i].at = at
 	}
 	done := make([]agentDone, len(specs))
 	fns := make([]func(*kairo.Context) error, len(specs))
@@ -494,10 +526,11 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	if !known {
 		return outcome(false, "", "no tool "+name), nil
 	}
+	at := r.at(thread)
 	r.tools++
 	// The call's id names it in the conversation and in the wait for its
 	// approval: the flow's turn and the call's place among its tool calls.
-	in := ToolInput{Dir: r.in.Dir, Call: fmt.Sprintf("%s%d_%d", FlowCallPrefix, r.in.N, r.tools), Args: raw}
+	in := ToolInput{At: at, Dir: r.in.Dir, Call: fmt.Sprintf("%s%d_%d", FlowCallPrefix, r.in.N, r.tools), Args: raw}
 	planned := false
 	for _, n := range r.policy.Planned {
 		planned = planned || n == name

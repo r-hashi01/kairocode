@@ -48,10 +48,24 @@ type block struct {
 // by side, loops framed. state gives each box its state ("" for none yet).
 // What does not fit is drawn as a tree.
 func Chart(c *flowchart.Chart, width int, state func(flowchart.Node) string) string {
+	return chart(c, width, state, nil)
+}
+
+// ChartOf draws a run of a flow: its chart with its calls' states, and how
+// often each was made when more than once (×N).
+func ChartOf(v *flowchart.View, width int) string {
+	return chart(v.Chart, width, func(n flowchart.Node) string { return v.States[n.Key()] },
+		func(n flowchart.Node) int { return v.Rounds[n.Key()] })
+}
+
+func chart(c *flowchart.Chart, width int, state func(flowchart.Node) string, rounds func(flowchart.Node) int) string {
 	if state == nil {
 		state = func(flowchart.Node) string { return StatePending }
 	}
-	d := drawer{state: state}
+	if rounds == nil {
+		rounds = func(flowchart.Node) int { return 0 }
+	}
+	d := drawer{state: state, rounds: rounds}
 	title := bold.Render(c.Name)
 	if c.Description != "" {
 		title += faint.Render("  " + c.Description)
@@ -69,6 +83,7 @@ func Chart(c *flowchart.Chart, width int, state func(flowchart.Node) string) str
 
 type drawer struct {
 	state   func(flowchart.Node) string
+	rounds  func(flowchart.Node) int
 	tooWide bool
 }
 
@@ -102,6 +117,9 @@ func fit(s string, w int) string {
 func (d *drawer) box(n flowchart.Node, maxw int) block {
 	mark, style := stateMark(d.state(n))
 	label := flowchart.Label(n)
+	if r := d.rounds(n); r > 1 {
+		label += fmt.Sprintf(" ×%d", r)
+	}
 	text := n.Text
 	if n.Kind == flowchart.Return {
 		if text == "" {

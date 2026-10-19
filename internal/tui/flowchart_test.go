@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
 
@@ -82,5 +84,52 @@ func TestChartTooNarrow(t *testing.T) {
 	out := plain(Chart(c, 30, nil))
 	if !strings.Contains(out, "├─ ○ agent build") || strings.Contains(out, "╭") {
 		t.Fatalf("not a tree:\n%s", out)
+	}
+}
+
+// A running flow is drawn above the input with its states and rounds; on a
+// short screen, as a tree; when it ends, its tree with the marks goes into
+// the scrollback and the chart off the screen.
+func TestFlowLive(t *testing.T) {
+	c, err := flowchart.Build("review-fix", []byte(sampleFlow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var build, ask string
+	var walk func([]flowchart.Node)
+	walk = func(nodes []flowchart.Node) {
+		for _, n := range nodes {
+			if n.Kind == flowchart.Agent && n.Title == "build" {
+				build = n.Key()
+			}
+			if n.Kind == flowchart.Ask {
+				ask = n.Key()
+			}
+			walk(n.Body)
+			walk(n.Then)
+		}
+	}
+	walk(c.Nodes)
+	d, _ := start(t, Options{})
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 200})
+	d.m.running = true
+	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateRunning},
+		Rounds: map[string]int{build: 2}}})
+	v := d.view()
+	for _, want := range []string{"✓ ask", "⏺ agent build ×2", "○ agent docs"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("no %q on the screen\n%s", want, v)
+		}
+	}
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if v := d.view(); !strings.Contains(v, "├─ ⏺ agent build") || strings.Contains(v, "╭─ ⟳") {
+		t.Fatalf("on a short screen:\n%s", v)
+	}
+	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateDone}, Done: true}})
+	if v := d.view(); strings.Contains(v, "agent build") {
+		t.Fatalf("the chart stayed:\n%s", v)
+	}
+	if out := d.out(); !strings.Contains(out, "✓ agent build") || !strings.Contains(out, "○ agent docs") {
+		t.Fatalf("scrollback\n%s", out)
 	}
 }

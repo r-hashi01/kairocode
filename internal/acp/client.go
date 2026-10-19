@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
 
 // Client is the client side of ACP: what an editor does, for KairoCode's own
@@ -27,6 +29,10 @@ type Update struct {
 	ToolCallID, Title, ToolKind, Status string
 	// Commands: available_commands_update's.
 	Commands []Command
+	// Meta is the update's _meta; Flow, a plan's flow (FlowMeta), when the
+	// agent is KairoCode's.
+	Meta json.RawMessage
+	Flow *flowchart.View
 }
 
 // Command is a slash command the agent offers.
@@ -91,15 +97,26 @@ func (cl *Client) handler(h ClientHandler) handler {
 					Kind              string          `json:"kind"`
 					Status            string          `json:"status"`
 					AvailableCommands []Command       `json:"availableCommands"`
+					Meta              json.RawMessage `json:"_meta"`
 				} `json:"update"`
 			}
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, invalid(err)
 			}
 			u := p.Update
+			up := Update{Session: p.SessionID, Kind: u.SessionUpdate, Text: contentText(u.Content),
+				ToolCallID: u.ToolCallID, Title: u.Title, ToolKind: u.Kind, Status: u.Status, Commands: u.AvailableCommands, Meta: u.Meta}
+			if u.SessionUpdate == "plan" && len(u.Meta) > 0 {
+				var meta map[string]json.RawMessage
+				if json.Unmarshal(u.Meta, &meta) == nil && len(meta[FlowMeta]) > 0 {
+					var v flowchart.View
+					if json.Unmarshal(meta[FlowMeta], &v) == nil && v.Chart != nil {
+						up.Flow = &v
+					}
+				}
+			}
 			if h.Update != nil {
-				h.Update(Update{Session: p.SessionID, Kind: u.SessionUpdate, Text: contentText(u.Content),
-					ToolCallID: u.ToolCallID, Title: u.Title, ToolKind: u.Kind, Status: u.Status, Commands: u.AvailableCommands})
+				h.Update(up)
 			}
 			return nil, nil
 		case "session/request_permission":

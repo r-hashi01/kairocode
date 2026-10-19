@@ -115,3 +115,21 @@ func TestClientPermission(t *testing.T) {
 		t.Fatalf("the answer: %s %s", m.ID, m.Result)
 	}
 }
+
+// A plan of KairoCode's carries its flow in _meta: the client gives it to
+// the handler (Update.Flow); a plan of another agent has none.
+func TestClientReadsAFlowPlan(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got := make(chan Update, 2)
+	_, agent := dialFake(t, ctx, ClientHandler{Update: func(u Update) { got <- u }})
+	agent.send(t, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s/x","update":{"sessionUpdate":"plan","entries":[],`+
+		`"_meta":{"kairocode/flow":{"turn":"s/x/t","chart":{"name":"fix","nodes":[{"kind":"agent","title":"build","line":2,"col":10}]},"states":{"2:10":"running"}}}}}}`)
+	agent.send(t, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s/x","update":{"sessionUpdate":"plan","entries":[]}}}`)
+	if u := <-got; u.Flow == nil || u.Flow.Chart.Name != "fix" || u.Flow.States["2:10"] != "running" {
+		t.Fatalf("flow %+v", u.Flow)
+	}
+	if u := <-got; u.Flow != nil {
+		t.Fatalf("a plan with no flow: %+v", u.Flow)
+	}
+}

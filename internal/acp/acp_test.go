@@ -974,3 +974,46 @@ func TestACPFlowQuestion(t *testing.T) {
 		t.Fatalf("reply %q", got)
 	}
 }
+
+// A running flow is a plan: an entry per call of its script, with its
+// state, and its chart in _meta for a client that draws it (ADR 0003).
+func TestACPFlowPlan(t *testing.T) {
+	b, ws := setup(t)
+	if err := os.MkdirAll(filepath.Join(ws, runtime.FlowsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, runtime.FlowsDir, "plan.star"),
+		[]byte("def main(input):\n    return ask(\"Which way?\", options = [\"left\", \"right\"]).value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	prompt(c, s, "/flow plan")
+	m, _ := c.until(func(m message) bool {
+		if m.Method != "session/update" {
+			return false
+		}
+		var p struct {
+			Update struct {
+				SessionUpdate string `json:"sessionUpdate"`
+				Entries       []struct {
+					Content, Status string
+				} `json:"entries"`
+			} `json:"update"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		return p.Update.SessionUpdate == "plan" && len(p.Update.Entries) == 1 &&
+			p.Update.Entries[0].Content == "ask: Which way?" && p.Update.Entries[0].Status == "in_progress"
+	})
+	var p struct {
+		Update struct {
+			Meta map[string]json.RawMessage `json:"_meta"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(m.Params, &p); err != nil || len(p.Update.Meta[FlowMeta]) == 0 {
+		t.Fatalf("no chart in _meta: %s", m.Params)
+	}
+}
