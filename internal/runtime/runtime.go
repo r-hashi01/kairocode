@@ -18,6 +18,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 	_ "modernc.org/sqlite"
 
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -73,6 +74,9 @@ type Runtime struct {
 	cfg   Config
 	mcp   *mcpServer
 	ev    *events
+	// lsp keeps the language servers whose errors are added to a write's
+	// result (ADR 0009).
+	lsp *lsp.Manager
 
 	sendMu sync.Mutex
 
@@ -134,10 +138,11 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{})}
+	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger)}
 	r.ev = newEvents(r)
 	fail := func(err error) (*Runtime, error) {
 		r.ev.close()
+		r.lsp.Close()
 		db.Close()
 		return nil, err
 	}
@@ -184,6 +189,7 @@ func (r *Runtime) Close() error {
 		r.ev.close()
 		err := r.mcp.close()
 		err = errors.Join(err, r.K.Close())
+		r.lsp.Close()
 		r.closeErr = errors.Join(err, r.db.Close())
 	})
 	return r.closeErr
@@ -420,11 +426,33 @@ func (r *Runtime) applyWrite(t *kairo.TaskContext, in workflows.ApplyInput) (wor
 	if res.Unknown {
 		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
 	}
+	if !res.IsError {
+		if errs := r.lspErrors(t, in.Dir, in.Path, content); errs != "" {
+			res.Output += "\n\n" + errs
+		}
+	}
 	out, err := r.toolResult(t, in.Call, res)
 	if err != nil {
 		return out, kairo.Unknown(fmt.Errorf("the write was made, its result was not stored: %w", err))
 	}
 	return out, nil
+}
+
+// lspErrors are the errors the language server for the file at path (in
+// dir) sees in content, as text for the write's result (ADR 0009). Which
+// server, if any, is decided here from the settings, and shows in the
+// result, which is recorded. No server, or none in time: "".
+func (r *Runtime) lspErrors(ctx context.Context, dir, path string, content []byte) string {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return ""
+	}
+	servers, err := lsp.Servers(real, filepath.Join(userConfigDir(), ConfigFile), filepath.Join(real, ConfigFile))
+	if err != nil {
+		r.logf("lsp: %v", err)
+		return ""
+	}
+	return r.lsp.Errors(ctx, servers, real, filepath.Join(real, filepath.FromSlash(path)), content)
 }
 
 // runTool runs one tool call in the working directory and stores its result.

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -19,6 +20,12 @@ import (
 // The child process's part of a crash test: it opens the runtime on the DB
 // and fake provider it is given, sends one message, and waits to be killed.
 func TestMain(m *testing.M) {
+	// No language server of this machine is started (ADR 0009).
+	os.Setenv(lsp.Off, "off")
+	if os.Getenv("KC_FAKE_LSP") == "1" {
+		lsp.FakeServer()
+		return
+	}
 	if os.Getenv("KC_CRASH_CHILD") == "1" {
 		crashChild()
 		return
@@ -275,7 +282,7 @@ func TestCrashClaudeEngine(t *testing.T) {
 // right after the write is in place (its result not recorded), lets change
 // run on the file, and resumes in this process. It returns the file and the
 // tool result the model was given.
-func crashWrite(t *testing.T, change func(path string)) (string, string) {
+func crashWrite(t *testing.T, change func(path string), withLSP bool) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	db := filepath.Join(dir, "k.db")
@@ -290,6 +297,11 @@ func crashWrite(t *testing.T, change func(path string)) (string, string) {
 		t.Fatal(err)
 	}
 	ws := repo(t)
+	if withLSP {
+		// The write done again on resume gets its errors (ADR 0009).
+		t.Setenv(lsp.Off, "")
+		fakeLSP(t, ws, filepath.Join(dir, "lsp.log"))
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile, "KC_HOLD_AFTER_WRITE="+hold)
 	cmd.Stderr = os.Stderr
@@ -337,11 +349,27 @@ func TestCrashWriteOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
-	file, result := crashWrite(t, nil)
+	file, result := crashWrite(t, nil, false)
 	if strings.Count(file, "// added") != 1 {
 		t.Fatalf("file after resume:\n%s", file)
 	}
 	if !strings.HasPrefix(result, "edited main.go") {
+		t.Fatalf("tool result %q", result)
+	}
+}
+
+// TestCrashWriteOnceWithLSP: the same with a language server: the write is
+// still made once, and its result done again on resume has the file's
+// errors (ADR 0009).
+func TestCrashWriteOnceWithLSP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	file, result := crashWrite(t, nil, true)
+	if strings.Count(file, "// added") != 1 {
+		t.Fatalf("file after resume:\n%s", file)
+	}
+	if !strings.HasPrefix(result, "edited main.go") || !strings.Contains(result, "ERROR [3:5] undefined: x") {
 		t.Fatalf("tool result %q", result)
 	}
 }
@@ -356,7 +384,7 @@ func TestCrashWriteConflict(t *testing.T) {
 		if err := os.WriteFile(path, []byte("package main // by hand\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	})
+	}, false)
 	if file != "package main // by hand\n" {
 		t.Fatalf("the change by hand was overwritten:\n%s", file)
 	}

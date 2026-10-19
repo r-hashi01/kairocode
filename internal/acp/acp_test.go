@@ -19,6 +19,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/provider"
@@ -526,6 +527,8 @@ func TestACPPermissionAnsweredElsewhere(t *testing.T) {
 // TestMain: the test binary is also a process that runs a session and is
 // killed while its command runs (KC_ACP_CHILD).
 func TestMain(m *testing.M) {
+	// No language server of this machine is started (ADR 0009).
+	os.Setenv(lsp.Off, "off")
 	if os.Getenv("KC_ACP_CHILD") == "1" {
 		crashChild()
 		return

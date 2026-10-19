@@ -2,7 +2,7 @@
 
 設計 10 節の段階を、受け入れ条件のテストに落としたものです。段階の作業は `/milestone` スキルで進めます。受け入れ条件は、実装の前にテストとして書きます（最初は落ちる）。すべて通ったら、その段階の「状態」を「完了（日付）」にします。
 
-今の段階: **M2（作業中）**。M3 は完了。M2 の残りは、LSP の診断（ADR 0009 の承認待ち）、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。
+今の段階: **M2（作業中）**。M3 は完了。M2 の残りは、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。
 
 ## M0 骨組み
 
@@ -84,7 +84,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。
 - [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。 → テストは通る（`TestClaudeEngineResumeDoesNotRepeatARealCall`、`TestCrashClaudeEngine`）。本物の `claude` での確認が残り。
 - [x] ターンの取り消し（ADR 0011、#11）: モデルの呼び出しの最中に止めるとターンが cancelled で終わり、次のターンの履歴に利用者のメッセージと書き添えが入る。承認の待ちの最中に止めると待ちが消え、ツールは動かない。取り消しの後に落ちて再開しても書き添えは二重にならない。版 4 のセッションは止めたターンを捨てる。ACP の `session/cancel` と TUI の Esc で止まる。（`TestCancelTurn`、`TestCancelWhileAwaitingApproval`、`TestCancelStopsARunningCommand`、`TestCancelInAVersion4Session`、`TestCrashCancel`、`TestCancelOverHTTP`、`TestACPCancel`、`TestEscStopsTheTurn`。セッションの版 5）
-- [ ] edit のあと、LSP の診断のエラーがツールの出力に足される。
+- [x] edit のあと、LSP の診断のエラーがツールの出力に足される。（ADR 0009。`TestWriteGetsLSPErrors`、`TestCrashWriteOnceWithLSP`、`internal/lsp` のテスト）
 - [x] `.opencode/agents/*.md`、`.opencode/commands/*.md`、`.opencode/skills/` を、opencode と同じ意味で読む。（`TestAgents`、`TestCommands`、`TestExpand`、`TestSkills`、`TestOpencodeAgent`、`TestOpencodeAgentRefused`、`TestOpencodeSkills`、`TestOpencodeCommand`、`TestACPProjectCommand`）
 - [x] `/undo` で作業ファイルが前のターンの状態に戻り、`/redo` で戻る。記録は消えない。（`TestUndoRedo`、`TestUndoThenNewTurnClearsRedo`、`TestUndoAfterRestart`、`TestCrashUndo`、`TestACPUndoRedo`。セッションとターンの版 4）
 - [ ] `TestDspchrStateReports`: `DSPCHR_SESSION` があるとき、ターンの始まり・終わり・承認の求め・要確認・失敗・閉じるときに、`dspchr state` が ADR 0004 の表のとおりに起動される（`dspchr` は引数を記録する偽のコマンドに差し替える）。`DSPCHR_SESSION` が無ければ何も起動しない。

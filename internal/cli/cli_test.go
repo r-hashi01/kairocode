@@ -18,12 +18,15 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 // The test binary is also the daemon the commands start (KC_CLI_DAEMON).
 func TestMain(m *testing.M) {
+	// No language server of this machine is started (ADR 0009).
+	os.Setenv(lsp.Off, "off")
 	if os.Getenv("KC_CLI_DAEMON") == "1" {
 		os.Exit(Main(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	}

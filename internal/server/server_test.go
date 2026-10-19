@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 )
@@ -189,6 +190,8 @@ func TestSSEDeliversTurnEvents(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	// No language server of this machine is started (ADR 0009).
+	os.Setenv(lsp.Off, "off")
 	home := isolatedHome()
 	code := m.Run()
 	os.RemoveAll(home)

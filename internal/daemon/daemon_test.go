@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -19,6 +20,8 @@ import (
 
 // The test binary is also the daemon a client starts (KC_DAEMON_CHILD).
 func TestMain(m *testing.M) {
+	// No language server of this machine is started (ADR 0009).
+	os.Setenv(lsp.Off, "off")
 	if os.Getenv("KC_DAEMON_CHILD") == "1" {
 		err := Serve(context.Background(), Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second,
 			Version: os.Getenv("KC_VERSION"), DrainTimeout: drainTimeout()})
