@@ -38,7 +38,9 @@ type Command struct {
 // PermissionRequest is a session/request_permission.
 type PermissionRequest struct {
 	Session string
-	Title   string
+	// ToolCallID is the tool call it is about.
+	ToolCallID string
+	Title      string
 	// ToolKind is ACP's kind of the tool call (read, edit, execute, ...).
 	ToolKind string
 	Options  []PermissionOption
@@ -104,8 +106,9 @@ func (cl *Client) handler(h ClientHandler) handler {
 			var p struct {
 				SessionID string `json:"sessionId"`
 				ToolCall  struct {
-					Title string `json:"title"`
-					Kind  string `json:"kind"`
+					ToolCallID string `json:"toolCallId"`
+					Title      string `json:"title"`
+					Kind       string `json:"kind"`
 				} `json:"toolCall"`
 				Options []PermissionOption `json:"options"`
 			}
@@ -114,7 +117,7 @@ func (cl *Client) handler(h ClientHandler) handler {
 			}
 			id := ""
 			if h.Permission != nil {
-				id = h.Permission(ctx, PermissionRequest{Session: p.SessionID, Title: p.ToolCall.Title, ToolKind: p.ToolCall.Kind, Options: p.Options})
+				id = h.Permission(ctx, PermissionRequest{Session: p.SessionID, ToolCallID: p.ToolCall.ToolCallID, Title: p.ToolCall.Title, ToolKind: p.ToolCall.Kind, Options: p.Options})
 			}
 			if id == "" {
 				return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil

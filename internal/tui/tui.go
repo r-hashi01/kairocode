@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,13 +125,17 @@ type model struct {
 	running bool
 	queued  []string // typed during a turn, sent after it
 
-	input   textarea.Model
-	spin    spinner.Model
-	width   int
-	live    string // the reply being written
-	asks    []*ask
-	tools   map[string]string // tool call id: title
-	last    string            // the last tool call written
+	input textarea.Model
+	spin  spinner.Model
+	width int
+	live  string // the reply being written
+	asks  []*ask
+	tools map[string]string // tool call id: title
+	// running tool calls, in order, written when they end (their colour
+	// tells how); notes: what was answered about one meanwhile.
+	calls   []string
+	notes   map[string][]string
+	began   time.Time // the turn's start
 	cmds    []acp.Command
 	compSel int
 	tokens  int64
@@ -161,16 +166,20 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetWidth(76)
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
-	return &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}}
+	return &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}}
 }
 
 var (
-	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#5FB3B3"))
-	faint  = lipgloss.NewStyle().Faint(true)
+	// Colours to read, not only to calm: secondary text is a grey that
+	// stays legible on dark and light backgrounds (Faint is too dim in many
+	// terminals), and a tool's end is told by its colour.
+	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#4FD6C8"))
+	faint  = lipgloss.NewStyle().Foreground(lipgloss.Color("#A3ACBC"))
+	good   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7DD87D"))
 	bold   = lipgloss.NewStyle().Bold(true)
-	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5C07B"))
-	bad    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E06C75"))
-	you    = lipgloss.NewStyle().Foreground(lipgloss.Color("#D7DAE0")).Background(lipgloss.Color("#3A3F4B"))
+	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFC861"))
+	bad    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7B86"))
+	you    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2F4F8")).Background(lipgloss.Color("#3B4252")).Bold(true)
 )
 
 func (m *model) Init() tea.Cmd { return m.start() }
@@ -300,7 +309,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		for i, a := range m.asks {
 			if a.reply == msg.reply {
 				m.asks = append(m.asks[:i], m.asks[i+1:]...)
-				m.print(faint.Render("  ⎿  " + a.req.Title + ": answered elsewhere"))
+				m.noteCall(a.req.ToolCallID, a.req.Title+": answered elsewhere")
 				break
 			}
 		}
@@ -309,6 +318,11 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.running = false
 		m.flushLive()
 		m.inReply = false
+		for len(m.calls) > 0 { // their end was not told: written as they are
+			id := m.calls[0]
+			m.tools[id] = m.tools[id] + " (no result)"
+			m.endCall(id, false, "")
+		}
 		switch {
 		case msg.err != nil && m.ctx.Err() == nil:
 			m.print(bad.Render("  ⎿  " + msg.err.Error()))
@@ -369,28 +383,54 @@ func (m *model) take(u acp.Update) {
 		m.block(userLine(u.Text))
 	case "tool_call":
 		m.flushLive()
+		if _, known := m.tools[u.ToolCallID]; !known {
+			m.calls = append(m.calls, u.ToolCallID)
+		}
 		m.tools[u.ToolCallID] = u.Title
-		m.last = u.ToolCallID
-		m.block(accent.Render("⏺ ") + bold.Render(cut(u.Title, m.width-2)))
 	case "tool_call_update":
 		if u.Status != "completed" && u.Status != "failed" {
 			return
 		}
 		m.flushLive()
-		lead := "  ⎿  "
-		if u.ToolCallID != m.last { // its call is not the line above
-			lead += m.tools[u.ToolCallID] + ": "
-		}
-		text := firstLines(u.Text, 3, m.width-8)
-		if u.Status == "failed" {
-			m.print(bad.Render(lead + text))
-		} else if text != "" {
-			m.print(faint.Render(lead + text))
-		}
-		m.last = ""
+		m.endCall(u.ToolCallID, u.Status == "failed", u.Text)
 	case "available_commands_update":
 		m.cmds = u.Commands
 	}
+}
+
+// endCall writes a tool call that ended: green, or red when it failed,
+// what was answered about it, and the first lines of its output.
+func (m *model) endCall(id string, failed bool, output string) {
+	title := m.tools[id]
+	if title == "" {
+		title = "tool call"
+	}
+	dot, out := good.Render("⏺ "), faint
+	if failed {
+		dot, out = bad.Render("⏺ "), bad
+	}
+	lines := []string{dot + bold.Render(cut(title, m.width-3))}
+	for _, n := range m.notes[id] {
+		lines = append(lines, faint.Render("  ⎿  "+n))
+	}
+	if text := firstLines(output, 3, m.width-8); strings.TrimSpace(text) != "" {
+		lines = append(lines, out.Render("  ⎿  "+text))
+	}
+	m.block(strings.Join(lines, "\n"))
+	delete(m.notes, id)
+	if i := slices.Index(m.calls, id); i >= 0 {
+		m.calls = slices.Delete(m.calls, i, i+1)
+	}
+}
+
+// noteCall keeps what was answered about a running call, to write with
+// it; a call not running has it written now.
+func (m *model) noteCall(id, note string) {
+	if slices.Contains(m.calls, id) {
+		m.notes[id] = append(m.notes[id], note)
+		return
+	}
+	m.print(faint.Render("  ⎿  " + note))
 }
 
 // flushLive moves the reply being written into the scrollback.
@@ -475,6 +515,7 @@ func hasAllow(options []acp.PermissionOption) bool {
 func (m *model) submit(text string) tea.Cmd {
 	m.block(userLine(text))
 	m.running = true
+	m.began = time.Now()
 	ctx, a, s := m.ctx, m.a, m.session
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		stop, err := a.Prompt(ctx, s, text)
@@ -661,7 +702,7 @@ func (m *model) answer() tea.Cmd {
 	m.asks = m.asks[1:]
 	o := a.req.Options[a.sel]
 	a.reply <- o.ID
-	m.print(faint.Render("  ⎿  " + a.req.Title + ": " + o.Name))
+	m.noteCall(a.req.ToolCallID, a.req.Title+": "+o.Name)
 	return nil
 }
 
@@ -682,10 +723,18 @@ func (m *model) View() tea.View {
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
 	default:
-		if m.running {
-			b.WriteString(m.spin.View() + accent.Render(" Working…") + faint.Render(" (esc to interrupt)") + "\n")
+		for _, id := range m.calls {
+			b.WriteString("\n" + warn.Render("⏺ ") + bold.Render(cut(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
 		}
-		line := faint.Render(strings.Repeat("─", w))
+		if m.running {
+			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +
+				faint.Render(fmt.Sprintf(" (%ds · esc to interrupt)", int(time.Since(m.began).Seconds()))) + "\n")
+		}
+		edge := accent
+		if m.running {
+			edge = faint
+		}
+		line := edge.Render(strings.Repeat("─", w))
 		b.WriteString("\n" + line + "\n")
 		if c := m.input.Cursor(); c != nil {
 			c.Y += strings.Count(b.String(), "\n")

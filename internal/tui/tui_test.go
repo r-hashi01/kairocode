@@ -356,3 +356,41 @@ func TestReplyWraps(t *testing.T) {
 		}
 	}
 }
+
+// A tool call is on the screen while it runs, and written when it ends,
+// green or red, with what was answered about it under it.
+func TestToolCalls(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.send(updateMsg{Kind: "tool_call", ToolCallID: "c1", Title: "bash make test", Status: "in_progress"})
+	if v := d.view(); !strings.Contains(v, "⏺ bash make test") || !strings.Contains(v, "running…") || strings.Contains(d.out(), "make test") {
+		t.Fatalf("running: view\n%s\nout\n%s", v, d.out())
+	}
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{ToolCallID: "c1", Title: "bash make test", Options: []acp.PermissionOption{
+		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
+	d.send(key("enter"))
+	<-reply
+	if strings.Contains(d.out(), "make test") {
+		t.Fatalf("written before it ended\n%s", d.out())
+	}
+	d.send(updateMsg{Kind: "tool_call_update", ToolCallID: "c1", Status: "failed", Text: "exit 2"})
+	out := d.out()
+	if !strings.Contains(out, "⏺ bash make test\n  ⎿  bash make test: Allow\n  ⎿  exit 2") || strings.Contains(d.view(), "running…") {
+		t.Fatalf("ended: out\n%s\nview\n%s", out, d.view())
+	}
+	if !strings.Contains(strings.Join(d.printed, "\n"), bad.Render("⏺ ")) {
+		t.Fatal("a failed call is not red")
+	}
+	d.send(updateMsg{Kind: "tool_call", ToolCallID: "c2", Title: "read a.go"})
+	d.send(updateMsg{Kind: "tool_call_update", ToolCallID: "c2", Status: "completed", Text: "package a"})
+	if !strings.Contains(strings.Join(d.printed, "\n"), good.Render("⏺ ")) {
+		t.Fatal("a call that ended well is not green")
+	}
+	// A call whose end was never told is written when the turn ends.
+	d.m.running = true
+	d.send(updateMsg{Kind: "tool_call", ToolCallID: "c3", Title: "glob *"})
+	d.send(turnDoneMsg{stop: "end_turn"})
+	if !strings.Contains(d.out(), "glob * (no result)") || len(d.m.calls) != 0 {
+		t.Fatalf("out\n%s", d.out())
+	}
+}
