@@ -189,7 +189,7 @@ func TestTurn(t *testing.T) {
 		{Kind: "agent_message_chunk", Text: "Done."},
 	}
 	header := d.out()
-	for _, want := range []string{"✻ kairo abc12345", "claude-code · claude-opus-5-5", "/work/repo"} {
+	for _, want := range []string{"ϟ kairo abc12345", "claude-code · claude-opus-5-5", "/work/repo"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("no %q in the header\n%s", want, header)
 		}
@@ -392,5 +392,25 @@ func TestToolCalls(t *testing.T) {
 	d.send(turnDoneMsg{stop: "end_turn"})
 	if !strings.Contains(d.out(), "glob * (no result)") || len(d.m.calls) != 0 {
 		t.Fatalf("out\n%s", d.out())
+	}
+}
+
+// kairo's colour is an electric yellow; on a light background, which the
+// terminal tells, each colour is a darker one, so it can be read.
+func TestTheme(t *testing.T) {
+	defer setTheme(true)
+	d, _ := start(t, Options{})
+	if got := accent.GetForeground(); got != lipgloss.Color(dark.accent) {
+		t.Fatalf("dark accent %v", got)
+	}
+	d.send(tea.BackgroundColorMsg{Color: lipgloss.Color("#FFFFFF")})
+	if got := accent.GetForeground(); got != lipgloss.Color(light.accent) {
+		t.Fatalf("light accent %v", got)
+	}
+	if d.m.spin.Style.GetForeground() != lipgloss.Color(light.accent) {
+		t.Fatal("the spinner kept the dark colour")
+	}
+	if warn.GetForeground() == accent.GetForeground() {
+		t.Fatal("a caution in kairo's own colour")
 	}
 }

@@ -10,13 +10,8 @@ import (
 // lists with bullets, code in its own colour, fences kept as blocks. It is
 // small on purpose: what it does not know is left as written.
 
-var (
-	heading = lipgloss.NewStyle().Bold(true)
-	h1      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#5FB3B3"))
-	code    = lipgloss.NewStyle().Foreground(lipgloss.Color("#C3A6E0"))
-	strong  = lipgloss.NewStyle().Bold(true)
-	quote   = lipgloss.NewStyle().Faint(true).Italic(true)
-)
+// quote: a quoted line, in the secondary grey.
+func quote() lipgloss.Style { return faint.Italic(true) }
 
 // markdown renders text for a terminal width wide. Its lines carry no
 // trailing spaces.
@@ -56,7 +51,7 @@ func markdown(text string, width int) string {
 			n := numbered(trimmed)
 			out = append(out, wrap(indent+trimmed[:n]+inline(trimmed[n:], lipgloss.NewStyle()), width, indent+strings.Repeat(" ", n)))
 		case strings.HasPrefix(trimmed, "> "):
-			out = append(out, wrap(quote.Render("│ "+trimmed[2:]), width, "  "))
+			out = append(out, wrap(quote().Render("│ "+trimmed[2:]), width, "  "))
 		case trimmed == "---" || trimmed == "***":
 			out = append(out, faint.Render(strings.Repeat("─", min(width, 40))))
 		default:

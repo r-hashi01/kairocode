@@ -142,6 +142,7 @@ type model struct {
 	note    string    // a hint under the input, until the next key
 	ctrlC   time.Time // the first Ctrl-C of two
 	leaving bool
+	isDark  bool
 	// header: the header is written (once the width is known); inReply: a
 	// reply has begun (its first paragraph has the mark).
 	header, inReply bool
@@ -166,23 +167,22 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetWidth(76)
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
-	return &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}}
+	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true}
+	m.restyle()
+	return m
 }
 
-var (
-	// Colours to read, not only to calm: secondary text is a grey that
-	// stays legible on dark and light backgrounds (Faint is too dim in many
-	// terminals), and a tool's end is told by its colour.
-	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#4FD6C8"))
-	faint  = lipgloss.NewStyle().Foreground(lipgloss.Color("#A3ACBC"))
-	good   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7DD87D"))
-	bold   = lipgloss.NewStyle().Bold(true)
-	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFC861"))
-	bad    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7B86"))
-	you    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2F4F8")).Background(lipgloss.Color("#3B4252")).Bold(true)
-)
+func (m *model) Init() tea.Cmd { return tea.Batch(tea.RequestBackgroundColor, m.start()) }
 
-func (m *model) Init() tea.Cmd { return m.start() }
+// restyle gives the parts that keep a style the colours now in use.
+func (m *model) restyle() {
+	st := m.input.Styles()
+	st.Focused.Prompt = accent
+	st.Focused.Placeholder = faint
+	st.Cursor.Color = accent.GetForeground()
+	m.input.SetStyles(st)
+	m.spin.Style = accent
+}
 
 // writeHeader writes the header once, as wide as the terminal allows.
 func (m *model) writeHeader() {
@@ -202,13 +202,13 @@ func (m *model) headerBox() string {
 	if m.o.Model != "" {
 		what += " · " + m.o.Model
 	}
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#5FB3B3")).Padding(0, 1)
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent.GetForeground()).Padding(0, 1)
 	room := max(m.width-5, 12) // the border and padding, and a column spare
 	version := m.o.Version
 	if len(version) > 8 {
 		version = version[:8]
 	}
-	return box.Render(accent.Bold(true).Render("✻ kairo") + faint.Render(" "+version) + "\n" +
+	return box.Render(accent.Bold(true).Render("ϟ kairo") + faint.Render(" "+version) + "\n" +
 		faint.Render(cut(what, room)) + "\n" + faint.Render(cutLeft(m.o.Dir, room)))
 }
 
@@ -285,6 +285,11 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			m.width = msg.Width
 			m.input.SetWidth(max(msg.Width-2, 10))
 		}
+		return nil
+	case tea.BackgroundColorMsg:
+		m.isDark = msg.IsDark()
+		setTheme(m.isDark)
+		m.restyle()
 		m.writeHeader()
 		return nil
 	case startedMsg:
@@ -724,7 +729,7 @@ func (m *model) View() tea.View {
 		b.WriteString(m.askView(w))
 	default:
 		for _, id := range m.calls {
-			b.WriteString("\n" + warn.Render("⏺ ") + bold.Render(cut(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
+			b.WriteString("\n" + accent.Render("⏺ ") + bold.Render(cut(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
 		}
 		if m.running {
 			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +

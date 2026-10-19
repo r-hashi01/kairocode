@@ -26,10 +26,12 @@ type trustModel struct {
 	done  bool
 }
 
-func (m *trustModel) Init() tea.Cmd { return nil }
+func (m *trustModel) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 func (m *trustModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		setTheme(msg.IsDark())
 	case tea.WindowSizeMsg:
 		if msg.Width > 0 {
 			m.width = msg.Width
