@@ -132,6 +132,9 @@ func subject(args json.RawMessage) string {
 // turn (invariant 2): a change to the settings meanwhile does not change it.
 func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionInput) (workflows.PermissionOutput, error) {
 	out, err := r.decide(t, in)
+	if err == nil && in.Tool == workflows.HookTool {
+		return r.hookCheck(t, in, out)
+	}
 	if err != nil || out.Action != string(permission.Ask) || in.MCP == nil {
 		return out, err
 	}
@@ -162,7 +165,7 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 	}
 	subj := subject(args)
 	d, ok := r.tool(in.Tool)
-	if !ok {
+	if !ok && in.Tool != workflows.HookTool { // a hook is a flow, not a tool: the rules still apply
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "no such tool", Subject: subj}, nil
 	}
 	if in.Policy.ReadOnly && d.Effect != tools.Read {

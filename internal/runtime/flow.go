@@ -45,7 +45,11 @@ func flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (workflows.FlowS
 		return workflows.FlowSource{}, err
 	}
 	sum := sha256.Sum256(b)
-	return workflows.FlowSource{Source: string(b), Hash: hex.EncodeToString(sum[:])}, nil
+	hash := hex.EncodeToString(sum[:])
+	if in.Expect != "" && in.Expect != hash {
+		return workflows.FlowSource{Error: fmt.Sprintf("the flow %q changed since it was allowed: it is asked about again next time", in.Name)}, nil
+	}
+	return workflows.FlowSource{Source: string(b), Hash: hash}, nil
 }
 
 // flowPut stores a message a flow makes.

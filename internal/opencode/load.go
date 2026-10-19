@@ -124,6 +124,9 @@ type Agent struct {
 	Steps   int  `json:"steps,omitempty"`
 	Disable bool `json:"disable,omitempty"`
 	Hidden  bool `json:"hidden,omitempty"`
+	// Workflow is a flow of .kairocode/workflows that runs the agent's turns
+	// in place of the model loop (KairoCode's, ADR 0003).
+	Workflow string `json:"workflow,omitempty"`
 	// Permission are permission rules in kairocode.json's form, each object
 	// a layer after the one before (tools first, then permission, file by
 	// file): of the rules that match a call, the last wins.
@@ -163,6 +166,9 @@ func Agents(dirs []string) (map[string]Agent, error) {
 		}
 		if s := v.Get("model").String(); s != "" {
 			a.Model = s
+		}
+		if s := v.Get("workflow").String(); s != "" {
+			a.Workflow = s
 		}
 		if body != "" {
 			a.Prompt = body

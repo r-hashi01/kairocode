@@ -10,6 +10,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -166,7 +167,19 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if err != nil {
 		return workflows.Agent{}, err
 	}
+	// A flow's agent has no hooks of its own: the session's turn has them.
+	var hooks []workflows.Hook
+	if !in.Sub {
+		if hooks, err = loadHooks(in.Dir); err != nil {
+			return workflows.Agent{}, err
+		}
+	}
+	if def.Workflow != "" && !flowchart.ValidName(def.Workflow) {
+		return workflows.Agent{}, fmt.Errorf("the agent %q: workflow %q is not a flow's name", in.Agent, def.Workflow)
+	}
 	return workflows.Agent{
+		Hooks:       hooks,
+		Workflow:    def.Workflow,
 		Name:        in.Agent,
 		Engine:      engine,
 		Model:       model,

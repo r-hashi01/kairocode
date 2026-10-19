@@ -60,6 +60,8 @@ const (
 	// (design 6.3).
 	ActFlowAsk    = "flow.ask"
 	ActFlowDecide = "flow.decide"
+	// ActHookTrust keeps that the user allowed a project's hook.
+	ActHookTrust = "hook.trust"
 
 	// ActHistoryCancelled adds a turn the user stopped to the
 	// conversation: what they asked, and a note that it was stopped (ADR
@@ -195,10 +197,18 @@ type FlowInput struct {
 	Engine  string   `json:"engine,omitempty"`
 	Model   string   `json:"model,omitempty"`
 	Call    FlowCall `json:"call"`
+	// Hook, for a hook's flow, names it: the event, the round and its place
+	// (AGENTS.md, invariant 8); Expect is the hash of the script the user
+	// allowed, which alone may run.
+	Hook   string `json:"hook,omitempty"`
+	Expect string `json:"expect,omitempty"`
 }
 
 // FlowOutput is how a flow ended: main's result, or why it stopped.
 type FlowOutput struct {
+	// Broken: the script could not run (not there, an error, a limit):
+	// the flow said nothing about the work.
+	Broken  bool      `json:"broken,omitempty"`
 	OK      bool      `json:"ok"`
 	Message string    `json:"message"`
 	Agents  int       `json:"agents"`
@@ -208,6 +218,8 @@ type FlowOutput struct {
 type FlowLoadInput struct {
 	Dir  string `json:"dir"`
 	Name string `json:"name"`
+	// Expect, if set, is the script's hash: another script is not loaded.
+	Expect string `json:"expect,omitempty"`
 }
 
 // FlowSource is a flow's script as it was when the flow started (recorded:
@@ -325,6 +337,11 @@ type Agent struct {
 	Permissions string `json:"permissions"`
 	// ReadOnly: the agent may only read (plan mode, FR-12).
 	ReadOnly bool `json:"read_only,omitempty"`
+	// Hooks are the flows bound to the turn's events, as they were when it
+	// started (ADR 0003); Workflow, a flow that runs the agent's turns in
+	// place of the model loop.
+	Hooks    []Hook `json:"hooks,omitempty"`
+	Workflow string `json:"workflow,omitempty"`
 }
 
 // Policy is what a tool call is checked against: the rules recorded at the
@@ -382,6 +399,32 @@ type PermissionOutput struct {
 	// Reason, for a deny that is not a rule's (the user's answer), is what
 	// the model is told.
 	Reason string `json:"reason,omitempty"`
+	// Trust, for a hook asked about, is the record to keep once the user
+	// allows it (ActHookTrust): it is not asked again while it holds.
+	Trust string `json:"trust,omitempty"`
+	// Script, for a hook, is the hash of the script the decision is about:
+	// the hook's flow runs only that script.
+	Script string `json:"script,omitempty"`
+}
+
+// Hooks (ADR 0003): a flow a project or the user binds to an event, run
+// every time it happens. HookTurnEnd runs when the model has answered, and
+// a flow that returns ok False sends its message back to the model.
+const (
+	HookTurnEnd = "turn.end"
+	// HookTool is the name a hook goes by in the permission rules: a
+	// project's hook is asked about before it first runs.
+	HookTool = "hook"
+	// maxHookRounds is how often turn.end hooks may send the model back.
+	maxHookRounds = 3
+)
+
+// Hook is a flow bound to an event. Project: the project's (its
+// kairocode.json), asked about before it first runs; not the user's own.
+type Hook struct {
+	Event   string `json:"event"`
+	Flow    string `json:"flow"`
+	Project bool   `json:"project,omitempty"`
 }
 
 // Approval answers a request for approval, from any client, any time later.

@@ -68,12 +68,12 @@ func RunFlowV1(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
 }
 
 func runFlow(ctx *kairo.Context, in FlowInput, marks bool) (FlowOutput, error) {
-	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name})
+	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name, Expect: in.Expect})
 	if err != nil {
 		return FlowOutput{}, err
 	}
 	if src.Error != "" {
-		return FlowOutput{Message: src.Error}, nil
+		return FlowOutput{Message: src.Error, Broken: true}, nil
 	}
 	r := &flowRun{ctx: ctx, in: in, maxAgents: flowAgents, marks: marks}
 	return r.run(src.Source)
@@ -120,11 +120,11 @@ func (r *flowRun) run(source string) (FlowOutput, error) {
 		return out, r.stop
 	}
 	if err := r.limits(globals["LIMITS"], thread); err != nil {
-		return FlowOutput{Message: err.Error()}, nil
+		return FlowOutput{Message: err.Error(), Broken: true}, nil
 	}
 	main, ok := globals["main"].(starlark.Callable)
 	if !ok {
-		return FlowOutput{Message: "the flow has no main(input) function"}, nil
+		return FlowOutput{Message: "the flow has no main(input) function", Broken: true}, nil
 	}
 	input := starlark.NewDict(1)
 	_ = input.SetKey(starlark.String("args"), starlark.String(r.in.Call.Args))
@@ -143,7 +143,7 @@ func (r *flowRun) ended(err error) (FlowOutput, bool) {
 	if err == nil {
 		return FlowOutput{}, false
 	}
-	out := FlowOutput{Agents: r.agents, Usage: r.usage}
+	out := FlowOutput{Agents: r.agents, Usage: r.usage, Broken: true}
 	if r.stop != nil {
 		return out, true
 	}

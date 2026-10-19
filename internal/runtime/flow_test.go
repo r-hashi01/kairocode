@@ -676,3 +676,133 @@ func TestNewFlow(t *testing.T) {
 		t.Fatalf("the flow made: %q", text)
 	}
 }
+
+// TestTurnEndHookBlocks: a turn.end hook (ADR 0003) that does not pass
+// sends its message back to the model, which goes on; at most three
+// times. A project's hook is asked about before it first runs, not again
+// while its script is the same, and again once it changes.
+func TestTurnEndHookBlocks(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{
+		ConfigFile:                        `{"hooks": {"turn.end": ["check"]}}`,
+		".kairocode/workflows/check.star": "def main(input):\n    return {\"ok\": False, \"message\": \"the tests fail\"}\n",
+	})
+	var script []provider.FakeReply
+	for i := 1; i <= 6; i++ {
+		script = append(script, provider.FakeReply{Text: fmt.Sprintf("done %d", i)})
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: script})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "hook", workflows.SessionInput{Dir: ws})
+	approve := func() {
+		t.Helper()
+		var p []Pending
+		waitUntil(t, ctx, "the hook is asked about", func() bool {
+			p, _ = r.Pending(ctx, s)
+			return len(p) == 1
+		})
+		if p[0].Tool != workflows.HookTool || p[0].Subject != "check" {
+			t.Fatalf("pending %+v", p[0])
+		}
+		if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, _ := r.Send(ctx, s, "fix it")
+	approve() // once: the next rounds run it without asking
+	out, err := r.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done 4" {
+		t.Fatalf("reply %q, want done 4 (three rounds sent back)", text)
+	}
+	conv := strings.Join(conversation(t, r, s), "\n")
+	if c := strings.Count(conv, "the tests fail"); c != 3 {
+		t.Fatalf("%d messages back to the model, want 3:\n%s", c, conv)
+	}
+
+	// Its script changed: asked again; this time it passes.
+	putFiles(t, ws, map[string]string{".kairocode/workflows/check.star": "def main(input):\n    return {\"ok\": True, \"message\": \"fine\"}\n"})
+	n, _ = r.Send(ctx, s, "and now?")
+	approve()
+	if out, err = r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done 5" {
+		t.Fatalf("reply %q", text)
+	}
+	// The same script again: not asked.
+	n, _ = r.Send(ctx, s, "once more")
+	if out, err = r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done 6" {
+		t.Fatalf("reply %q", text)
+	}
+}
+
+// An agent whose definition names a workflow has its turns run by that
+// flow, given what the user said (ADR 0003).
+func TestAgentWorkflow(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{
+		".opencode/agents/greeter.md":     "---\ndescription: Greets\nworkflow: greet\n---\n",
+		".kairocode/workflows/greet.star": "def main(input):\n    return \"hello \" + input[\"args\"]\n",
+	})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "greet", workflows.SessionInput{Dir: ws, Agent: "greeter"})
+	if text, _ := r.Reply(ctx, turn(t, r, s, "world").Reply); text != "hello world" {
+		t.Fatalf("reply %q", text)
+	}
+}
+
+// The script that runs is the one the user allowed: changed while the
+// question waits, it does not run (and the next turn asks about the new
+// one). A hook whose script does not run does not send the model back.
+func TestHookRunsTheScriptAllowed(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{
+		ConfigFile:                        `{"hooks": {"turn.end": ["check", "gone"]}}`,
+		".kairocode/workflows/check.star": "def main(input):\n    return {\"ok\": False, \"message\": \"allowed script\"}\n",
+	})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "done 1"}, {Text: "done 2"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "allowed", workflows.SessionInput{Dir: ws})
+	pending := func(subject string) Pending {
+		t.Helper()
+		var p []Pending
+		waitUntil(t, ctx, "the hook "+subject+" is asked about", func() bool {
+			p, _ = r.Pending(ctx, s)
+			return len(p) == 1 && p[0].Subject == subject
+		})
+		return p[0]
+	}
+	n, _ := r.Send(ctx, s, "fix it")
+	p := pending("check")
+	putFiles(t, ws, map[string]string{".kairocode/workflows/check.star": "def main(input):\n    return {\"ok\": False, \"message\": \"swapped script\"}\n"})
+	if err := r.Approve(ctx, p.Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	// gone.star is not there: asked about, then it does not run.
+	if err := r.Approve(ctx, pending("gone").Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "done 1" {
+		t.Fatalf("reply %q: the model was sent back", text)
+	}
+	if conv := strings.Join(conversation(t, r, s), "\n"); strings.Contains(conv, "script") {
+		t.Fatalf("a hook's message reached the model:\n%s", conv)
+	}
+	// The swapped script is asked about.
+	r.Send(ctx, s, "again")
+	pending("check")
+}

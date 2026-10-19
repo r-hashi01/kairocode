@@ -1,6 +1,8 @@
 package workflows
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -66,11 +68,59 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	if err != nil {
 		return TurnOutput{}, err
 	}
+	if agent.Workflow != "" && !in.Sub {
+		// The agent's turns are its flow's (ADR 0003): what the user said
+		// is what the flow is given.
+		args, err := kairo.Call[string](ctx, ActFlowText, in.Message)
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		in.Flow = &FlowCall{Name: agent.Workflow, Args: args}
+		return runFlowTurn(ctx, in)
+	}
 	if agent.Engine == EngineClaudeCode {
 		return runClaudeTurn(ctx, in, agent)
 	}
 	out := TurnOutput{}
 	turn := []string{in.Message}
+	hookRounds := 0
+	for {
+		// The model loop, then the turn.end hooks: one that does not pass
+		// sends the model back to it (at most maxHookRounds times).
+		if err := modelLoop(ctx, in, agent, &out, &turn); err != nil {
+			return TurnOutput{}, err
+		}
+		if out.Stopped != "" || in.Sub || hookRounds == maxHookRounds {
+			break
+		}
+		blocked, err := turnEndHooks(ctx, in, agent, hookRounds)
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		if blocked == "" {
+			break
+		}
+		hookRounds++
+		note, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user",
+			Text: "A check that runs when you finish did not pass:\n" + blocked + "\nPut it right, then finish."})
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		turn = append(turn, note)
+	}
+	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: turn})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	out.Head = head
+	return out, nil
+}
+
+// modelLoop is the turn's model loop: model, tools, model, ... until the
+// model asks for no tools, or the turn stops.
+func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, turnp *[]string) error {
+	turn := *turnp
+	defer func() { *turnp = turn }()
 	for {
 		if out.Steps == agent.MaxSteps {
 			out.Stopped = "max_steps"
@@ -82,7 +132,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			History: in.History, Turn: turn,
 		})
 		if err != nil {
-			return TurnOutput{}, err
+			return err
 		}
 		out.Usage.Add(reply.Usage)
 		out.Reply = reply.Message
@@ -113,7 +163,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 				// calls keep their ids.
 				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil)
 				if err != nil {
-					return TurnOutput{}, err
+					return err
 				}
 				gates[i] = g
 			}
@@ -128,7 +178,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			}
 		}
 		if err := kairo.Parallel(ctx, calls...); err != nil {
-			return TurnOutput{}, err
+			return err
 		}
 		for _, r := range results {
 			turn = append(turn, r.Message)
@@ -138,12 +188,68 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			break
 		}
 	}
-	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: turn})
-	if err != nil {
-		return TurnOutput{}, err
+	return nil
+}
+
+// turnEndHooks runs the turn.end hooks (ADR 0003), in order, and returns
+// the message of the first that does not pass ("" if all pass). A
+// project's hook is asked about before it first runs (and again after its
+// script changes); one the user declines, or the rules deny, is not run.
+func turnEndHooks(ctx *kairo.Context, in TurnInput, agent Agent, round int) (string, error) {
+	for i, h := range agent.Hooks {
+		if h.Event != HookTurnEnd {
+			continue
+		}
+		expect := ""
+		if h.Project {
+			args, err := json.Marshal(map[string]string{"name": h.Flow, "event": h.Event})
+			if err != nil {
+				return "", err
+			}
+			call := ToolInput{Dir: in.Dir, Call: fmt.Sprintf("hook_%d_%d_%d", in.N, round, i), Args: args}
+			d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{
+				Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}, Tool: HookTool, Call: call})
+			if err != nil {
+				return "", err
+			}
+			if d.Action == "deny" {
+				continue
+			}
+			if d.Action == "ask" {
+				a, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+call.Call)
+				if err != nil {
+					return "", err
+				}
+				if !a.OK {
+					continue
+				}
+				if _, err := kairo.Call[bool](ctx, ActHookTrust, d.Trust); err != nil {
+					return "", err
+				}
+			}
+			expect = d.Script
+		}
+		fo, err := kairo.Child[FlowOutput](ctx, Flow, FlowInput{
+			Session: in.Session, N: in.N, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, Call: FlowCall{Name: h.Flow},
+			Hook: fmt.Sprintf("%s/%d/%d", h.Event, round, i), Expect: expect,
+		})
+		var failed *kairo.WorkflowError
+		if errors.As(err, &failed) {
+			return h.Flow + " failed: " + failed.Message, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if fo.Broken {
+			// The hook's script does not run: nothing the model can put
+			// right. It is not sent back.
+			continue
+		}
+		if !fo.OK {
+			return h.Flow + ": " + fo.Message, nil
+		}
 	}
-	out.Head = head
-	return out, nil
+	return "", nil
 }
 
 // runClaudeTurn hands the turn to the user's Claude Code (ADR 0007). Its

@@ -337,4 +337,14 @@ def main(input):
   - 変えた台本が検査（`flowchart.Check`）を通らなければ書きません（たとえば、後で使う値を作る文を消すと「定義されていない」になる）。言葉がコードで書かれた箱や、大きな文の一部の呼び出しは、図の上では変えられず、言葉で頼むように知らせます。
   - これは利用者自身の操作なので、TUI が台本を直接書きます（モデルの `flow_write` ではない）。
   - テスト: `TestSetText`、`TestDeleteAndMove`、`TestEditOnTheChart`（検査を通さずに書く形に壊すと落ちることを確かめた）。
-- **まだ:** `kairocode flow show --follow`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **hook とエージェントの `workflow:`（7 歩目）:**
+  - `kairocode.json` の `{"hooks": {"turn.end": ["<flow>", …]}}` で、フローを出来事に結びます。利用者の設定（`~/.config/kairocode/kairocode.json`）とプロジェクトの設定の両方を読み、agent.load で記録します（不変条件 2）。今の出来事は `turn.end` だけです（`tool.after`、`session.start` はまだ）。
+  - `turn.end`: モデルが答え終えたら、順に動かします。`ok: false` を返したら、その `message` を利用者の発言としてモデルに返し、ループを続けます。送り返すのは 3 回までです（`TestTurnEndHookBlocks`）。フローのエージェント（`Sub`）のターンには hook はありません。
+  - **プロジェクトの hook は、初めて動く前に聞きます。** 権限の判定を種類 `hook`（対象はフローの名前）で通します。規則で `"hook": "allow"` などとも書けます。聞いて許されたら、フォルダ、出来事、フロー、台本のハッシュを記録し（store の `hook-trust`。内容のハッシュで引く既存の表で、表は足していない）、同じ台本の間は聞きません。台本が変わったら、また聞きます。断られた hook は動かしません。読むだけのモード（plan）でも動かしません。
+  - 利用者自身の設定の hook も聞きます（durability-reviewer の指摘）。名前で結ぶので、動くのはプロジェクトの台本だからです。
+  - 動くのは、許された台本だけです。許したときの台本のハッシュをフローに渡し（`FlowInput.Expect`）、読み込んだ台本と違えば動かしません。許可を待つ間に台本が変わっても、許していない台本は動きません（`TestHookRunsTheScriptAllowed`。この照合を外すと落ちることを確かめた）。
+  - 台本が無い、誤りがある、上限を超えたなど、台本そのものが動かない hook（`FlowOutput.Broken`）は、モデルに送り返しません。モデルには直せないからです。
+  - hook のフローの入力には、出来事、何回目、何番目（`FlowInput.Hook`）を入れます（不変条件 8）。
+  - エージェントの定義（`.opencode/agents/*.md`）に `workflow: <flow>` と書くと、そのエージェントのターンは、モデルのループの代わりにそのフローで進みます。利用者の発言が `input["args"]` です（`TestAgentWorkflow`）。
+  - どれも記録されたエージェントの定義の新しい欄で分けたので、それを持たない進行中のターンは、今までと同じ呼び出しをします。
+- **まだ:** `kairocode flow show --follow`、`tool.after` と `session.start` の hook、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
