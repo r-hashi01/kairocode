@@ -68,6 +68,9 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 	if r.System != "" {
 		params.System = []anthropic.BetaTextBlockParam{{Text: r.System}}
 	}
+	if r.Force != "" {
+		params.ToolChoice = anthropic.BetaToolChoiceParamOfTool(r.Force)
+	}
 	resp, err := a.stream(ctx, params, r.OnText)
 	if err != nil {
 		var apierr *anthropic.Error

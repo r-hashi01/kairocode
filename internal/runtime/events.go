@@ -25,6 +25,9 @@ const (
 	EventApprovalResolved  = "approval.resolved"
 	EventReviewRequested   = "review.requested"
 	EventReviewResolved    = "review.resolved"
+	// A flow's question (ADR 0003): Pending has it, and its options.
+	EventQuestionRequested = "question.requested"
+	EventQuestionResolved  = "question.resolved"
 )
 
 // Event is something that happened in a session, told to those who watch
@@ -370,15 +373,21 @@ func (e *events) join(w *watcher) {
 }
 
 func requested(p Pending) string {
-	if p.Kind == "review" {
+	switch p.Kind {
+	case "review":
 		return EventReviewRequested
+	case KindQuestion:
+		return EventQuestionRequested
 	}
 	return EventApprovalRequested
 }
 
 func resolved(p Pending) string {
-	if p.Kind == "review" {
+	switch p.Kind {
+	case "review":
 		return EventReviewResolved
+	case KindQuestion:
+		return EventQuestionResolved
 	}
 	return EventApprovalResolved
 }

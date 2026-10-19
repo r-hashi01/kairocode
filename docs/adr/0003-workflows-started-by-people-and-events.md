@@ -290,4 +290,19 @@ def main(input):
   - ACP では、フローが自分で呼んだツール（`flow_` で始まる呼び出しの ID）は、聞く前に `tool_call` として知らせます。
 - **Claude Code のエンジン:** フローのエージェントのターンは、セッションの Claude Code のセッションを使いません。自分のターンの実行の ID から作った、別のセッションで動きます。履歴を持たずに始まり、並んだエージェントが互いの claude を止めることもありません（`TestFlowAgentsOnClaudeCode`）。
 - **記録したスクリプト:** `TestFlowKeepsItsScript` は、書き換えの後にプロセスを開き直し、フローを頭から動かし直しても、記録したスクリプトで終わることを確かめます。
-- **まだ:** `ask`、`decide`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **`ask(question, options=["Yes", "No"])`（2 歩目）:**
+  - 問いを `flow.ask` で記録してから、シグナル `answer/<id>` を待ちます。待っている間、プロセスは要りません（`TestFlowAsks` は、待っている間にプロセスを開き直す）。
+  - 問いは、承認と同じ一覧（`Pending`、`Kind: "question"`、選択肢つき）と出来事（`question.requested`、`question.resolved`）に出ます。
+  - 答えは選択肢のどれかで、最初の答えだけが通ります（`Runtime.Answer`、`POST /questions`、`kairocode answer <key> <answer>`）。
+  - ACP では `session/request_permission` で聞きます。題が問いで、種類は `think` です。選択肢はどれも `reject_once` の種類にします。要確認と同じく、自動で許すクライアントが利用者の代わりに答えないためです。
+  - 選択肢は 2 つ以上です。自由な文での答えは、まだありません。
+- **`decide(prompt, type="bool"|"number"|"choice", choices=None)`（2 歩目）:**
+  - モデルに型付きで決めさせます（設計 6.3）。文章から判断を取り出すことはしません。
+  - API のエンジンでは、`decide` のツールを呼ばせることを強制します（`tool_choice`）。
+  - Claude Code のエンジンでは、`claude -p --output-format json --json-schema` の `structured_output` を読みます（ツールなし、セッションを残さない）。
+  - 型に合わない答え、答えなし、断りは `ok` が偽の値で返ります（`TestFlowDecide`、`TestFlowDecideOnClaudeCode`、`TestFlowDecideOnClaudeCodeFails`）。Claude Code が判断せずに 0 以外で終わっても、結果の行が読めればそれを使います。API の一時的なエラーは、モデルの呼び出しと同じく、やり直します。
+  - 判断を求める文は `flow.put` で保存し、ハッシュで渡します（不変条件 5。`agent()` と同じ）。
+  - 数の判断は、2^53 より小さい整数だけを Starlark の整数にします。それより大きいものは小数のままです（整数への変換が、機械によって変わらないように）。
+  - 判断のための `claude` は、落ちた後に残ったものを止める仕組み（`SetClaudeProc`）に乗っていません。ツールを持たず、何も残さないので、二重に効く作用はなく、増えるのは費用だけです。
+- `kairocode run "/flow <name> …"` でも、フローを非対話で動かせます（`TestRunAFlowThatAsks`）。
+- **まだ:** `wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。

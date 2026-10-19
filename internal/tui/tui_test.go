@@ -439,3 +439,19 @@ func TestEscStopsTheTurn(t *testing.T) {
 		t.Fatalf("out\n%s", d.out())
 	}
 }
+
+// A flow's question is shown as a question, with nothing chosen yet.
+func TestFlowQuestion(t *testing.T) {
+	d, _ := start(t, Options{})
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{Title: "Which way?", ToolKind: "think", Options: []acp.PermissionOption{
+		{ID: "answer_0", Name: "left", Kind: "reject_once"}, {ID: "answer_1", Name: "right", Kind: "reject_once"}}}, reply: reply})
+	v := d.view()
+	if !strings.Contains(v, "The flow asks") || !strings.Contains(v, "Which way?") || strings.Contains(v, "❯") {
+		t.Fatalf("view\n%s", v)
+	}
+	d.send(key("2"))
+	if got := <-reply; got != "answer_1" {
+		t.Fatalf("chose %q", got)
+	}
+}

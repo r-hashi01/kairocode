@@ -23,6 +23,8 @@ type Request struct {
 	// OnText, if set, is given the reply's text as it comes, piece by piece
 	// (to stream it to the user). The Response still holds all of it.
 	OnText func(text string)
+	// Force, if set, names the tool the model must call (a typed answer).
+	Force string
 }
 
 type Response struct {

@@ -362,3 +362,48 @@ func isolatedHome() string {
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	return home
 }
+
+// run "/flow <name>" runs a flow; its question is shown with how to answer
+// it, and the answer, given by another command through the daemon, lets it
+// go on (ADR 0003).
+func TestRunAFlowThatAsks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "plan.star"),
+		[]byte("def main(input):\n    return \"chose \" + ask(\"Which way?\", options = [\"left\", \"right way\"]).value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, t.TempDir()))
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var stdout bytes.Buffer
+	var stderr lockedBuffer
+	code := make(chan int, 1)
+	go func() { code <- Main(ctx, []string{"run", "-dir", ws, "-data", data, "/flow plan"}, &stdout, &stderr) }()
+	var key string
+	until(t, ctx, "the question is shown", func() bool {
+		_, rest, ok := strings.Cut(stderr.String(), "kairocode answer ")
+		key, _, _ = strings.Cut(rest, " <answer>")
+		return ok && strings.Contains(rest, " <answer>")
+	})
+	if !strings.Contains(stderr.String(), "the flow asks: Which way?") || !strings.Contains(stderr.String(), "left | right way") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	var out bytes.Buffer
+	if c := Main(ctx, []string{"answer", "-data", data, key, "right", "way"}, &out, &out); c != 0 {
+		t.Fatalf("answer: exit %d: %s", c, out.String())
+	}
+	if c := <-code; c != 0 {
+		t.Fatalf("exit %d: %s", c, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "chose right way" {
+		t.Fatalf("stdout %q", got)
+	}
+}

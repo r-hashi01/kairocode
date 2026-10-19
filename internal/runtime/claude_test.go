@@ -31,6 +31,11 @@ type fakeClaudeRun struct {
 	// exists (the tool is under way), without waiting for its result.
 	Die   bool   `json:"die,omitempty"`
 	Reply string `json:"reply"`
+	// Decide: run with --json-schema, it answers this structured output;
+	// DecideFails: it ends with an error result of this subtype instead,
+	// and exits 1, as claude does.
+	Decide      json.RawMessage `json:"decide,omitempty"`
+	DecideFails string          `json:"decide_fails,omitempty"`
 }
 
 type fakeClaudeCall struct {
@@ -48,7 +53,7 @@ type fakeClaudeStart struct {
 func fakeClaude() {
 	args := os.Args[1:]
 	var start fakeClaudeStart
-	var mcpConfig string
+	var mcpConfig, jsonSchema string
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "-p":
@@ -59,6 +64,8 @@ func fakeClaude() {
 			mcpConfig = args[i+1]
 		case "--allowedTools":
 			start.Allowed = args[i+1]
+		case "--json-schema":
+			jsonSchema = args[i+1]
 		}
 	}
 	// Like Claude Code: the session's transcript gets the prompt.
@@ -89,6 +96,19 @@ func fakeClaude() {
 		panic(err)
 	}
 	r := script.Runs[run]
+	if jsonSchema != "" && r.DecideFails != "" {
+		res, _ := json.Marshal(map[string]any{"type": "result", "subtype": r.DecideFails, "is_error": true,
+			"usage": map[string]any{"input_tokens": 2, "output_tokens": 1}})
+		fmt.Println(string(res))
+		os.Exit(1)
+	}
+	if jsonSchema != "" { // a decision: one JSON object, no tools
+		res, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false,
+			"structured_output": r.Decide, "schema": json.RawMessage(jsonSchema),
+			"usage": map[string]any{"input_tokens": 2, "output_tokens": 1}})
+		fmt.Println(string(res))
+		return
+	}
 	var cfg struct {
 		MCPServers map[string]struct{ URL string } `json:"mcpServers"`
 	}
@@ -521,5 +541,44 @@ def main(input):
 		if x.Mode != "--session-id" || x.Session == claudeSessionID(s) {
 			t.Fatalf("an agent in the session's Claude Code session: %+v", x)
 		}
+	}
+}
+
+// decide() on Claude Code: its answer fits the schema (claude --json-schema)
+// and comes back typed.
+func TestFlowDecideOnClaudeCode(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Decide: json.RawMessage(`{"value": "medium"}`)})
+	r := openClaude(t, e)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/size.star": `
+def main(input):
+    d = decide("How big is this change?", type = "choice", choices = ["small", "medium", "large"])
+    return "%s %s" % (d.ok, d.value)
+`})
+	if _, text, _ := flowTurn(t, r, ws, "size", ""); text != "True medium" {
+		t.Fatalf("reply %q", text)
+	}
+	st := e.starts(t)
+	if len(st) != 1 || st[0].Prompt != "How big is this change?" || st[0].Session != "" {
+		t.Fatalf("claude was started as %+v", st)
+	}
+}
+
+// Claude Code that will not decide ends with an error result and a status
+// of 1: that is an outcome (ok False), not a step to try again.
+func TestFlowDecideOnClaudeCodeFails(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{DecideFails: "error_max_structured_output_retries"})
+	r := openClaude(t, e)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/no.star": `
+def main(input):
+    d = decide("Is it done?")
+    return "%s %s" % (d.ok, d.error)
+`})
+	if _, text, _ := flowTurn(t, r, ws, "no", ""); text != "False Claude Code made no decision (error_max_structured_output_retries)" {
+		t.Fatalf("reply %q", text)
+	}
+	if n := len(e.starts(t)); n != 1 {
+		t.Fatalf("claude started %d times, want 1", n)
 	}
 }

@@ -211,18 +211,24 @@ func (r *Runtime) mcpGrant(t *kairo.TaskContext, in workflows.MCPGrantInput) (bo
 	return true, r.Store.Grant(t, in.Turn, in.Ask, in.Content, in.Approval.OK, in.Approval.Reason)
 }
 
-// Pending is a tool call waiting for the user: for approval before it runs
-// (Kind "approval"), or, cut off while it ran, to be told whether it took
-// effect (Kind "review", invariant 4).
+// Pending is what waits for the user: a tool call, for approval before it
+// runs (Kind "approval") or, cut off while it ran, to be told whether it
+// took effect (Kind "review", invariant 4); or a flow's question (Kind
+// "question": Subject is the question, Options its answers, ADR 0003).
 type Pending struct {
 	Kind string `json:"kind"`
-	// Key names the request: give it to Approve.
-	Key     string `json:"key"`
-	Turn    string `json:"turn"`
-	Tool    string `json:"tool"`
-	Subject string `json:"subject"`
-	Rule    string `json:"rule"`
+	// Key names the request: give it to Approve, or a question's to
+	// Answer.
+	Key     string   `json:"key"`
+	Turn    string   `json:"turn"`
+	Tool    string   `json:"tool"`
+	Subject string   `json:"subject"`
+	Rule    string   `json:"rule"`
+	Options []string `json:"options,omitempty"`
 }
+
+// KindQuestion is a Pending that is a flow's question.
+const KindQuestion = "question"
 
 // Pending lists the calls of a session that wait for approval.
 func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error) {
@@ -261,7 +267,17 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 	var out []Pending
 	checks := map[string]workflows.PermissionOutput{}
 	tool := map[string]string{}
+	questions := map[string]workflows.FlowAskInput{}
 	for _, c := range calls {
+		if c.Plan == "kairo.call/"+workflows.ActFlowAsk && c.Finished() {
+			var in struct {
+				In workflows.FlowAskInput `json:"in"`
+			}
+			if json.Unmarshal(c.Input, &in) == nil {
+				questions[in.In.ID] = in.In
+			}
+			continue
+		}
 		if (c.Workflow == workflows.Flow || c.Workflow == workflows.Turn) && !c.Finished() {
 			p, err := r.pendingIn(ctx, c, top)
 			if err != nil {
@@ -325,6 +341,11 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 				Rule: "cut off while it ran: did it take effect?"})
 			continue
 		}
+		if id, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalAnswerPrefix); ok && !c.Finished() {
+			q := questions[id]
+			out = append(out, Pending{Kind: KindQuestion, Key: run.RunID + "#" + id, Turn: top, Subject: q.Question, Options: q.Options})
+			continue
+		}
 		call, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalApprovePrefix)
 		if !ok || c.Finished() {
 			continue
@@ -336,6 +357,43 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 }
 
 const reviewPrefix = "review:"
+
+// ErrQuestion: a flow's question was given a yes or no, or an answer that
+// is not one of its options.
+var ErrQuestion = errors.New("not an answer to this question")
+
+// Answer answers a flow's question (Pending of Kind "question") with one
+// of its options. As with Approve, only the first answer goes through.
+func (r *Runtime) Answer(ctx context.Context, key, option string) error {
+	session := sessionOf(key)
+	if session == "" {
+		return fmt.Errorf("not a question's key: %q", key)
+	}
+	r.approveMu.Lock()
+	defer r.approveMu.Unlock()
+	pending, err := r.Pending(ctx, session)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(pending, func(p Pending) bool { return p.Key == key })
+	if i < 0 {
+		return ErrAnswered
+	}
+	p := pending[i]
+	if p.Kind != KindQuestion {
+		return fmt.Errorf("%w: %s is not a question", ErrQuestion, key)
+	}
+	if !slices.Contains(p.Options, option) {
+		return fmt.Errorf("%w: %q is not one of %q", ErrQuestion, option, p.Options)
+	}
+	run, id, _ := strings.Cut(key, "#")
+	r.ev.answered(session, key, true)
+	if err := r.K.Signal(ctx, run, workflows.SignalAnswerPrefix+id, workflows.FlowAnswer{Option: option}); err != nil {
+		r.ev.forget(session, key)
+		return err
+	}
+	return nil
+}
 
 // ErrAnswered: the request was answered already (by another client), or
 // waits no more.
@@ -366,8 +424,12 @@ func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason strin
 	// (ADR 0008). Processes sharing a database would need more (kairo-gap
 	// #21). Pending lists the waits of the session's turns and of the runs
 	// below them (flows, their agents).
-	if !slices.ContainsFunc(pending, func(p Pending) bool { return p.Key == key }) {
+	i := slices.IndexFunc(pending, func(p Pending) bool { return p.Key == key })
+	if i < 0 {
 		return ErrAnswered
+	}
+	if pending[i].Kind == KindQuestion {
+		return fmt.Errorf("%w: answer it with one of its options", ErrQuestion)
 	}
 	// Kept before it is given: the request may be seen resolved at once.
 	r.ev.answered(session, key, ok)

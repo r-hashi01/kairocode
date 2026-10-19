@@ -256,3 +256,62 @@ func tail(s string, n int) string {
 	}
 	return s
 }
+
+// claudeDecide asks Claude Code for a flow's decision (decide.go),
+// fitting schema: one run, no tools, nothing kept of it. claude starts
+// here, with the turns' (ADR 0007).
+func (r *Runtime) claudeDecide(t *kairo.TaskContext, dir, prompt, model string, schema json.RawMessage) (workflows.DecideOutput, error) {
+	args := []string{"-p", prompt,
+		"--output-format", "json", "--json-schema", string(schema),
+		"--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config",
+		"--no-session-persistence", "--system-prompt", decideSystem,
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	cmd := exec.CommandContext(t, r.cfg.ClaudePath, args...)
+	cmd.Dir = dir
+	cmd.Env = claudeEnv()
+	cmd.Stdin = nil
+	cmd.SysProcAttr = claudeProcAttr()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	b, runErr := cmd.Output()
+	if t.Err() != nil {
+		return workflows.DecideOutput{}, t.Err()
+	}
+	var res struct {
+		IsError          bool            `json:"is_error"`
+		Subtype          string          `json:"subtype"`
+		StructuredOutput json.RawMessage `json:"structured_output"`
+		Usage            struct {
+			Input      int64 `json:"input_tokens"`
+			Output     int64 `json:"output_tokens"`
+			CacheRead  int64 `json:"cache_read_input_tokens"`
+			CacheWrite int64 `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	}
+	// A result is read whatever claude exited with: one that is an error
+	// (it would not decide) exits non-zero too, and is an outcome.
+	var typ struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(b, &res) != nil || json.Unmarshal(b, &typ) != nil || typ.Type != "result" {
+		// No result: nothing was decided, and asking again is safe.
+		return workflows.DecideOutput{}, kairo.Retryable(fmt.Errorf("claude: %v: %s", runErr, tail(stderr.String(), 200)))
+	}
+	out := workflows.DecideOutput{Usage: msg.Usage{Input: res.Usage.Input, Output: res.Usage.Output,
+		CacheRead: res.Usage.CacheRead, CacheWrite: res.Usage.CacheWrite}}
+	var v struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if res.IsError || json.Unmarshal(res.StructuredOutput, &v) != nil || len(v.Value) == 0 {
+		out.Error = "Claude Code made no decision"
+		if res.Subtype != "" && res.Subtype != "success" {
+			out.Error += " (" + res.Subtype + ")"
+		}
+		return out, nil
+	}
+	out.OK, out.Value = true, v.Value
+	return out, nil
+}

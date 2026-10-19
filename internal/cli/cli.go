@@ -32,6 +32,7 @@ const usage = `usage:
   kairocode run [-dir DIR] [-data DIR] "<request>"   answer one request, then exit
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
+  kairocode answer [-data DIR] <key> <answer>         answer a flow's question
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
   kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
@@ -100,6 +101,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = approvals(ctx, args, stdout, stderr)
 	case "approve":
 		err = approve(ctx, args, stderr)
+	case "answer":
+		err = answer(ctx, args, stderr)
 	case "usage":
 		err = showUsage(ctx, args, stdout, stderr)
 	case "acp":
@@ -260,7 +263,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		defer close(shown)
 		showEvents(watch, c, s, events, stderr, sent, &n, turnDone)
 	}()
-	n, err = c.Send(ctx, s, request)
+	if flow, ok := strings.CutPrefix(request, "/flow "); ok { // a flow (ADR 0003)
+		name, args, _ := strings.Cut(strings.TrimSpace(flow), " ")
+		n, err = c.RunFlow(ctx, s, name, strings.TrimSpace(args))
+	} else {
+		n, err = c.Send(ctx, s, request)
+	}
 	close(sent)
 	if err != nil {
 		return err
@@ -303,6 +311,10 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintln(stdout, "nothing waits for approval")
 	}
 	for _, x := range p {
+		if x.Kind == runtime.KindQuestion {
+			fmt.Fprintf(stdout, "%s\n  question: %s\n  answers: %s (kairocode answer <key> <answer>)\n", x.Key, x.Subject, strings.Join(x.Options, " | "))
+			continue
+		}
 		fmt.Fprintf(stdout, "%s\n  %s %q (%s)\n", x.Key, x.Tool, x.Subject, x.Rule)
 	}
 	return nil
@@ -326,6 +338,25 @@ func approve(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	defer c.Close()
 	return c.Approve(ctx, fs.Arg(0), !*deny, *reason)
+}
+
+// answer answers a flow's question (ADR 0003) with one of its options.
+func answer(ctx context.Context, args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("answer", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() < 2 {
+		return errors.New("answer needs a key and an answer: see kairocode approvals")
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return c.Answer(ctx, fs.Arg(0), strings.Join(fs.Args()[1:], " "))
 }
 
 // stopOnSignals: the first SIGINT or SIGTERM ends the returned context (the
@@ -426,6 +457,11 @@ func showEvent(w io.Writer, ev runtime.Event) {
 	case runtime.EventReviewRequested:
 		fmt.Fprintf(w, "cut off while it ran, did it take effect? %s %s\n  kairocode approve %s   (or -deny: it did not)\n",
 			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Key)
+	case runtime.EventQuestionRequested:
+		fmt.Fprintf(w, "the flow asks: %s\n  answers: %s\n  kairocode answer %s <answer>\n",
+			ev.Pending.Subject, strings.Join(ev.Pending.Options, " | "), ev.Pending.Key)
+	case runtime.EventQuestionResolved:
+		fmt.Fprintln(w, "  answered")
 	case runtime.EventApprovalResolved:
 		fmt.Fprintf(w, "  %s\n", answer(ev.OK, "approved", "declined"))
 	case runtime.EventReviewResolved:

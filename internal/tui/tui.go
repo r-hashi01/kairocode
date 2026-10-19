@@ -815,7 +815,10 @@ func (m *model) askView(w int) string {
 	rule := warn.Render(strings.Repeat("─", w))
 	var b strings.Builder
 	q := "Allow this?"
-	if !hasAllow(a.req.Options) {
+	switch {
+	case a.req.ToolKind == "think": // a flow's question (ADR 0003)
+		q = "The flow asks"
+	case !hasAllow(a.req.Options):
 		q = "It was cut off while it ran. Did it take effect?"
 	}
 	b.WriteString(rule + "\n" + warn.Bold(true).Render(q) + "\n\n" + bold.Render(a.req.Title) + "\n\n")

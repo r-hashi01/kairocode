@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -368,5 +369,106 @@ def main(input):
 	b, _ := os.ReadFile(calls)
 	if n := len(strings.Fields(string(b))); n != 1 {
 		t.Fatalf("%d model calls after the restart, want 1 (the agent that had not ended)", n)
+	}
+}
+
+// ask() puts a question to the user and waits, without the process: its
+// answer is one of its options, given once (ADR 0003, invariant 7).
+func TestFlowAsks(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/plan.star": `
+def main(input):
+    a = ask("Go on with this plan?", options = ["Go on", "Stop"])
+    if a.value != "Go on":
+        return {"ok": False, "message": "stopped"}
+    return "going on"
+`})
+	db := filepath.Join(t.TempDir(), "k.db")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Owner: "ask", Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := r.CreateSession(ctx, "ask", workflows.SessionInput{Dir: ws})
+	events, err := r.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := r.RunFlow(ctx, s, "plan", "")
+	var p []Pending
+	waitUntil(t, ctx, "the question", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if p[0].Kind != KindQuestion || p[0].Subject != "Go on with this plan?" || strings.Join(p[0].Options, "|") != "Go on|Stop" {
+		t.Fatalf("pending %+v", p[0])
+	}
+	for ev := range events {
+		if ev.Type == EventQuestionRequested {
+			if ev.Pending == nil || ev.Pending.Key != p[0].Key {
+				t.Fatalf("event %+v", ev)
+			}
+			break
+		}
+	}
+	// It waits without the process: another one answers it.
+	r.Close()
+	r, err = Open(ctx, Config{DB: db, Owner: "ask", Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Approve(ctx, p[0].Key, true, ""); !errors.Is(err, ErrQuestion) {
+		t.Fatalf("approving a question: %v", err)
+	}
+	if err := r.Answer(ctx, p[0].Key, "Maybe"); !errors.Is(err, ErrQuestion) {
+		t.Fatalf("an answer not offered: %v", err)
+	}
+	if err := r.Answer(ctx, p[0].Key, "Go on"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Answer(ctx, p[0].Key, "Stop"); !errors.Is(err, ErrAnswered) {
+		t.Fatalf("a second answer: %v", err)
+	}
+	out, err := r.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "going on" {
+		t.Fatalf("reply %q", text)
+	}
+}
+
+// decide() has the model decide, typed: a bool, a number, one of the
+// choices. A decision of another type, or none, is ok False.
+func TestFlowDecide(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{
+		".kairocode/workflows/yes.star":    "def main(input):\n    d = decide(\"Do the tests pass?\")\n    return \"%s %s\" % (d.ok, d.value)\n",
+		".kairocode/workflows/score.star":  "def main(input):\n    d = decide(\"Score it\", type = \"number\")\n    return \"%s %s\" % (d.ok, d.value + 1)\n",
+		".kairocode/workflows/half.star":   "def main(input):\n    d = decide(\"Score it\", type = \"number\")\n    return \"%s %s %s\" % (d.ok, d.value, type(d.value))\n",
+		".kairocode/workflows/huge.star":   "def main(input):\n    d = decide(\"Count\", type = \"number\")\n    return type(d.value)\n",
+		".kairocode/workflows/pick.star":   "def main(input):\n    d = decide(\"Pick\", type = \"choice\", choices = [\"a\", \"b\"])\n    return \"%s %s %s\" % (d.ok, d.value, d.error)\n",
+		".kairocode/workflows/silent.star": "def main(input):\n    d = decide(\"Anything?\")\n    return \"%s %s\" % (d.ok, d.error)\n",
+	})
+	decided := func(input string) provider.FakeReply {
+		return provider.FakeReply{Tools: []provider.FakeTool{{Name: "decide", Input: json.RawMessage(input)}}}
+	}
+	for name, c := range map[string]struct {
+		reply provider.FakeReply
+		want  string
+	}{
+		"yes":    {decided(`{"value": true}`), "True True"},
+		"score":  {decided(`{"value": 7}`), "True 8"},
+		"half":   {decided(`{"value": 7.5}`), "True 7.5 float"},
+		"huge":   {decided(`{"value": 1e300}`), "float"}, // past 2^53, not made an int
+		"pick":   {decided(`{"value": "c"}`), `False None "c" is not a decision of type choice`},
+		"silent": {provider.FakeReply{Text: "I would rather not"}, "False the model made no decision"},
+	} {
+		r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{c.reply}})
+		if _, text, _ := flowTurn(t, r, ws, name, ""); text != c.want {
+			t.Errorf("%s: %q, want %q", name, text, c.want)
+		}
 	}
 }

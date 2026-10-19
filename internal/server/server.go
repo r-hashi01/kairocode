@@ -36,6 +36,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/close", s.closeSession)
 	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
 	s.mux.HandleFunc("POST /approvals", s.approve)
+	s.mux.HandleFunc("POST /questions", s.answer)
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
 	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
@@ -208,6 +209,28 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		code := http.StatusBadRequest
 		if errors.Is(err, runtime.ErrAnswered) {
 			code = http.StatusConflict // another client answered first
+		}
+		fail(w, code, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// answer answers a flow's question: {"key": "...", "answer": "<one of its
+// options>"}. 409 when it was answered already.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Key    string `json:"key"`
+		Answer string `json:"answer"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Key == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"key": "...", "answer": "..."}`))
+		return
+	}
+	if err := s.rt.Answer(r.Context(), in.Key, in.Answer); err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, runtime.ErrAnswered) {
+			code = http.StatusConflict
 		}
 		fail(w, code, err)
 		return

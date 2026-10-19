@@ -75,6 +75,7 @@ type flowRun struct {
 	agents int
 	usage  msg.Usage
 	tools  int
+	asks   int
 	// policy: the session agent's rules, loaded at the first tool call.
 	policy *Agent
 	phase  string
@@ -189,6 +190,8 @@ func (r *flowRun) builtins() starlark.StringDict {
 		"agent":    starlark.NewBuiltin("agent", r.agent),
 		"parallel": starlark.NewBuiltin("parallel", r.parallel),
 		"tool":     starlark.NewBuiltin("tool", r.tool),
+		"ask":      starlark.NewBuiltin("ask", r.ask),
+		"decide":   starlark.NewBuiltin("decide", r.decide),
 		"phase":    starlark.NewBuiltin("phase", r.setPhase),
 	}
 }
@@ -201,9 +204,118 @@ func (r *flowRun) fail(err error) error {
 
 // outcome is what a primitive returns: ok, its output, and its error.
 func outcome(ok bool, output, errText string) starlark.Value {
+	return valued(ok, output, errText, starlark.None)
+}
+
+// valued is an outcome with a value (an answer, a decision).
+func valued(ok bool, output, errText string, value starlark.Value) starlark.Value {
 	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
-		"ok": starlark.Bool(ok), "output": starlark.String(output), "error": starlark.String(errText),
+		"ok": starlark.Bool(ok), "output": starlark.String(output), "error": starlark.String(errText), "value": value,
 	})
+}
+
+// strings is a Starlark list of strings, or an error naming what of fn it
+// is.
+func stringList(fn, what string, v starlark.Value) ([]string, error) {
+	list, ok := v.(*starlark.List)
+	if !ok {
+		return nil, fmt.Errorf("%s: %s must be a list of strings", fn, what)
+	}
+	out := make([]string, list.Len())
+	for i := range out {
+		s, ok := starlark.AsString(list.Index(i))
+		if !ok || s == "" {
+			return nil, fmt.Errorf("%s: %s[%d] must be a string", fn, what, i)
+		}
+		out[i] = s
+	}
+	return out, nil
+}
+
+// ask(question, options=["Yes", "No"]): puts the question to the user and
+// waits for the answer (the process may stop meanwhile, invariant 7); its
+// value is the option chosen.
+func (r *flowRun) ask(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var question string
+	var opts starlark.Value = starlark.NewList([]starlark.Value{starlark.String("Yes"), starlark.String("No")})
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "question", &question, "options?", &opts); err != nil {
+		return nil, err
+	}
+	options, err := stringList("ask", "options", opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(options) < 2 {
+		return nil, fmt.Errorf("ask: give at least two options")
+	}
+	r.asks++
+	in := FlowAskInput{ID: fmt.Sprintf("ask_%d_%d", r.in.N, r.asks), Question: question, Options: options}
+	if _, err := kairo.Call[bool](r.ctx, ActFlowAsk, in); err != nil {
+		return nil, r.fail(err)
+	}
+	a, err := kairo.WaitFor[FlowAnswer](r.ctx, SignalAnswerPrefix+in.ID)
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	return valued(true, a.Option, "", starlark.String(a.Option)), nil
+}
+
+// decide(prompt, type="bool", choices=None): the model's decision, typed
+// (design 6.3): True or False, a number, or one of choices. Its value is
+// the decision; a decision the model would not make is ok False.
+func (r *flowRun) decide(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	in := DecideInput{Dir: r.in.Dir, Engine: r.in.Engine, Model: r.in.Model, Type: DecideBool}
+	var choices starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "prompt", &in.Prompt, "type?", &in.Type, "choices?", &choices); err != nil {
+		return nil, err
+	}
+	switch in.Type {
+	case DecideBool, DecideNumber:
+	case DecideChoice:
+		var err error
+		if in.Choices, err = stringList("decide", "choices", choices); err != nil {
+			return nil, err
+		}
+		if len(in.Choices) < 2 {
+			return nil, fmt.Errorf("decide: give at least two choices")
+		}
+	default:
+		return nil, fmt.Errorf("decide: type is bool, number or choice, not %q", in.Type)
+	}
+	// The prompt is stored, and travels by hash (invariant 5).
+	h, err := kairo.Call[string](r.ctx, ActFlowPut, FlowPutInput{Role: string(msg.User), Text: in.Prompt})
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	in.Prompt = h
+	out, err := kairo.Call[DecideOutput](r.ctx, ActFlowDecide, in)
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	if err := r.spend(out.Usage); err != nil {
+		return nil, err
+	}
+	if !out.OK {
+		return valued(false, "", out.Error, starlark.None), nil
+	}
+	var v any
+	if err := json.Unmarshal(out.Value, &v); err != nil {
+		return valued(false, "", "the decision is not JSON: "+err.Error(), starlark.None), nil
+	}
+	switch x := v.(type) {
+	case bool:
+		return valued(true, string(out.Value), "", starlark.Bool(x)), nil
+	case float64:
+		// A whole number is an int while it is exactly one (|x| < 2^53):
+		// past that, converting it would differ from machine to machine.
+		if x == float64(int64(x)) && x < 1<<53 && x > -(1<<53) {
+			return valued(true, string(out.Value), "", starlark.MakeInt64(int64(x))), nil
+		}
+		return valued(true, string(out.Value), "", starlark.Float(x)), nil
+	case string:
+		return valued(true, x, "", starlark.String(x)), nil
+	}
+	return valued(false, "", "a decision of no known type: "+string(out.Value), starlark.None), nil
 }
 
 // agentSpec is one agent to run: its definition's name and its prompt.

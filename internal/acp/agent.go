@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -36,6 +37,7 @@ type Backend interface {
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
+	Answer(ctx context.Context, key, option string) error
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
 }
 
@@ -451,9 +453,9 @@ func (a *agent) event(session string, ev runtime.Event) {
 		a.update(session, toolCall(ev.Call, ev.Tool, ev.Input, "in_progress"))
 	case runtime.EventToolEnd:
 		a.update(session, toolResult(ev.Call, ev.Tool, ev.Output, ev.IsError))
-	case runtime.EventApprovalRequested, runtime.EventReviewRequested:
+	case runtime.EventApprovalRequested, runtime.EventReviewRequested, runtime.EventQuestionRequested:
 		a.ask(session, *ev.Pending)
-	case runtime.EventApprovalResolved, runtime.EventReviewResolved:
+	case runtime.EventApprovalResolved, runtime.EventReviewResolved, runtime.EventQuestionResolved:
 		a.mu.Lock()
 		if cancel := a.asks[ev.Key]; cancel != nil {
 			cancel() // answered elsewhere: the client's request is withdrawn
@@ -483,7 +485,19 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	}
 	answers := map[string]bool{"allow_once": true, "reject_once": false}
 	title := strings.TrimSpace(p.Tool + " " + p.Subject)
-	if p.Kind == "review" {
+	question := p.Kind == runtime.KindQuestion
+	kind := toolKind(p.Tool)
+	if question {
+		// A flow's question (ADR 0003): its options, each of a reject kind
+		// for the reason a review's are (a client that allows by itself
+		// must not answer for the user).
+		options, answers = nil, nil
+		for i, o := range p.Options {
+			id := fmt.Sprintf("answer_%d", i)
+			options = append(options, map[string]any{"optionId": id, "name": o, "kind": "reject_once"})
+		}
+		title, kind = p.Subject, "think"
+	} else if p.Kind == "review" {
 		// Neither option is of an allow kind: a client that allows tool
 		// calls by itself must not say a call took effect (invariant 4).
 		options = []map[string]any{
@@ -504,11 +518,11 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		// this id yet.
 		call = p.Key
 		a.update(session, map[string]any{"sessionUpdate": "tool_call", "toolCallId": call, "title": title,
-			"kind": toolKind(p.Tool), "status": "pending"})
+			"kind": kind, "status": "pending"})
 	}
 	params := map[string]any{
 		"sessionId": session,
-		"toolCall":  map[string]any{"toolCallId": call, "title": title, "kind": toolKind(p.Tool), "status": "pending"},
+		"toolCall":  map[string]any{"toolCallId": call, "title": title, "kind": kind, "status": "pending"},
 		"options":   options,
 	}
 	a.wg.Add(1)
@@ -529,8 +543,21 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		if err := a.c.call(ctx, "session/request_permission", params, &resp); err != nil {
 			return // withdrawn, or the client went away: it still waits in kairo
 		}
+		if resp.Outcome.Outcome != "selected" {
+			return
+		}
+		if question {
+			var i int
+			if _, err := fmt.Sscanf(resp.Outcome.OptionID, "answer_%d", &i); err != nil || i < 0 || i >= len(p.Options) {
+				return // not an answer offered: it still waits in kairo
+			}
+			if err := a.b.Answer(a.ctx, p.Key, p.Options[i]); err != nil && !errors.Is(err, runtime.ErrAnswered) {
+				a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
+			}
+			return
+		}
 		ok, offered := answers[resp.Outcome.OptionID]
-		if resp.Outcome.Outcome != "selected" || !offered {
+		if !offered {
 			return
 		}
 		if err := a.b.Approve(a.ctx, p.Key, ok, ""); err != nil && !errors.Is(err, runtime.ErrAnswered) {

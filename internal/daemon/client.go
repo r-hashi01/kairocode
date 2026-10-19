@@ -274,6 +274,17 @@ func (c *Client) Approve(ctx context.Context, key string, ok bool, reason string
 	return err
 }
 
+// Answer answers a flow's question with one of its options. Only the
+// first answer goes through: a later one returns runtime.ErrAnswered.
+func (c *Client) Answer(ctx context.Context, key, option string) error {
+	err := c.do(ctx, "POST", "/questions", map[string]any{"key": key, "answer": option}, nil)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusConflict {
+		return runtime.ErrAnswered
+	}
+	return err
+}
+
 // Events follows the session's events (GET /sessions/{id}/events): first
 // what waits for a person, then what happens. The channel closes when ctx
 // ends or the stream does (the daemon stopped, or this client fell

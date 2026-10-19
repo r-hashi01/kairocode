@@ -259,6 +259,9 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, flowLoad)
 	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
+	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,
+		func(*kairo.TaskContext, workflows.FlowAskInput) (bool, error) { return true, nil }) // recorded: Pending reads it
+	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, kairo.Timeout(10*time.Minute))
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
 	kairo.Action(r.K, workflows.ActToolDenied, kairo.Unprotected, r.toolDenied)

@@ -89,6 +89,10 @@ func (l *local) Flows(ctx context.Context, s string) ([]runtime.FlowInfo, error)
 	return l.r.Flows(ctx, s)
 }
 
+func (l *local) Answer(ctx context.Context, key, option string) error {
+	return l.r.Answer(ctx, key, option)
+}
+
 func (l *local) RunFlow(ctx context.Context, s, name, args string) (int, error) {
 	return l.r.RunFlow(ctx, s, name, args)
 }
@@ -912,5 +916,61 @@ func TestACPFlow(t *testing.T) {
 	}
 	if got != "wrote: True" {
 		t.Fatalf("/flow note: %q", got)
+	}
+}
+
+// A flow's question is asked with session/request_permission: the question
+// as its title, its options to choose from, none of a kind a client would
+// choose by itself; the option chosen is the answer (ADR 0003).
+func TestACPFlowQuestion(t *testing.T) {
+	b, ws := setup(t)
+	if err := os.MkdirAll(filepath.Join(ws, runtime.FlowsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, runtime.FlowsDir, "plan.star"),
+		[]byte("def main(input):\n    return \"chose \" + ask(\"Which way?\", options = [\"left\", \"right\"]).value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	id := prompt(c, s, "/flow plan")
+	req, _ := c.until(isMethod("session/request_permission"))
+	var p struct {
+		ToolCall struct {
+			Title string `json:"title"`
+			Kind  string `json:"kind"`
+		} `json:"toolCall"`
+		Options []struct {
+			OptionID string `json:"optionId"`
+			Name     string `json:"name"`
+			Kind     string `json:"kind"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.ToolCall.Title != "Which way?" || p.ToolCall.Kind != "think" || len(p.Options) != 2 || p.Options[1].Name != "right" {
+		t.Fatalf("request %s", req.Params)
+	}
+	for _, o := range p.Options {
+		if strings.HasPrefix(o.Kind, "allow") {
+			t.Fatalf("option %s is of kind %s", o.Name, o.Kind)
+		}
+	}
+	allow(c, req, p.Options[1].OptionID)
+	_, before := c.until(isResponse(id))
+	got := ""
+	for _, m := range before {
+		if m.Method == "session/update" {
+			if u := updateOf(t, m); u.SessionUpdate == "agent_message_chunk" {
+				got += u.text()
+			}
+		}
+	}
+	if got != "chose right" {
+		t.Fatalf("reply %q", got)
 	}
 }

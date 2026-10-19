@@ -51,6 +51,11 @@ const (
 	ActFlowLoad = "flow.load"
 	ActFlowPut  = "flow.put"
 	ActFlowText = "flow.text"
+	// ActFlowAsk records a question a flow puts to the user, before it
+	// waits for the answer; ActFlowDecide has the model decide, typed
+	// (design 6.3).
+	ActFlowAsk    = "flow.ask"
+	ActFlowDecide = "flow.decide"
 	// ActHistoryCancelled adds a turn the user stopped to the
 	// conversation: what they asked, and a note that it was stopped (ADR
 	// 0011).
@@ -75,6 +80,9 @@ const (
 	// SignalApprovePrefix + a call's id is the signal that answers its
 	// request for approval.
 	SignalApprovePrefix = "approve/"
+	// SignalAnswerPrefix + a question's id is the signal that answers a
+	// flow's ask() (ADR 0003).
+	SignalAnswerPrefix = "answer/"
 	// ActToolPrefix + a tool's name is that tool's action. A tool that writes
 	// a file has two instead (design 3.1): ActToolPrefix + name +
 	// ActPlanSuffix works the write out, and ActFileApply makes it.
@@ -372,6 +380,46 @@ type PermissionOutput struct {
 type Approval struct {
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// FlowAskInput is a question a flow puts to the user: one of Options is
+// the answer.
+type FlowAskInput struct {
+	ID       string   `json:"id"`
+	Question string   `json:"question"`
+	Options  []string `json:"options"`
+}
+
+// FlowAnswer is the user's answer to a flow's question.
+type FlowAnswer struct {
+	Option string `json:"option"`
+}
+
+// Kinds of a decision (decide()).
+const (
+	DecideBool   = "bool"
+	DecideNumber = "number"
+	DecideChoice = "choice"
+)
+
+// DecideInput is a decision the model makes: of Type, from Choices for a
+// choice. Prompt is the stored message that asks it, by hash (as a model
+// call's input is, invariant 5).
+type DecideInput struct {
+	Dir     string   `json:"dir"`
+	Engine  string   `json:"engine,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	Prompt  string   `json:"prompt"`
+	Type    string   `json:"type"`
+	Choices []string `json:"choices,omitempty"`
+}
+
+// DecideOutput is the decision, as JSON of its type; or why there is none.
+type DecideOutput struct {
+	OK    bool            `json:"ok"`
+	Value json.RawMessage `json:"value,omitempty"`
+	Error string          `json:"error,omitempty"`
+	Usage msg.Usage       `json:"usage"`
 }
 
 type DeniedInput struct {
