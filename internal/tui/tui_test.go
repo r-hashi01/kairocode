@@ -103,6 +103,12 @@ type fakeAgent struct {
 	loaded   string
 	prompts  []string
 	turn     []acp.Update
+	cancels  []string
+}
+
+func (a *fakeAgent) Cancel(session string) error {
+	a.cancels = append(a.cancels, session)
+	return nil
 }
 
 func (a *fakeAgent) NewSession(ctx context.Context, cwd string) (string, error) {
@@ -412,5 +418,24 @@ func TestTheme(t *testing.T) {
 	}
 	if warn.GetForeground() == accent.GetForeground() {
 		t.Fatal("a caution in kairo's own colour")
+	}
+}
+
+// Esc during a turn asks for it to stop (ADR 0011); a turn that stopped so
+// says what became of the request. With no turn, Esc does nothing.
+func TestEscStopsTheTurn(t *testing.T) {
+	d, a := start(t, Options{})
+	d.send(key("esc"))
+	if len(a.cancels) != 0 {
+		t.Fatal("Esc with no turn asked to stop one")
+	}
+	d.m.running = true
+	d.send(key("esc"))
+	if len(a.cancels) != 1 || a.cancels[0] != "s/0123456789abcdef" || !strings.Contains(d.view(), "Stopping…") {
+		t.Fatalf("cancels %q\n%s", a.cancels, d.view())
+	}
+	d.send(turnDoneMsg{stop: "cancelled"})
+	if !strings.Contains(d.out(), "Stopped. What you asked stays in the conversation.") || d.m.running {
+		t.Fatalf("out\n%s", d.out())
 	}
 }

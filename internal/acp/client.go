@@ -185,6 +185,12 @@ func (cl *Client) LoadSession(ctx context.Context, session, cwd string) error {
 	return cl.c.call(ctx, "session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}}, nil)
 }
 
+// Cancel asks the agent to stop the session's turn under way: its Prompt
+// then answers "cancelled".
+func (cl *Client) Cancel(session string) error {
+	return cl.c.notify("session/cancel", map[string]any{"sessionId": session})
+}
+
 // Prompt runs a turn, and returns why it stopped (ACP's stopReason). The
 // turn's updates have all been given to the handler when it returns.
 func (cl *Client) Prompt(ctx context.Context, session, text string) (string, error) {

@@ -207,3 +207,62 @@ func isolatedHome() string {
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	return home
 }
+
+// POST /sessions/{id}/cancel stops the turn under way (ADR 0011): the turn
+// answers "stopped": "cancelled"; with no turn running it is 409.
+func TestCancelOverHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	hold := filepath.Join(t.TempDir(), "held")
+	rt, err := runtime.Open(ctx, runtime.Config{
+		DB:       filepath.Join(t.TempDir(), "k.db"),
+		Provider: &provider.Fake{HoldAt: 0, HoldFile: hold, Script: []provider.FakeReply{{Text: "never said"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	srv := httptest.NewServer(New(rt, "secret", func() string { return "one" }))
+	defer srv.Close()
+	call := func(method, path string, body any) (int, map[string]any) {
+		t.Helper()
+		var b bytes.Buffer
+		if body != nil {
+			_ = json.NewEncoder(&b).Encode(body)
+		}
+		req, _ := http.NewRequestWithContext(ctx, method, srv.URL+path, &b)
+		req.Header.Set("Authorization", "Bearer secret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	call("POST", "/sessions", map[string]string{"dir": t.TempDir()})
+	if code, _ := call("POST", "/sessions/one/cancel", nil); code != http.StatusConflict {
+		t.Fatalf("cancel with no turn: %d", code)
+	}
+	call("POST", "/sessions/one/messages", map[string]string{"text": "hi"})
+	for {
+		if _, err := os.Stat(hold); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the model call never started")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if code, out := call("POST", "/sessions/one/cancel", nil); code != http.StatusAccepted || out["turn"] != float64(0) {
+		t.Fatalf("cancel: %d %v", code, out)
+	}
+	if code, out := call("GET", "/sessions/one/turns/0", nil); code != http.StatusOK || out["stopped"] != "cancelled" {
+		t.Fatalf("the stopped turn: %d %v", code, out)
+	}
+	if code, _ := call("POST", "/sessions/one/cancel", nil); code != http.StatusConflict {
+		t.Fatalf("cancel after it stopped: %d", code)
+	}
+}

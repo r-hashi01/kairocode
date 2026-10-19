@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -55,7 +56,7 @@ type Config struct {
 	Now func() time.Time
 
 	// onlyVersion, in tests, declares the session and the turn at that old
-	// version only ("2" or "3"), as a build of that version did.
+	// version only ("2", "3" or "4"), as a build of that version did.
 	onlyVersion string
 }
 
@@ -233,12 +234,18 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 }
 
 func (r *Runtime) declare() {
-	if v := r.cfg.onlyVersion; v != "" {
+	switch v := r.cfg.onlyVersion; v {
+	case workflows.SessionVersion4:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV4, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+	case workflows.SessionVersion3, workflows.SessionVersion2:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV3, kairo.WorkflowVersion(v))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV3, kairo.WorkflowVersion(v))
-	} else {
+	default:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+		// Version 4 finishes as it started: a stopped turn is not kept.
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV4, kairo.WorkflowVersion(workflows.SessionVersion4), kairo.Draining())
 		// Versions 3 and 2 finish with the functions they started with.
 		for _, v := range []string{workflows.SessionVersion3, workflows.SessionVersion2} {
 			kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV3, kairo.WorkflowVersion(v), kairo.Draining())
@@ -260,6 +267,7 @@ func (r *Runtime) declare() {
 		func(t *kairo.TaskContext, in workflows.HistoryExtendInput) (string, error) {
 			return r.Store.Extend(t, in.Prev, in.Messages)
 		})
+	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
 	kairo.Action(r.K, workflows.ActToolMissing, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {
 			call, err := r.toolCall(t, in)
@@ -528,7 +536,7 @@ func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if info.Version != workflows.SessionVersion {
+	if info.Version != workflows.SessionVersion && info.Version != workflows.SessionVersion4 {
 		return 0, ErrNoUndo
 	}
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: kind})
@@ -547,6 +555,78 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 		return 0, err
 	}
 	return n, nil
+}
+
+// stoppedNote is what the conversation says of a turn the user stopped
+// (ADR 0011), in the assistant's place: the next turn's model reads it.
+const stoppedNote = "[The user stopped this turn before it finished. Tool calls made in it may have changed the working files; look before going on.]"
+
+// historyCancelled keeps a stopped turn in the conversation: the message
+// it was asked with, and the note.
+func (r *Runtime) historyCancelled(t *kairo.TaskContext, in workflows.HistoryCancelledInput) (string, error) {
+	note, err := r.Store.PutMessage(t, msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.Text, Text: stoppedNote}}})
+	if err != nil {
+		return "", err
+	}
+	return r.Store.Extend(t, in.Prev, []string{in.Message, note})
+}
+
+// StoppedCancelled is why a turn the user stopped ended, as clients are
+// told it (a turn's Stopped).
+const StoppedCancelled = "cancelled"
+
+// ErrNoTurnToCancel: the session's last turn has ended (or none was sent).
+var ErrNoTurnToCancel = errors.New("no turn is running")
+
+// Cancel stops the session's turn under way (ADR 0011): kairo cancels it,
+// with what it waits for and the steps under way. It returns the turn's
+// number. Turns run one at a time: the one under way is the one not ended,
+// whatever was sent after it. With none under way, the last turn sent is
+// waited for if it has not begun (a stop pressed just after a send).
+func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
+	for {
+		changed := r.changes()
+		kids, err := r.K.Children(ctx, session)
+		if err != nil {
+			return 0, err
+		}
+		for _, k := range kids {
+			if k.Workflow == workflows.Turn && !k.Finished() {
+				var w struct {
+					Input workflows.TurnInput `json:"input"`
+				}
+				_ = json.Unmarshal(k.Input, &w)
+				// kairo-gap #22: were the turn's function to return between
+				// the look above and this cancel, kairo would record the run
+				// cancelled while the session had its value.
+				return w.Input.N, r.K.Cancel(ctx, k.RunID)
+			}
+		}
+		r.sendMu.Lock()
+		n, err := r.sent(ctx, session)
+		r.sendMu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			return 0, ErrNoTurnToCancel
+		}
+		if _, ok, err := r.TurnRun(ctx, session, n-1); err != nil || ok {
+			return n - 1, cmp.Or(err, ErrNoTurnToCancel) // it has ended
+		}
+		info, err := r.K.Get(ctx, session)
+		if err != nil {
+			return 0, err
+		}
+		if info.Finished() { // the last event closed it
+			return 0, ErrNoTurnToCancel
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
 }
 
 // CloseSession ends a session after the turns it has been sent.

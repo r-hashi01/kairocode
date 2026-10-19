@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/msg"
@@ -46,6 +49,9 @@ func (l *local) Send(ctx context.Context, s, text string) (int, error) { return 
 
 func (l *local) WaitTurn(ctx context.Context, s string, n int) (daemon.Turn, error) {
 	out, err := l.r.WaitTurn(ctx, s, n)
+	if errors.Is(err, kairo.ErrCancelled) { // as the daemon's server answers it
+		return daemon.Turn{Stopped: runtime.StoppedCancelled}, nil
+	}
 	if err != nil {
 		return daemon.Turn{}, err
 	}
@@ -76,6 +82,8 @@ func (l *local) Commands(ctx context.Context, s string) ([]opencode.Command, err
 func (l *local) RunCommand(ctx context.Context, s, name, args string) (int, error) {
 	return l.r.RunCommand(ctx, s, name, args)
 }
+
+func (l *local) Cancel(ctx context.Context, s string) (int, error) { return l.r.Cancel(ctx, s) }
 
 // writeScript: the model writes notes.txt, then says done.
 var writeScript = []provider.FakeReply{
@@ -770,4 +778,46 @@ func isolatedHome() string {
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	return home
+}
+
+// session/cancel stops the turn (ADR 0011): here while it waits for
+// permission. The prompt answers "cancelled", the request for permission is
+// withdrawn, and the tool does not run.
+func TestACPCancel(t *testing.T) {
+	b, ws := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	id := prompt(c, s, "write notes")
+	req, _ := c.until(isMethod("session/request_permission"))
+	params, _ := json.Marshal(map[string]any{"sessionId": s})
+	c.send(message{Method: "session/cancel", Params: params})
+	// The withdrawal and the prompt's answer come in either order.
+	var withdrawn, answered bool
+	for !withdrawn || !answered {
+		m := c.next()
+		switch {
+		case m.Method == "$/cancel_request":
+			var cr struct {
+				RequestID json.RawMessage `json:"requestId"`
+			}
+			if err := json.Unmarshal(m.Params, &cr); err != nil || string(cr.RequestID) != string(req.ID) {
+				t.Fatalf("withdrew %s, want %s (%v)", cr.RequestID, req.ID, err)
+			}
+			withdrawn = true
+		case isResponse(id)(m):
+			var r struct {
+				StopReason string `json:"stopReason"`
+			}
+			if err := json.Unmarshal(m.Result, &r); err != nil || r.StopReason != "cancelled" {
+				t.Fatalf("prompt: %s %v", m.Result, err)
+			}
+			answered = true
+		}
+	}
+	if _, err := os.Stat(filepath.Join(ws, "notes.txt")); err == nil {
+		t.Fatal("the tool ran")
+	}
 }

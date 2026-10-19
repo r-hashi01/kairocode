@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -483,9 +484,12 @@ func (e *events) turn(session, run string, started bool) {
 	ev := Event{Type: EventTurnEnd, Turn: run, N: in.N}
 	// The run has settled: Await returns its result at once.
 	out, err := kairo.Await[workflows.TurnOutput](e.ctx, e.r.K, run)
-	if err != nil {
+	switch {
+	case errors.Is(err, kairo.ErrCancelled): // stopped by the user (ADR 0011)
+		ev.Stopped = StoppedCancelled
+	case err != nil:
 		ev.Error = err.Error()
-	} else {
+	default:
 		ev.Steps, ev.Stopped, ev.Usage = out.Steps, out.Stopped, &out.Usage
 		if out.Reply != "" {
 			if ev.Reply, err = e.r.Reply(e.ctx, out.Reply); err != nil {

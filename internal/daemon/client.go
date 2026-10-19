@@ -345,6 +345,20 @@ func (c *Client) Usage(ctx context.Context, session string) (runtime.SessionUsag
 // Undo starts a turn that puts the working files back as they were before
 // the session's last turn in effect; Redo puts back what an undo took away.
 // They return the turn's number.
+// Cancel stops the session's last turn (ADR 0011). It returns the turn's
+// number, or runtime.ErrNoTurnToCancel when it has ended.
+func (c *Client) Cancel(ctx context.Context, session string) (int, error) {
+	var out struct {
+		Turn int `json:"turn"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/cancel", nil, &out)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusConflict {
+		return 0, runtime.ErrNoTurnToCancel
+	}
+	return out.Turn, err
+}
+
 func (c *Client) Undo(ctx context.Context, session string) (int, error) {
 	return c.undo(ctx, session, "undo")
 }

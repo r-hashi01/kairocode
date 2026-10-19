@@ -14,9 +14,13 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "4"
+	SessionVersion = "5"
 	Turn           = "turn"
 	TurnVersion    = "4"
+	// SessionVersion4 is the version before a turn stopped by the user
+	// was kept in the conversation (ADR 0011). Its runs are finished by
+	// RunSessionV4: a stopped turn leaves the conversation as it was.
+	SessionVersion4 = "4"
 	// SessionVersion3 and TurnVersion3 are the versions before snapshots
 	// and undo (design 7). Their runs are finished by RunSessionV3 and
 	// RunTurnV3, the functions of that version.
@@ -37,6 +41,10 @@ const (
 	ActAgentLoad     = "agent.load"
 	ActModel         = "model"
 	ActHistoryExtend = "history.extend"
+	// ActHistoryCancelled adds a turn the user stopped to the
+	// conversation: what they asked, and a note that it was stopped (ADR
+	// 0011).
+	ActHistoryCancelled = "history.cancelled"
 	// ActSnapshot records the working files as a tree, and ActRestore puts
 	// them back as a tree has them (design 7).
 	ActSnapshot = "snapshot"
@@ -360,6 +368,13 @@ type ToolOutput struct {
 type HistoryExtendInput struct {
 	Prev     string   `json:"prev,omitempty"`
 	Messages []string `json:"messages"`
+}
+
+// HistoryCancelledInput: the conversation before the stopped turn, and the
+// message it was asked with.
+type HistoryCancelledInput struct {
+	Prev    string `json:"prev,omitempty"`
+	Message string `json:"message"`
 }
 
 // ClaudeTurnInput is a turn as Claude Code runs it: the prompt and the

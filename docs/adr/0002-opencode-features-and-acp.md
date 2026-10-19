@@ -113,7 +113,6 @@ KairoCode の設定は KairoCode の置き場（`kairocode.json`、`.kairocode/`
   - ACP の通知は、受け取った順に、続く応答より前に処理するようにしました（`TestClientKeepsTheOrderOfUpdates`）。
   - テストは `TestChat`、`TestChatAsks`、`TestNoCommandIsTheChat`、`TestClientPermission` です。
 - まだ入れていないもの:
-  - `session/cancel`（#11。対話で Ctrl-C を押すと、対話は抜けるが、ターンはデーモンで続く）
   - `allow_always`（規則として記録する）
   - `plan`
   - 差分の表示（`tool_call` の `diff`）

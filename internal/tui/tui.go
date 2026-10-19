@@ -27,6 +27,8 @@ type Agent interface {
 	NewSession(ctx context.Context, cwd string) (string, error)
 	LoadSession(ctx context.Context, session, cwd string) error
 	Prompt(ctx context.Context, session, text string) (string, error)
+	// Cancel asks for the turn under way to stop (ADR 0011).
+	Cancel(session string) error
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -331,6 +333,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		switch {
 		case msg.err != nil && m.ctx.Err() == nil:
 			m.print(bad.Render("  ⎿  " + msg.err.Error()))
+		case msg.stop == "cancelled":
+			m.print(warn.Render("  ⎿  Stopped. What you asked stays in the conversation."))
 		case msg.stop != "" && msg.stop != "end_turn":
 			m.print(warn.Render("  ⎿  stopped: " + msg.stop))
 		}
@@ -583,7 +587,11 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 	case "esc":
 		if m.running {
-			m.note = "Stopping a turn comes with issue #11 (ADR 0011)"
+			if err := m.a.Cancel(m.session); err != nil {
+				m.note = "Could not stop the turn: " + err.Error()
+			} else {
+				m.note = "Stopping…"
+			}
 		}
 		return nil
 	case "tab":
@@ -665,6 +673,7 @@ func (m *model) help() string {
 	}
 	lines = append(lines, bold.Render("Keys"),
 		"  enter          send (during a turn: after it)",
+		"  esc            stop the turn",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
 		"  tab            complete a command",
 		"  ctrl+c         clear the input; twice to leave",
@@ -733,7 +742,7 @@ func (m *model) View() tea.View {
 		}
 		if m.running {
 			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +
-				faint.Render(fmt.Sprintf(" (%ds · esc to interrupt)", int(time.Since(m.began).Seconds()))) + "\n")
+				faint.Render(fmt.Sprintf(" (%ds · esc to stop)", int(time.Since(m.began).Seconds()))) + "\n")
 		}
 		edge := accent
 		if m.running {

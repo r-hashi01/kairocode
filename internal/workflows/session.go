@@ -47,11 +47,24 @@ type done struct {
 	before, after string
 }
 
-// RunSession is a session of version 4: RunSessionV3, with undo and redo
+// RunSessionV4 is a session of version 4: RunSessionV3, with undo and redo
 // (design 7). What an undo or a redo restores is worked out from the turns'
 // recorded outputs alone (their snapshots), so a resumed session undoes the
 // same turns.
+func RunSessionV4(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, false)
+}
+
+// RunSession is a session of version 5: RunSessionV4, and a turn the user
+// stopped stays in the conversation, with a note that it was stopped (ADR
+// 0011): the model knows what was asked, and that tool calls may have
+// changed the files.
 func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true)
+}
+
+// runSession is RunSessionV4, and with keepStopped RunSession.
+func runSession(ctx *kairo.Context, in SessionInput, keepStopped bool) (SessionOutput, error) {
 	head := ""
 	// applied: turns in effect, the last undone first; undone: turns undone,
 	// the last redone first. A new turn clears undone.
@@ -90,9 +103,23 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 		out, err := kairo.Child[TurnOutput](ctx, Turn, tin)
 		if err != nil {
 			// As in RunSessionV3: a recorded failure or cancellation leaves
-			// things as they were; anything else is not an outcome.
+			// things as they were; anything else is not an outcome. From
+			// version 5, a message's turn the user stopped is kept with
+			// its note. Stopped means the turn's own run was cancelled: a
+			// turn that failed with a cancelled call inside is a failure,
+			// and is told apart by its type alone (live, its error wraps
+			// the call's; read back, it does not).
 			var failed *kairo.WorkflowError
-			if errors.As(err, &failed) || errors.Is(err, kairo.ErrCancelled) {
+			isFailure := errors.As(err, &failed)
+			switch {
+			case keepStopped && !isFailure && errors.Is(err, kairo.ErrCancelled) && ev.Kind == EventMessage:
+				h, err := kairo.Call[string](ctx, ActHistoryCancelled, HistoryCancelledInput{Prev: head, Message: ev.Message})
+				if err != nil {
+					return SessionOutput{Turns: n, Head: head}, err
+				}
+				head = h
+				continue
+			case isFailure || errors.Is(err, kairo.ErrCancelled):
 				continue
 			}
 			return SessionOutput{Turns: n, Head: head}, err

@@ -43,6 +43,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/commands", s.runCommand)
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
+	s.mux.HandleFunc("POST /sessions/{id}/cancel", s.cancel)
 	return s
 }
 
@@ -128,6 +129,20 @@ func (s *Server) undo(redo bool) http.HandlerFunc {
 	}
 }
 
+// cancel stops the session's last turn (ADR 0011); 409 when it has ended.
+func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
+	n, err := s.rt.Cancel(r.Context(), sessionOf(r))
+	if errors.Is(err, runtime.ErrNoTurnToCancel) {
+		fail(w, http.StatusConflict, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
 func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 	if err := s.rt.CloseSession(r.Context(), sessionOf(r)); err != nil {
 		fail(w, http.StatusInternalServerError, err)
@@ -145,6 +160,10 @@ func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.rt.WaitTurn(r.Context(), sessionOf(r), n)
+	if errors.Is(err, kairo.ErrCancelled) { // stopped by the user: an end, not a failure
+		writeJSON(w, http.StatusOK, map[string]any{"stopped": runtime.StoppedCancelled})
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return

@@ -34,6 +34,7 @@ type Backend interface {
 	Redo(ctx context.Context, session string) (int, error)
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
+	Cancel(ctx context.Context, session string) (int, error)
 }
 
 // builtinCommands are the slash commands KairoCode itself has.
@@ -153,8 +154,22 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 	case "session/prompt":
 		return a.prompt(ctx, params)
 	case "session/cancel":
-		// Cancelling a turn is issue #11: until then the turn goes on.
-		a.o.Logger.Info("acp: session/cancel is not supported yet")
+		// The turn under way stops (ADR 0011); its session/prompt answers
+		// "cancelled". A notification: it does not hold up the messages
+		// after it while the daemon finds the turn.
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, invalid(err)
+		}
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			if _, err := a.b.Cancel(a.ctx, p.SessionID); err != nil && !errors.Is(err, runtime.ErrNoTurnToCancel) {
+				a.o.Logger.Warn("acp: cancelling the turn", "session", p.SessionID, "err", err)
+			}
+		}()
 		return nil, nil
 	}
 	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
@@ -238,6 +253,8 @@ func stopReason(stopped string) string {
 		return "max_turn_requests"
 	case "max_tokens", "refusal":
 		return stopped
+	case runtime.StoppedCancelled:
+		return "cancelled"
 	}
 	return "end_turn"
 }

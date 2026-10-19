@@ -59,3 +59,16 @@ kairo には `k.Cancel(ctx, id)` があります。実行と、その実行が�
 - **ターンの途中までのモデルの応答とツールの結果を残す:** claude に近くなります。ただし、取り消されたターンには結果の記録がありません。残すには、ターンが進むたびに会話を書き足す（ターンの形を変える）か、取り消された実行の呼び出しを読み出すアクションが要ります。まず書き添えから始めます。
 - **ワークフローの中のシグナルで止める（ターンがステップの合間に見る）:** 走っているモデルの呼び出しや長いコマンドが、終わるまで止まりません。
 - **途中で切った実の呼び出しを要確認にする:** 不変条件 4 の考え方には近くなります。ただし、自分で止めたものを「効いたか」と聞かれ、止めたのにターンが進みません。
+
+## 実装（2026-10-19、M2）
+
+- `workflows.RunSession`（版 5）と `RunSessionV4`（版 4、`Draining`）を、1 つの関数 `runSession` から作りました。違いは、止めたターンを `history.cancelled` で残すかどうかだけです。ターンの版（4）は変えていません。
+- `Runtime.Cancel` は、最後のターンの実行が現れるまで待ってから取り消します（送った直後の Esc も、そのターンを止める）。
+- 止めたターンの終わりは、失敗ではなく `stopped: "cancelled"` として伝えます（SSE の `turn.end`、`GET /sessions/{id}/turns/{n}`、ACP の `stopReason`）。
+- ACP の `session/cancel` は通知なので、デーモンへの取り消しは別の goroutine で行い、後に続くメッセージの読み取りを止めません。
+- **止めたターンかどうかは、エラーの型で決めます**（durability-reviewer の指摘）。ターンの実行そのものが取り消されたときだけ、`ErrCancelled` が `WorkflowError` の外で返ります。ターンの中の呼び出しが取り消されてターンが失敗したときは `WorkflowError` で、live ではその中に `ErrCancelled` が見えますが、読み直すと見えません。そこで「`WorkflowError` でなく、`ErrCancelled` である」ときだけを止めたターンとして扱い、live と再開で同じ道に入るようにしました（`TestCancelledCallIsAFailure`）。
+- **止めるのは、走っているターンです**（同じく指摘）。最後に送った出来事ではなく、終わっていないターンの実行を止めます。後ろに並んだメッセージは、止めた後に動きます（`TestCancelStopsTheTurnUnderWay`）。走っているターンがなく、送ったばかりのターンがまだ始まっていなければ、始まるのを待って止めます。
+- **残る隙間（kairo-gap #22）:** ターンの関数が成功で返った直後に取り消しが記録されると、kairo は完了を捨てて `cancelled` と記録します。live のセッションは値を受け取りますが、再開すると止めたターンとして読み直します。kairo の側で、完了と取り消しを排他にする必要があります（案: `docs/proposals/kairo-done-and-cancel.md`）。
+- undo と redo のターンを止めると、作業ファイルは途中まで戻った状態で残ります。書き添えはありません（メッセージのターンではないため）。次の undo の対象も変わりません。
+- 版 4 のセッションの undo も、引き続き受け付けます（undo の版の検査を「4 か 5」にした）。
+- テスト: `TestCancelTurn`（SSE の `turn.end` も）、`TestCancelledCallIsAFailure`、`TestCancelStopsTheTurnUnderWay`、`TestCancelWhileAwaitingApproval`、`TestCancelStopsARunningCommand`（bash のプロセスが消える。グループで止めないと落ちることを確かめた）、`TestCancelInAVersion4Session`、`TestCrashCancel`、`TestCancelOverHTTP`、`TestACPCancel`、`TestEscStopsTheTurn`。

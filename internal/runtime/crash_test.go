@@ -23,6 +23,10 @@ func TestMain(m *testing.M) {
 		crashChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_CANCEL_CHILD") == "1" {
+		crashCancelChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_UNDO_CHILD") == "1" {
 		crashUndoChild()
 		return
