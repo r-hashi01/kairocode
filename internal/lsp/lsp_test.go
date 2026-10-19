@@ -240,7 +240,8 @@ func TestStuckServer(t *testing.T) {
 		if got := m.Errors(context.Background(), []Server{cfg}, dir, file, big); got != "" {
 			t.Fatal(got)
 		}
-		if d := time.Since(start); d > 3*time.Second {
+		// Held until Wait, not longer: the server was stuck, not gone.
+		if d := time.Since(start); d < Wait/2 || d > 3*time.Second {
 			t.Fatalf("write %d took %v", i, d)
 		}
 	}

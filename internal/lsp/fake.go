@@ -50,7 +50,9 @@ func FakeServer() {
 			WriteMessage(os.Stdout, map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"capabilities": map[string]any{}}})
 		case "initialized":
 			if os.Getenv("KC_FAKE_LSP_STUCK") == "1" {
-				select {}
+				// Not select {}: with nothing else to run, Go would end the
+				// process as deadlocked.
+				time.Sleep(time.Hour)
 			}
 		case "shutdown":
 			WriteMessage(os.Stdout, map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": nil})
