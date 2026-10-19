@@ -23,6 +23,10 @@ func TestMain(m *testing.M) {
 		crashChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_FLOW_CHILD") == "1" {
+		crashFlowChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_CANCEL_CHILD") == "1" {
 		crashCancelChild()
 		return

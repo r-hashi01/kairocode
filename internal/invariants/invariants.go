@@ -35,6 +35,11 @@ var workflowImports = map[string]bool{
 	module + "/internal/permission":     true,
 	module + "/internal/plan":           true,
 	module + "/internal/tools":          true, // for the Def and Effect types
+	// Starlark (ADR 0003): a language with no clock, randomness or I/O,
+	// whose dicts keep their order; flows run in it inside the workflow.
+	"go.starlark.net/starlark":       true,
+	"go.starlark.net/starlarkstruct": true,
+	"go.starlark.net/syntax":         true,
 }
 
 // workflowImportPrefixes are allowed with everything below them.

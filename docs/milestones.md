@@ -93,7 +93,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 ## M3 サブエージェントと、人と出来事が始めるワークフロー
 
-状態: 未着手
+状態: 作業中
 
 中身: task（サブエージェント）。Starlark のフロー（ADR 0003: `.kairocode/workflows/<name>.star`、プリミティブ `agent`・`parallel`・`decide`・`tool`・`ask`・`phase`、ずれの検出、上限）。入口は `/flow <name>`、hook（`turn.end`、`tool.after`、`session.start`）、エージェントの `workflow:`。言葉から作る（`/flow new <説明>`）。端末のフローの図（作るとき、動いている間、`kairocode flow graph`・`show`・`stats`）と、図の上での変更。
 
@@ -101,15 +101,15 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 受け入れ条件:
 
-- [ ] `TestCrashWorkflowScriptResume`: 10 個の `agent` を `parallel` で並べたスクリプトを途中で強制終了して再開すると、終わった葉はやり直さない。
+- [x] `TestCrashWorkflowScriptResume`: 10 個の `agent` を `parallel` で並べたスクリプトを途中で強制終了して再開すると、終わった葉はやり直さない。
 - [ ] `TestWorkflowScriptDivergence`: 記録と違う呼び出しをするスクリプトで再開すると、実行せずに止まる。
-- [ ] `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。
+- [ ] `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。 → ステップ数とエージェントの数は `TestFlowMistakesAreReplies`。トークンが残り。
 - [ ] `TestTurnEndHookBlocks`: `turn.end` のフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
 - [ ] `TestWorkflowGraph`: フローの図が、順番、`if`、`parallel`、`for`、`def` の展開、`phase` を正しく表し、幅が足りないときはまとめ、木の図に切り替える。
 - [ ] `TestWorkflowLive`: 実行の木の状態が、図の箱の印と色、繰り返しの回に写る。`kairocode flow show <実行> --follow` が同じ図を出す。
 - [ ] `TestDraftFromWords`: `/flow new` で、モデルが書いたスクリプトが検査を通ってファイルになり、図で見え、`/flow <name>` で動く。入力欄から頼んだ変更で図が描き直される。
 - [ ] `TestEditOnTheChart`: 図の上で箱の中身を書き換える、消す、入れ替えると、スクリプトのその引数と文の並びだけが変わる。
-- [ ] 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。
+- [x] 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。（`TestFlowKeepsItsScript`）
 - [ ] リポジトリの hook が初めて走る前に、利用者に確認する。
 - [ ] エージェントの定義に `workflow:` を書くと、そのエージェントのターンがそのフローで進む。
 - [ ] 親を止めると、子も止まる（ADR 0011）。

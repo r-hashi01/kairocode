@@ -35,12 +35,15 @@ type Backend interface {
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
+	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
+	RunFlow(ctx context.Context, session, name, args string) (int, error)
 }
 
 // builtinCommands are the slash commands KairoCode itself has.
 var builtinCommands = []map[string]any{
 	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
 	{"name": "redo", "description": "Put back what the last undo took away"},
+	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them)", "input": map[string]any{"hint": "<name> [what to give it]"}},
 }
 
 // offerCommands tells the client the slash commands: KairoCode's, then the
@@ -52,7 +55,7 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		a.o.Logger.Warn("acp: the project's commands", "err", err)
 	}
 	for _, c := range cs {
-		if c.Name == "undo" || c.Name == "redo" {
+		if c.Name == "undo" || c.Name == "redo" || c.Name == "flow" {
 			continue // KairoCode's own
 		}
 		desc := c.Description
@@ -207,13 +210,23 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	}
 	prompt := strings.Join(text, "\n")
 	start := a.b.Send
-	undo := false
+	// quiet: no model speaks the turn's reply (an undo, a flow): it is sent
+	// whole when the turn ends.
+	quiet := false
 	name, args, _ := strings.Cut(strings.TrimSpace(prompt), " ")
 	switch {
 	case name == "/undo":
-		start, undo = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
+		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
 	case name == "/redo":
-		start, undo = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	case name == "/flow":
+		flow, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
+		if flow == "" { // the list, without a turn
+			return a.listFlows(ctx, p.SessionID)
+		}
+		start, quiet = func(ctx context.Context, s, _ string) (int, error) {
+			return a.b.RunFlow(ctx, s, flow, strings.TrimSpace(rest))
+		}, true
 	case strings.HasPrefix(name, "/"):
 		// A project's command; any other /word is the user's text.
 		cs, err := a.b.Commands(ctx, p.SessionID)
@@ -238,10 +251,36 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if err := w.wait(ctx, n); err != nil {
 		return nil, err
 	}
-	if undo { // no model speaks in an undo: what it did is the reply
+	if quiet {
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(turn.Reply)})
 	}
 	return map[string]any{"stopReason": stopReason(turn.Stopped)}, nil
+}
+
+// listFlows answers /flow alone: the flows there are, as the agent's
+// message.
+func (a *agent) listFlows(ctx context.Context, session string) (any, error) {
+	fs, err := a.b.Flows(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	text := "There are no flows yet: they are .kairocode/workflows/<name>.star."
+	if len(fs) > 0 {
+		lines := []string{"Flows (/flow <name> [what to give it]):"}
+		for _, f := range fs {
+			lines = append(lines, "- "+f.Name+describe(f.Description))
+		}
+		text = strings.Join(lines, "\n")
+	}
+	a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+	return map[string]any{"stopReason": "end_turn"}, nil
+}
+
+func describe(d string) string {
+	if d == "" {
+		return ""
+	}
+	return ": " + d
 }
 
 // stopReason is ACP's name for why a turn stopped.
@@ -457,11 +496,12 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		title += " (" + p.Rule + ")"
 	}
 	call, known := "", false
-	if _, c, ok := strings.Cut(p.Key, "#"); ok && !strings.HasPrefix(c, workflows.MCPCallPrefix) {
+	if _, c, ok := strings.Cut(p.Key, "#"); ok && !strings.HasPrefix(c, workflows.MCPCallPrefix) && !strings.HasPrefix(c, workflows.FlowCallPrefix) {
 		call, known = c, true // the model's tool call, as in its tool_call
 	}
 	if !known {
-		// A review, or Claude Code's call: no tool_call has this id yet.
+		// A review, Claude Code's call or a flow's own: no tool_call has
+		// this id yet.
 		call = p.Key
 		a.update(session, map[string]any{"sessionUpdate": "tool_call", "toolCallId": call, "title": title,
 			"kind": toolKind(p.Tool), "status": "pending"})

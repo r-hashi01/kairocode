@@ -10,17 +10,27 @@ import (
 
 // RunTurn is one turn (design 5) of version 4: RunTurnV3 between two
 // snapshots of the working files, or, for an undo or a redo, a restore
-// (design 7).
+// (design 7). A flow's turn runs the flow between the snapshots instead
+// (ADR 0003), and a flow's agent is RunTurnV3 alone. Both are new fields of
+// the input: a turn without them makes the calls it always made.
 func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	if in.Undo != nil {
 		return runUndo(ctx, in)
+	}
+	if in.Sub {
+		return RunTurnV3(ctx, in)
 	}
 	snap := SnapshotInput{Dir: in.Dir, Session: in.Session, N: in.N, At: "start"}
 	before, err := kairo.Call[SnapshotOutput](ctx, ActSnapshot, snap)
 	if err != nil {
 		return TurnOutput{}, err
 	}
-	out, err := RunTurnV3(ctx, in)
+	var out TurnOutput
+	if in.Flow != nil {
+		out, err = runFlowTurn(ctx, in)
+	} else {
+		out, err = RunTurnV3(ctx, in)
+	}
 	if err != nil {
 		return TurnOutput{}, err
 	}
@@ -52,7 +62,7 @@ func runUndo(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 // recorded values: the agent's definition as loaded at the start, and the
 // model's replies.
 func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
-	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model})
+	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent, Sub: in.Sub, Engine: in.Engine, Model: in.Model})
 	if err != nil {
 		return TurnOutput{}, err
 	}
@@ -149,10 +159,17 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, error) {
 	out := TurnOutput{}
 	note := ""
+	// The Claude Code session is the KairoCode session's, so its turns
+	// share one conversation; a flow's agent has one of its own, from its
+	// turn's run, with no history and no other agent to stop.
+	session := in.Session
+	if in.Sub {
+		session = ctx.ID()
+	}
 	for round := 0; ; round++ {
 		r, err := kairo.Call[ClaudeTurnOutput](ctx, ActClaudeTurn, ClaudeTurnInput{
 			Note: note, Round: round,
-			Session: in.Session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
+			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message,
 			Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},
 		})

@@ -266,3 +266,54 @@ func TestCancelOverHTTP(t *testing.T) {
 		t.Fatalf("cancel after it stopped: %d", code)
 	}
 }
+
+// GET /sessions/{id}/flows lists the project's flows; POST runs one, and
+// its result is the turn's reply (ADR 0003).
+func TestFlowsOverHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, runtime.FlowsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, runtime.FlowsDir, "greet.star"),
+		[]byte("DESCRIPTION = \"Says hello\"\ndef main(input):\n    return \"hello \" + input[\"args\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.Open(ctx, runtime.Config{DB: filepath.Join(t.TempDir(), "k.db"), Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	srv := httptest.NewServer(New(rt, "secret", func() string { return "one" }))
+	defer srv.Close()
+	call := func(method, path string, body any, out any) int {
+		t.Helper()
+		var b bytes.Buffer
+		if body != nil {
+			_ = json.NewEncoder(&b).Encode(body)
+		}
+		req, _ := http.NewRequestWithContext(ctx, method, srv.URL+path, &b)
+		req.Header.Set("Authorization", "Bearer secret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_ = json.NewDecoder(resp.Body).Decode(out)
+		return resp.StatusCode
+	}
+	call("POST", "/sessions", map[string]string{"dir": ws}, &map[string]any{})
+	var flows []runtime.FlowInfo
+	if code := call("GET", "/sessions/one/flows", nil, &flows); code != http.StatusOK || len(flows) != 1 || flows[0].Description != "Says hello" {
+		t.Fatalf("flows: %d %+v", code, flows)
+	}
+	var started map[string]any
+	if code := call("POST", "/sessions/one/flows", map[string]string{"name": "greet", "arguments": "you"}, &started); code != http.StatusAccepted {
+		t.Fatalf("run: %d %v", code, started)
+	}
+	var turn map[string]any
+	if code := call("GET", "/sessions/one/turns/0", nil, &turn); code != http.StatusOK || turn["reply"] != "hello you" {
+		t.Fatalf("turn: %d %v", code, turn)
+	}
+}

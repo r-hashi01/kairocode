@@ -86,6 +86,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped bool) (SessionO
 		if ev.Model != "" {
 			tin.Model = ev.Model
 		}
+		tin.Flow = ev.Flow
 		switch ev.Kind {
 		case EventUndo:
 			tin.Undo = &UndoInput{Of: -1}

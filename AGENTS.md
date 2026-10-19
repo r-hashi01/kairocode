@@ -23,7 +23,7 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 
 | パッケージ | 責務 | I/O・goroutine |
 |---|---|---|
-| `internal/workflows` | kairo のワークフロー（`session`、`turn`、`agent`、動的なワークフローの解釈）。エージェントのループの制御 | **一切禁止。** SDK の `*kairo.Context`（`kairo.Call`、`Parallel`、`WaitFor`、`Child`、`ctx.Now`、`ctx.Random`、`ctx.Sleep`）を通してだけ外を見る |
+| `internal/workflows` | kairo のワークフロー（`session`、`turn`、`flow`（Starlark のフローをワークフローの中で動かす。ADR 0003））。エージェントのループの制御 | **一切禁止。** SDK の `*kairo.Context`（`kairo.Call`、`Parallel`、`WaitFor`、`Child`、`ctx.Now`、`ctx.Random`、`ctx.Sleep`）を通してだけ外を見る |
 | `internal/runtime` | `kairo.Open`、ワークフローとアクションの宣言。アクションの実装（`agent.load`、`model`、`history.extend`、`tool.<name>`。後で `permission.check`、`snapshot`、`restore`）。ツールの作用の型から kairo の `Effect` への写し。サーバーと CLI に向けた小さな API（`CreateSession`、`Send`、`WaitTurn`） | ここで I/O する |
 | `internal/tools` | 組み込みのツール。1 ファイル 1 ツールで、`tools.Def` に作用の型を書く | ここで I/O する |
 | `internal/provider` | モデルのプロバイダーのアダプター（Anthropic と、テスト用の fake） | ここで I/O する |
@@ -38,7 +38,7 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
 | `cmd/kairocode` | エントリーポイント | — |
 
-ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、`internal/msg`、`internal/plan`、`internal/tools` の型、決定的な標準ライブラリ）。`internal/msg`（メッセージの型）と `internal/plan`（動的なワークフローの計画の型と検査）は、純粋なパッケージとして足す予定です。
+ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、Starlark（`go.starlark.net`。ADR 0003）、`internal/msg`、`internal/plan`、`internal/tools` の型、決定的な標準ライブラリ）。`internal/msg`（メッセージの型）と `internal/plan`（動的なワークフローの計画の型と検査）は、純粋なパッケージとして足す予定です。
 
 ## 破ってはいけない不変条件
 
@@ -79,7 +79,7 @@ make check | quick | build
 - **ツールを足す・変える。** `/tool-change` スキル（作用の型、結果が不明なときの確かめ方、権限の規則の形、crash のテスト）。
 - **ワークフロー（`internal/workflows`）を変える。** `/workflow-change` スキル（決定性、記録された値、ID の規則、版の扱い）。
 - **kairo の API が足りない。** `/kairo-gap` スキル。
-- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003 の承認後）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
+- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003、承認済み）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
 
 ## コーディング規約
 

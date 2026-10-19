@@ -324,7 +324,12 @@ func (e *events) make(it item) {
 	case it.join != nil:
 		e.join(it.join)
 	case it.chunk != nil:
-		e.emit(it.session, Event{Type: EventToken, Turn: turnOf(it.chunk.RunID), Text: string(it.chunk.Data)})
+		// The session's reply only: a call of its turn (s/<id>/<turn>/<call>),
+		// not of an agent a flow runs further down (ADR 0003), whose words
+		// are the flow's to use.
+		if strings.Count(it.chunk.RunID, "/") == 3 {
+			e.emit(it.session, Event{Type: EventToken, Turn: turnOf(it.chunk.RunID), Text: string(it.chunk.Data)})
+		}
 	case it.obs != nil:
 		e.observed(it.session, *it.obs)
 	}

@@ -255,6 +255,10 @@ func (r *Runtime) declare() {
 		}
 	}
 	kairo.Workflow(r.K, workflows.MCPCall, workflows.RunMCPCall, kairo.WorkflowVersion(workflows.MCPCallVersion))
+	kairo.Workflow(r.K, workflows.Flow, workflows.RunFlow, kairo.WorkflowVersion(workflows.FlowVersion))
+	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, flowLoad)
+	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
+	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
 	kairo.Action(r.K, workflows.ActToolDenied, kairo.Unprotected, r.toolDenied)

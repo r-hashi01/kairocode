@@ -262,3 +262,32 @@ def main(input):
 - **JavaScript（goja）:** `Date` や `Math.random` を自分で外す必要があります。利用者は Python の書き方を望みました。
 - **本物の Python（sandbox の中のプロセス）:** 書ける範囲は一番広いです。ただし、Python の実行環境が要り（ADR 0001 の単一のバイナリから外れる）、決定性は環境の固定（`PYTHONHASHSEED`、時刻の差し替え）でしか守れません。構文の木を Go の中で読めないので、静的な図も Python のプロセスに頼むことになります。
 - **Go（yaegi）:** KairoCode と同じ言語にできますが、正しいジェネリクスのコードが動きませんでした。インタプリタが Go の新しい機能に追いついていません。また、`GOPATH` からソースを読み込む作りなので、import の検査が別に要ります。
+
+## 実装（2026-10-19、M3 の 1 歩目）
+
+最初に入れたのは、`/flow <name>` で Starlark のフローを、落ちても続く形で動かす核です。
+
+- **形:** `/flow <name> [引数]` は、セッションのターンになります。ターンは始まりと終わりのスナップショットの間で、子の実行 `flow`（版 1）を動かし、`main` の結果をターンの返答として会話に残します。
+- **スクリプトの記録:** フローの始まりに、アクション `flow.load` でスクリプトを読みます。結果が記録されるので、走っている途中でファイルを書き換えても、元のスクリプトで終わります（`TestFlowKeepsItsScript`）。
+- **Starlark はワークフローの中で動かします。** `go.starlark.net`（`v0.0.0-20261005163335-bcb1a1a55bf9`）の `starlark`、`starlarkstruct`、`syntax` を、ワークフローが import してよいもの（`internal/invariants`）に足しました。`while` は使え、再帰は使えません。ステップの上限で、終わらないものを止めます。
+- **プリミティブ（最初の版）**
+
+  | 書き方 | 返す値 | 中身 |
+  |---|---|---|
+  | `agent(agent=, prompt=, model=None)` | `ok`、`output`、`error` を持つ値 | 履歴を持たない子のターン（`TurnInput.Sub`）。スナップショットは取らず、サブエージェント（`mode: subagent`）も使える |
+  | `parallel([{"agent":…, "prompt":…}, …])` | 同じ形の値の一覧（順番どおり） | `kairo.Parallel` |
+  | `tool(name, **args)` | `ok`、`output`、`error` | セッションのエージェントの権限の規則を通す。確認が要るものは、ふだんのツールと同じく承認を待つ |
+  | `phase(name)` | なし | 段の名前（図で使う） |
+
+  `main(input)` の `input` は `{"args": "<名前の後に打った言葉>"}` です。`main` は、`{"ok": …, "message": …}`、文字列、`None` のどれかを返します。ADR の例の `test.exit_code` は、今は `ok` と `output` です。
+- **失敗の扱い:** スクリプトの誤り、上限（`LIMITS` の `agents`、`steps`、`tokens`）、無いフローは、ターンの失敗ではなく、返答として「フローが成功しなかった理由」を返します（`TestFlowMistakesAreReplies`）。kairo の止め（待ち、取り消し）は、そのまま止めます。
+- **トークン:** フローの中のエージェントの言葉は、セッションの返答のトークンとしては流しません（`s/<id>/<ターン>/<呼び出し>` の深さのものだけを流す）。ツールの開始と終わりは、今までどおり届きます。
+- **入口:** ACP（TUI、Zed）では `/flow` だけで一覧、`/flow <name> [引数]` で実行です。HTTP は `GET`・`POST /sessions/{id}/flows` です。
+- **互換:** すべて入力の新しい欄（`TurnInput.Flow`、`Sub`、`AgentLoadInput.Sub`、`SessionEvent.Flow`）で分けたので、それを持たない進行中のセッションとターンは、今までと同じ呼び出しをします。版は上げていません。
+- **承認と要確認（durability-reviewer の指摘で直した）:**
+  - フローの中の承認の待ちと、途中で切れた実の呼び出しは、セッションのターンの下の深い所（フローの実行、そのエージェントのターン）にあります。`Pending` は、ターンから下へ、終わっていないフローとターンをたどって集めます。
+  - 承認のキーは「待っている実行の ID + `#` + 呼び出しの ID」で、答えはその実行に送ります（`TestFlowAsksForApproval`、`TestFlowCutOffCallIsReviewed`）。
+  - ACP では、フローが自分で呼んだツール（`flow_` で始まる呼び出しの ID）は、聞く前に `tool_call` として知らせます。
+- **Claude Code のエンジン:** フローのエージェントのターンは、セッションの Claude Code のセッションを使いません。自分のターンの実行の ID から作った、別のセッションで動きます。履歴を持たずに始まり、並んだエージェントが互いの claude を止めることもありません（`TestFlowAgentsOnClaudeCode`）。
+- **記録したスクリプト:** `TestFlowKeepsItsScript` は、書き換えの後にプロセスを開き直し、フローを頭から動かし直しても、記録したスクリプトで終わることを確かめます。
+- **まだ:** `ask`、`decide`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。

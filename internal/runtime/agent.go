@@ -56,8 +56,9 @@ func (r *Runtime) engineFor(engine, model string) (string, string, error) {
 var builtinAgents = []string{"build", "plan"}
 
 // agentDef is the definition of agent name for dir: opencode's (ADR 0002),
-// over the built-in one of that name.
-func agentDef(dir, name string) (opencode.Agent, error) {
+// over the built-in one of that name. A subagent runs only as a flow's
+// agent (sub).
+func agentDef(dir, name string, sub bool) (opencode.Agent, error) {
 	defs, err := opencode.Agents(opencode.Dirs(dir))
 	if err != nil {
 		return opencode.Agent{}, err
@@ -68,8 +69,8 @@ func agentDef(dir, name string) (opencode.Agent, error) {
 		return def, fmt.Errorf("no agent %q (built in: %s; or define it in .opencode/agents/%s.md)", name, strings.Join(builtinAgents, ", "), name)
 	case def.Disable:
 		return def, fmt.Errorf("the agent %q is disabled", name)
-	case def.Mode == "subagent":
-		return def, fmt.Errorf("the agent %q is a subagent: it runs as another agent's task (M3), not as a session's", name)
+	case def.Mode == "subagent" && !sub:
+		return def, fmt.Errorf("the agent %q is a subagent: it runs as a flow's agent, not as a session's", name)
 	}
 	return def, nil
 }
@@ -91,7 +92,7 @@ func modelOf(name string) (string, error) {
 // Reading the files here, in an action, is what lets a resumed turn go on
 // with what it started with even if they changed since (invariant 2).
 func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (workflows.Agent, error) {
-	def, err := agentDef(in.Dir, in.Agent)
+	def, err := agentDef(in.Dir, in.Agent, in.Sub)
 	if err != nil {
 		return workflows.Agent{}, err
 	}

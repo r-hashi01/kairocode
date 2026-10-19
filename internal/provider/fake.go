@@ -26,6 +26,9 @@ type Fake struct {
 	// It applies only when HoldFile is set.
 	HoldAt   int    `json:"hold_at"`
 	HoldFile string `json:"hold_file,omitempty"`
+	// HoldOn, if set, holds instead the calls whose last user message has
+	// it in its text (one of agents run at once).
+	HoldOn string `json:"hold_on,omitempty"`
 	// ReleaseFile, if set, ends the hold when it appears: the call then
 	// answers from the script, so a test can let a held call finish.
 	ReleaseFile string `json:"release_file,omitempty"`
@@ -68,7 +71,7 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 			return Response{}, err
 		}
 	}
-	if f.HoldFile != "" && i == f.HoldAt {
+	if f.HoldFile != "" && (f.HoldOn == "" && i == f.HoldAt || f.HoldOn != "" && strings.Contains(lastUserText(r.Messages), f.HoldOn)) {
 		if err := os.WriteFile(f.HoldFile, nil, 0o600); err != nil {
 			return Response{}, err
 		}
@@ -137,4 +140,21 @@ func (f *Fake) hold(ctx context.Context) error {
 		case <-t.C:
 		}
 	}
+}
+
+// lastUserText is the text of the last user message.
+func lastUserText(ms []msg.Message) string {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if ms[i].Role != msg.User {
+			continue
+		}
+		var b strings.Builder
+		for _, p := range ms[i].Parts {
+			if p.Type == msg.Text {
+				b.WriteString(p.Text)
+			}
+		}
+		return b.String()
+	}
+	return ""
 }

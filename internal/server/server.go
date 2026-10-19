@@ -44,6 +44,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
 	s.mux.HandleFunc("POST /sessions/{id}/cancel", s.cancel)
+	s.mux.HandleFunc("GET /sessions/{id}/flows", s.flows)
+	s.mux.HandleFunc("POST /sessions/{id}/flows", s.runFlow)
 	return s
 }
 
@@ -295,6 +297,39 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cs)
+}
+
+// flows lists the flows the session's project has (ADR 0003).
+func (s *Server) flows(w http.ResponseWriter, r *http.Request) {
+	fs, err := s.rt.Flows(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fs)
+}
+
+// runFlow runs one: {"name": "...", "arguments": "..."}. A flow that is
+// not there ends its turn saying so.
+func (s *Server) runFlow(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"name": "...", "arguments": "..."}`))
+		return
+	}
+	n, err := s.rt.RunFlow(r.Context(), sessionOf(r), in.Name, in.Arguments)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
 }
 
 // runCommand runs one: {"name": "...", "arguments": "..."}.

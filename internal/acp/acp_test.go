@@ -85,6 +85,14 @@ func (l *local) RunCommand(ctx context.Context, s, name, args string) (int, erro
 
 func (l *local) Cancel(ctx context.Context, s string) (int, error) { return l.r.Cancel(ctx, s) }
 
+func (l *local) Flows(ctx context.Context, s string) ([]runtime.FlowInfo, error) {
+	return l.r.Flows(ctx, s)
+}
+
+func (l *local) RunFlow(ctx context.Context, s, name, args string) (int, error) {
+	return l.r.RunFlow(ctx, s, name, args)
+}
+
 // writeScript: the model writes notes.txt, then says done.
 var writeScript = []provider.FakeReply{
 	{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hello\n"}`)}}},
@@ -819,5 +827,90 @@ func TestACPCancel(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, "notes.txt")); err == nil {
 		t.Fatal("the tool ran")
+	}
+}
+
+// /flow alone lists the project's flows, without a turn; /flow <name> runs
+// one, and its result is the reply (ADR 0003).
+func TestACPFlow(t *testing.T) {
+	b, ws := setup(t)
+	if err := os.MkdirAll(filepath.Join(ws, runtime.FlowsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, runtime.FlowsDir, "greet.star"),
+		[]byte("DESCRIPTION = \"Says hello\"\ndef main(input):\n    return \"hello \" + input[\"args\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	reply := func(text string) string {
+		t.Helper()
+		resp, before := c.until(isResponse(prompt(c, s, text)))
+		if resp.Error != nil {
+			t.Fatalf("%s: %v", text, resp.Error)
+		}
+		out := ""
+		for _, m := range before {
+			if m.Method == "session/update" {
+				if u := updateOf(t, m); u.SessionUpdate == "agent_message_chunk" {
+					out += u.text()
+				}
+			}
+		}
+		return out
+	}
+	if got := reply("/flow"); !strings.Contains(got, "- greet: Says hello") {
+		t.Fatalf("/flow: %q", got)
+	}
+	if got := reply("/flow greet the world"); got != "hello the world" {
+		t.Fatalf("/flow greet: %q", got)
+	}
+	if _, ok, _ := b.r.TurnRun(ctx, s, 1); ok {
+		t.Fatal("two turns: the list made one")
+	}
+
+	// A flow's own tool call the rules ask about: the client is told of the
+	// call, then asked about it.
+	if err := os.WriteFile(filepath.Join(ws, runtime.FlowsDir, "note.star"),
+		[]byte("def main(input):\n    return \"wrote: %s\" % tool(\"write\", path = \"n.txt\", content = \"x\\n\").ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := prompt(c, s, "/flow note")
+	req, before := c.until(isMethod("session/request_permission"))
+	var p struct {
+		ToolCall struct {
+			ToolCallID string `json:"toolCallId"`
+		} `json:"toolCall"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	told := false
+	for _, m := range before {
+		if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "tool_call" && updateOf(t, m).ToolCallID == p.ToolCall.ToolCallID {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatalf("asked about %q, a call the client was not told of", p.ToolCall.ToolCallID)
+	}
+	allow(c, req, "allow_once")
+	resp, after := c.until(isResponse(id))
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	got := ""
+	for _, m := range after {
+		if m.Method == "session/update" {
+			if u := updateOf(t, m); u.SessionUpdate == "agent_message_chunk" {
+				got += u.text()
+			}
+		}
+	}
+	if got != "wrote: True" {
+		t.Fatalf("/flow note: %q", got)
 	}
 }

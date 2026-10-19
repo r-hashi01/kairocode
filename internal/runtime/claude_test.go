@@ -496,3 +496,30 @@ func TestClaudeEngineApprovalServesOneRun(t *testing.T) {
 		t.Fatalf("the tool ran %d times, want 2 (n=1 once on its approval, n=9 once)", got)
 	}
 }
+
+// A flow's agents on Claude Code each have a Claude Code session of their
+// own: not the session's (they start with no history), and not each
+// other's (one would stop the other's claude).
+func TestFlowAgentsOnClaudeCode(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Reply: "one"}, fakeClaudeRun{Reply: "two"})
+	r := openClaude(t, e)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/pair.star": `
+def main(input):
+    rs = parallel([{"agent": "build", "prompt": "a"}, {"agent": "build", "prompt": "b"}])
+    return "%d replies" % len([x for x in rs if x.ok])
+`})
+	_, text, s := flowTurn(t, r, ws, "pair", "")
+	if text != "2 replies" {
+		t.Fatalf("reply %q", text)
+	}
+	st := e.starts(t)
+	if len(st) != 2 || st[0].Session == st[1].Session {
+		t.Fatalf("claude was started as %+v", st)
+	}
+	for _, x := range st {
+		if x.Mode != "--session-id" || x.Session == claudeSessionID(s) {
+			t.Fatalf("an agent in the session's Claude Code session: %+v", x)
+		}
+	}
+}

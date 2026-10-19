@@ -33,6 +33,10 @@ const (
 	// so start its turns again under other ids.
 	SessionVersion2 = "2"
 	TurnVersion2    = "2"
+	// Flow runs a flow (ADR 0003): a Starlark script of
+	// .kairocode/workflows, recorded when it starts.
+	Flow        = "flow"
+	FlowVersion = "1"
 	// MCPCall runs one tool call that Claude Code made through KairoCode's
 	// MCP server (ADR 0007).
 	MCPCall        = "mcp.call"
@@ -41,6 +45,12 @@ const (
 	ActAgentLoad     = "agent.load"
 	ActModel         = "model"
 	ActHistoryExtend = "history.extend"
+	// ActFlowLoad reads a flow's script, to be recorded; ActFlowPut stores
+	// a message a flow makes (an agent's prompt, the flow's result);
+	// ActFlowText reads a stored message's text back.
+	ActFlowLoad = "flow.load"
+	ActFlowPut  = "flow.put"
+	ActFlowText = "flow.text"
 	// ActHistoryCancelled adds a turn the user stopped to the
 	// conversation: what they asked, and a note that it was stopped (ADR
 	// 0011).
@@ -114,6 +124,8 @@ type SessionEvent struct {
 	// session's (a command's, opencode's commands/*.md). Version 4 on.
 	Agent string `json:"agent,omitempty"`
 	Model string `json:"model,omitempty"`
+	// Flow, if set, makes the message's turn run that flow (/flow).
+	Flow *FlowCall `json:"flow,omitempty"`
 }
 
 const (
@@ -145,6 +157,57 @@ type TurnInput struct {
 	// Undo, if set, makes the turn an undo or a redo: it restores the
 	// working files instead of asking the model (design 7).
 	Undo *UndoInput `json:"undo,omitempty"`
+	// Flow, if set, makes the turn run that flow (ADR 0003).
+	Flow *FlowCall `json:"flow,omitempty"`
+	// Sub: the turn is an agent of a flow. It starts with no history,
+	// takes no snapshots (the flow's turn does), and may be a subagent.
+	Sub bool `json:"sub,omitempty"`
+}
+
+// FlowCall is what /flow asks for: a flow by name, and the words after it.
+type FlowCall struct {
+	Name string `json:"name"`
+	Args string `json:"args,omitempty"`
+}
+
+// FlowInput is a flow's run, in the turn that runs it.
+type FlowInput struct {
+	Session string   `json:"session"`
+	N       int      `json:"n"`
+	Dir     string   `json:"dir"`
+	Agent   string   `json:"agent"`
+	Engine  string   `json:"engine,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	Call    FlowCall `json:"call"`
+}
+
+// FlowOutput is how a flow ended: main's result, or why it stopped.
+type FlowOutput struct {
+	OK      bool      `json:"ok"`
+	Message string    `json:"message"`
+	Agents  int       `json:"agents"`
+	Usage   msg.Usage `json:"usage"`
+}
+
+type FlowLoadInput struct {
+	Dir  string `json:"dir"`
+	Name string `json:"name"`
+}
+
+// FlowSource is a flow's script as it was when the flow started (recorded:
+// the run goes on with it, whatever the file becomes). Error: there is no
+// such flow.
+type FlowSource struct {
+	Source string `json:"source,omitempty"`
+	Hash   string `json:"hash,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// FlowPutInput is a message a flow stores: Role is msg.User or
+// msg.Assistant.
+type FlowPutInput struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
 }
 
 // UndoInput is what an undo or a redo restores, as the session worked it
@@ -219,6 +282,8 @@ type TurnOutput struct {
 type AgentLoadInput struct {
 	Dir   string `json:"dir"`
 	Agent string `json:"agent"`
+	// Sub: for a flow's agent, which may be a subagent.
+	Sub bool `json:"sub,omitempty"`
 	// Engine and Model, if set, are the session's choice of who runs the
 	// model loop and with which model (the client's settings, ADR 0008);
 	// empty: the daemon's. Empty fields stay out of the JSON, so runs

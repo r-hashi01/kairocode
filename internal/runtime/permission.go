@@ -235,46 +235,70 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		if turn.Workflow != workflows.Turn {
 			continue
 		}
-		// A finished turn waits for nothing, but an MCP call of it that was
-		// cut off may still wait to be reviewed.
-		var calls []kairo.RunInfo
-		if !turn.Finished() {
-			var err error
-			if calls, err = r.K.Children(ctx, turn.RunID); err != nil {
+		p, err := r.pendingIn(ctx, turn, turn.RunID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p...)
+	}
+	return out, nil
+}
+
+// pendingIn lists what waits in run, a turn of the session (top) or a run
+// below it: a flow, an agent a flow runs (ADR 0003), down to any depth. An
+// approval's key names the run that waits for it, which its answer goes
+// to.
+func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) ([]Pending, error) {
+	// A finished run waits for nothing, but an MCP call of a turn that was
+	// cut off may still wait to be reviewed.
+	var calls []kairo.RunInfo
+	if !run.Finished() {
+		var err error
+		if calls, err = r.K.Children(ctx, run.RunID); err != nil {
+			return nil, err
+		}
+	}
+	var out []Pending
+	checks := map[string]workflows.PermissionOutput{}
+	tool := map[string]string{}
+	for _, c := range calls {
+		if (c.Workflow == workflows.Flow || c.Workflow == workflows.Turn) && !c.Finished() {
+			p, err := r.pendingIn(ctx, c, top)
+			if err != nil {
 				return nil, err
 			}
+			out = append(out, p...)
+			continue
 		}
-		checks := map[string]workflows.PermissionOutput{}
-		tool := map[string]string{}
-		for _, c := range calls {
-			if c.Plan == "kairo.call/"+workflows.ActClaudeTurn && c.Finished() {
-				var o workflows.ClaudeTurnOutput
-				if json.Unmarshal(c.Output, &o) == nil {
-					for _, a := range o.Asks {
-						call := workflows.MCPCallPrefix + a.Key
-						checks[call] = workflows.PermissionOutput{Rule: a.Rule, Subject: a.Subject}
-						tool[call] = a.Tool
-					}
+		if c.Plan == "kairo.call/"+workflows.ActClaudeTurn && c.Finished() {
+			var o workflows.ClaudeTurnOutput
+			if json.Unmarshal(c.Output, &o) == nil {
+				for _, a := range o.Asks {
+					call := workflows.MCPCallPrefix + a.Key
+					checks[call] = workflows.PermissionOutput{Rule: a.Rule, Subject: a.Subject}
+					tool[call] = a.Tool
 				}
-				continue
 			}
-			if c.Plan != "kairo.call/"+workflows.ActPermissionCheck || !c.Finished() {
-				continue
-			}
-			// A call run's input is kept as {"in": <the action's input>}.
-			var in struct {
-				In workflows.PermissionInput `json:"in"`
-			}
-			var o workflows.PermissionOutput
-			if json.Unmarshal(c.Input, &in) != nil || json.Unmarshal(c.Output, &o) != nil {
-				continue
-			}
-			checks[in.In.Call.Call] = o
-			tool[in.In.Call.Call] = in.In.Tool
+			continue
 		}
-		// The MCP calls of the turn are runs of their own (kairo-gap #17):
-		// their cut-off steps are listed with the turn's.
-		mcpRuns, err := r.Store.MCPRuns(ctx, turn.RunID)
+		if c.Plan != "kairo.call/"+workflows.ActPermissionCheck || !c.Finished() {
+			continue
+		}
+		// A call run's input is kept as {"in": <the action's input>}.
+		var in struct {
+			In workflows.PermissionInput `json:"in"`
+		}
+		var o workflows.PermissionOutput
+		if json.Unmarshal(c.Input, &in) != nil || json.Unmarshal(c.Output, &o) != nil {
+			continue
+		}
+		checks[in.In.Call.Call] = o
+		tool[in.In.Call.Call] = in.In.Tool
+	}
+	// The MCP calls of a turn are runs of their own (kairo-gap #17): their
+	// cut-off steps are listed with the turn's.
+	if run.Workflow == workflows.Turn {
+		mcpRuns, err := r.Store.MCPRuns(ctx, run.RunID)
 		if err != nil {
 			return nil, err
 		}
@@ -285,28 +309,28 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 			}
 			calls = append(calls, steps...)
 		}
-		for _, c := range calls {
-			if c.Status == "blocked" {
-				name := strings.TrimPrefix(c.Plan, "kairo.call/"+workflows.ActToolPrefix)
-				var in struct {
-					In workflows.ToolInput `json:"in"`
-				}
-				_ = json.Unmarshal(c.Input, &in)
-				subj := ""
-				if args, err := r.toolArgs(ctx, in.In); err == nil {
-					subj = subject(args)
-				}
-				out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: turn.RunID, Tool: name, Subject: subj,
-					Rule: "cut off while it ran: did it take effect?"})
-				continue
+	}
+	for _, c := range calls {
+		if c.Status == "blocked" {
+			name := strings.TrimPrefix(c.Plan, "kairo.call/"+workflows.ActToolPrefix)
+			var in struct {
+				In workflows.ToolInput `json:"in"`
 			}
-			call, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalApprovePrefix)
-			if !ok || c.Finished() {
-				continue
+			_ = json.Unmarshal(c.Input, &in)
+			subj := ""
+			if args, err := r.toolArgs(ctx, in.In); err == nil {
+				subj = subject(args)
 			}
-			o := checks[call]
-			out = append(out, Pending{Kind: "approval", Key: turn.RunID + "#" + call, Turn: turn.RunID, Tool: tool[call], Subject: o.Subject, Rule: o.Rule})
+			out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: name, Subject: subj,
+				Rule: "cut off while it ran: did it take effect?"})
+			continue
 		}
+		call, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalApprovePrefix)
+		if !ok || c.Finished() {
+			continue
+		}
+		o := checks[call]
+		out = append(out, Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool[call], Subject: o.Subject, Rule: o.Rule})
 	}
 	return out, nil
 }
@@ -340,8 +364,8 @@ func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason strin
 	// call, so under approveMu a request that waits has not been answered.
 	// This holds within one process: the one daemon of a data directory
 	// (ADR 0008). Processes sharing a database would need more (kairo-gap
-	// #21). Pending lists the waits of the session's turns: a wait for
-	// approval elsewhere (a subagent's) must be listed there to be answered.
+	// #21). Pending lists the waits of the session's turns and of the runs
+	// below them (flows, their agents).
 	if !slices.ContainsFunc(pending, func(p Pending) bool { return p.Key == key }) {
 		return ErrAnswered
 	}
@@ -376,9 +400,10 @@ func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string
 		}
 		return r.K.Resolve(ctx, run, out)
 	}
-	turn, call, found := strings.Cut(key, "#")
-	if !found || turn == "" || call == "" {
+	run, call, found := strings.Cut(key, "#")
+	if !found || run == "" || call == "" {
 		return fmt.Errorf("not an approval key: %q", key)
 	}
-	return r.K.Signal(ctx, turn, workflows.SignalApprovePrefix+call, workflows.Approval{OK: ok, Reason: reason})
+	// The run that waits: the turn, or a flow or an agent below it.
+	return r.K.Signal(ctx, run, workflows.SignalApprovePrefix+call, workflows.Approval{OK: ok, Reason: reason})
 }

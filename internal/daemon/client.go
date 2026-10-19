@@ -382,6 +382,23 @@ func (c *Client) Commands(ctx context.Context, session string) ([]opencode.Comma
 	return out, err
 }
 
+// Flows lists the flows of the session's project (ADR 0003).
+func (c *Client) Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error) {
+	var out []runtime.FlowInfo
+	err := c.do(ctx, "GET", sessionPath(session)+"/flows", nil, &out)
+	return out, err
+}
+
+// RunFlow runs the flow name with args (/flow) and returns the turn's
+// number.
+func (c *Client) RunFlow(ctx context.Context, session, name, args string) (int, error) {
+	var out struct {
+		Turn int `json:"turn"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/flows", map[string]string{"name": name, "arguments": args}, &out)
+	return out.Turn, err
+}
+
 // RunCommand runs one with args and returns the turn's number.
 func (c *Client) RunCommand(ctx context.Context, session, name, args string) (int, error) {
 	var out struct {
