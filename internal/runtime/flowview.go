@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -186,4 +187,31 @@ func (r *Runtime) FlowView(ctx context.Context, flow kairo.RunInfo, chart *flowc
 		v.Chart = &flowchart.Chart{Name: in.Call.Name}
 	}
 	return v, nil
+}
+
+// ErrNoFlow: the session has run no flow.
+var ErrNoFlow = errors.New("this session has run no flow")
+
+// LastFlow is the session's latest flow, running or ended, as far as it
+// has gone.
+func (r *Runtime) LastFlow(ctx context.Context, session string) (*flowchart.View, error) {
+	turns, err := r.K.Children(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i].Workflow != workflows.Turn {
+			continue
+		}
+		kids, err := r.K.Children(ctx, turns[i].RunID)
+		if err != nil {
+			return nil, err
+		}
+		for j := len(kids) - 1; j >= 0; j-- {
+			if kids[j].Workflow == workflows.Flow {
+				return r.FlowView(ctx, kids[j], nil)
+			}
+		}
+	}
+	return nil, ErrNoFlow
 }

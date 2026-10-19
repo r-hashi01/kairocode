@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -408,6 +409,17 @@ func (c *Client) RunFlow(ctx context.Context, session, name, args string) (int, 
 	}
 	err := c.do(ctx, "POST", sessionPath(session)+"/flows", map[string]string{"name": name, "arguments": args}, &out)
 	return out.Turn, err
+}
+
+// LastFlow is the session's latest flow, with its calls' states.
+func (c *Client) LastFlow(ctx context.Context, session string) (*flowchart.View, error) {
+	var v flowchart.View
+	err := c.do(ctx, "GET", sessionPath(session)+"/flow", nil, &v)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return nil, runtime.ErrNoFlow
+	}
+	return &v, err
 }
 
 // NewFlow has the model write a flow from request (/flow new) and returns

@@ -37,6 +37,7 @@ const usage = `usage:
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
   kairocode flow graph [-dir DIR] [-width N] <name>   draw a flow of .kairocode/workflows (ADR 0003)
+  kairocode flow show [-data DIR] [-follow] <session> the session's latest flow, as it has gone
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
   kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
@@ -108,7 +109,7 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 	case "answer":
 		err = answer(ctx, args, stderr)
 	case "flow":
-		err = flowCommand(args, stdout, stderr)
+		err = flowCommand(ctx, args, stdout, stderr)
 	case "usage":
 		err = showUsage(ctx, args, stdout, stderr)
 	case "acp":
@@ -555,26 +556,78 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	return nil
 }
 
-// flowCommand: kairocode flow graph <name>, the chart of a flow, from its
-// script (nothing runs, and the daemon is not needed).
-func flowCommand(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "graph" {
-		return errors.New("kairocode flow graph [-dir DIR] [-width N] <name>")
+// flowCommand: kairocode flow graph <name>, the chart of a flow from its
+// script (nothing runs, and the daemon is not needed); kairocode flow show
+// <session>, the session's latest flow with its calls' states, and with
+// -follow drawn again as it goes on.
+func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session>")
+	if len(args) == 0 {
+		return usage
 	}
-	fs := flag.NewFlagSet("flow graph", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	dir := fs.String("dir", ".", "working directory")
-	width := fs.Int("width", 100, "columns to draw in")
-	if err := fs.Parse(args[1:]); err != nil {
+	switch args[0] {
+	case "graph":
+		fs := flag.NewFlagSet("flow graph", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		dir := fs.String("dir", ".", "working directory")
+		width := fs.Int("width", 100, "columns to draw in")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return usage
+		}
+		out, err := tui.FlowGraph(*dir, fs.Arg(0), *width)
+		if err != nil {
+			return err
+		}
+		_, err = lipgloss.Fprintln(stdout, out)
 		return err
+	case "show":
+		fs := flag.NewFlagSet("flow show", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+		width := fs.Int("width", 100, "columns to draw in")
+		follow := fs.Bool("follow", false, "draw it again as it goes on, until it ends")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return usage
+		}
+		s := fs.Arg(0)
+		if !strings.HasPrefix(s, "s/") {
+			s = runtime.SessionID(s)
+		}
+		c, err := connect(ctx, *data)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		var events <-chan runtime.Event
+		if *follow { // watched before it is looked at: nothing between is missed
+			if events, err = c.Events(ctx, s); err != nil {
+				return err
+			}
+		}
+		v, err := c.LastFlow(ctx, s)
+		if err != nil {
+			return err
+		}
+		lipgloss.Fprintln(stdout, tui.ChartOf(v, *width))
+		if !*follow || v.Done {
+			return nil
+		}
+		for ev := range events {
+			if ev.Type != runtime.EventFlow || ev.Flow == nil || ev.Flow.Chart == nil {
+				continue
+			}
+			lipgloss.Fprintln(stdout, "\n"+tui.ChartOf(ev.Flow, *width))
+			if ev.Flow.Done {
+				return nil
+			}
+		}
+		return ctx.Err()
 	}
-	if fs.NArg() != 1 {
-		return errors.New("kairocode flow graph [-dir DIR] [-width N] <name>")
-	}
-	out, err := tui.FlowGraph(*dir, fs.Arg(0), *width)
-	if err != nil {
-		return err
-	}
-	_, err = lipgloss.Fprintln(stdout, out)
-	return err
+	return usage
 }

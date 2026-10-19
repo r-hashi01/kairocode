@@ -61,6 +61,9 @@ type Config struct {
 	// onlyFlowVersion, in tests, declares the flow at that old version
 	// only ("1").
 	onlyFlowVersion string
+	// flowFunc, in tests, runs the flows of the current version in place
+	// of workflows.RunFlow: code that changed under the same version.
+	flowFunc func(*kairo.Context, workflows.FlowInput) (workflows.FlowOutput, error)
 }
 
 type Runtime struct {
@@ -261,10 +264,17 @@ func (r *Runtime) declare() {
 	if r.cfg.onlyFlowVersion == workflows.FlowVersion1 {
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1))
 	} else {
-		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlow, kairo.WorkflowVersion(workflows.FlowVersion))
-		// Version 1 finishes as it started: its calls carry no At.
+		run := workflows.RunFlow
+		if r.cfg.flowFunc != nil {
+			run = r.cfg.flowFunc
+		}
+		kairo.Workflow(r.K, workflows.Flow, run, kairo.WorkflowVersion(workflows.FlowVersion))
+		// Versions 2 and 1 finish as they started: no flow.step, and in 1
+		// no At either.
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV2, kairo.WorkflowVersion(workflows.FlowVersion2), kairo.Draining())
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1), kairo.Draining())
 	}
+	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
 	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, flowLoad)
 	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)

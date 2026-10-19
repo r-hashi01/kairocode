@@ -36,7 +36,11 @@ const (
 	// Flow runs a flow (ADR 0003): a Starlark script of
 	// .kairocode/workflows, recorded when it starts.
 	Flow        = "flow"
-	FlowVersion = "2"
+	FlowVersion = "3"
+	// FlowVersion2 is the version before a flow recorded each call's place
+	// and content (flow.step) to find a run that goes another way. Its runs
+	// finish with RunFlowV2.
+	FlowVersion2 = "2"
 	// FlowVersion1 is the version before a flow's calls carried where in
 	// the script they are (At, for its chart). Its runs finish with
 	// RunFlowV1.
@@ -60,6 +64,10 @@ const (
 	// (design 6.3).
 	ActFlowAsk    = "flow.ask"
 	ActFlowDecide = "flow.decide"
+	// ActFlowStep records the k-th call of a flow (its content's hash)
+	// before it is made, and says whether a run before made another k-th
+	// call: the script went another way (ADR 0003, a safety net).
+	ActFlowStep = "flow.step"
 	// ActHookTrust keeps that the user allowed a project's hook.
 	ActHookTrust = "hook.trust"
 
@@ -229,6 +237,12 @@ type FlowSource struct {
 	Source string `json:"source,omitempty"`
 	Hash   string `json:"hash,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+// FlowStep is the Seq-th call of a flow, by the hash of what it is.
+type FlowStep struct {
+	Seq int    `json:"seq"`
+	Sig string `json:"sig"`
 }
 
 // FlowPutInput is a message a flow stores: Role is msg.User or

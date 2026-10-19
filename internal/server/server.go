@@ -48,6 +48,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/flows", s.flows)
 	s.mux.HandleFunc("POST /sessions/{id}/flows", s.runFlow)
 	s.mux.HandleFunc("POST /sessions/{id}/flows/new", s.newFlow)
+	s.mux.HandleFunc("GET /sessions/{id}/flow", s.lastFlow)
 	return s
 }
 
@@ -354,6 +355,21 @@ func (s *Server) runFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+// lastFlow is the session's latest flow, with its calls' states; 404 when
+// it ran none.
+func (s *Server) lastFlow(w http.ResponseWriter, r *http.Request) {
+	v, err := s.rt.LastFlow(r.Context(), sessionOf(r))
+	if errors.Is(err, runtime.ErrNoFlow) || errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 // newFlow has the model write a flow from words: {"request": "..."}.

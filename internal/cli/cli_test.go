@@ -432,3 +432,55 @@ func TestFlowGraph(t *testing.T) {
 		t.Fatal("drew a flow that is not there")
 	}
 }
+
+// kairocode flow show -follow draws the session's flow as it goes on: the
+// question waiting, then answered, and ends with the flow.
+func TestFlowShowFollow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	ws := t.TempDir()
+	os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "plan.star"),
+		[]byte("def main(input):\n    return ask(\"Which way?\", options = [\"left\", \"right\"]).value\n"), 0o644)
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, t.TempDir()))
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c, err := connect(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s, _ := c.CreateSession(ctx, workflows.SessionInput{Dir: ws})
+	n, _ := c.RunFlow(ctx, s, "plan", "")
+	var key string
+	until(t, ctx, "the question", func() bool {
+		p, _ := c.Pending(ctx, s)
+		if len(p) == 1 {
+			key = p[0].Key
+		}
+		return len(p) == 1
+	})
+	var out lockedBuffer
+	code := make(chan int, 1)
+	go func() { code <- Main(ctx, []string{"flow", "show", "-data", data, "-follow", s}, &out, &out) }()
+	until(t, ctx, "the waiting question drawn", func() bool { return strings.Contains(out.String(), "⏸ ask") })
+	if err := c.Answer(ctx, key, "left"); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-code; got != 0 {
+		t.Fatalf("exit %d: %s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "✓ ask") {
+		t.Fatalf("out\n%s", out.String())
+	}
+	if _, err := c.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	var again bytes.Buffer
+	if got := Main(ctx, []string{"flow", "show", "-data", data, s}, &again, &again); got != 0 || !strings.Contains(again.String(), "✓ ask") {
+		t.Fatalf("after it ended: exit %d\n%s", got, again.String())
+	}
+}

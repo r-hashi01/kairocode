@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	kairo "github.com/r-hashi01/kairo/sdk/go"
+
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
@@ -805,4 +807,109 @@ func TestHookRunsTheScriptAllowed(t *testing.T) {
 	// The swapped script is asked about.
 	r.Send(ctx, s, "again")
 	pending("check")
+}
+
+// LIMITS tokens: a flow stops once its agents have used more (the fake
+// reports 15 a call).
+func TestFlowTokenLimit(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/costly.star": `
+LIMITS = {"tokens": 20}
+def main(input):
+    agent(agent = "build", prompt = "one")
+    agent(agent = "build", prompt = "two")
+    agent(agent = "build", prompt = "three")
+    return "all three"
+`})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "ok"}}})
+	out, text, _ := flowTurn(t, r, ws, "costly", "")
+	if !strings.Contains(text, "more than 20 tokens (LIMITS tokens)") || out.Steps != 2 {
+		t.Fatalf("reply %q after %d agents", text, out.Steps)
+	}
+}
+
+// Stopping the turn stops its flow, and the flow's agents with it (ADR
+// 0011, FR-13).
+func TestCancelStopsTheFlow(t *testing.T) {
+	ws := repo(t)
+	hold := filepath.Join(t.TempDir(), "held")
+	putFiles(t, ws, map[string]string{".kairocode/workflows/long.star": `
+def main(input):
+    parallel([{"agent": "build", "prompt": "hold here"}, {"agent": "build", "prompt": "hold here too"}])
+    return "never"
+`})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, HoldOn: "hold here", HoldFile: hold, Script: []provider.FakeReply{{Text: "ok"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "stop", workflows.SessionInput{Dir: ws})
+	n, _ := r.RunFlow(ctx, s, "long", "")
+	waitUntil(t, ctx, "the agents run", func() bool { return exists(hold) })
+	if _, err := r.Cancel(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); !errors.Is(err, kairo.ErrCancelled) {
+		t.Fatalf("the turn: %v", err)
+	}
+	turnRun, _, _ := r.TurnRun(ctx, s, n)
+	kids, _ := r.K.Children(ctx, turnRun.RunID)
+	flows := 0
+	for _, k := range kids {
+		if k.Workflow != workflows.Flow {
+			continue
+		}
+		flows++
+		agents, _ := r.K.Children(ctx, k.RunID)
+		for _, a := range append(agents, k) {
+			if (a.Workflow == workflows.Flow || a.Workflow == workflows.Turn) && a.Status != "cancelled" {
+				t.Errorf("%s %s is %s", a.Workflow, a.RunID, a.Status)
+			}
+		}
+	}
+	if flows != 1 {
+		t.Fatalf("%d flows", flows)
+	}
+}
+
+// TestWorkflowScriptDivergence: a flow taken up again by code that makes
+// another call where the run before made one (code changed under the same
+// version) stops there, without making it.
+func TestWorkflowScriptDivergence(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/two.star": `
+def main(input):
+    agent(agent = "build", prompt = "first " + input["args"])
+    agent(agent = "build", prompt = "second, hold here")
+    return "done"
+`})
+	dir := t.TempDir()
+	db, hold, calls := filepath.Join(dir, "k.db"), filepath.Join(dir, "held"), filepath.Join(dir, "calls")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	first, err := Open(ctx, Config{DB: db, Owner: "div", Provider: &provider.Fake{HoldAt: -1, HoldOn: "hold here", HoldFile: hold,
+		Script: []provider.FakeReply{{Text: "ok"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := first.CreateSession(ctx, "div", workflows.SessionInput{Dir: ws})
+	n, _ := first.RunFlow(ctx, s, "two", "as asked")
+	waitUntil(t, ctx, "the second agent", func() bool { return exists(hold) })
+	first.Close()
+
+	// Other code under the same version: it gives the flow other words.
+	changed := func(ctx *kairo.Context, in workflows.FlowInput) (workflows.FlowOutput, error) {
+		in.Call.Args = "otherwise"
+		return workflows.RunFlow(ctx, in)
+	}
+	r, err := Open(ctx, Config{DB: db, Owner: "div", flowFunc: changed,
+		Provider: &provider.Fake{HoldAt: -1, CallLog: calls, Script: []provider.FakeReply{{Text: "ok"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.WaitTurn(ctx, s, n); err == nil || !strings.Contains(err.Error(), "went another way") {
+		t.Fatalf("the turn: %v", err)
+	}
+	if b, _ := os.ReadFile(calls); len(b) != 0 {
+		t.Fatalf("the model was called: %q", b)
+	}
 }

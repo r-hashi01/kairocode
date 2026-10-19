@@ -1,6 +1,8 @@
 package workflows
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,16 +60,25 @@ const (
 //
 // Version 2: each call carries where in the script it is (At), for the
 // chart of the run.
+//
+// Version 3: before each call it records the call's place and content
+// (flow.step); a run that makes another call in a place a run before
+// made one stops there, without making it.
 func RunFlow(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
-	return runFlow(ctx, in, true)
+	return runFlow(ctx, in, true, true)
 }
 
-// RunFlowV1 is a flow of version 1: RunFlow without At.
+// RunFlowV2 is a flow of version 2: RunFlow without flow.step.
+func RunFlowV2(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
+	return runFlow(ctx, in, true, false)
+}
+
+// RunFlowV1 is a flow of version 1: RunFlowV2 without At.
 func RunFlowV1(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
-	return runFlow(ctx, in, false)
+	return runFlow(ctx, in, false, false)
 }
 
-func runFlow(ctx *kairo.Context, in FlowInput, marks bool) (FlowOutput, error) {
+func runFlow(ctx *kairo.Context, in FlowInput, marks, steps bool) (FlowOutput, error) {
 	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name, Expect: in.Expect})
 	if err != nil {
 		return FlowOutput{}, err
@@ -75,7 +86,7 @@ func runFlow(ctx *kairo.Context, in FlowInput, marks bool) (FlowOutput, error) {
 	if src.Error != "" {
 		return FlowOutput{Message: src.Error, Broken: true}, nil
 	}
-	r := &flowRun{ctx: ctx, in: in, maxAgents: flowAgents, marks: marks}
+	r := &flowRun{ctx: ctx, in: in, maxAgents: flowAgents, marks: marks, steps: steps}
 	return r.run(src.Source)
 }
 
@@ -94,8 +105,36 @@ type flowRun struct {
 
 	maxAgents int
 	maxTokens int64
-	// marks: calls carry where they are (version 2 on).
-	marks bool
+	// marks: calls carry where they are (version 2 on); steps: each call
+	// is recorded first, and a run that goes another way stops (version 3).
+	marks, steps bool
+	seq          int
+}
+
+// ErrDiverged: a run of a flow made another call where a run before made
+// one: what ran before was not this. It stops rather than run on.
+var ErrDiverged = errors.New("the flow went another way than when it ran before: stopped without making the call")
+
+// step records the next call (its kind and content) before it is made,
+// and stops the flow if a run before made another one there.
+func (r *flowRun) step(kind string, content any) error {
+	if !r.steps {
+		return nil
+	}
+	b, err := json.Marshal(content)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(append([]byte(kind+"\x00"), b...))
+	r.seq++
+	same, err := kairo.Call[bool](r.ctx, ActFlowStep, FlowStep{Seq: r.seq, Sig: hex.EncodeToString(sum[:])})
+	if err != nil {
+		return r.fail(err)
+	}
+	if !same {
+		return r.fail(fmt.Errorf("%w (call %d, %s)", ErrDiverged, r.seq, kind))
+	}
+	return nil
 }
 
 // at is where the primitive being called is called from ("line:col", as
@@ -273,6 +312,9 @@ func (r *flowRun) ask(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	if len(options) < 2 {
 		return nil, fmt.Errorf("ask: give at least two options")
 	}
+	if err := r.step("ask", map[string]any{"question": question, "options": options, "at": r.at(thread)}); err != nil {
+		return nil, err
+	}
 	r.asks++
 	in := FlowAskInput{At: r.at(thread), ID: fmt.Sprintf("ask_%d_%d", r.in.N, r.asks), Question: question, Options: options}
 	if _, err := kairo.Call[bool](r.ctx, ActFlowAsk, in); err != nil {
@@ -308,6 +350,9 @@ func (r *flowRun) decide(thread *starlark.Thread, b *starlark.Builtin, args star
 		return nil, fmt.Errorf("decide: type is bool, number or choice, not %q", in.Type)
 	}
 	in.At = r.at(thread)
+	if err := r.step("decide", in); err != nil {
+		return nil, err
+	}
 	// The prompt is stored, and travels by hash (invariant 5).
 	h, err := kairo.Call[string](r.ctx, ActFlowPut, FlowPutInput{Role: string(msg.User), Text: in.Prompt})
 	if err != nil {
@@ -348,6 +393,11 @@ func (r *flowRun) decide(thread *starlark.Thread, b *starlark.Builtin, args star
 type agentSpec struct {
 	agent, prompt, model string
 	at                   string // where in the script
+}
+
+// content is what the agent is to do, for flow.step.
+func (s agentSpec) content() map[string]string {
+	return map[string]string{"agent": s.agent, "prompt": s.prompt, "model": s.model, "at": s.at}
 }
 
 // agentDone is how one agent ended.
@@ -413,6 +463,9 @@ func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starl
 		return nil, err
 	}
 	s.at = r.at(thread)
+	if err := r.step("agent", s.content()); err != nil {
+		return nil, err
+	}
 	d, err := r.runAgent(r.ctx, s)
 	if err != nil {
 		return nil, r.fail(err)
@@ -467,6 +520,13 @@ func (r *flowRun) parallel(thread *starlark.Thread, b *starlark.Builtin, args st
 	at := r.at(thread)
 	for i := range specs {
 		specs[i].at = at
+	}
+	contents := make([]map[string]string, len(specs))
+	for i := range specs {
+		contents[i] = specs[i].content()
+	}
+	if err := r.step("parallel", contents); err != nil {
+		return nil, err
 	}
 	done := make([]agentDone, len(specs))
 	fns := make([]func(*kairo.Context) error, len(specs))
@@ -527,6 +587,9 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 		return outcome(false, "", "no tool "+name), nil
 	}
 	at := r.at(thread)
+	if err := r.step("tool", map[string]any{"name": name, "args": json.RawMessage(raw), "at": at}); err != nil {
+		return nil, err
+	}
 	r.tools++
 	// The call's id names it in the conversation and in the wait for its
 	// approval: the flow's turn and the call's place among its tool calls.

@@ -347,4 +347,9 @@ def main(input):
   - hook のフローの入力には、出来事、何回目、何番目（`FlowInput.Hook`）を入れます（不変条件 8）。
   - エージェントの定義（`.opencode/agents/*.md`）に `workflow: <flow>` と書くと、そのエージェントのターンは、モデルのループの代わりにそのフローで進みます。利用者の発言が `input["args"]` です（`TestAgentWorkflow`）。
   - どれも記録されたエージェントの定義の新しい欄で分けたので、それを持たない進行中のターンは、今までと同じ呼び出しをします。
-- **まだ:** `kairocode flow show --follow`、`tool.after` と `session.start` の hook、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **ずれの検出と M3 の残り（8 歩目）:**
+  - フローの版を 3 に上げました（版 2、版 1 は `Draining` で残す）。各プリミティブを呼ぶ前に、何番目の呼び出しで、何をするか（種類と中身のハッシュ）を `flow.step` で記録します。
+  - 同じ中身で再開した呼び出しは、記録から結果が返るので `flow.step` の処理は動きません。動くのは、中身が変わったとき（同じ版のままコードが変わったときなど）だけです。そのときは、同じ番目で別の中身の記録があれば「ずれた」と答え、フローは呼び出しをせずに止まります（`TestWorkflowScriptDivergence`。照合を外すと、新しいエージェントが動いて落ちることを確かめた）。
+  - `kairocode flow show [-follow] <session>` は、セッションの最新のフローを、呼び出しの状態つきで描きます。`-follow` を付けると、進むたびに描き直し、終わったら抜けます（`GET /sessions/{id}/flow`、`TestFlowShowFollow`）。
+  - トークンの上限（`TestFlowTokenLimit`）と、ターンを止めるとフローとそのエージェントも止まること（`TestCancelStopsTheFlow`）を確かめました。
+- **まだ:** `tool.after` と `session.start` の hook、`kairocode flow stats`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。

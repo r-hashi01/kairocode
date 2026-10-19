@@ -102,17 +102,17 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 受け入れ条件:
 
 - [x] `TestCrashWorkflowScriptResume`: 10 個の `agent` を `parallel` で並べたスクリプトを途中で強制終了して再開すると、終わった葉はやり直さない。
-- [ ] `TestWorkflowScriptDivergence`: 記録と違う呼び出しをするスクリプトで再開すると、実行せずに止まる。
-- [ ] `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。 → ステップ数とエージェントの数は `TestFlowMistakesAreReplies`。トークンが残り。
+- [x] `TestWorkflowScriptDivergence`: 記録と違う呼び出しをするスクリプトで再開すると、実行せずに止まる。
+- [x] `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。（`TestFlowMistakesAreReplies`、`TestFlowTokenLimit`）
 - [x] `TestTurnEndHookBlocks`: `turn.end` のフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
 - [x] `TestWorkflowGraph`: フローの図が、順番、`if`、`parallel`、`for`、`def` の展開、`phase` を正しく表し、幅が足りないときはまとめ、木の図に切り替える。（`TestBuild`、`TestChartLooks`、`TestChartStates`、`TestChartTooNarrow`、`TestFlowGraph`）
-- [ ] `TestWorkflowLive`: 実行の木の状態が、図の箱の印と色、繰り返しの回に写る。`kairocode flow show <実行> --follow` が同じ図を出す。 → TUI と ACP は済み（`TestFlowEvents`、`TestFlowAgentWaiting`、`TestFlowLive`、`TestACPFlowPlan`）。`kairocode flow show --follow` が残り。
+- [x] `TestWorkflowLive`: 実行の木の状態が、図の箱の印と色、繰り返しの回に写る。`kairocode flow show <実行> --follow` が同じ図を出す。（`TestFlowEvents`、`TestFlowAgentWaiting`、`TestFlowLive`、`TestACPFlowPlan`、`TestFlowShowFollow`）
 - [x] `TestDraftFromWords`: `/flow new` で、モデルが書いたスクリプトが検査を通ってファイルになり、図で見え、`/flow <name>` で動く。入力欄から頼んだ変更で図が描き直される。（`TestNewFlow`、`TestFlowWrite`、`TestCheck`、`TestDiff`、`TestFlowsTheTurnMade`）
 - [x] `TestEditOnTheChart`: 図の上で箱の中身を書き換える、消す、入れ替えると、スクリプトのその引数と文の並びだけが変わる。（`TestSetText`、`TestDeleteAndMove`、`TestEditOnTheChart`）
 - [x] 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。（`TestFlowKeepsItsScript`）
 - [x] リポジトリの hook が初めて走る前に、利用者に確認する。（`TestTurnEndHookBlocks`。台本が変わったらまた聞く）
 - [x] エージェントの定義に `workflow:` を書くと、そのエージェントのターンがそのフローで進む。（`TestAgentWorkflow`）
-- [ ] 親を止めると、子も止まる（ADR 0011）。
+- [x] 親を止めると、子も止まる（ADR 0011）。（`TestCancelStopsTheFlow`）
 
 ## M4 非対話とサーバーレス
 

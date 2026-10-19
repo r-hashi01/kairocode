@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -149,4 +150,31 @@ func (r *Runtime) RunFlow(ctx context.Context, session, name, args string) (int,
 	}
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h,
 		Flow: &workflows.FlowCall{Name: name, Args: args}})
+}
+
+// flowStep answers whether the flow's Seq-th call is the one a run before
+// made there (or none was made): another one means the flow went another
+// way, and it stops (ADR 0003). A call made as before is read back from
+// the record without coming here; this runs only for a call that is new.
+func (r *Runtime) flowStep(t *kairo.TaskContext, in workflows.FlowStep) (bool, error) {
+	i := strings.LastIndex(t.RunID, "/")
+	if i < 0 {
+		return true, nil
+	}
+	kids, err := r.K.Children(t, t.RunID[:i])
+	if err != nil {
+		return false, kairo.Retryable(err) // it only reads: asking again is safe
+	}
+	for _, k := range kids {
+		if k.Plan != "kairo.call/"+workflows.ActFlowStep || k.RunID == t.RunID {
+			continue
+		}
+		var before struct {
+			In workflows.FlowStep `json:"in"`
+		}
+		if json.Unmarshal(k.Input, &before) == nil && before.In.Seq == in.Seq && before.In.Sig != in.Sig {
+			return false, nil
+		}
+	}
+	return true, nil
 }
