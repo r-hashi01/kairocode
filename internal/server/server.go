@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strconv"
 
+	kairo "github.com/r-hashi01/kairo/sdk/go"
+
+	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -34,6 +37,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
 	s.mux.HandleFunc("POST /approvals", s.approve)
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
+	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
 	return s
 }
 
@@ -199,4 +203,23 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 	}
+}
+
+// history is the session's conversation as of its last finished turn: the
+// messages' roles and parts (not their providers' encodings).
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	ms, err := s.rt.History(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]msg.Message, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, msg.Message{Role: m.Role, Parts: m.Parts})
+	}
+	writeJSON(w, http.StatusOK, out)
 }

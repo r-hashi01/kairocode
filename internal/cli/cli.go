@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -28,7 +30,8 @@ const usage = `usage:
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode daemon [-data DIR]                       run the daemon in the foreground
-  kairocode daemon [-data DIR] stop                  stop it (a step running is cut, as in a crash)
+  kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
+  kairocode acp [-data DIR]                          an ACP agent on stdin and stdout, for editors (ADR 0002)
 
 One daemon per data directory runs the sessions (ADR 0008); the commands
 above start it when it is not running, and it stops after 10 minutes with
@@ -62,6 +65,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = approvals(ctx, args[1:], stdout, stderr)
 	case "approve":
 		err = approve(ctx, args[1:], stderr)
+	case "acp":
+		err = runACP(ctx, args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -406,4 +411,26 @@ func oneLine(s string, max int) string {
 		return string(r[:max]) + "…"
 	}
 	return s
+}
+
+// stdin is what `kairocode acp` reads (a variable for tests).
+var stdin io.Reader = os.Stdin
+
+// runACP serves ACP on stdin and stdout (ADR 0002) as a client of the
+// daemon. Its sessions run with KAIROCODE_ENGINE and KAIROCODE_MODEL.
+func runACP(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("acp", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return acp.Serve(ctx, c, stdin, stdout, acp.Options{Version: buildVersion(),
+		Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
+		Logger: slog.New(slog.NewTextHandler(stderr, nil))})
 }

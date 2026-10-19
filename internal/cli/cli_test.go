@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -228,5 +232,93 @@ func until(t *testing.T, ctx context.Context, what string, cond func() bool) {
 			t.Fatalf("%s: %v", what, ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// `kairocode acp` is an ACP agent on stdin and stdout, a client of the
+// daemon: a turn goes to its end, and session/load in a second agent
+// replays it through the daemon's history (ADR 0002, issue #9).
+func TestACPCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module example.com/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, dir,
+		provider.FakeReply{Tools: []provider.FakeTool{{Name: "glob", Input: json.RawMessage(`{"pattern":"*.mod"}`)}}},
+		provider.FakeReply{Text: "the module is example.com/x"},
+	))
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// agent runs `kairocode acp` with the given requests (one JSON object per
+	// line) and returns what it wrote, once it has answered request last.
+	agent := func(last string, requests ...string) []map[string]any {
+		t.Helper()
+		inR, inW := io.Pipe()
+		outR, outW := io.Pipe()
+		stdin = inR
+		defer func() { stdin = os.Stdin }()
+		code := make(chan int, 1)
+		var stderr lockedBuffer
+		go func() {
+			code <- Main(ctx, []string{"acp", "-data", data}, outW, &stderr)
+			outW.Close()
+		}()
+		go func() {
+			for _, r := range requests {
+				io.WriteString(inW, r+"\n")
+			}
+		}()
+		var got []map[string]any
+		lines := bufio.NewScanner(outR)
+		for lines.Scan() {
+			var m map[string]any
+			if err := json.Unmarshal(lines.Bytes(), &m); err != nil {
+				t.Fatalf("%q: %v", lines.Text(), err)
+			}
+			got = append(got, m)
+			if id, ok := m["id"].(float64); ok && strconv.Itoa(int(id)) == last && m["method"] == nil {
+				break
+			}
+		}
+		inW.Close()
+		go io.Copy(io.Discard, outR)
+		if c := <-code; c != 0 {
+			t.Fatalf("exit %d: %s", c, stderr.String())
+		}
+		return got
+	}
+	hello := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}`
+	got := agent("2", hello, `{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"`+ws+`","mcpServers":[]}}`)
+	session, _ := got[len(got)-1]["result"].(map[string]any)["sessionId"].(string)
+	if session == "" {
+		t.Fatalf("session/new: %v", got)
+	}
+	got = agent("3", hello, `{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"`+session+
+		`","prompt":[{"type":"text","text":"what module is this?"}]}}`)
+	if r, _ := got[len(got)-1]["result"].(map[string]any); r["stopReason"] != "end_turn" {
+		t.Fatalf("prompt: %v", got[len(got)-1])
+	}
+	got = agent("4", hello, `{"jsonrpc":"2.0","id":4,"method":"session/load","params":{"sessionId":"`+session+
+		`","cwd":"`+ws+`","mcpServers":[]}}`)
+	var replayed []string
+	for _, m := range got {
+		if m["method"] == "session/update" {
+			u := m["params"].(map[string]any)["update"].(map[string]any)
+			replayed = append(replayed, u["sessionUpdate"].(string))
+		}
+	}
+	want := []string{"user_message_chunk", "tool_call", "tool_call_update", "agent_message_chunk"}
+	if !slices.Equal(replayed, want) {
+		t.Fatalf("replayed %v, want %v", replayed, want)
 	}
 }

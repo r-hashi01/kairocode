@@ -92,3 +92,22 @@ KairoCode の設定は KairoCode の置き場（`kairocode.json`、`.kairocode/`
 - **自前の TUI を作る:** 画面の作り込みに時間がかかります。ACP のクライアントの表示より良くなる見込みは薄いです。
 - **opencode を fork する:** TypeScript なので、ADR 0001 と逆の方向です。
 - **ACP のクライアントの `fs/*` と `terminal/*` に、ファイルと端末の操作を任せる:** v2 で無くなります。作用が kairo の記録と sandbox の外で起きます。
+
+## 実装（2026-10-19、M2）
+
+- **Go の ACP は自分で作りました。** JSON-RPC と stdio だけなので、依存（コミュニティの SDK）は足していません。`internal/acp` にあります。
+- **固定した版:** ACP の schema の v1（`schema-v1.26.0`）を、`internal/acp/testdata/acp-schema-v1.26.0/` に置きました（Apache-2.0。LICENSE も置いた）。テストのクライアントは、エージェントから受け取るすべてのメッセージを、この schema で確かめます。検査器は、ACP の schema が使うキーワードだけを持つ、テストの中の小さなものです（`TestSchemaChecker` で、通すものと落とすものを確かめる）。
+- **ACP のプロセスはデーモンのクライアントです**（ADR 0008。上の「ランタイムを埋め込む」を置き換える）。エディタが `kairocode acp` を閉じても、セッションと承認の待ちはデーモン（kairo）に残ります。
+- 実装したメソッドは `initialize`、`session/new`、`session/load`、`session/prompt`、`session/update`（`agent_message_chunk`、`tool_call`、`tool_call_update`、`user_message_chunk`）、`session/request_permission`、`$/cancel_request` です。
+  - ほかのクライアントが先に承認に答えると、出していた `request_permission` を `$/cancel_request` で取り下げます（`TestACPPermissionAnsweredElsewhere`）。
+  - `session/load` は、最後に終わったターンまでの会話を送り直し、待っている承認と要確認をもう一度聞きます（`TestACPApprovalSurvivesRestart`）。
+- **要確認の選択肢は、どちらも `reject_once` の種類にしました。** ACP の選択肢の種類は表示の手がかりですが、ツールを自動で許すクライアントがあります。「効いた」を `allow_once` にすると、人が答えずに要確認が決着し得ます（不変条件 4）。選択肢の ID は `did_not_take_effect` と `took_effect` です。提示していない ID の答えは受け取らず、待ちは kairo に残ります（`TestCrashACPReview`）。
+- 要確認と、Claude Code のエンジンの承認には、まだクライアントに伝えた `tool_call` がありません。そのため、`request_permission` の前に、同じ ID の `tool_call` を送ります。
+- `session/prompt` の応答は、そのターンの更新をすべて送ってから返します。見張りは、`Send` の前に始めます。
+- まだ入れていないもの:
+  - `session/cancel`（#11）
+  - `allow_always`（規則として記録する）
+  - `plan`
+  - スラッシュのコマンド
+  - 差分の表示（`tool_call` の `diff`）
+

@@ -326,3 +326,10 @@ func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Eve
 	}()
 	return out, nil
 }
+
+// History is the session's conversation as of its last finished turn.
+func (c *Client) History(ctx context.Context, session string) ([]msg.Message, error) {
+	var out []msg.Message
+	err := c.do(ctx, "GET", sessionPath(session)+"/history", nil, &out)
+	return out, err
+}

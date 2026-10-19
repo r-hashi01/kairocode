@@ -599,3 +599,37 @@ func (r *Runtime) Reply(ctx context.Context, hash string) (string, error) {
 func (r *Runtime) logf(format string, args ...any) {
 	r.cfg.Logger.Warn(fmt.Sprintf(format, args...))
 }
+
+// History is the session's conversation as of its last finished turn: what
+// a client that comes back shows (ACP's session/load).
+func (r *Runtime) History(ctx context.Context, session string) ([]msg.Message, error) {
+	if _, err := r.K.Get(ctx, session); err != nil {
+		return nil, err
+	}
+	runs, err := r.K.Children(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	last, run := -1, ""
+	for _, t := range runs {
+		if t.Workflow != workflows.Turn || t.Status != "completed" {
+			continue
+		}
+		var in workflows.TurnInput
+		if json.Unmarshal(input(t), &in) == nil && in.N > last {
+			last, run = in.N, t.RunID
+		}
+	}
+	if run == "" {
+		return nil, nil
+	}
+	out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, run)
+	if err != nil {
+		return nil, err
+	}
+	hashes, err := r.Store.Conversation(ctx, out.Head)
+	if err != nil {
+		return nil, err
+	}
+	return r.Store.Messages(ctx, hashes)
+}
