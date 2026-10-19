@@ -223,3 +223,37 @@ func TestEventsStreamTokens(t *testing.T) {
 		}
 	}
 }
+
+// A watcher that does not keep up is dropped, so the runtime never waits
+// for it: its channel closes, and it watches again (issue #3).
+func TestEventsDropASlowWatcher(t *testing.T) {
+	long := strings.Repeat("word ", 1000)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: long}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "slow", workflows.SessionInput{Dir: repo(t)})
+	slow, _ := r.Events(ctx, s)
+	n, _ := r.Send(ctx, s, "talk")
+	// The turn ends although the watcher reads nothing.
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	got := 0
+	for {
+		select {
+		case ev, ok := <-slow:
+			if !ok {
+				if got >= 1000 {
+					t.Fatalf("all %d events were kept", got)
+				}
+				return
+			}
+			if ev.Type == EventTurnEnd {
+				t.Fatal("the slow watcher was not dropped")
+			}
+			got++
+		case <-ctx.Done():
+			t.Fatal("the slow watcher's channel did not close")
+		}
+	}
+}

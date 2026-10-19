@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -471,5 +472,84 @@ func TestCrashGitCommitOnce(t *testing.T) {
 	// The index followed HEAD, as git commit leaves it (review M1, item 3).
 	if st := git("status", "--porcelain"); st != "" {
 		t.Fatalf("not clean after the resumed commit:\n%s", st)
+	}
+}
+
+// TestCrashEventsAfterRestart: the process dies while a command runs. One
+// who watches the session in the next process is told the call waits for
+// review, then that it was answered, the call's end and the turn's end
+// (issues #3, #7).
+func TestCrashEventsAfterRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	dir := t.TempDir()
+	db := filepath.Join(dir, "k.db")
+	ws := repo(t)
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo ran >> count.txt; touch started; sleep 5"}`)}}},
+		{Text: "done"},
+	}
+	fakeFile := filepath.Join(dir, "fake.json")
+	b, _ := json.Marshal(provider.Fake{Script: script, HoldAt: -1})
+	if err := os.WriteFile(fakeFile, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, filepath.Join(ws, "started"), cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{Script: script, HoldAt: -1}, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("crash")
+	events, err := r.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Told on joining, or as it happens: the call stopped for review.
+	review := next(t, ctx, events)
+	if review.Type != EventReviewRequested || review.Pending == nil || review.Pending.Kind != "review" ||
+		review.Tool != "bash" || !strings.Contains(review.Pending.Subject, "count.txt") {
+		t.Fatalf("first event %+v", review)
+	}
+	if err := r.Approve(ctx, review.Pending.Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	var end, resolved Event
+	for {
+		ev := next(t, ctx, events)
+		got = append(got, ev.Type)
+		switch ev.Type {
+		case EventToolEnd:
+			end = ev
+		case EventReviewResolved:
+			resolved = ev
+		}
+		if ev.Type == EventTurnEnd {
+			if ev.Reply != "done" {
+				t.Fatalf("turn end %+v", ev)
+			}
+			break
+		}
+	}
+	want := []string{EventToolEnd, EventReviewResolved, EventTurnEnd}
+	if !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	if resolved.Key != review.Pending.Key || !strings.Contains(end.Output, "says it did take effect") || end.IsError {
+		t.Fatalf("resolved %+v, tool end %+v", resolved, end)
 	}
 }
