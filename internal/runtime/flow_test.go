@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -915,5 +916,288 @@ def main(input):
 	}
 	if b, _ := os.ReadFile(calls); len(b) != 0 {
 		t.Fatalf("the model was called: %q", b)
+	}
+}
+
+// agent(schema=): the agent's reply comes back as a dict of the fields,
+// typed (decided from the reply, as decide does); a decision that does not
+// fit the schema is ok False, with the reply as output.
+func TestAgentSchema(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/plan.star": `
+def main(input):
+    p = agent(agent = "plan", prompt = "plan it", schema = {"plan": "string", "tests": "list", "risky": "bool"})
+    if not p.ok:
+        return "no plan: " + p.error
+    return "%s; %d tests; risky %s" % (p.value["plan"], len(p.value["tests"]), p.value["risky"])
+`})
+	for decided, want := range map[string]string{
+		`{"value": {"plan": "add a flag", "tests": ["a", "b"], "risky": false}}`: "add a flag; 2 tests; risky False",
+		`{"value": {"plan": "add a flag", "tests": "a, b", "risky": false}}`:     "no plan: its tests is not a list",
+	} {
+		r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Decide: json.RawMessage(decided),
+			Script: []provider.FakeReply{{Text: "Plan: add a flag. Tests: a, b."}}})
+		if _, text, _ := flowTurn(t, r, ws, "plan", ""); text != want {
+			t.Errorf("%s: %q, want %q", decided, text, want)
+		}
+	}
+}
+
+// The task tool (FR-13): the model hands tasks to subagents, two at once;
+// each runs as a turn of its own and its reply is the call's result; a
+// subagent of an agent that is not there fails as a result, not the turn.
+// A subagent is not given the task tool, nor is the plan agent.
+func TestTaskTool(t *testing.T) {
+	ws := repo(t)
+	task := func(agent, prompt string) provider.FakeTool {
+		b, _ := json.Marshal(map[string]string{"agent": agent, "prompt": prompt})
+		return provider.FakeTool{Name: "task", Input: b}
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
+		Script: []provider.FakeReply{
+			{Tools: []provider.FakeTool{task("build", "look at main.go"), task("nobody", "do nothing"),
+				{Name: "task", Input: json.RawMessage(`{"prompt": 3}`)}, task("build", " ")}},
+			{Text: "the subagents answered"},
+		},
+		Replies: map[string]provider.FakeReply{"look at main.go": {Text: "main prints hi"}},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "task", workflows.SessionInput{Dir: ws})
+	out := turn(t, r, s, "find out what main does")
+	if text, _ := r.Reply(ctx, out.Reply); text != "the subagents answered" {
+		t.Fatalf("reply %q", text)
+	}
+	conv := strings.Join(conversationOf(t, r, s, true), "\n")
+	for _, want := range []string{"tool: main prints hi", "tool: The subagent failed:", `no agent "nobody"`,
+		"tool: the arguments are not", "tool: the task has no prompt"} {
+		if !strings.Contains(conv, want) {
+			t.Errorf("no %q in\n%s", want, conv)
+		}
+	}
+	// Who has the task tool.
+	run, _, _ := r.TurnRun(ctx, s, 0)
+	kids, _ := r.K.Children(ctx, run.RunID)
+	subs := 0
+	for _, k := range kids {
+		if k.Workflow != workflows.Turn {
+			continue
+		}
+		subs++
+		calls, _ := r.K.Children(ctx, k.RunID)
+		for _, c := range calls {
+			if c.Plan == "kairo.call/"+workflows.ActAgentLoad && c.Status == "completed" {
+				var a workflows.Agent
+				json.Unmarshal(c.Output, &a)
+				if slices.Contains(a.Names, "task") {
+					t.Errorf("the subagent %s has the task tool", a.Name)
+				}
+			}
+		}
+	}
+	if subs != 2 {
+		t.Fatalf("%d subagents", subs)
+	}
+	if a := agentOf(t, ctx, r, s, 0); !slices.Contains(a.Names, "task") {
+		t.Fatalf("the build agent has no task tool: %v", a.Names)
+	}
+	plan, _ := r.CreateSession(ctx, "plan-task", workflows.SessionInput{Dir: ws, Agent: "plan"})
+	turn(t, r, plan, "find out what main does")
+	if a := agentOf(t, ctx, r, plan, 0); slices.Contains(a.Names, "task") {
+		t.Fatal("the plan agent has the task tool")
+	}
+}
+
+// The child of TestCrashTaskResume: one message, whose reply hands two
+// tasks to subagents; it says it is ready once the first has ended and the
+// second is in its model call.
+func crashTaskChild() {
+	ctx := context.Background()
+	fake, err := provider.LoadFake(os.Getenv("KC_FAKE"))
+	if err != nil {
+		panic(err)
+	}
+	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash"})
+	if err != nil {
+		panic(err)
+	}
+	s, err := r.CreateSession(ctx, "crash", workflows.SessionInput{Dir: os.Getenv("KC_DIR")})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := r.Send(ctx, s, "what does main do?"); err != nil {
+		panic(err)
+	}
+	for {
+		if subagentsEnded(ctx, r, s) == 1 && exists(os.Getenv("KC_HOLD")) {
+			os.WriteFile(os.Getenv("KC_READY"), nil, 0o600)
+			select {}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// subagentsEnded counts the subagents of session s's first turn that have
+// ended.
+func subagentsEnded(ctx context.Context, r *Runtime, s string) int {
+	run, ok, err := r.TurnRun(ctx, s, 0)
+	if err != nil || !ok {
+		return 0
+	}
+	kids, _ := r.K.Children(ctx, run.RunID)
+	count := 0
+	for _, k := range kids {
+		if k.Workflow == workflows.Turn && k.Status == "completed" {
+			count++
+		}
+	}
+	return count
+}
+
+// TestCrashTaskResume: a process killed while the second of two tasks runs,
+// the first ended, is followed by one that finishes the turn running only
+// the second subagent again (FR-13, NFR-1).
+func TestCrashTaskResume(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a child process and kills it")
+	}
+	dir := t.TempDir()
+	ws := repo(t)
+	db, hold, ready := filepath.Join(dir, "k.db"), filepath.Join(dir, "held"), filepath.Join(dir, "ready")
+	task := func(prompt string) provider.FakeTool {
+		b, _ := json.Marshal(map[string]string{"prompt": prompt})
+		return provider.FakeTool{Name: "task", Input: b}
+	}
+	fake := provider.Fake{HoldAt: -1,
+		Script:  []provider.FakeReply{{Tools: []provider.FakeTool{task("task one"), task("task two")}}, {Text: "both done"}},
+		Replies: map[string]provider.FakeReply{"task one": {Text: "one done"}, "task two": {Text: "two done"}},
+	}
+	child := fake
+	child.HoldOn, child.HoldFile = "task two", hold
+	b, err := json.Marshal(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "child.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_TASK_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_HOLD="+hold, "KC_READY="+ready,
+		"KC_FAKE="+filepath.Join(dir, "child.json"))
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, ready, cmd)
+	cmd.Process.Signal(syscall.SIGKILL)
+
+	prompts := filepath.Join(dir, "prompts")
+	fake.PromptLog = prompts
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Owner: "crash", Provider: &fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("crash")
+	out, err := r.WaitTurn(ctx, s, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); text != "both done" {
+		t.Fatalf("reply %q", text)
+	}
+	conv := strings.Join(conversationOf(t, r, s, true), "\n")
+	for _, want := range []string{"tool: one done", "tool: two done"} {
+		if !strings.Contains(conv, want) {
+			t.Errorf("no %q in\n%s", want, conv)
+		}
+	}
+	b, _ = os.ReadFile(prompts)
+	got := strings.Split(strings.TrimSpace(string(b)), "\n")
+	slices.Sort(got)
+	if want := []string{"task two", "what does main do?"}; !slices.Equal(got, want) {
+		t.Fatalf("model calls after the restart, by first prompt: %q, want %q (the subagent that had ended is not run again)", got, want)
+	}
+}
+
+// session.start hooks speak with the first request; tool.after hooks with
+// a call's result, given the tool and what it acts on, only for the tool
+// they name, and not after a call that did not run (here, of a tool the
+// agent lacks).
+func TestToolAfterAndSessionStartHooks(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{
+		ConfigFile:                             `{"hooks": {"session.start": ["guide"], "tool.after": [{"tool": "glob", "flow": "never"}, {"tool": "nope", "flow": "never"}, {"tool": "read", "flow": "after-read"}]}}`,
+		".kairocode/workflows/guide.star":      "def main(input):\n    return {\"ok\": False, \"message\": \"mind the style guide\"}\n",
+		".kairocode/workflows/after-read.star": "def main(input):\n    return {\"ok\": False, \"message\": \"you read \" + input[\"args\"]}\n",
+		".kairocode/workflows/never.star":      "def main(input):\n    return {\"ok\": False, \"message\": \"never\"}\n",
+		".kairocode/workflows/fine.star":       "def main(input):\n    return {\"ok\": True, \"message\": \"fine\"}\n",
+	})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "read", Input: json.RawMessage(`{"path":"main.go"}`)}, {Name: "nope", Input: json.RawMessage(`{}`)}}},
+		{Text: "done"},
+		{Text: "again"},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "hooks", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "look at main")
+	for _, flow := range []string{"guide", "after-read"} {
+		var p []Pending
+		waitUntil(t, ctx, "the hook "+flow, func() bool {
+			p, _ = r.Pending(ctx, s)
+			return len(p) == 1 && p[0].Subject == flow
+		})
+		if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	conv := strings.Join(conversation(t, r, s), "\n")
+	for _, want := range []string{"[What the session's start says: guide: mind the style guide]", "read: after-read: you read read main.go"} {
+		if !strings.Contains(conv, want) {
+			t.Errorf("no %q in\n%s", want, conv)
+		}
+	}
+	if strings.Contains(conv, "never") {
+		t.Fatalf("a hook of another tool ran:\n%s", conv)
+	}
+	// The second turn is not the session's start.
+	if out := turn(t, r, s, "and?"); out.Stopped != "" {
+		t.Fatal(out)
+	}
+
+	// flow stats: what ran, from where, how it ended; and what never ran.
+	n, err := r.RunFlow(ctx, s, "fine", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := r.FlowStats(ctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, st := range stats {
+		got = append(got, fmt.Sprintf("%s runs=%d ok=%d failed=%d running=%d from=%q defined=%v",
+			st.Name, st.Runs, st.OK, st.Failed, st.Running, FlowFrom(st.From), st.Defined))
+	}
+	want := []string{
+		`after-read runs=1 ok=0 failed=1 running=0 from="hook 1" defined=true`,
+		`fine runs=1 ok=1 failed=0 running=0 from="command 1" defined=true`,
+		`guide runs=1 ok=0 failed=1 running=0 from="hook 1" defined=true`,
+		`never runs=0 ok=0 failed=0 running=0 from="" defined=true`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("stats:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if other, err := r.FlowStats(ctx, t.TempDir()); err != nil || len(other) != 0 {
+		t.Fatalf("another folder's stats: %v %v", other, err)
 	}
 }

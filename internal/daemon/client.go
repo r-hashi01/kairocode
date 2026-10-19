@@ -422,6 +422,14 @@ func (c *Client) LastFlow(ctx context.Context, session string) (*flowchart.View,
 	return &v, err
 }
 
+// FlowStats are the flows the sessions in dir ran, and the project's
+// flows that none ran.
+func (c *Client) FlowStats(ctx context.Context, dir string) ([]runtime.FlowStat, error) {
+	var out []runtime.FlowStat
+	err := c.do(ctx, "GET", "/flows/stats?dir="+url.QueryEscape(dir), nil, &out)
+	return out, err
+}
+
 // NewFlow has the model write a flow from request (/flow new) and returns
 // the turn's number.
 func (c *Client) NewFlow(ctx context.Context, session, request string) (int, error) {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +23,10 @@ type Fake struct {
 	// CallLog, if set, gets one line per call ("<index>\n"), appended, so a
 	// test can count calls across processes.
 	CallLog string `json:"call_log,omitempty"`
+	// PromptLog, if set, gets one line per call: the request's first user
+	// text on one line, so a test can tell whose calls were made (the
+	// subagent given a prompt).
+	PromptLog string `json:"prompt_log,omitempty"`
 	// HoldAt is the reply index at which the fake writes HoldFile and then
 	// waits until its context ends, so a test can kill the process mid-call.
 	// It applies only when HoldFile is set.
@@ -29,6 +35,12 @@ type Fake struct {
 	// HoldOn, if set, holds instead the calls whose last user message has
 	// it in its text (one of agents run at once).
 	HoldOn string `json:"hold_on,omitempty"`
+	// Replies answers, in place of the script, a request whose first user
+	// message has the key in its text (a subagent given that prompt).
+	Replies map[string]FakeReply `json:"replies,omitempty"`
+	// Decide, if set, answers a request that forces a tool (Request.Force):
+	// it calls that tool with this input, whatever the script says.
+	Decide json.RawMessage `json:"decide,omitempty"`
 	// ReleaseFile, if set, ends the hold when it appears: the call then
 	// answers from the script, so a test can let a held call finish.
 	ReleaseFile string `json:"release_file,omitempty"`
@@ -71,6 +83,11 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 			return Response{}, err
 		}
 	}
+	if f.PromptLog != "" {
+		if err := appendLine(f.PromptLog, strings.Join(strings.Fields(firstUserText(r.Messages)), " ")); err != nil {
+			return Response{}, err
+		}
+	}
 	if f.HoldFile != "" && (f.HoldOn == "" && i == f.HoldAt || f.HoldOn != "" && strings.Contains(lastUserText(r.Messages), f.HoldOn)) {
 		if err := os.WriteFile(f.HoldFile, nil, 0o600); err != nil {
 			return Response{}, err
@@ -79,10 +96,26 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 			return Response{}, err
 		}
 	}
-	if i >= len(f.Script) {
-		return Response{}, fmt.Errorf("fake provider: no reply %d in a script of %d", i, len(f.Script))
+	if r.Force != "" && len(f.Decide) > 0 {
+		return Response{Message: msg.Message{Role: msg.Assistant, Parts: []msg.Part{
+			{Type: msg.ToolUse, ID: "toolu_force", Name: r.Force, Input: f.Decide}}}, Stop: StopToolUse,
+			Usage: msg.Usage{Input: 10, Output: 5}}, nil
 	}
-	s := f.Script[i]
+	s, found := FakeReply{}, false
+	if first := firstUserText(r.Messages); first != "" {
+		for _, key := range slices.Sorted(maps.Keys(f.Replies)) {
+			if strings.Contains(first, key) {
+				s, found = f.Replies[key], true
+				break
+			}
+		}
+	}
+	if !found {
+		if i >= len(f.Script) {
+			return Response{}, fmt.Errorf("fake provider: no reply %d in a script of %d", i, len(f.Script))
+		}
+		s = f.Script[i]
+	}
 	m := msg.Message{Role: msg.Assistant}
 	if s.Text != "" {
 		m.Parts = append(m.Parts, msg.Part{Type: msg.Text, Text: s.Text})
@@ -150,6 +183,23 @@ func lastUserText(ms []msg.Message) string {
 		}
 		var b strings.Builder
 		for _, p := range ms[i].Parts {
+			if p.Type == msg.Text {
+				b.WriteString(p.Text)
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// firstUserText is the text of the first user message.
+func firstUserText(ms []msg.Message) string {
+	for _, m := range ms {
+		if m.Role != msg.User {
+			continue
+		}
+		var b strings.Builder
+		for _, p := range m.Parts {
 			if p.Type == msg.Text {
 				b.WriteString(p.Text)
 			}

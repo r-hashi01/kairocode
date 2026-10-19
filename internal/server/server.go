@@ -49,6 +49,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/flows", s.runFlow)
 	s.mux.HandleFunc("POST /sessions/{id}/flows/new", s.newFlow)
 	s.mux.HandleFunc("GET /sessions/{id}/flow", s.lastFlow)
+	s.mux.HandleFunc("GET /flows/stats", s.flowStats)
 	return s
 }
 
@@ -370,6 +371,22 @@ func (s *Server) lastFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// flowStats are the flows the sessions in ?dir= ran, and the project's
+// flows that none ran.
+func (s *Server) flowStats(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		fail(w, http.StatusBadRequest, errors.New("want ?dir="))
+		return
+	}
+	st, err := s.rt.FlowStats(r.Context(), dir)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // newFlow has the model write a flow from words: {"request": "..."}.

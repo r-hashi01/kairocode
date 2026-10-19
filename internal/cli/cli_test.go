@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -482,5 +483,13 @@ func TestFlowShowFollow(t *testing.T) {
 	var again bytes.Buffer
 	if got := Main(ctx, []string{"flow", "show", "-data", data, s}, &again, &again); got != 0 || !strings.Contains(again.String(), "✓ ask") {
 		t.Fatalf("after it ended: exit %d\n%s", got, again.String())
+	}
+	// kairocode flow stats: the flow ran once, from /flow, and ended well.
+	var stats bytes.Buffer
+	if got := Main(ctx, []string{"flow", "stats", "-data", data, "-dir", ws}, &stats, &stats); got != 0 {
+		t.Fatalf("flow stats: exit %d\n%s", got, stats.String())
+	}
+	if !regexp.MustCompile(`(?m)^plan +1 +1 +0 +0 +command 1 +\d{4}-`).MatchString(stats.String()) {
+		t.Fatalf("flow stats:\n%s", stats.String())
 	}
 }

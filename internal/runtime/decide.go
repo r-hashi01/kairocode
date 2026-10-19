@@ -26,6 +26,19 @@ func decideSchema(in workflows.DecideInput) (json.RawMessage, error) {
 		value = map[string]any{"type": "number"}
 	case workflows.DecideChoice:
 		value = map[string]any{"type": "string", "enum": in.Choices}
+	case workflows.DecideObject:
+		props := map[string]any{}
+		var required []string
+		for name, typ := range in.Fields {
+			t, ok := fieldTypes[typ]
+			if !ok {
+				return nil, fmt.Errorf("decide: field %s: no type %q (string, number, bool, list, dict)", name, typ)
+			}
+			props[name] = map[string]any{"type": t}
+			required = append(required, name)
+		}
+		slices.Sort(required)
+		value = map[string]any{"type": "object", "properties": props, "required": required}
 	default:
 		return nil, fmt.Errorf("decide: no type %q", in.Type)
 	}
@@ -34,11 +47,43 @@ func decideSchema(in workflows.DecideInput) (json.RawMessage, error) {
 	})
 }
 
+// fieldTypes are an object's field types, as JSON Schema names them.
+var fieldTypes = map[string]string{"string": "string", "number": "number", "bool": "boolean", "list": "array", "dict": "object"}
+
 // checkDecision reports whether value is a decision of in's type.
 func checkDecision(in workflows.DecideInput, value json.RawMessage) error {
 	var v any
 	if err := json.Unmarshal(value, &v); err != nil {
 		return err
+	}
+	if in.Type == workflows.DecideObject {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s is not an object", value)
+		}
+		for name, typ := range in.Fields {
+			f, found := obj[name]
+			if !found {
+				return fmt.Errorf("the object has no %s", name)
+			}
+			var good bool
+			switch typ {
+			case "string":
+				_, good = f.(string)
+			case "number":
+				_, good = f.(float64)
+			case "bool":
+				_, good = f.(bool)
+			case "list":
+				_, good = f.([]any)
+			case "dict":
+				_, good = f.(map[string]any)
+			}
+			if !good {
+				return fmt.Errorf("its %s is not a %s", name, typ)
+			}
+		}
+		return nil
 	}
 	switch x := v.(type) {
 	case bool:

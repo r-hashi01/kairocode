@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -559,9 +560,10 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 // flowCommand: kairocode flow graph <name>, the chart of a flow from its
 // script (nothing runs, and the daemon is not needed); kairocode flow show
 // <session>, the session's latest flow with its calls' states, and with
-// -follow drawn again as it goes on.
+// -follow drawn again as it goes on; kairocode flow stats, how often each
+// flow of the project ran, from where, and how it ended.
 func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session>")
+	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session> | kairocode flow stats [-data DIR] [-dir DIR]")
 	if len(args) == 0 {
 		return usage
 	}
@@ -628,6 +630,53 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			}
 		}
 		return ctx.Err()
+	case "stats":
+		fs := flag.NewFlagSet("flow stats", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+		dir := fs.String("dir", ".", "working directory")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return usage
+		}
+		abs, err := filepath.Abs(*dir)
+		if err != nil {
+			return err
+		}
+		c, err := connect(ctx, *data)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		stats, err := c.FlowStats(ctx, abs)
+		if err != nil {
+			return err
+		}
+		return writeFlowStats(stdout, stats)
 	}
 	return usage
+}
+
+// writeFlowStats puts flow stats in a table: a flow that is no longer in
+// the project is marked so.
+func writeFlowStats(w io.Writer, stats []runtime.FlowStat) error {
+	if len(stats) == 0 {
+		_, err := fmt.Fprintln(w, "no flows: none in "+runtime.FlowsDir+", and none ran")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "FLOW\tRUNS\tOK\tFAILED\tRUNNING\tFROM\tLAST")
+	for _, s := range stats {
+		name, last := s.Name, "never"
+		if !s.Defined {
+			name += " (gone)"
+		}
+		if !s.Last.IsZero() {
+			last = s.Last.Local().Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n", name, s.Runs, s.OK, s.Failed, s.Running, runtime.FlowFrom(s.From), last)
+	}
+	return tw.Flush()
 }

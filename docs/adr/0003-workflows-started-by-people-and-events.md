@@ -338,7 +338,7 @@ def main(input):
   - これは利用者自身の操作なので、TUI が台本を直接書きます（モデルの `flow_write` ではない）。
   - テスト: `TestSetText`、`TestDeleteAndMove`、`TestEditOnTheChart`（検査を通さずに書く形に壊すと落ちることを確かめた）。
 - **hook とエージェントの `workflow:`（7 歩目）:**
-  - `kairocode.json` の `{"hooks": {"turn.end": ["<flow>", …]}}` で、フローを出来事に結びます。利用者の設定（`~/.config/kairocode/kairocode.json`）とプロジェクトの設定の両方を読み、agent.load で記録します（不変条件 2）。今の出来事は `turn.end` だけです（`tool.after`、`session.start` はまだ）。
+  - `kairocode.json` の `{"hooks": {"turn.end": ["<flow>", …]}}` で、フローを出来事に結びます。利用者の設定（`~/.config/kairocode/kairocode.json`）とプロジェクトの設定の両方を読み、agent.load で記録します（不変条件 2）。出来事は `turn.end`、`tool.after`、`session.start` です（9 歩目）。
   - `turn.end`: モデルが答え終えたら、順に動かします。`ok: false` を返したら、その `message` を利用者の発言としてモデルに返し、ループを続けます。送り返すのは 3 回までです（`TestTurnEndHookBlocks`）。フローのエージェント（`Sub`）のターンには hook はありません。
   - **プロジェクトの hook は、初めて動く前に聞きます。** 権限の判定を種類 `hook`（対象はフローの名前）で通します。規則で `"hook": "allow"` などとも書けます。聞いて許されたら、フォルダ、出来事、フロー、台本のハッシュを記録し（store の `hook-trust`。内容のハッシュで引く既存の表で、表は足していない）、同じ台本の間は聞きません。台本が変わったら、また聞きます。断られた hook は動かしません。読むだけのモード（plan）でも動かしません。
   - 利用者自身の設定の hook も聞きます（durability-reviewer の指摘）。名前で結ぶので、動くのはプロジェクトの台本だからです。
@@ -352,4 +352,12 @@ def main(input):
   - 同じ中身で再開した呼び出しは、記録から結果が返るので `flow.step` の処理は動きません。動くのは、中身が変わったとき（同じ版のままコードが変わったときなど）だけです。そのときは、同じ番目で別の中身の記録があれば「ずれた」と答え、フローは呼び出しをせずに止まります（`TestWorkflowScriptDivergence`。照合を外すと、新しいエージェントが動いて落ちることを確かめた）。
   - `kairocode flow show [-follow] <session>` は、セッションの最新のフローを、呼び出しの状態つきで描きます。`-follow` を付けると、進むたびに描き直し、終わったら抜けます（`GET /sessions/{id}/flow`、`TestFlowShowFollow`）。
   - トークンの上限（`TestFlowTokenLimit`）と、ターンを止めるとフローとそのエージェントも止まること（`TestCancelStopsTheFlow`）を確かめました。
-- **まだ:** `tool.after` と `session.start` の hook、`kairocode flow stats`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **残りの出来事、stats、schema、task（9 歩目）:**
+  - `tool.after`: 実行したツールの呼び出しごとに、結果の後で動きます。`kairocode.json` の要素は、フローの名前か `{"tool": "<ツール>", "flow": "<フロー>"}` で、`tool` を書くとそのツールの後だけで動きます。フローの `input["args"]` は、ツールの名前と、何に対して動いたか（権限の判定と同じ対象。パスやコマンド）です。`ok: false` の `message` は、ツールの結果の後に利用者の発言として足し、モデルに返します。走らなかった呼び出し（断られた、無い、切れた）の後では動きません（durability-reviewer の指摘で、作用の名前の前置きでなく、判定の結果で見分けるように直した）。
+  - `session.start`: セッションの最初のターン（N = 0）の始めに動きます。`ok: false` の `message` を、最初の発言に `[What the session's start says: …]` として足します。2 回目からのターンでは動きません。
+  - どちらも `turn.end` と同じく、初めて動く前に聞き、許された台本だけが動き、`Broken` はモデルに返しません。入力の `Hook` には出来事、何歩目と何番目の呼び出し（`tool.after`）、何番目の hook を入れます（不変条件 8）。hook が無いエージェントは、今までと同じ呼び出しをします。
+  - テスト: `TestToolAfterAndSessionStartHooks`（別のツールの hook を先に置き、ツールの照合を外すと落ちる。`session.start` を外すと落ちることを確かめた）。
+  - `kairocode flow stats [-dir DIR]`: そのフォルダのセッションの記録から、フローごとに、走った回数、入口（`command`: `/flow`、`hook`、`agent`: エージェントの `workflow:`）、成功・失敗（`ok: false`、台本が動かない、失敗、取り消し）・走っている数、最後に走った時刻を出します。プロジェクトにあって一度も走っていないフローも出し、もう無いフローには `(gone)` を付けます（`GET /flows/stats?dir=`、`Runtime.FlowStats`）。数えるのは残っている記録だけです（`KeepFinished` を過ぎた木は消える）。テスト: `TestToolAfterAndSessionStartHooks` の後半（入口の判定を逆にすると落ちることを確かめた）、`TestFlowShowFollow` の後半。
+  - `agent(…, schema = {"名前": "string", …})`: エージェントが答えた後、その答えを `decide` と同じ仕組み（強制したツールの呼び出し）で、決まった欄を持つ dict に直します。欄の型は `"string"`、`"number"`、`"bool"`、`"list"`、`"dict"` です。返るのは `decide` と同じ形（`.ok`、`.value`、`.error`）で、欄が無い・型が合わない値は `ok` が偽になり、理由が `.error` に入ります（`TestAgentSchema`。型の照合を外すと落ちることを確かめた）。
+  - `task` のツール（FR-13）: モデルが自分でサブエージェントを呼びます。ツールとしては実行せず、ターンのワークフローが、子のターン（`Sub`、入力の `At` に `task:<呼び出しの ID>`）として動かし、その答えを呼び出しの結果にします。同じ返答の中の複数の `task` は並べて動き、再起動しても終わったサブエージェントはやり直さず、親を止めると止まります。作用の型は `Read` で、実際の作用は、サブエージェントのツールがそれぞれの権限の判定を通して起こします。サブエージェント、読むだけのモード、Claude Code のエンジンには `task` を渡しません。引数が読めない、`prompt` が空の呼び出しは、ターンを失敗させず、誤りの結果としてモデルに返します（`TestTaskTool`。結果を子の答えにしないよう壊すと落ちることを確かめた）。2 つの `task` の 1 つ目が終わり、2 つ目が動いている間にプロセスを強制終了して再開すると、2 つ目だけがもう一度動きます（`TestCrashTaskResume`。1 つ目も終わる前に殺すと、1 つ目のやり直しを検出して落ちることを確かめた）。フローの `tool("task", …)` は動かさず、`agent()` を使うように返します。
+- **まだ:** `wait`。

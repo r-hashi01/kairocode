@@ -68,6 +68,24 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	if err != nil {
 		return TurnOutput{}, err
 	}
+	if in.N == 0 && !in.Sub && hasHook(agent, HookSessionStart) {
+		// The session's start (ADR 0003): what its hooks say goes with the
+		// first request.
+		said, err := runHooks(ctx, in, agent, HookSessionStart, "start", "", nil)
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		if said != "" {
+			text, err := kairo.Call[string](ctx, ActFlowText, in.Message)
+			if err != nil {
+				return TurnOutput{}, err
+			}
+			if in.Message, err = kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user",
+				Text: text + "\n\n[What the session's start says: " + said + "]"}); err != nil {
+				return TurnOutput{}, err
+			}
+		}
+	}
 	if agent.Workflow != "" && !in.Sub {
 		// The agent's turns are its flow's (ADR 0003): what the user said
 		// is what the flow is given.
@@ -93,7 +111,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		if out.Stopped != "" || in.Sub || hookRounds == maxHookRounds {
 			break
 		}
-		blocked, err := turnEndHooks(ctx, in, agent, hookRounds)
+		blocked, err := runHooks(ctx, in, agent, HookTurnEnd, fmt.Sprint(hookRounds), "", nil)
 		if err != nil {
 			return TurnOutput{}, err
 		}
@@ -172,7 +190,11 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 		calls := make([]func(*kairo.Context) error, len(reply.Calls))
 		for i := range reply.Calls {
 			calls[i] = func(ctx *kairo.Context) error {
-				r, err := runGated(ctx, gates[i], inputs[i])
+				run := runGated
+				if gates[i].Action == ActToolPrefix+TaskTool {
+					run = func(ctx *kairo.Context, _ Gate, ti ToolInput) (ToolOutput, error) { return runTask(ctx, in, ti) }
+				}
+				r, err := run(ctx, gates[i], inputs[i])
 				results[i] = r
 				return err
 			}
@@ -183,6 +205,32 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 		for _, r := range results {
 			turn = append(turn, r.Message)
 		}
+		// tool.after hooks (ADR 0003): what they say goes to the model with
+		// the calls' results.
+		if !in.Sub && hasHook(agent, HookToolAfter) {
+			var said []string
+			for i, c := range reply.Calls {
+				if !ran(gates[i]) {
+					continue
+				}
+				msg, err := runHooks(ctx, in, agent, HookToolAfter, fmt.Sprintf("tool%d.%d", out.Steps, i),
+					strings.TrimSpace(c.Name+" "+gates[i].Subject), func(h Hook) bool { return h.Tool == "" || h.Tool == c.Name })
+				if err != nil {
+					return err
+				}
+				if msg != "" {
+					said = append(said, c.Name+": "+msg)
+				}
+			}
+			if len(said) > 0 {
+				note, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user",
+					Text: "A check that runs after tools did not pass:\n" + strings.Join(said, "\n")})
+				if err != nil {
+					return err
+				}
+				turn = append(turn, note)
+			}
+		}
 		if cut {
 			out.Stopped = reply.Stop
 			break
@@ -191,22 +239,61 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 	return nil
 }
 
-// turnEndHooks runs the turn.end hooks (ADR 0003), in order, and returns
-// the message of the first that does not pass ("" if all pass). A
-// project's hook is asked about before it first runs (and again after its
-// script changes); one the user declines, or the rules deny, is not run.
-func turnEndHooks(ctx *kairo.Context, in TurnInput, agent Agent, round int) (string, error) {
+// runTask runs a task call (FR-13): a subagent, as a turn of its own (a
+// child: it survives restarts, and stops with this turn), given the prompt
+// as its only message; its reply answers the call.
+func runTask(ctx *kairo.Context, in TurnInput, call ToolInput) (ToolOutput, error) {
+	args, err := kairo.Call[TaskArgs](ctx, ActTaskArgs, call)
+	if err != nil {
+		return ToolOutput{}, err
+	}
+	if args.Error != "" {
+		return kairo.Call[ToolOutput](ctx, ActTaskResult, TaskResultInput{Call: call.Call, Text: args.Error, IsError: true})
+	}
+	prompt, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user", Text: args.Prompt})
+	if err != nil {
+		return ToolOutput{}, err
+	}
+	res := TaskResultInput{Call: call.Call}
+	out, err := kairo.Child[TurnOutput](ctx, Turn, TurnInput{
+		Session: in.Session, N: in.N, Dir: in.Dir, Agent: args.Agent, Engine: in.Engine, Model: in.Model,
+		Message: prompt, Sub: true, At: "task:" + call.Call,
+	})
+	var failed *kairo.WorkflowError
+	switch {
+	case errors.As(err, &failed):
+		res.Text, res.IsError = "The subagent failed: "+failed.Message, true
+	case err != nil:
+		return ToolOutput{}, err
+	default:
+		if res.Text, err = kairo.Call[string](ctx, ActFlowText, out.Reply); err != nil {
+			return ToolOutput{}, err
+		}
+		if out.Stopped != "" {
+			res.Text = "[the subagent stopped: " + out.Stopped + "]\n" + res.Text
+		}
+	}
+	return kairo.Call[ToolOutput](ctx, ActTaskResult, res)
+}
+
+// runHooks runs the hooks of event (ADR 0003) that match, in order, with
+// args, and returns the message of the first that does not pass ("" if
+// all pass). tag tells this time from the event's others in the turn (the
+// round, the call). A hook is asked about before it first runs (and again
+// after its script changes); one the user declines, or the rules deny, is
+// not run.
+func runHooks(ctx *kairo.Context, in TurnInput, agent Agent, event, tag, args string, match func(Hook) bool) (string, error) {
 	for i, h := range agent.Hooks {
-		if h.Event != HookTurnEnd {
+		if h.Event != event || match != nil && !match(h) {
 			continue
 		}
 		expect := ""
 		if h.Project {
-			args, err := json.Marshal(map[string]string{"name": h.Flow, "event": h.Event})
+			hookArgs, err := json.Marshal(map[string]string{"name": h.Flow, "event": h.Event})
 			if err != nil {
 				return "", err
 			}
-			call := ToolInput{Dir: in.Dir, Call: fmt.Sprintf("hook_%d_%d_%d", in.N, round, i), Args: args}
+			call := ToolInput{Dir: in.Dir, Call: fmt.Sprintf("hook_%d_%s_%d", in.N, tag, i), Args: hookArgs}
 			d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{
 				Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}, Tool: HookTool, Call: call})
 			if err != nil {
@@ -230,8 +317,8 @@ func turnEndHooks(ctx *kairo.Context, in TurnInput, agent Agent, round int) (str
 			expect = d.Script
 		}
 		fo, err := kairo.Child[FlowOutput](ctx, Flow, FlowInput{
-			Session: in.Session, N: in.N, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, Call: FlowCall{Name: h.Flow},
-			Hook: fmt.Sprintf("%s/%d/%d", h.Event, round, i), Expect: expect,
+			Session: in.Session, N: in.N, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, Call: FlowCall{Name: h.Flow, Args: args},
+			Hook: fmt.Sprintf("%s/%s/%d", h.Event, tag, i), Expect: expect,
 		})
 		var failed *kairo.WorkflowError
 		if errors.As(err, &failed) {
@@ -321,7 +408,10 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 // of the actions that answer a call that does not run), and whether it is a
 // planned write.
 type Gate struct {
-	Action  string       `json:"action"`
+	Action string `json:"action"`
+	// Subject is what the call acts on (its command, its path), as the
+	// permission check saw it.
+	Subject string       `json:"subject,omitempty"`
 	Planned bool         `json:"planned,omitempty"`
 	Denied  *DeniedInput `json:"denied,omitempty"`
 	Ask     *AskRequest  `json:"ask,omitempty"`
@@ -361,7 +451,7 @@ func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in T
 			return deny(reason)
 		}
 	}
-	return Gate{Action: ActToolPrefix + tool, Planned: planned}, nil
+	return Gate{Action: ActToolPrefix + tool, Planned: planned, Subject: d.Subject}, nil
 }
 
 // runGated runs a checked call. A tool that writes a file is two calls
@@ -385,4 +475,16 @@ func runGated(ctx *kairo.Context, g Gate, in ToolInput) (ToolOutput, error) {
 		return p.Result, nil
 	}
 	return kairo.Call[ToolOutput](ctx, p.Action, p.Apply)
+}
+
+// ran reports whether a gated call runs its tool: not denied, not put to
+// an MCP server's question, not of a tool the agent lacks, not of a reply
+// cut off.
+func ran(g Gate) bool {
+	return g.Denied == nil && g.Ask == nil && g.Action != ActToolMissing && g.Action != ActToolSkipped
+}
+
+// hasHook reports whether the agent has a hook of event.
+func hasHook(agent Agent, event string) bool {
+	return slices.ContainsFunc(agent.Hooks, func(h Hook) bool { return h.Event == event })
 }

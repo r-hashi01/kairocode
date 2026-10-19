@@ -68,6 +68,13 @@ const (
 	// before it is made, and says whether a run before made another k-th
 	// call: the script went another way (ADR 0003, a safety net).
 	ActFlowStep = "flow.step"
+	// ActTaskArgs reads a task call's arguments (the subagent and its
+	// prompt); ActTaskResult answers the call with the subagent's reply.
+	// Its name is a tool's, so its end is told as the call's.
+	ActTaskArgs   = "task.args"
+	ActTaskResult = ActToolPrefix + "task.result"
+	// TaskTool is the tool the model hands a task to a subagent with.
+	TaskTool = "task"
 	// ActHookTrust keeps that the user allowed a project's hook.
 	ActHookTrust = "hook.trust"
 
@@ -237,6 +244,22 @@ type FlowSource struct {
 	Source string `json:"source,omitempty"`
 	Hash   string `json:"hash,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+// TaskArgs are a task call's: the subagent, and what it is to do.
+type TaskArgs struct {
+	Agent  string `json:"agent"`
+	Prompt string `json:"prompt"`
+	// Error: the arguments are not a task's; it goes back to the model.
+	Error string `json:"error,omitempty"`
+}
+
+// TaskResultInput answers a task call: the subagent's reply, or why
+// there is none.
+type TaskResultInput struct {
+	Call    string `json:"call"`
+	Text    string `json:"text"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // FlowStep is the Seq-th call of a flow, by the hash of what it is.
@@ -426,6 +449,12 @@ type PermissionOutput struct {
 // a flow that returns ok False sends its message back to the model.
 const (
 	HookTurnEnd = "turn.end"
+	// HookToolAfter runs after a tool call (of Hook.Tool, or any); its
+	// message goes to the model with the call's result.
+	HookToolAfter = "tool.after"
+	// HookSessionStart runs when the session's first turn starts; its
+	// message goes with the first request.
+	HookSessionStart = "session.start"
 	// HookTool is the name a hook goes by in the permission rules: a
 	// project's hook is asked about before it first runs.
 	HookTool = "hook"
@@ -436,8 +465,10 @@ const (
 // Hook is a flow bound to an event. Project: the project's (its
 // kairocode.json), asked about before it first runs; not the user's own.
 type Hook struct {
-	Event   string `json:"event"`
-	Flow    string `json:"flow"`
+	Event string `json:"event"`
+	Flow  string `json:"flow"`
+	// Tool: of a tool.after hook, the tool it follows ("" every tool).
+	Tool    string `json:"tool,omitempty"`
 	Project bool   `json:"project,omitempty"`
 }
 
@@ -466,6 +497,9 @@ const (
 	DecideBool   = "bool"
 	DecideNumber = "number"
 	DecideChoice = "choice"
+	// DecideObject is a dict of Fields, each of a type: string, number,
+	// bool, list or dict (an agent's typed output, agent(schema=)).
+	DecideObject = "object"
 )
 
 // DecideInput is a decision the model makes: of Type, from Choices for a
@@ -479,6 +513,8 @@ type DecideInput struct {
 	Prompt  string   `json:"prompt"`
 	Type    string   `json:"type"`
 	Choices []string `json:"choices,omitempty"`
+	// Fields: of an object, its fields' types, by name.
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // DecideOutput is the decision, as JSON of its type; or why there is none.

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
@@ -453,11 +455,33 @@ func (r *flowRun) runAgent(ctx *kairo.Context, s agentSpec) (agentDone, error) {
 	return agentDone{ok: out.Stopped == "", output: text, fail: out.Stopped, usage: out.Usage}, nil
 }
 
-// agent(agent, prompt, model=None): one agent; its reply.
+// agent(agent, prompt, model=None, schema=None): one agent; its reply.
+// With schema ({"name": "string" | "number" | "bool" | "list" | "dict"}),
+// its value is the reply as a dict of those fields, typed (decided by the
+// model as decide does, from the reply).
 func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var s agentSpec
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "agent", &s.agent, "prompt", &s.prompt, "model?", &s.model); err != nil {
+	var schema *starlark.Dict
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "agent", &s.agent, "prompt", &s.prompt, "model?", &s.model, "schema?", &schema); err != nil {
 		return nil, err
+	}
+	var fields map[string]string
+	if schema != nil {
+		fields = map[string]string{}
+		for _, item := range schema.Items() {
+			name, ok1 := starlark.AsString(item[0])
+			typ, ok2 := starlark.AsString(item[1])
+			switch {
+			case !ok1 || !ok2:
+				return nil, fmt.Errorf("agent: schema maps names to types, as {\"plan\": \"string\"}")
+			case typ != "string" && typ != "number" && typ != "bool" && typ != "list" && typ != "dict":
+				return nil, fmt.Errorf("agent: schema: %s is %q, not string, number, bool, list or dict", name, typ)
+			}
+			fields[name] = typ
+		}
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("agent: an empty schema")
+		}
 	}
 	if err := r.countAgents(1); err != nil {
 		return nil, err
@@ -473,7 +497,63 @@ func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starl
 	if err := r.spend(d.usage); err != nil {
 		return nil, err
 	}
-	return outcome(d.ok, d.output, d.fail), nil
+	if fields == nil || !d.ok {
+		return outcome(d.ok, d.output, d.fail), nil
+	}
+	// Typed: the reply's fields, decided from it (design 6.3: never read
+	// out of prose by KairoCode itself).
+	text := "Read this reply of an agent and give its parts.\n\n<reply>\n" + d.output + "\n</reply>"
+	h, err := kairo.Call[string](r.ctx, ActFlowPut, FlowPutInput{Role: string(msg.User), Text: text})
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	out, err := kairo.Call[DecideOutput](r.ctx, ActFlowDecide, DecideInput{At: s.at, Dir: r.in.Dir, Engine: r.in.Engine,
+		Model: r.in.Model, Prompt: h, Type: DecideObject, Fields: fields})
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	if err := r.spend(out.Usage); err != nil {
+		return nil, err
+	}
+	if !out.OK {
+		return valued(false, d.output, out.Error, starlark.None), nil
+	}
+	var v any
+	if err := json.Unmarshal(out.Value, &v); err != nil {
+		return valued(false, d.output, err.Error(), starlark.None), nil
+	}
+	return valued(true, d.output, "", fromGo(v)), nil
+}
+
+// fromGo is a JSON value as Starlark has it. A whole number is an int
+// while it is exactly one (|x| < 2^53).
+func fromGo(v any) starlark.Value {
+	switch x := v.(type) {
+	case nil:
+		return starlark.None
+	case bool:
+		return starlark.Bool(x)
+	case float64:
+		if x == float64(int64(x)) && x < 1<<53 && x > -(1<<53) {
+			return starlark.MakeInt64(int64(x))
+		}
+		return starlark.Float(x)
+	case string:
+		return starlark.String(x)
+	case []any:
+		out := make([]starlark.Value, len(x))
+		for i, e := range x {
+			out[i] = fromGo(e)
+		}
+		return starlark.NewList(out)
+	case map[string]any:
+		d := starlark.NewDict(len(x))
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			_ = d.SetKey(starlark.String(k), fromGo(x[k]))
+		}
+		return d
+	}
+	return starlark.None
 }
 
 // parallel([{"agent": ..., "prompt": ...}, ...]): the agents at once; their

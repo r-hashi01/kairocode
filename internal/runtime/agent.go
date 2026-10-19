@@ -153,6 +153,11 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		if d.Name == tools.SkillTool.Name && len(skills) == 0 {
 			continue // nothing to load
 		}
+		// No subagent of a subagent; none for an agent that only reads (it
+		// would act through it); none on Claude Code, which has its own.
+		if d.Name == tools.TaskTool.Name && (in.Sub || readOnly || engine == workflows.EngineClaudeCode) {
+			continue
+		}
 		specs = append(specs, provider.ToolSpec{Name: d.Name, Description: d.Description, Schema: d.Schema})
 		names = append(names, d.Name)
 		if d.Plan != nil {

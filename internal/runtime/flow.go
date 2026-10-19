@@ -90,6 +90,11 @@ func (r *Runtime) Flows(ctx context.Context, session string) ([]FlowInfo, error)
 	if err != nil {
 		return nil, err
 	}
+	return flowsIn(dir)
+}
+
+// flowsIn are the flows of the project in dir, by name.
+func flowsIn(dir string) ([]FlowInfo, error) {
 	entries, err := os.ReadDir(filepath.Join(dir, FlowsDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
