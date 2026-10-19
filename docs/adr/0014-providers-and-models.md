@@ -1,6 +1,6 @@
 # 0014 プロバイダーとモデルを、会話の途中で切り替える（/provider、/model）
 
-- 状態: 提案
+- 状態: 承認（2026-10-19）
 - 日付: 2026-10-19
 - 関連: 設計 11 節の 2（最初のプロバイダー）、ADR 0002（opencode を手本にする）、0007（Claude Code のエンジン）、0008（エンジンとモデルはセッションごと）、0010（TUI）、AGENTS.md の不変条件 2・4・6・8
 
@@ -58,24 +58,42 @@
 - **API のエンジンに切り替えたとき**は、今までどおり鎖をそのまま使います。CLI のエンジンだった間のターンは、鎖に利用者の発言と応答だけがあるので、そのまま続きます。
 - モデルだけを変えたとき（同じプロバイダー）は、会話はそのままです。CLI のエンジンでは `--model` を変えて、同じ CLI のセッションを続けます。
 
-### 4. codex と copilot のエンジン（段 1）
+### 4. codex と copilot のエンジン（段 1）: KairoCode が ACP のクライアントになって呼ぶ
 
-ADR 0007 の `claude-code` と同じ作りです。ターンは 1 つのアクション（`codex.turn`、`copilot.turn`。作用は `Unprotected`）で、KairoCode のツールは MCP で出します。MCP の呼び出しの実行の ID は不変条件 8 のとおりです。
+（2026-10-19 に利用者の判断で書き換えました。最初の案は、各 CLI を非対話で起動し（`codex exec`、`copilot -p`）、その JSON の出力を読む形でした。下の追記を参照。）
 
-- **`copilot`**
-  - 起動の形: `copilot -p <プロンプト> --output-format json --session-id <uuid> [--model …] --additional-mcp-config <KairoCode の MCP> --available-tools <kairocode の各ツール> --disable-builtin-mcps --no-custom-instructions --no-ask-user --allow-tool kairocode`
-  - 2 回目からのターンは、同じ `--session-id` で続けます。
-- **`codex`**
-  - 起動の形: `codex exec --json -s read-only -C <dir> --skip-git-repo-check -c mcp_servers.kairocode.url=… -c approval_policy="never" [-m …] <プロンプト>`
-  - 2 回目からのターンは `codex exec resume <id>` で続けます。
-  - Codex のセッションの ID は、最初のターンの出来事から読み、`kc_engine_session` に記録します。
-  - 組み込みのシェルは外せないので、sandbox を `read-only` にします。シェルでの読み取りは記録されませんが、作用はありません。書き込みは KairoCode の MCP のツールだけが通ります（不変条件 3・4 の作用の型と承認が効く）。
-- **共通**
-  - ライブの出力は、各 CLI の JSON の出来事を `TaskContext.Emit` で流します。
-  - 落ちたときの再開は ADR 0007 と同じ考えです。CLI の記録にターンの目印があれば、プロンプトを送り直さず「続けて」を送ります。
-  - 子の環境から、KairoCode の秘密と、入れ子を拒ませる変数を外します。
-  - 起動するのは `internal/runtime` の各エンジンのファイルだけです（`internal/invariants` の `commandStarters` に足す）。
-- 各 CLI のフラグと出力の形は、実装のときに実際の CLI で確かめ、合わないところはこの ADR に追記します。
+KairoCode が ACP（ADR 0002）のクライアントになり、各エージェントを子のプロセスとして起動して、ACP で話します。
+
+| プロバイダー | 起動するもの | 備考 |
+|---|---|---|
+| `codex` | `codex-acp`（Zed の ACP のアダプター。`KAIROCODE_CODEX` で変えられる） | 利用者が入れる（npm） |
+| `copilot` | `copilot --acp`（`KAIROCODE_COPILOT`） | Copilot CLI がそのまま話す |
+
+`claude-code` は、今までどおり ADR 0007 の形（`claude -p` と MCP）のままです。Claude の ACP のアダプター（`claude-code-acp`）を使う形は、必要になったら足します。
+
+- **ターン**
+  - ターンは 1 つのアクション（`codex.turn`、`copilot.turn`。作用は `Unprotected`）です。
+  - 中身は次の順です。エージェントを起動し、`initialize` を送ります。セッションを作るか読み込み（`session/new` か `session/load`）、モデルを選び（`session/set_config_option`）、`session/prompt` を送ります。答え（`agent_message_chunk`）を `TaskContext.Emit` で流しながら集め、終わったら記録します。
+- **セッション**
+  - 最初のターンで `session/new` を送り、返ったセッションの ID を `kc_engine_session` に、KairoCode が決めた名前（セッション、プロバイダー、何回目の切り替えか。不変条件 8）で記録します。
+  - 次のターンからは `session/load` で続けます。エージェントが `loadSession` を持たなければ、毎ターン新しいセッションにして、それまでの会話を付けて渡します（3）。
+- **作用は KairoCode のツールを通す**
+  - KairoCode は、クライアントの能力として `fs.readTextFile`、`fs.writeTextFile`、`terminal` を出します。
+  - エージェントからのファイルの書き込み（`fs/write_text_file`）と端末（`terminal/create`）は、KairoCode の `write` と `bash` のツールとして実行します。ADR 0007 の MCP の呼び出しと同じ仕組みで、実行の ID は不変条件 8 のとおり、作用の型、権限の判定、承認、要確認、sandbox もそのまま効きます。
+  - 読み取り（`fs/read_text_file`）は、作業ディレクトリの中だけを、その場で読みます。
+  - KairoCode の MCP のサーバーも `session/new` の `mcpServers` で渡します（そのほかのツールのため）。
+- **承認**
+  - エージェントの `session/request_permission` には、KairoCode のツールの呼び出しなら、その場で `allow_once` を答えます。実際の作用は、上のとおり KairoCode のツールを通るところで判定されるからです。ほかの呼び出しは断ります（実装の節の追記）。
+  - そこで「聞く」になった呼び出しは、ADR 0007 と同じく、呼び出しを承認待ちとしてエージェントに返します。ターンの回を終え、ワークフローで承認を待ち、答えを次の回のプロンプトで伝えます。
+- **落ちたときの再開**
+  - プロンプトの末尾に、ターンの目印を付けます。
+  - 再開で `session/load` が返す履歴（`user_message_chunk`）に目印があれば、プロンプトを送り直さず「続けて」を送ります。
+- **限界**
+  - エージェントが、クライアントに頼まずに自分でファイルを書いたりコマンドを動かしたりするなら、その作用は KairoCode の記録に残りません。
+  - 各エージェントが頼む形で動くかは、実装のときに実際のエージェントで確かめ、この ADR に追記します。
+- **起動するファイル**
+  - 起動するのは `internal/runtime` の ACP のエンジンのファイルだけです（`internal/invariants` の `commandStarters` に足す）。
+  - JSON-RPC は、KairoCode の ACP のエージェント（`internal/acp`）と同じものを、`internal/jsonrpc` に分けて使います。
 
 ### 5. チャット欄の `/provider` と `/model`（ADR 0010 の TUI、ACP）
 
@@ -113,3 +131,58 @@ ADR 0007 の `claude-code` と同じ作りです。ターンは 1 つのアク�
 - **CLI のエンジンのとき、毎ターン会話の全体を渡す（CLI のセッションを続けない）:** CLI の文脈の圧縮や記録を使えず、長い会話で遅く、高くなります。
 - **codex を MCP のサーバー（`codex mcp-server`）として使う:** 対話の形が違い、ツールを KairoCode の MCP に向ける設定が `exec` より複雑になります。
 - **Copilot と OpenAI を最初から API で呼ぶ:** 認証（とくに Copilot の OAuth）を先に決める必要があります。利用者の選んだ順（CLI が先）にしました。
+
+## 追記（2026-10-19）: CLI の起動から ACP のクライアントへ
+
+- 最初の決定 4 は、各 CLI を非対話で起動し、その JSON の出力を読む形でした。2026-10-19 に、手元の `codex` 0.163.0 と `copilot` 1.0.54 で、次のことを確かめました。
+  - `codex exec --json` は、`thread.started`、`item.completed`（`agent_message`）、`turn.completed`（`usage`）を出します。
+  - `copilot -p --output-format json` は、`assistant.message_delta`、`assistant.message`、`result`（`sessionId`）を出します。
+  - この版の copilot は `--session-id` を受けず、セッションの名前（`--name`、`--resume=<名前か ID>`）で続けます。
+- 利用者から「KairoCode から ACP で claude、codex、copilot を呼ぶ構図」という指示があり、決定 4 を ACP の形に書き換えました。
+  - ACP にすると、エージェントのファイルの書き込みとコマンドを、クライアントとして KairoCode のツールで実行できます。承認もそこで扱えます。
+  - CLI ごとに出力を読み分ける必要もなくなります。
+
+
+## 実装（2026-10-19、段 1）
+
+- **切り替え**
+  - `SessionEvent.Switch`（`workflows.Switch{Engine, Model}`）を足し、セッションのワークフローを版 6（`RunSession`）に上げました。版 5 は `RunSessionV5` で残します（`Draining`）。
+  - エンジンが変わるたびに `TurnInput.Epoch` が 1 つ増えます。CLI のエンジンのターンに会話（`ClaudeTurnInput.History`）を渡すのは、`Epoch > 0` のときだけです。最初の時期の Claude Code のターンは入力が変わらないので、進行中のターンの呼び出しの ID も変わりません。
+  - `/provider` と `/model` の選択は、デーモンのメモリに置き（`Runtime.Switch`）、そのセッションへの次の出来事（`signal`）に付けて送ります。記録されるのはそのときです（不変条件 2）。送る前にデーモンが止まると、選択は失われます。
+  - `Runtime.Settings` は、最新のターンの入力と、まだ送っていない選択から、次のターンのプロバイダーとモデルを出します。
+  - デーモンの API は `GET /providers`、`GET /providers/{id}/models`、`GET|POST /sessions/{id}/settings` です。
+- **ACP のエンジン**（`internal/runtime/acpengine.go`）
+  - `codex.turn` と `copilot.turn` は、エージェントを起動し、`internal/jsonrpc`（`internal/acp` から分けた JSON-RPC）で話します。
+  - エージェントからの `fs/write_text_file` と `terminal/create` は、`mcpServer.call`（ADR 0007 の MCP の呼び出しと同じ、`<ターン>/mcp/<内容のハッシュ>.<n>` の実行）で、KairoCode の `write` と `bash` として実行します。`fs/read_text_file` は、作業ディレクトリの中だけをその場で読みます。
+  - `session/request_permission` には、KairoCode のツールの呼び出しだけ `allow_once` を答えます（下の「直したこと」）。
+  - エージェントのセッションの ID は、`kc_engine_session` に名前で記録します。次のターンでは `session/load` で続けます。
+  - 指定したモデルをエージェントが受けないときは、ターンを止めず、エージェント自身のモデルで答え、そのことを答えの頭に書き添えます。2026-10-19 に `copilot --acp`（1.0.54）で確かめたところ、セッションのモデルの一覧はアカウントの状態で変わりました（`gpt-4.1` が通った後、`auto` だけになった）。
+- **本物のエージェントでの確認**（2026-10-19、`copilot --acp`）
+  - ファイルの作成は KairoCode の `write` を、`ls` は KairoCode の `bash` を通りました（copilot は、渡した MCP の KairoCode のツールを使った）。
+  - `codex-acp` は、この手元に入っていないので、まだ確かめていません。
+- **画面**
+  - ACP のエージェント（`internal/acp`）は、`session/new`・`session/load` の応答と `config_option_update` で、`provider` と `model` の設定を出し、`session/set_config_option` を受けます。打ち込んだ `/provider`・`/model` も扱います。
+  - TUI は、`/provider`・`/model` で一覧を出して矢印で選ぶか、名前で直接選びます。状態の行に今の値を出します。
+  - `run` と `chat` に `-provider`、`-model` を足しました。
+- **テスト**
+  - `TestSwitchProviderAndModel`: 偽の ACP のエージェントで、API → Codex → Copilot → API と切り替えます。次のことを確かめます（切り替えを送らない、会話を渡さない、書き込みを直接する、の 3 つの壊し方で、それぞれ落ちることを確かめた）。
+    - 会話の引き継ぎ
+    - `session/load` での継続
+    - 書き込みが KairoCode のツールの実行として記録されること
+  - `TestProviderAndModel`（TUI）。
+- **durability-reviewer の指摘で直したこと**
+  - **承認:** `session/request_permission` は、KairoCode のツールの呼び出しだけを許し、ほかは断ります。KairoCode のツールかどうかは、題で判断します。
+    - 題が `kairocode-<名前>` か `mcp__kairocode__<名前>` なら、KairoCode のツールです。
+    - 名前だけの題は、組み込みのツールを外した copilot のときだけ、KairoCode のツールとみなします。組み込みのツールを外せない codex では、同じ名前の codex 自身のツールがあり得るので断ります（再レビューの指摘）。copilot は `--available-tools=kairocode-<ツール>,…` で起動し、copilot 自身の組み込みのツール（bash、apply_patch、view など）を使えなくします。copilot 1.0.54 で、組み込みのツールが外れ、作業が KairoCode のツールで進むことを確かめました。copilot の承認の求めは、MCP のツールでも題がツールの名前だけ（`write`、`bash`）で来るので、組み込みのツールを外すことが要ります。`codex-acp` での形はまだ確かめていません。
+  - **Claude Code への切り替え:** `Epoch > 0` のターンは、`(セッション, Epoch)` から作った新しい Claude Code のセッションで始めます。会話も付けます。最初の時期のターンは、ID も入力も今までどおりです（`TestSwitchToClaudeCode`）。
+  - **会話の引き継ぎ:** codex と copilot のターンには、最初の時期から会話を渡します。`session/load` ができないエージェントでも、新しいセッションに会話を付けて渡せます。新しいアクションなので、進行中の呼び出しの ID には影響しません。
+  - **プロセスの扱い:**
+    - エージェントの stderr は、書かれている間に読んでも安全な形にしました。
+    - 出力を読み切るのを待ってから `Wait` します。
+    - 止めるときはプロセスグループごと止め、`WaitDelay` は 5 秒です。
+    - 答えの文字は、ロックの中で読みます。
+    - 出力を読み切るのを待つのは 5 秒までです。グループの外に出た子孫が出力を開いたままでも、止まり続けません。
+  - **crash のテスト:** `TestCrashACPWrite`。エージェントの書き込みが済み、その結果を記録する前に強制終了します。再開すると、セッションを読み込み、「続けて」に応えてエージェントが同じ書き込みをもう一度頼みますが、書き込みの実行は 1 回だけです（実行を再利用しない形に壊すと 2 回になって落ちることを確かめた）。
+  - **コマンドを起動するファイル:** `internal/runtime/acpengine.go`（エージェント）と、`internal/runtime/cliengines.go` です。後者は、モデルの一覧を読むために `codex debug models` と `copilot help config` を、sandbox の外で起動します。どちらも読むだけのコマンドです。
+  - **残した点:** 残ったエージェントを止める判定は、記録した PID のコマンドの名前（`codex-acp`、`copilot`）で行います。PID が使い回されていると、利用者の別の copilot を止め得ます（ADR 0007 の claude は、セッションの ID で見分けている）。
+- **まだ:** 段 2（`openai`、`github-copilot` の API）。`codex-acp` での確認。

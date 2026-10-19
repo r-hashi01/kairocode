@@ -106,7 +106,13 @@ type fakeAgent struct {
 	prompts  []string
 	turn     []acp.Update
 	cancels  []string
-	onPrompt func() // what the turn does to the files
+	onPrompt func()   // what the turn does to the files
+	set      []string // settings set: id=value
+}
+
+func (a *fakeAgent) SetConfigOption(ctx context.Context, session, id, value string) error {
+	a.set = append(a.set, id+"="+value)
+	return nil
 }
 
 func (a *fakeAgent) Cancel(session string) error {
@@ -524,5 +530,42 @@ func TestFlowsTheTurnMade(t *testing.T) {
 	typed(d, "thanks")
 	if strings.Count(d.out(), "✎") != before {
 		t.Fatal("a flow drawn again with no change")
+	}
+}
+
+// /provider and /model (ADR 0014): the status line shows the session's
+// settings; alone, the command lists the values to choose with the
+// arrows; with a value, it sets it. Neither is a turn.
+func TestProviderAndModel(t *testing.T) {
+	d, a := start(t, Options{})
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "provider", Name: "Provider", CurrentValue: "anthropic", Options: []acp.ConfigValue{
+			{Value: "anthropic", Name: "Claude API"}, {Value: "codex", Name: "Codex (your plan)"}, {Value: "copilot", Name: "GitHub Copilot CLI (your plan)", Description: "not available here"}}},
+		{ID: "model", Name: "Model", CurrentValue: "claude-opus-5-5", Options: []acp.ConfigValue{{Value: "claude-opus-5-5", Name: "claude-opus-5-5"}}},
+	}})
+	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5") {
+		t.Fatalf("status\n%s", v)
+	}
+	d.m.input.SetValue("/provider")
+	d.send(key("enter"))
+	v := d.view()
+	if !strings.Contains(v, "Provider") || !strings.Contains(v, "Codex (your plan)") || !strings.Contains(v, "not available here") {
+		t.Fatalf("the list\n%s", v)
+	}
+	d.send(key("down"))
+	d.send(key("enter"))
+	if strings.Join(a.set, ",") != "provider=codex" || d.m.pick != nil {
+		t.Fatalf("set %q", a.set)
+	}
+	d.m.input.SetValue("/model gpt-x")
+	d.send(key("enter"))
+	if strings.Join(a.set, ",") != "provider=codex,model=gpt-x" || len(a.prompts) != 0 {
+		t.Fatalf("set %q, prompts %q", a.set, a.prompts)
+	}
+	d.m.input.SetValue("/model")
+	d.send(key("enter"))
+	d.send(key("esc"))
+	if d.m.pick != nil || len(a.set) != 2 {
+		t.Fatalf("esc did not leave the list: %q", a.set)
 	}
 }

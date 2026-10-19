@@ -52,20 +52,30 @@ type done struct {
 // recorded outputs alone (their snapshots), so a resumed session undoes the
 // same turns.
 func RunSessionV4(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
-	return runSession(ctx, in, false)
+	return runSession(ctx, in, false, false)
 }
 
-// RunSession is a session of version 5: RunSessionV4, and a turn the user
-// stopped stays in the conversation, with a note that it was stopped (ADR
-// 0011): the model knows what was asked, and that tool calls may have
+// RunSessionV5 is a session of version 5: RunSessionV4, and a turn the
+// user stopped stays in the conversation, with a note that it was stopped
+// (ADR 0011): the model knows what was asked, and that tool calls may have
 // changed the files.
-func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
-	return runSession(ctx, in, true)
+func RunSessionV5(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, false)
 }
 
-// runSession is RunSessionV4, and with keepStopped RunSession.
-func runSession(ctx *kairo.Context, in SessionInput, keepStopped bool) (SessionOutput, error) {
+// RunSession is a session of version 6: RunSessionV5, and an event may
+// switch the session's engine or model for its turn and those after it
+// (ADR 0014). A switch of engine starts a new epoch, in which a CLI engine
+// starts a session of its own.
+func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, true)
+}
+
+// runSession is RunSessionV4; with keepStopped RunSessionV5; with switches
+// too RunSession.
+func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool) (SessionOutput, error) {
 	head := ""
+	engine, model, epoch := in.Engine, in.Model, 0
 	// applied: turns in effect, the last undone first; undone: turns undone,
 	// the last redone first. A new turn clears undone.
 	var applied, undone []done
@@ -77,8 +87,18 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped bool) (SessionO
 		if ev.Kind == EventClose {
 			return SessionOutput{Turns: n, Head: head}, nil
 		}
+		if switches && ev.Switch != nil {
+			if ev.Switch.Engine != "" && ev.Switch.Engine != engine {
+				engine, model = ev.Switch.Engine, ""
+				epoch++
+			}
+			if ev.Switch.Model != "" {
+				model = ev.Switch.Model
+			}
+		}
 		tin := TurnInput{
-			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, History: head, Message: ev.Message,
+			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: engine, Model: model, History: head, Message: ev.Message,
+			Epoch: epoch,
 		}
 		if ev.Agent != "" {
 			tin.Agent = ev.Agent

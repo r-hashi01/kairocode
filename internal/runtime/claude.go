@@ -86,6 +86,13 @@ func fileContains(path, s string) bool {
 // stopStaleClaude stops the claude process a run of this session left
 // behind, if it is still running, before the session is resumed in another.
 func (r *Runtime) stopStaleClaude(ctx context.Context, sid string) error {
+	return r.stopStale(ctx, sid, sid)
+}
+
+// stopStale stops the process kept under key, if it is still running and
+// its command line has match.
+func (r *Runtime) stopStale(ctx context.Context, key, match string) error {
+	sid := key
 	pid, err := r.Store.ClaudeProc(ctx, sid)
 	if err != nil || pid == 0 {
 		return err
@@ -93,7 +100,7 @@ func (r *Runtime) stopStaleClaude(ctx context.Context, sid string) error {
 	// Only a process that is still a claude of this session: the pid may be
 	// another process's by now.
 	out, err := exec.CommandContext(ctx, "ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	if err == nil && strings.Contains(string(out), sid) {
+	if err == nil && strings.Contains(string(out), match) {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
@@ -136,6 +143,11 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		return workflows.ClaudeTurnOutput{}, err
 	}
 	sid := claudeSessionID(in.Session)
+	if in.Epoch > 0 {
+		// A Claude Code session of its own in each epoch after a switch
+		// (ADR 0014); the first keeps the id it always had.
+		sid = claudeSessionID(fmt.Sprintf("%s#%d", in.Session, in.Epoch))
+	}
 	if err := r.stopStaleClaude(t, sid); err != nil {
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
@@ -145,6 +157,14 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	transcript := claudeTranscript(sid)
 	mark := turnMark(in.Turn)
 	prompt := user.Text() + "\n\n" + mark
+	if transcript == "" && in.History != "" {
+		// A session that starts after a switch: the conversation so far.
+		history, err := r.carried(t, in.History)
+		if err != nil {
+			return workflows.ClaudeTurnOutput{}, err
+		}
+		prompt = "<conversation so far, with another model>\n" + history + "</conversation so far>\n\n" + prompt
+	}
 	if transcript != "" && fileContains(transcript, mark) {
 		// Claude Code has the prompt: tell it the user's answers, or just
 		// to go on after being cut short.

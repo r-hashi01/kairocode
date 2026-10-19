@@ -14,7 +14,6 @@ import (
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
-	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/trust"
 	"github.com/r-hashi01/kairocode/internal/tui"
@@ -32,6 +31,8 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	dir := fs.String("dir", ".", "working directory")
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	session := fs.String("session", "", "a session to take up again (as the chat printed it)")
+	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (/provider switches it)")
+	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (/model switches it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -65,7 +66,7 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		defer close(agentDone)
 		defer fromAgentW.Close()
 		err := acp.Serve(agentCtx, c, toAgentR, fromAgentW, acp.Options{Version: buildVersion(),
-			Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
+			Engine: *prov, Model: *model,
 			Logger: slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))})
 		if err != nil && agentCtx.Err() == nil {
 			fmt.Fprintf(stderr, "kairocode: the agent: %v\n", err)
@@ -92,14 +93,7 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 		}
-		engine, model := os.Getenv("KAIROCODE_ENGINE"), os.Getenv("KAIROCODE_MODEL")
-		if model == "" {
-			model = provider.DefaultModel
-			if engine == "claude-code" {
-				model = "Claude Code's model"
-			}
-		}
-		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Version: buildVersion(), Engine: engine, Model: model,
+		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Version: buildVersion(), Engine: *prov, Model: *model,
 			Usage: func(ctx context.Context, s string) (int64, error) {
 				u, err := c.Usage(ctx, s)
 				return u.Total.Input + u.Total.Output, err

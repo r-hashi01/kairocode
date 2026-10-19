@@ -51,6 +51,10 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/flows/new", s.newFlow)
 	s.mux.HandleFunc("GET /sessions/{id}/flow", s.lastFlow)
 	s.mux.HandleFunc("GET /flows/stats", s.flowStats)
+	s.mux.HandleFunc("GET /providers", s.providers)
+	s.mux.HandleFunc("GET /providers/{id}/models", s.models)
+	s.mux.HandleFunc("GET /sessions/{id}/settings", s.settings)
+	s.mux.HandleFunc("POST /sessions/{id}/settings", s.switchSettings)
 	return s
 }
 
@@ -160,6 +164,68 @@ func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 
 // getTurn waits for the turn to finish (the request's context bounds the
 // wait) and returns its reply.
+// providers are the providers a session can switch to (ADR 0014).
+func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.rt.Providers())
+}
+
+// models are a provider's models to choose from.
+func (s *Server) models(w http.ResponseWriter, r *http.Request) {
+	ms, err := s.rt.Models(r.Context(), r.PathValue("id"))
+	if errors.Is(err, runtime.ErrNoProvider) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	if ms == nil {
+		ms = []string{}
+	}
+	writeJSON(w, http.StatusOK, ms)
+}
+
+// settings are the provider and model the session's next turn runs with.
+func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
+	st, err := s.rt.Settings(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// switchSettings switches them from the next turn on: {"provider": "...",
+// "model": "..."}, either may be left out.
+func (s *Server) switchSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Provider == "" && in.Model == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"provider": "...", "model": "..."}`))
+		return
+	}
+	st, err := s.rt.Switch(r.Context(), sessionOf(r), in.Provider, in.Model)
+	switch {
+	case errors.Is(err, kairo.ErrUnknownRun), errors.Is(err, runtime.ErrNoProvider):
+		fail(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, runtime.ErrUnavailable):
+		fail(w, http.StatusConflict, err)
+		return
+	case err != nil:
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 // lastTurn is the number of the session's latest turn; 404 if it has
 // none.
 func (s *Server) lastTurn(w http.ResponseWriter, r *http.Request) {

@@ -43,6 +43,11 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS kc_claude_proc (
 			session TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL)`,
+		// The sessions of the Codex and Copilot CLIs (ADR 0014): theirs are
+		// ids the CLI makes, kept by the name KairoCode gives each.
+		`CREATE TABLE IF NOT EXISTS kc_engine_session (
+			name TEXT PRIMARY KEY,
+			id TEXT NOT NULL)`,
 		// The tool calls Claude Code made over MCP (ADR 0007): which run each
 		// is, from which claude run (proc), and whether its result is known
 		// to have reached Claude Code. Kept here as well as in kairo, which
@@ -194,6 +199,25 @@ func (s *Store) SetClaudeProc(ctx context.Context, session string, pid int) erro
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO kc_claude_proc (session, pid) VALUES (?, ?) ON CONFLICT (session) DO UPDATE SET pid = excluded.pid`,
 		session, pid)
+	return err
+}
+
+// EngineSession is the id a CLI gave the session KairoCode calls name,
+// or "" if it has none yet.
+func (s *Store) EngineSession(ctx context.Context, name string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM kc_engine_session WHERE name = ?`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// SetEngineSession records that the CLI's session name is id.
+func (s *Store) SetEngineSession(ctx context.Context, name, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO kc_engine_session (name, id) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET id = excluded.id`,
+		name, id)
 	return err
 }
 

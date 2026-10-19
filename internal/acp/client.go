@@ -14,6 +14,7 @@ import (
 // it).
 type Client struct {
 	c    *conn
+	h    ClientHandler
 	done chan struct{}
 }
 
@@ -33,6 +34,27 @@ type Update struct {
 	// agent is KairoCode's.
 	Meta json.RawMessage
 	Flow *flowchart.View
+	// Config: config_option_update's, the session's settings (ADR 0014).
+	// The client gives one too when a session is made or loaded, and when a
+	// setting is set.
+	Config []ConfigOption
+}
+
+// ConfigOption is one of a session's settings: a selector, its current
+// value and the values there are.
+type ConfigOption struct {
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	Category     string        `json:"category"`
+	CurrentValue string        `json:"currentValue"`
+	Options      []ConfigValue `json:"options"`
+}
+
+// ConfigValue is a value a setting can take.
+type ConfigValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // Command is a slash command the agent offers.
@@ -72,10 +94,10 @@ type ClientHandler struct {
 // Dial begins talking to an agent. The client stops when r ends or ctx
 // does; Done is closed then.
 func Dial(ctx context.Context, r io.Reader, w io.Writer, h ClientHandler) *Client {
-	cl := &Client{c: newConn(w), done: make(chan struct{})}
+	cl := &Client{c: newConn(w), h: h, done: make(chan struct{})}
 	go func() {
 		defer close(cl.done)
-		_ = cl.c.serve(ctx, r, cl.handler(h))
+		_ = cl.c.Serve(ctx, r, cl.handler(h))
 	}()
 	return cl
 }
@@ -97,6 +119,7 @@ func (cl *Client) handler(h ClientHandler) handler {
 					Kind              string          `json:"kind"`
 					Status            string          `json:"status"`
 					AvailableCommands []Command       `json:"availableCommands"`
+					ConfigOptions     []ConfigOption  `json:"configOptions"`
 					Meta              json.RawMessage `json:"_meta"`
 				} `json:"update"`
 			}
@@ -105,7 +128,8 @@ func (cl *Client) handler(h ClientHandler) handler {
 			}
 			u := p.Update
 			up := Update{Session: p.SessionID, Kind: u.SessionUpdate, Text: contentText(u.Content),
-				ToolCallID: u.ToolCallID, Title: u.Title, ToolKind: u.Kind, Status: u.Status, Commands: u.AvailableCommands, Meta: u.Meta}
+				ToolCallID: u.ToolCallID, Title: u.Title, ToolKind: u.Kind, Status: u.Status, Commands: u.AvailableCommands, Meta: u.Meta,
+				Config: u.ConfigOptions}
 			if u.SessionUpdate == "plan" && len(u.Meta) > 0 {
 				var meta map[string]json.RawMessage
 				if json.Unmarshal(u.Meta, &meta) == nil && len(meta[FlowMeta]) > 0 {
@@ -179,7 +203,7 @@ func (cl *Client) Initialize(ctx context.Context) (string, error) {
 			Name string `json:"name"`
 		} `json:"agentInfo"`
 	}
-	err := cl.c.call(ctx, "initialize", map[string]any{"protocolVersion": ProtocolVersion,
+	err := cl.c.Call(ctx, "initialize", map[string]any{"protocolVersion": ProtocolVersion,
 		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false}}, &out)
 	if err == nil && out.ProtocolVersion != ProtocolVersion {
 		err = errors.New("acp: the agent speaks another version of the protocol")
@@ -190,22 +214,53 @@ func (cl *Client) Initialize(ctx context.Context) (string, error) {
 // NewSession starts a session working in cwd (an absolute path).
 func (cl *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 	var out struct {
-		SessionID string `json:"sessionId"`
+		SessionID     string         `json:"sessionId"`
+		ConfigOptions []ConfigOption `json:"configOptions"`
 	}
-	err := cl.c.call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": []any{}}, &out)
+	err := cl.c.Call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": []any{}}, &out)
+	if err == nil {
+		cl.configured(out.SessionID, out.ConfigOptions)
+	}
 	return out.SessionID, err
 }
 
 // LoadSession takes up a session: its conversation comes again as updates,
 // and what waits for a person is asked again.
 func (cl *Client) LoadSession(ctx context.Context, session, cwd string) error {
-	return cl.c.call(ctx, "session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}}, nil)
+	var out struct {
+		ConfigOptions []ConfigOption `json:"configOptions"`
+	}
+	err := cl.c.Call(ctx, "session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}}, &out)
+	if err == nil {
+		cl.configured(session, out.ConfigOptions)
+	}
+	return err
+}
+
+// SetConfigOption sets one of the session's settings (ADR 0014: provider,
+// model).
+func (cl *Client) SetConfigOption(ctx context.Context, session, id, value string) error {
+	var out struct {
+		ConfigOptions []ConfigOption `json:"configOptions"`
+	}
+	err := cl.c.Call(ctx, "session/set_config_option", map[string]any{"sessionId": session, "configId": id, "value": value}, &out)
+	if err == nil {
+		cl.configured(session, out.ConfigOptions)
+	}
+	return err
+}
+
+// configured gives the handler the session's settings as an update.
+func (cl *Client) configured(session string, opts []ConfigOption) {
+	if len(opts) > 0 && cl.h.Update != nil {
+		cl.h.Update(Update{Session: session, Kind: "config_option_update", Config: opts})
+	}
 }
 
 // Cancel asks the agent to stop the session's turn under way: its Prompt
 // then answers "cancelled".
 func (cl *Client) Cancel(session string) error {
-	return cl.c.notify("session/cancel", map[string]any{"sessionId": session})
+	return cl.c.Notify("session/cancel", map[string]any{"sessionId": session})
 }
 
 // Prompt runs a turn, and returns why it stopped (ACP's stopReason). The
@@ -214,7 +269,7 @@ func (cl *Client) Prompt(ctx context.Context, session, text string) (string, err
 	var out struct {
 		StopReason string `json:"stopReason"`
 	}
-	err := cl.c.call(ctx, "session/prompt", map[string]any{"sessionId": session,
+	err := cl.c.Call(ctx, "session/prompt", map[string]any{"sessionId": session,
 		"prompt": []any{textBlock(text)}}, &out)
 	return out.StopReason, err
 }

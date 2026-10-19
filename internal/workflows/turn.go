@@ -96,7 +96,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		in.Flow = &FlowCall{Name: agent.Workflow, Args: args}
 		return runFlowTurn(ctx, in)
 	}
-	if agent.Engine == EngineClaudeCode {
+	if CLIEngine(agent.Engine) {
 		return runClaudeTurn(ctx, in, agent)
 	}
 	out := TurnOutput{}
@@ -359,9 +359,25 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	if in.Sub {
 		session = ctx.ID()
 	}
+	act := ActClaudeTurn
+	switch agent.Engine {
+	case EngineCodex:
+		act = ActCodexTurn
+	case EngineCopilot:
+		act = ActCopilotTurn
+	}
+	// A turn gives the CLI the conversation before it, for a CLI session
+	// that starts without it (ADR 0014): after a switch of engine, or an
+	// agent that cannot load its session. Claude Code's turns of the first
+	// epoch keep the input they had, so turns under way keep their calls'
+	// ids; a flow's agent starts with no history.
+	history := ""
+	if (in.Epoch > 0 || agent.Engine != EngineClaudeCode) && !in.Sub {
+		history = in.History
+	}
 	for round := 0; ; round++ {
-		r, err := kairo.Call[ClaudeTurnOutput](ctx, ActClaudeTurn, ClaudeTurnInput{
-			Note: note, Round: round,
+		r, err := kairo.Call[ClaudeTurnOutput](ctx, act, ClaudeTurnInput{
+			Note: note, Round: round, Epoch: in.Epoch, History: history,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message,
 			Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},

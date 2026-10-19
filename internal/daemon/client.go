@@ -245,6 +245,35 @@ type Turn struct {
 	Usage   msg.Usage `json:"usage"`
 }
 
+// Providers are the providers a session can switch to (ADR 0014).
+func (c *Client) Providers(ctx context.Context) ([]runtime.ProviderInfo, error) {
+	var out []runtime.ProviderInfo
+	err := c.do(ctx, "GET", "/providers", nil, &out)
+	return out, err
+}
+
+// Models are provider id's models to choose from.
+func (c *Client) Models(ctx context.Context, id string) ([]string, error) {
+	var out []string
+	err := c.do(ctx, "GET", "/providers/"+url.PathEscape(id)+"/models", nil, &out)
+	return out, err
+}
+
+// Settings are the provider and model the session's next turn runs with.
+func (c *Client) Settings(ctx context.Context, session string) (runtime.Settings, error) {
+	var out runtime.Settings
+	err := c.do(ctx, "GET", sessionPath(session)+"/settings", nil, &out)
+	return out, err
+}
+
+// Switch switches the session's provider or model ("": keep it) from its
+// next turn on, and returns the settings it then has.
+func (c *Client) Switch(ctx context.Context, session, provider, model string) (runtime.Settings, error) {
+	var out runtime.Settings
+	err := c.do(ctx, "POST", sessionPath(session)+"/settings", map[string]string{"provider": provider, "model": model}, &out)
+	return out, err
+}
+
 // ErrNoTurn: the session has no turn (or is not there).
 var ErrNoTurn = errors.New("the session has no turn")
 

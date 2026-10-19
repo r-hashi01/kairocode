@@ -22,6 +22,12 @@ import (
 func TestMain(m *testing.M) {
 	// No language server of this machine is started (ADR 0009).
 	os.Setenv(lsp.Off, "off")
+	// The fake ACP agent is started with no arguments but --acp; a crash
+	// test's child, which has KC_FAKE_CLI too, with -test.run.
+	if os.Getenv("KC_FAKE_CLI") == "1" && (len(os.Args) == 1 || len(os.Args) == 3 && os.Args[1] == "--acp") {
+		fakeCLI()
+		return
+	}
 	if os.Getenv("KC_FAKE_LSP") == "1" {
 		lsp.FakeServer()
 		return
@@ -87,11 +93,12 @@ func crashChild() {
 	if err != nil {
 		panic(err)
 	}
-	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash"})
+	// KC_ENGINE: the session's engine; codex is the fake ACP agent.
+	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash", CodexPath: os.Args[0]})
 	if err != nil {
 		panic(err)
 	}
-	s, err := r.CreateSession(ctx, "crash", workflows.SessionInput{Dir: os.Getenv("KC_DIR")})
+	s, err := r.CreateSession(ctx, "crash", workflows.SessionInput{Dir: os.Getenv("KC_DIR"), Engine: os.Getenv("KC_ENGINE")})
 	if err != nil {
 		panic(err)
 	}

@@ -49,7 +49,7 @@ func (r *Runtime) Usage(ctx context.Context, session string) (SessionUsage, erro
 			return out, err
 		}
 		for _, c := range calls {
-			if c.Status != "completed" || (c.Plan != "kairo.call/"+workflows.ActModel && c.Plan != "kairo.call/"+workflows.ActClaudeTurn) {
+			if c.Status != "completed" || (c.Plan != "kairo.call/"+workflows.ActModel && !cliTurnPlan(c.Plan)) {
 				continue
 			}
 			var o struct {

@@ -41,6 +41,10 @@ type Backend interface {
 	Answer(ctx context.Context, key, option string) error
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
 	NewFlow(ctx context.Context, session, request string) (int, error)
+	Providers(ctx context.Context) ([]runtime.ProviderInfo, error)
+	Models(ctx context.Context, provider string) ([]string, error)
+	Settings(ctx context.Context, session string) (runtime.Settings, error)
+	Switch(ctx context.Context, session, provider, model string) (runtime.Settings, error)
 }
 
 // builtinCommands are the slash commands KairoCode itself has.
@@ -48,6 +52,78 @@ var builtinCommands = []map[string]any{
 	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
 	{"name": "redo", "description": "Put back what the last undo took away"},
 	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them)", "input": map[string]any{"hint": "<name> [what to give it]"}},
+	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
+	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
+}
+
+// defaultModel is the value of the model option that leaves the choice to
+// the provider.
+const defaultModel = "default"
+
+// configOptions are the session's provider and model as ACP's session
+// settings (ADR 0014): a client shows them as selectors.
+func (a *agent) configOptions(ctx context.Context, session string) ([]map[string]any, error) {
+	st, err := a.b.Settings(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	ps, err := a.b.Providers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var providers []map[string]any
+	for _, p := range ps {
+		o := map[string]any{"value": p.ID, "name": p.Name}
+		if !p.Available {
+			o["description"] = "not available here"
+		}
+		providers = append(providers, o)
+	}
+	ms, err := a.b.Models(ctx, st.Provider)
+	if err != nil {
+		return nil, err
+	}
+	current := st.Model
+	if current == "" {
+		current = defaultModel
+	}
+	models := []map[string]any{}
+	if !slices.Contains(ms, current) {
+		name := current
+		if current == defaultModel {
+			name = "Default (" + st.Provider + "'s)"
+		}
+		models = append(models, map[string]any{"value": current, "name": name})
+	}
+	for _, m := range ms {
+		models = append(models, map[string]any{"value": m, "name": m})
+	}
+	return []map[string]any{
+		{"id": "provider", "name": "Provider", "category": "_provider", "type": "select",
+			"description": "Who runs the model loop, from the next turn on", "currentValue": st.Provider, "options": providers},
+		{"id": "model", "name": "Model", "category": "model", "type": "select",
+			"description": "The model, from the next turn on", "currentValue": current, "options": models},
+	}, nil
+}
+
+// setConfig switches the session's provider or model (ADR 0014) and gives
+// the settings it then has.
+func (a *agent) setConfig(ctx context.Context, session, id, value string) ([]map[string]any, error) {
+	var err error
+	switch id {
+	case "provider":
+		_, err = a.b.Switch(ctx, session, value, "")
+	case "model":
+		if value != defaultModel {
+			_, err = a.b.Switch(ctx, session, "", value)
+		}
+	default:
+		return nil, invalid(fmt.Errorf("no setting %q", id))
+	}
+	if err != nil {
+		return nil, invalid(err)
+	}
+	return a.configOptions(ctx, session)
 }
 
 // offerCommands tells the client the slash commands: KairoCode's, then the
@@ -59,7 +135,7 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		a.o.Logger.Warn("acp: the project's commands", "err", err)
 	}
 	for _, c := range cs {
-		if c.Name == "undo" || c.Name == "redo" || c.Name == "flow" {
+		if c.Name == "undo" || c.Name == "redo" || c.Name == "flow" || c.Name == "provider" || c.Name == "model" {
 			continue // KairoCode's own
 		}
 		desc := c.Description
@@ -92,7 +168,7 @@ func Serve(ctx context.Context, b Backend, r io.Reader, w io.Writer, o Options) 
 	a := &agent{b: b, o: o, c: newConn(w), ctx: ctx, watching: map[string]*sessionWatch{}, asks: map[string]context.CancelFunc{}}
 	defer a.wg.Wait()
 	defer stop() // ends the watches before waiting for them
-	return a.c.serve(ctx, r, a.handle)
+	return a.c.Serve(ctx, r, a.handle)
 }
 
 type agent struct {
@@ -137,11 +213,15 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
+		opts, err := a.configOptions(ctx, s)
+		if err != nil {
+			return nil, err
+		}
 		if _, err := a.watch(s); err != nil {
 			return nil, err
 		}
 		a.offerCommands(ctx, s)
-		return map[string]any{"sessionId": s}, nil
+		return map[string]any{"sessionId": s, "configOptions": opts}, nil
 	case "session/load":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -152,12 +232,32 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err := a.replay(ctx, p.SessionID); err != nil {
 			return nil, err
 		}
+		// Worked out before the watch, which may ask the client about the
+		// session at once: the answer to the load comes first.
+		opts, err := a.configOptions(ctx, p.SessionID)
+		if err != nil {
+			return nil, err
+		}
 		// What waits for a person is asked again: the watch is told it first.
 		if _, err := a.watch(p.SessionID); err != nil {
 			return nil, err
 		}
 		a.offerCommands(ctx, p.SessionID)
-		return map[string]any{}, nil
+		return map[string]any{"configOptions": opts}, nil
+	case "session/set_config_option":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			ConfigID  string `json:"configId"`
+			Value     string `json:"value"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, invalid(err)
+		}
+		opts, err := a.setConfig(ctx, p.SessionID, p.ConfigID, p.Value)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"configOptions": opts}, nil
 	case "session/prompt":
 		return a.prompt(ctx, params)
 	case "session/cancel":
@@ -223,6 +323,9 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
 	case name == "/redo":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	case name == "/provider" || name == "/model":
+		// Without a turn: the settings change, or are listed (ADR 0014).
+		return a.settingsCommand(ctx, p.SessionID, name[1:], strings.TrimSpace(args))
 	case name == "/flow":
 		flow, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
 		if flow == "" { // the list, without a turn
@@ -263,6 +366,54 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(turn.Reply)})
 	}
 	return map[string]any{"stopReason": stopReason(turn.Stopped)}, nil
+}
+
+// settingsCommand answers /provider and /model: with a value, it switches
+// the setting and tells the client the new ones; alone, it lists what
+// there is, as the agent's message.
+func (a *agent) settingsCommand(ctx context.Context, session, id, value string) (any, error) {
+	var opts []map[string]any
+	var err error
+	if value != "" {
+		opts, err = a.setConfig(ctx, session, id, value)
+	} else {
+		opts, err = a.configOptions(ctx, session)
+	}
+	if err != nil {
+		var re *rpcError
+		if errors.As(err, &re) { // a value there is not: said, not failed
+			a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(re.Message)})
+			return map[string]any{"stopReason": "end_turn"}, nil
+		}
+		return nil, err
+	}
+	a.update(session, map[string]any{"sessionUpdate": "config_option_update", "configOptions": opts})
+	var b strings.Builder
+	for _, o := range opts {
+		if o["id"] != id {
+			continue
+		}
+		cur := o["currentValue"]
+		if value != "" {
+			fmt.Fprintf(&b, "%s: %v (from the next turn)", o["name"], cur)
+			break
+		}
+		fmt.Fprintf(&b, "%s:\n", o["name"])
+		for _, v := range o["options"].([]map[string]any) {
+			mark := "  "
+			if v["value"] == cur {
+				mark = "* "
+			}
+			line := fmt.Sprintf("%s%v", mark, v["value"])
+			if d, ok := v["description"]; ok {
+				line += fmt.Sprintf(" (%v)", d)
+			}
+			b.WriteString(line + "\n")
+		}
+		fmt.Fprintf(&b, "/%s <%s> switches from the next turn.", id, id)
+	}
+	a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(b.String())})
+	return map[string]any{"stopReason": "end_turn"}, nil
 }
 
 // listFlows answers /flow alone: the flows there are, as the agent's
@@ -308,7 +459,7 @@ func stopReason(stopped string) string {
 
 // update sends a session/update.
 func (a *agent) update(session string, u map[string]any) {
-	if err := a.c.notify("session/update", map[string]any{"sessionId": session, "update": u}); err != nil {
+	if err := a.c.Notify("session/update", map[string]any{"sessionId": session, "update": u}); err != nil {
 		a.o.Logger.Warn("acp: session/update", "err", err)
 	}
 }
@@ -550,7 +701,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 				OptionID string `json:"optionId"`
 			} `json:"outcome"`
 		}
-		if err := a.c.call(ctx, "session/request_permission", params, &resp); err != nil {
+		if err := a.c.Call(ctx, "session/request_permission", params, &resp); err != nil {
 			return // withdrawn, or the client went away: it still waits in kairo
 		}
 		if resp.Outcome.Outcome != "selected" {

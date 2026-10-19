@@ -98,6 +98,20 @@ func (l *local) NewFlow(ctx context.Context, s, request string) (int, error) {
 	return l.r.NewFlow(ctx, s, request)
 }
 
+func (l *local) Providers(context.Context) ([]runtime.ProviderInfo, error) {
+	return l.r.Providers(), nil
+}
+
+func (l *local) Models(ctx context.Context, p string) ([]string, error) { return l.r.Models(ctx, p) }
+
+func (l *local) Settings(ctx context.Context, s string) (runtime.Settings, error) {
+	return l.r.Settings(ctx, s)
+}
+
+func (l *local) Switch(ctx context.Context, s, provider, model string) (runtime.Settings, error) {
+	return l.r.Switch(ctx, s, provider, model)
+}
+
 func (l *local) RunFlow(ctx context.Context, s, name, args string) (int, error) {
 	return l.r.RunFlow(ctx, s, name, args)
 }

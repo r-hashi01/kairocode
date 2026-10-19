@@ -36,8 +36,12 @@ type Config struct {
 	Engine string
 	// Provider is the model provider of the API engine.
 	Provider provider.Provider
-	// ClaudePath is the claude command of the Claude Code engine.
-	ClaudePath string
+	// ClaudePath is the claude command of the Claude Code engine;
+	// CodexPath and CopilotPath, the codex and copilot commands of theirs
+	// (ADR 0014).
+	ClaudePath  string
+	CodexPath   string // the ACP agent: codex-acp
+	CopilotPath string // copilot, run with --acp
 	// ExtraTools are offered besides the built-in ones (tests).
 	ExtraTools []tools.Def
 	// Model is the model an agent uses unless it names one.
@@ -82,6 +86,11 @@ type Runtime struct {
 
 	approveMu sync.Mutex // serializes answers (Approve)
 
+	// switches are the switches of provider and model (ADR 0014) that wait
+	// for their session's next event.
+	switchMu sync.Mutex
+	switches map[string]*workflows.Switch
+
 	closeOnce sync.Once
 	closeErr  error
 
@@ -107,7 +116,7 @@ func DefaultDB() string { return DBIn(DefaultDataDir()) }
 
 func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	switch cfg.Engine {
-	case "", workflows.EngineAPI:
+	case "", workflows.EngineAPI, ProviderAnthropic:
 		cfg.Engine = workflows.EngineAPI
 		if cfg.Provider == nil {
 			return nil, errors.New("runtime: the API engine needs a model provider")
@@ -115,13 +124,20 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		if cfg.Model == "" {
 			cfg.Model = provider.DefaultModel
 		}
-	case workflows.EngineClaudeCode:
-		// The model is Claude Code's own default unless one is named.
+	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
+		// The model is the CLI's own default unless one is named.
 	default:
 		return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
 	}
-	if cfg.ClaudePath == "" { // a session may ask for Claude Code whatever the default
+	// A session may ask for any engine whatever the default.
+	if cfg.ClaudePath == "" {
 		cfg.ClaudePath = "claude"
+	}
+	if cfg.CodexPath == "" {
+		cfg.CodexPath = "codex-acp"
+	}
+	if cfg.CopilotPath == "" {
+		cfg.CopilotPath = "copilot"
 	}
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = 50
@@ -247,6 +263,9 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 
 func (r *Runtime) declare() {
 	switch v := r.cfg.onlyVersion; v {
+	case workflows.SessionVersion5:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
 	case workflows.SessionVersion4:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV4, kairo.WorkflowVersion(v))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
@@ -256,6 +275,8 @@ func (r *Runtime) declare() {
 	default:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+		// Version 5 finishes as it started: no switch of engine or model.
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(workflows.SessionVersion5), kairo.Draining())
 		// Version 4 finishes as it started: a stopped turn is not kept.
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV4, kairo.WorkflowVersion(workflows.SessionVersion4), kairo.Draining())
 		// Versions 3 and 2 finish with the functions they started with.
@@ -294,6 +315,8 @@ func (r *Runtime) declare() {
 			return r.toolResult(t, in.Call, tools.Result{Output: in.Text, IsError: in.IsError})
 		})
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
+	kairo.Action(r.K, workflows.ActCodexTurn, kairo.Unprotected, r.acpTurn(workflows.EngineCodex), kairo.Timeout(time.Hour))
+	kairo.Action(r.K, workflows.ActCopilotTurn, kairo.Unprotected, r.acpTurn(workflows.EngineCopilot), kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
 	kairo.Action(r.K, workflows.ActToolDenied, kairo.Unprotected, r.toolDenied)
 	kairo.Action(r.K, workflows.ActMCPAsk, kairo.Unprotected, r.mcpAsk)
@@ -555,6 +578,7 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {
 			return "", err
 		}
+		in.Engine, _ = engineOf(in.Engine) // a provider's name: its engine's
 	}
 	abs, err := filepath.Abs(in.Dir)
 	if err != nil {
@@ -595,7 +619,7 @@ func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if info.Version != workflows.SessionVersion && info.Version != workflows.SessionVersion4 {
+	if info.Version != workflows.SessionVersion && info.Version != workflows.SessionVersion5 && info.Version != workflows.SessionVersion4 {
 		return 0, ErrNoUndo
 	}
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: kind})
@@ -610,7 +634,16 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 	if err != nil {
 		return 0, err
 	}
+	sw := r.takeSwitch(session)
+	ev.Switch = sw
 	if err := r.K.Signal(ctx, session, workflows.SignalMessage, ev); err != nil {
+		if sw != nil { // not sent: it waits for the next event
+			r.switchMu.Lock()
+			if r.switches[session] == nil {
+				r.switches[session] = sw
+			}
+			r.switchMu.Unlock()
+		}
 		return 0, err
 	}
 	return n, nil

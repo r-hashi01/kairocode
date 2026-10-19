@@ -30,6 +30,9 @@ type Agent interface {
 	Prompt(ctx context.Context, session, text string) (string, error)
 	// Cancel asks for the turn under way to stop (ADR 0011).
 	Cancel(session string) error
+	// SetConfigOption sets one of the session's settings: its provider or
+	// model (ADR 0014).
+	SetConfigOption(ctx context.Context, session, id, value string) error
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -144,6 +147,10 @@ type model struct {
 	tokens  int64
 	// edit: a flow being changed on its chart (/flow edit).
 	edit *flowEdit
+	// config: the session's settings (provider, model; ADR 0014); pick: one
+	// of them being chosen (/provider, /model).
+	config []acp.ConfigOption
+	pick   *pick
 	// flowsBefore: the project's flows when the turn began, to draw those
 	// it made or changed when it ends.
 	flowsBefore map[string]string
@@ -321,6 +328,13 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case updateMsg:
 		m.take(acp.Update(msg))
 		return nil
+	case setMsg:
+		if msg.err != nil {
+			m.print(bad.Render("  ⎿  " + msg.err.Error()))
+		} else {
+			m.print(faint.Render("  ⎿  " + m.settings() + " from the next turn"))
+		}
+		return nil
 	case askMsg:
 		a := &ask{req: msg.req, reply: msg.reply, sel: -1}
 		if hasAllow(msg.req.Options) {
@@ -427,6 +441,8 @@ func (m *model) take(u acp.Update) {
 		m.endCall(u.ToolCallID, u.Status == "failed", u.Text)
 	case "available_commands_update":
 		m.cmds = u.Commands
+	case "config_option_update":
+		m.config = u.Config
 	case "plan":
 		if u.Flow == nil {
 			return
@@ -663,6 +679,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case len(m.asks) > 0:
 		return m.askKey(key)
+	case m.pick != nil:
+		return m.pickKey(key)
 	case m.edit != nil:
 		return m.editKey(k)
 	}
@@ -725,6 +743,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		case "/help":
 			m.print(m.help())
 			return nil
+		}
+		if id, value, ok := settingCommand(text); ok { // the provider or the model (ADR 0014)
+			return m.setting(id, value)
 		}
 		if name, ok := strings.CutPrefix(text, "/flow edit "); ok { // changed here, on its chart
 			e, err := openFlowEdit(m.o.Dir, strings.TrimSpace(name))
@@ -855,6 +876,8 @@ func (m *model) View() tea.View {
 	switch {
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
+	case m.pick != nil:
+		b.WriteString(m.pickView(w))
 	case m.edit != nil:
 		b.WriteString("\n" + m.editView(w) + "\n")
 		if m.edit.words {
@@ -910,13 +933,7 @@ func (m *model) View() tea.View {
 }
 
 func (m *model) status(w int) string {
-	left := m.o.Engine
-	if left == "" {
-		left = "api"
-	}
-	if m.o.Model != "" {
-		left += " · " + m.o.Model
-	}
+	left := m.settings()
 	if m.note != "" {
 		left = warn.Render(m.note)
 	} else {

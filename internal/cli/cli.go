@@ -33,7 +33,7 @@ import (
 
 const usage = `usage:
   kairocode [chat] [-dir DIR] [-data DIR] [-session ID]   talk with it in the terminal (kairo is the same)
-  kairocode run [-dir DIR] [-data DIR] [-detach] "<request>"   answer one request, then exit
+  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] "<request>"   answer one request, then exit
                                                      (-detach: stop when it waits for a person, exit 3)
   kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
@@ -52,13 +52,18 @@ nothing to do (KAIROCODE_DAEMON_IDLE). A command of another build replaces
 it when it runs no step and no other client uses it. The data directory defaults to
 $XDG_DATA_HOME/kairocode or ~/.local/share/kairocode.
 
-KAIROCODE_ENGINE picks who runs the model loop of the sessions you start:
-  api (default)   the Claude API (credentials as the Anthropic SDK resolves them)
-  claude-code     your own Claude Code, signed in with your plan (ADR 0007);
-                  KAIROCODE_CLAUDE names the claude command (default: claude)
-KAIROCODE_MODEL picks the model. The daemon takes the rest from the
-environment it starts in: KAIROCODE_CLAUDE, and KAIROCODE_PROVIDER=fake with
-KAIROCODE_FAKE=<script.json> to script the API engine's replies (tests).
+The provider runs the model loop; -provider and -model of run (or
+KAIROCODE_ENGINE and KAIROCODE_MODEL) choose them for the sessions you
+start, and /provider and /model in the chat switch them from the next
+turn on (ADR 0014):
+  anthropic (default)   the Claude API (credentials as the Anthropic SDK resolves them)
+  claude-code           your own Claude Code, signed in with your plan (ADR 0007)
+  codex                 your own Codex CLI
+  copilot               your own GitHub Copilot CLI
+KAIROCODE_CLAUDE, KAIROCODE_CODEX and KAIROCODE_COPILOT name their commands.
+The daemon takes them from the environment it starts in, and
+KAIROCODE_PROVIDER=fake with KAIROCODE_FAKE=<script.json> to script the API
+engine's replies (tests).
 `
 
 // Main runs the command with args (without the program name) and returns the
@@ -148,6 +153,7 @@ func newProvider() (provider.Provider, error) {
 func openRuntime(ctx context.Context, cfg runtime.Config) (*runtime.Runtime, error) {
 	cfg.Engine, cfg.Model = os.Getenv("KAIROCODE_ENGINE"), os.Getenv("KAIROCODE_MODEL")
 	cfg.ClaudePath = os.Getenv("KAIROCODE_CLAUDE")
+	cfg.CodexPath, cfg.CopilotPath = os.Getenv("KAIROCODE_CODEX"), os.Getenv("KAIROCODE_COPILOT")
 	p, err := newProvider()
 	if err != nil {
 		return nil, err
@@ -236,6 +242,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	dir := fs.String("dir", ".", "working directory")
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3); go on with kairocode resume")
+	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (ADR 0014)")
+	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (default: the provider's)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -255,7 +263,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	// The session runs with this client's choice of engine and model, not
 	// whatever the daemon was started with.
 	s, err := c.CreateSession(ctx, workflows.SessionInput{
-		Dir: abs, Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
+		Dir: abs, Engine: *prov, Model: *model,
 	})
 	if err != nil {
 		return err

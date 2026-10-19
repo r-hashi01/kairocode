@@ -121,6 +121,14 @@ func (r *Runtime) flowDecide(t *kairo.TaskContext, in workflows.DecideInput) (wo
 	}
 	prompt := m.Text()
 	var out workflows.DecideOutput
+	if engine == workflows.EngineCodex || engine == workflows.EngineCopilot {
+		// Their CLIs answer no schema here: the API decides if there is
+		// one, else Claude Code, each with its default model (ADR 0014).
+		engine, model = workflows.EngineClaudeCode, ""
+		if r.cfg.Provider != nil {
+			engine, model = workflows.EngineAPI, provider.DefaultModel
+		}
+	}
 	if engine == workflows.EngineClaudeCode {
 		out, err = r.claudeDecide(t, in.Dir, prompt, model, schema)
 	} else {

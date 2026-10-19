@@ -20,4 +20,4 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0011](0011-cancel-a-turn.md) | ターンの取り消し: kairo の取り消しで止め、止めたことを会話に残す | 承認（2026-10-19） |
 | [0012](0012-github-and-serverless.md) | GitHub から起動し、待つ間はプロセスを持たない（サーバーレス）。作業ディレクトリはブランチで持ち越す | 提案 |
 | [0013](0013-http-tools.md) | HTTP(S) のツール: 読む `fetch` と、作用のある `http` | 提案 |
-| [0014](0014-providers-and-models.md) | プロバイダーとモデルを、会話の途中で切り替える（/provider、/model）。codex と copilot は CLI のエンジンから | 提案 |
+| [0014](0014-providers-and-models.md) | プロバイダーとモデルを、会話の途中で切り替える（/provider、/model）。codex と copilot は CLI のエンジンから | 承認（2026-10-19） |

@@ -14,9 +14,13 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "5"
+	SessionVersion = "6"
 	Turn           = "turn"
 	TurnVersion    = "4"
+	// SessionVersion5 is the version before a message could switch the
+	// session's provider and model for the turns after it (ADR 0014). Its
+	// runs finish with RunSessionV5: they have no switch to read.
+	SessionVersion5 = "5"
 	// SessionVersion4 is the version before a turn stopped by the user
 	// was kept in the conversation (ADR 0011). Its runs are finished by
 	// RunSessionV4: a stopped turn leaves the conversation as it was.
@@ -86,8 +90,12 @@ const (
 	// them back as a tree has them (design 7).
 	ActSnapshot = "snapshot"
 	ActRestore  = "restore"
-	// ActClaudeTurn runs a turn in the user's Claude Code (ADR 0007).
-	ActClaudeTurn = "claude.turn"
+	// ActClaudeTurn runs a turn in the user's Claude Code (ADR 0007);
+	// ActCodexTurn and ActCopilotTurn in their Codex and Copilot CLIs (ADR
+	// 0014).
+	ActClaudeTurn  = "claude.turn"
+	ActCodexTurn   = "codex.turn"
+	ActCopilotTurn = "copilot.turn"
 	// ActPermissionCheck decides whether a tool call may run; ActToolDenied
 	// answers one that may not.
 	ActPermissionCheck = "permission.check"
@@ -122,11 +130,20 @@ const (
 	SignalMessage = "message"
 )
 
-// Engines (ADR 0007): who runs the model loop.
+// Engines (ADR 0007, 0014): who runs the model loop. The API engine is
+// the provider anthropic; the others are the user's own CLIs.
 const (
 	EngineAPI        = "api"
 	EngineClaudeCode = "claude-code"
+	EngineCodex      = "codex"
+	EngineCopilot    = "copilot"
 )
+
+// CLIEngine reports whether engine is one of the user's CLIs: it runs the
+// model loop itself, and KairoCode's tools reach it over MCP.
+func CLIEngine(engine string) bool {
+	return engine == EngineClaudeCode || engine == EngineCodex || engine == EngineCopilot
+}
 
 type SessionInput struct {
 	// Dir is the working directory every tool of the session works in.
@@ -156,6 +173,17 @@ type SessionEvent struct {
 	Model string `json:"model,omitempty"`
 	// Flow, if set, makes the message's turn run that flow (/flow).
 	Flow *FlowCall `json:"flow,omitempty"`
+	// Switch, if set, changes the session's engine or model from this
+	// event's turn on (/provider, /model; ADR 0014). Version 6 on.
+	Switch *Switch `json:"switch,omitempty"`
+}
+
+// Switch is a change of the session's engine (provider) or model. An
+// empty field keeps what the session has; a new engine starts with its
+// own default model unless Model names one.
+type Switch struct {
+	Engine string `json:"engine,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 const (
@@ -183,6 +211,10 @@ type TurnInput struct {
 	Model  string `json:"model,omitempty"`
 	// History is the conversation before this turn, by its last link.
 	History string `json:"history,omitempty"`
+	// Epoch counts the session's switches of engine before this turn
+	// (ADR 0014): a CLI engine starts a session of its own in each, given
+	// the conversation so far.
+	Epoch   int    `json:"epoch,omitempty"`
 	Message string `json:"message"`
 	// Undo, if set, makes the turn an undo or a redo: it restores the
 	// working files instead of asking the model (design 7).
@@ -361,7 +393,7 @@ type AgentLoadInput struct {
 // keeps it to its end (design 5).
 type Agent struct {
 	Name string `json:"name"`
-	// Engine is EngineAPI or EngineClaudeCode.
+	// Engine is EngineAPI or a CLI engine (CLIEngine).
 	Engine   string   `json:"engine"`
 	Model    string   `json:"model"`
 	MaxSteps int      `json:"max_steps"`
@@ -597,10 +629,16 @@ type HistoryCancelledInput struct {
 
 // ClaudeTurnInput is a turn as Claude Code runs it: the prompt and the
 // agent, by hash, and where the turn's tool calls are to be recorded.
+// ClaudeTurnInput is a turn of a CLI engine: Claude Code (ADR 0007),
+// Codex or Copilot (ADR 0014).
 type ClaudeTurnInput struct {
 	// Note, from the second round on, tells Claude Code what the user
 	// answered; Round tells the rounds apart.
-	Note    string   `json:"note,omitempty"`
+	Note string `json:"note,omitempty"`
+	// Epoch is the turn's (TurnInput.Epoch); History, the conversation
+	// before the turn, given to a CLI session that starts without it.
+	Epoch   int      `json:"epoch,omitempty"`
+	History string   `json:"history,omitempty"`
 	Round   int      `json:"round,omitempty"`
 	Policy  Policy   `json:"policy"`
 	Session string   `json:"session"`

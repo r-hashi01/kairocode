@@ -293,7 +293,7 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			out = append(out, p...)
 			continue
 		}
-		if c.Plan == "kairo.call/"+workflows.ActClaudeTurn && c.Finished() {
+		if cliTurnPlan(c.Plan) && c.Finished() {
 			var o workflows.ClaudeTurnOutput
 			if json.Unmarshal(c.Output, &o) == nil {
 				for _, a := range o.Asks {

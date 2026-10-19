@@ -35,6 +35,9 @@ func (r *Runtime) engineFor(engine, model string) (string, string, error) {
 			model = r.cfg.Model
 		}
 	}
+	if engine == ProviderAnthropic {
+		engine = workflows.EngineAPI
+	}
 	switch engine {
 	case workflows.EngineAPI:
 		if r.cfg.Provider == nil {
@@ -43,8 +46,8 @@ func (r *Runtime) engineFor(engine, model string) (string, string, error) {
 		if model == "" {
 			model = provider.DefaultModel
 		}
-	case workflows.EngineClaudeCode:
-		// The model is Claude Code's own default unless one is named.
+	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
+		// The model is the CLI's own default unless one is named.
 	default:
 		return "", "", fmt.Errorf("unknown engine %q", engine)
 	}
@@ -154,8 +157,8 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 			continue // nothing to load
 		}
 		// No subagent of a subagent; none for an agent that only reads (it
-		// would act through it); none on Claude Code, which has its own.
-		if d.Name == tools.TaskTool.Name && (in.Sub || readOnly || engine == workflows.EngineClaudeCode) {
+		// would act through it); none on a CLI engine, which has its own.
+		if d.Name == tools.TaskTool.Name && (in.Sub || readOnly || workflows.CLIEngine(engine)) {
 			continue
 		}
 		specs = append(specs, provider.ToolSpec{Name: d.Name, Description: d.Description, Schema: d.Schema})
