@@ -15,12 +15,16 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/trust"
+	"github.com/r-hashi01/kairocode/internal/tui"
 )
 
-// chat talks with the agent in the terminal, a line at a time (`kairo`,
-// `kairocode chat`). It is an ACP client (ADR 0002) of the ACP agent it runs
-// in this process on the daemon, as an editor would be: the session runs in
-// the daemon, and leaving the chat leaves it there to take up again.
+// chat talks with the agent in the terminal (`kairo`, `kairocode chat`):
+// in the TUI on a terminal (ADR 0010), a line at a time otherwise. Either is
+// an ACP client (ADR 0002) of the ACP agent it runs in this process on the
+// daemon, as an editor would be: the session runs in the daemon, and
+// leaving the chat leaves it there to take up again. A folder not trusted
+// yet is asked about before anything in it is read.
 func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -36,6 +40,14 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	abs, err := filepath.Abs(*dir)
 	if err != nil {
 		return err
+	}
+	trusted, err := trust.Trusted(*data, abs)
+	if err != nil {
+		return err
+	}
+	s := *session
+	if s != "" && !strings.HasPrefix(s, "s/") {
+		s = runtime.SessionID(s)
 	}
 	c, err := connect(ctx, *data)
 	if err != nil {
@@ -65,25 +77,68 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		<-agentDone
 	}()
 
+	if in, out, ok := terminal(stdout); ok {
+		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Version: buildVersion(),
+			Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
+			Trusted: trusted, Trust: func() error { return trust.Trust(*data, abs) },
+			Usage: func(ctx context.Context, s string) (int64, error) {
+				u, err := c.Usage(ctx, s)
+				return u.Total.Input + u.Total.Output, err
+			}})
+		cl := acp.Dial(ctx, fromAgentR, toAgentW, acp.ClientHandler{Update: ui.Update, Permission: ui.Permission})
+		if _, err := cl.Initialize(ctx); err != nil {
+			return err
+		}
+		s, err := ui.Run(cl)
+		if s != "" {
+			fmt.Fprintf(out, "The session stays in the daemon: kairo -session %s takes it up again.\n", strings.TrimPrefix(s, "s/"))
+		}
+		return err
+	}
+	return lineChat(ctx, fromAgentR, toAgentW, stdout, *data, abs, s, trusted)
+}
+
+// lineChat is the chat a line at a time, on what is not a terminal.
+func lineChat(ctx context.Context, fromAgent io.Reader, toAgent io.Writer, stdout io.Writer, data, abs, s string, trusted bool) error {
 	t := &term{out: stdout, input: make(chan string)}
 	go t.read(ctx, stdin)
-	cl := acp.Dial(ctx, fromAgentR, toAgentW, acp.ClientHandler{Update: t.update, Permission: t.permission})
+	if !trusted {
+		t.line("Do you trust the files in " + abs + "?")
+		t.line("kairo will follow its permission rules (kairocode.json), and the agents, commands and skills in .opencode and .claude.")
+		t.mu.Lock()
+		io.WriteString(t.out, "trust it? (y/n): ")
+		t.midLine = true
+		t.mu.Unlock()
+		var answer string
+		select {
+		case <-ctx.Done():
+			return nil
+		case l := <-t.input:
+			answer = strings.ToLower(strings.TrimSpace(l))
+			t.typed()
+		}
+		if answer != "y" && answer != "yes" {
+			t.line("Nothing in " + abs + " was read.")
+			return nil
+		}
+		if err := trust.Trust(data, abs); err != nil {
+			return err
+		}
+	}
+	cl := acp.Dial(ctx, fromAgent, toAgent, acp.ClientHandler{Update: t.update, Permission: t.permission})
 	if _, err := cl.Initialize(ctx); err != nil {
 		return err
 	}
 	banner := func(s string) {
 		t.line(fmt.Sprintf("kairo · %s · session %s\n/help for commands, Ctrl-D to leave", abs, strings.TrimPrefix(s, "s/")))
 	}
-	s := *session
 	if s == "" {
+		var err error
 		if s, err = cl.NewSession(ctx, abs); err != nil {
 			return err
 		}
 		banner(s)
 	} else {
-		if !strings.HasPrefix(s, "s/") {
-			s = runtime.SessionID(s)
-		}
 		banner(s) // then what was said in it
 		if err := cl.LoadSession(ctx, s, abs); err != nil {
 			return err
@@ -303,4 +358,21 @@ func shortcut(options []acp.PermissionOption) (yes, no string) {
 		return "", ""
 	}
 	return yes, no
+}
+
+// terminal is the terminal the chat runs its TUI on: stdin and stdout, when
+// both are one (and KAIROCODE_PLAIN does not ask for lines).
+func terminal(stdout io.Writer) (io.Reader, io.Writer, bool) {
+	in, ok1 := stdin.(*os.File)
+	out, ok2 := stdout.(*os.File)
+	if !ok1 || !ok2 || os.Getenv("KAIROCODE_PLAIN") != "" {
+		return nil, nil, false
+	}
+	for _, f := range []*os.File{in, out} {
+		info, err := f.Stat()
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			return nil, nil, false
+		}
+	}
+	return in, out, true
 }

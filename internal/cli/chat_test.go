@@ -14,6 +14,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/trust"
 )
 
 // chatting runs the chat with args, on a stdin the test writes to.
@@ -84,16 +85,18 @@ func TestChat(t *testing.T) {
 	defer cancel()
 
 	c := startChat(t, ctx, "chat", "-dir", ws, "-data", data)
+	c.wait(t, ctx, "trust it? (y/n): ", 1)
+	c.say(t, "y")
 	c.wait(t, ctx, "> ", 1)
 	c.say(t, "write notes")
-	c.wait(t, ctx, "(y/n): ", 1)
+	c.wait(t, ctx, "choose 1-2 (y/n): ", 1)
 	for _, want := range []string{"· write notes.txt", "? write notes.txt", "1) Allow", "2) Reject"} {
 		if !strings.Contains(c.out.String(), want) {
 			t.Errorf("no %q in\n%s", want, c.out.String())
 		}
 	}
 	c.say(t, "maybe") // not an answer: asked again
-	c.wait(t, ctx, "(y/n): ", 2)
+	c.wait(t, ctx, "choose 1-2 (y/n): ", 2)
 	c.say(t, "y")
 	c.wait(t, ctx, "> ", 2)
 	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "hi\n" {
@@ -145,6 +148,9 @@ func TestNoCommandIsTheChat(t *testing.T) {
 	})
 	ws := t.TempDir()
 	t.Chdir(ws)
+	if err := trust.Trust(filepath.Join(xdg, "kairocode"), ws); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	c := startChat(t, ctx)
@@ -205,5 +211,31 @@ func TestChatAsks(t *testing.T) {
 	io.WriteString(inW, "hello\n")
 	if l := <-tm.input; l != "hello" {
 		t.Fatalf("the prompt got %q", l)
+	}
+}
+
+// A folder not trusted: no starts nothing (the session would read its
+// rules); the answer is not kept, and the next chat asks again.
+func TestChatInAFolderNotTrusted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, t.TempDir()))
+	data := dataDir(t)
+	ws := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := startChat(t, ctx, "-dir", ws, "-data", data)
+	c.wait(t, ctx, "trust it? (y/n): ", 1)
+	c.say(t, "n")
+	if code := <-c.code; code != 0 {
+		t.Fatalf("exit %d: %s", code, c.errs.String())
+	}
+	if out := c.out.String(); !strings.Contains(out, "Nothing in") || strings.Contains(out, "session") {
+		t.Fatalf("out\n%s", out)
+	}
+	if ok, err := trust.Trusted(data, ws); ok || err != nil {
+		t.Fatalf("trusted after no: %v %v", ok, err)
 	}
 }

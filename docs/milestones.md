@@ -80,6 +80,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] `TestACPContract`: 実装した ACP のメソッドの要求と応答が、固定した版の ACP の JSON Schema（v1、`schema-v1.26.0`）に合う。
 - [x] 決まった順のメッセージを流す ACP のクライアントで、`session/new` → `prompt` → `tool_call` の更新 → `request_permission` → 答え → ターンの終わりが通る（`TestACPTurn`、`TestACPCommand`）。要確認も `request_permission` で答えられる（`TestCrashACPReview`）。
 - [x] 端末の対話（`kairocode chat`、引数なしの `kairo`）を、自分の ACP のクライアントとして作る（ADR 0002）: 返答を届いたそばから書き、ツールの呼び出しを示し、権限を端末で聞き、`-session` で会話を表示し直して続ける（`TestChat`、`TestChatAsks`、`TestNoCommandIsTheChat`、`TestClientKeepsTheOrderOfUpdates`、`TestClientPermission`）。
+- [x] `kairo` は端末では TUI（ADR 0010）: 見出し、入力の枠、状態の行、返答とツールの行、矢印で選ぶ承認（要確認は何も選んでいない状態から）、取り下げ、コマンドの補完、Ctrl-C 2 回で抜ける（`TestTurn`、`TestAsk`、`TestKeys`、`TestQueuedDuringATurn`、`TestHelp`、`TestReplyWraps`、`TestNoSize`）。初めてのフォルダは信頼を聞き、「いいえ」なら何も読まない（`TestTrustQuestion`、`TestChatInAFolderNotTrusted`、`TestTrust`）。Esc でターンを止めるのは ADR 0011 の承認待ち。
 - [x] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。
 - [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。 → テストは通る（`TestClaudeEngineResumeDoesNotRepeatARealCall`、`TestCrashClaudeEngine`）。本物の `claude` での確認が残り。
 - [ ] edit のあと、LSP の診断のエラーがツールの出力に足される。

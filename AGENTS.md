@@ -33,6 +33,8 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/opencode` | opencode のエージェント・コマンド・スキルの定義（`.opencode/agents`、`commands`、`SKILL.md`）を、opencode と同じ意味で読み、コマンドを展開する。frontmatter の YAML は小さな自前のパーサーで読む | ファイルを読むだけ（コマンドの `` !`…` `` は呼び出し側が sandbox で動かす） |
 | `internal/acp` | ACP のエージェント（ADR 0002）と、端末の対話が使う ACP のクライアント。stdio の JSON-RPC、デーモンのセッション・出来事・承認を ACP に写す。待ちの状態を持たない（承認の待ちは kairo にある） | ここで I/O する |
 | `internal/cli` | `kairocode chat`（引数なしの `kairo` も。自分の ACP のクライアントとして話す端末の対話）、`run / approvals / approve / daemon / acp / usage`、後で `replay`。DB を自分で開かず、デーモンにつなぐ | ここで I/O する |
+| `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力だけを持つ | 端末の入出力だけ |
+| `internal/trust` | 信頼したフォルダの一覧（ADR 0010。データの置き場の `trust.json`）。クライアントだけが読み書きする | ここで I/O する |
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
 | `cmd/kairocode` | エントリーポイント | — |
 
@@ -77,7 +79,7 @@ make check | quick | build
 - **ツールを足す・変える。** `/tool-change` スキル（作用の型、結果が不明なときの確かめ方、権限の規則の形、crash のテスト）。
 - **ワークフロー（`internal/workflows`）を変える。** `/workflow-change` スキル（決定性、記録された値、ID の規則、版の扱い）。
 - **kairo の API が足りない。** `/kairo-gap` スキル。
-- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003 の承認後）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）です。それ以外（TUI のライブラリを含む）は、利用者の了承と ADR が要ります（hook が確認を求めます）。
+- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003 の承認後）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
 
 ## コーディング規約
 
