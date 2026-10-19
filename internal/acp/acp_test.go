@@ -17,6 +17,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -67,6 +68,14 @@ func (l *local) History(ctx context.Context, s string) ([]msg.Message, error) {
 func (l *local) Undo(ctx context.Context, s string) (int, error) { return l.r.Undo(ctx, s) }
 
 func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Redo(ctx, s) }
+
+func (l *local) Commands(ctx context.Context, s string) ([]opencode.Command, error) {
+	return l.r.Commands(ctx, s)
+}
+
+func (l *local) RunCommand(ctx context.Context, s, name, args string) (int, error) {
+	return l.r.RunCommand(ctx, s, name, args)
+}
 
 // writeScript: the model writes notes.txt, then says done.
 var writeScript = []provider.FakeReply{
@@ -497,7 +506,10 @@ func TestMain(m *testing.M) {
 		crashChild()
 		return
 	}
-	os.Exit(m.Run())
+	home := isolatedHome()
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 // bashScript: the model runs a command that marks it started, then says
@@ -703,4 +715,59 @@ func TestACPUndoRedo(t *testing.T) {
 			t.Fatalf("after %s notes.txt exists: %v", st.command, err == nil)
 		}
 	}
+}
+
+// The project's commands (.opencode/commands) are offered as slash
+// commands, and /name args runs one; any other /word is the user's text.
+func TestACPProjectCommand(t *testing.T) {
+	b, ws := setup(t)
+	if err := os.MkdirAll(filepath.Join(ws, ".opencode", "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".opencode", "commands", "greet.md"), []byte("---\ndescription: Greet someone\n---\nSay hello to $1.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
+	resp, before := c.until(isResponse(id))
+	var r struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	offered := false
+	for _, m := range before {
+		if m.Method == "session/update" && strings.Contains(string(m.Params), `{"description":"Greet someone","input":{"hint":"arguments"},"name":"greet"}`) {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Fatalf("greet was not offered: %v", before)
+	}
+	// The script's first reply writes; answer it, then look at the message.
+	id = prompt(c, r.SessionID, "/greet world")
+	req, _ := c.until(isMethod("session/request_permission"))
+	allow(c, req, "reject_once")
+	c.until(isResponse(id))
+	ms, err := b.r.History(ctx, r.SessionID)
+	if err != nil || len(ms) == 0 || ms[0].Parts[0].Text != "Say hello to world." {
+		t.Fatalf("history %+v %v", ms, err)
+	}
+}
+
+// isolatedHome points HOME and XDG_CONFIG_HOME at a fresh directory, so the
+// user's own settings, agents and skills stay out of the tests (and of the
+// processes they start). It returns the directory, to remove.
+func isolatedHome() string {
+	home, err := os.MkdirTemp("", "kc-home")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	return home
 }

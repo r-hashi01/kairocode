@@ -37,7 +37,17 @@ func TestMain(m *testing.M) {
 		fakeClaude()
 		return
 	}
-	os.Exit(m.Run())
+	// The user's own settings, agents and skills (~/.config, ~/.claude) stay
+	// out of the tests.
+	home, err := os.MkdirTemp("", "kc-home")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func crashChild() {

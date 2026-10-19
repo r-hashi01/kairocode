@@ -30,7 +30,10 @@ func TestMain(m *testing.M) {
 		return []string{os.Args[0], "-test.run=^$", "daemon", "-data", data}, nil
 	}
 	os.Setenv("KC_CLI_DAEMON", "1") // the daemons' environment; this process ignores it now
-	os.Exit(m.Run())
+	home := isolatedHome()
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 // dataDir is a data directory whose daemon is killed when the test ends.
@@ -345,4 +348,17 @@ func TestACPCommand(t *testing.T) {
 	if !slices.Equal(replayed, want) {
 		t.Fatalf("replayed %v, want %v", replayed, want)
 	}
+}
+
+// isolatedHome points HOME and XDG_CONFIG_HOME at a fresh directory, so the
+// user's own settings, agents and skills stay out of the tests (and of the
+// processes they start). It returns the directory, to remove.
+func isolatedHome() string {
+	home, err := os.MkdirTemp("", "kc-home")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	return home
 }

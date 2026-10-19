@@ -67,6 +67,12 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 		tin := TurnInput{
 			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, History: head, Message: ev.Message,
 		}
+		if ev.Agent != "" {
+			tin.Agent = ev.Agent
+		}
+		if ev.Model != "" {
+			tin.Model = ev.Model
+		}
 		switch ev.Kind {
 		case EventUndo:
 			tin.Undo = &UndoInput{Of: -1}

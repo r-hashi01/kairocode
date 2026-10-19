@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -357,5 +358,21 @@ func (c *Client) undo(ctx context.Context, session, which string) (int, error) {
 		Turn int `json:"turn"`
 	}
 	err := c.do(ctx, "POST", sessionPath(session)+"/"+which, nil, &out)
+	return out.Turn, err
+}
+
+// Commands are the commands the session can run.
+func (c *Client) Commands(ctx context.Context, session string) ([]opencode.Command, error) {
+	var out []opencode.Command
+	err := c.do(ctx, "GET", sessionPath(session)+"/commands", nil, &out)
+	return out, err
+}
+
+// RunCommand runs one with args and returns the turn's number.
+func (c *Client) RunCommand(ctx context.Context, session, name, args string) (int, error) {
+	var out struct {
+		Turn int `json:"turn"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/commands", map[string]string{"name": name, "arguments": args}, &out)
 	return out.Turn, err
 }

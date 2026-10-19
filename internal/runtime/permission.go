@@ -38,6 +38,8 @@ var defaultRules = []permission.Rule{
 	// (ADR 0005).
 	{Tool: "bash", Action: permission.Allow},
 	{Tool: "git_commit", Action: permission.Allow},
+	// A skill only gives the model instructions to read.
+	{Tool: "skill", Action: permission.Allow},
 }
 
 // userConfigDir is where the user's kairocode.json lives.
@@ -50,9 +52,10 @@ func userConfigDir() string {
 }
 
 // loadRules reads the permission rules for a working directory: the
-// defaults, then the user's, then the project's. "~/" and "$HOME/" in a
-// pattern are the home directory.
-func loadRules(dir string) ([]permission.Rule, error) {
+// defaults, then the user's, then the project's, then the agent's own
+// (layers, each in kairocode.json's form). "~/" and "$HOME/" in a pattern
+// are the home directory.
+func loadRules(dir string, agent []json.RawMessage) ([]permission.Rule, error) {
 	rules := append([]permission.Rule(nil), defaultRules...)
 	for _, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
 		b, err := os.ReadFile(path)
@@ -71,6 +74,13 @@ func loadRules(dir string) ([]permission.Rule, error) {
 		r, err := permission.Parse(cfg.Permission)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		rules = append(rules, r...)
+	}
+	for _, layer := range agent {
+		r, err := permission.Parse(layer)
+		if err != nil {
+			return nil, fmt.Errorf("the agent's permission: %w", err)
 		}
 		rules = append(rules, r...)
 	}
@@ -96,6 +106,7 @@ func subject(args json.RawMessage) string {
 	var in struct {
 		Command string `json:"command"`
 		Path    string `json:"path"`
+		Name    string `json:"name"` // a skill's
 	}
 	_ = json.Unmarshal(args, &in)
 	if in.Command != "" {
@@ -103,6 +114,9 @@ func subject(args json.RawMessage) string {
 	}
 	if in.Path != "" {
 		return in.Path
+	}
+	if in.Name != "" {
+		return in.Name
 	}
 	var v any
 	if json.Unmarshal(args, &v) != nil {

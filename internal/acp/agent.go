@@ -7,11 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -30,17 +32,35 @@ type Backend interface {
 	History(ctx context.Context, session string) ([]msg.Message, error)
 	Undo(ctx context.Context, session string) (int, error)
 	Redo(ctx context.Context, session string) (int, error)
+	Commands(ctx context.Context, session string) ([]opencode.Command, error)
+	RunCommand(ctx context.Context, session, name, args string) (int, error)
 }
 
-// commands are the slash commands the agent offers (available_commands_update).
-var commands = []map[string]any{
+// builtinCommands are the slash commands KairoCode itself has.
+var builtinCommands = []map[string]any{
 	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
 	{"name": "redo", "description": "Put back what the last undo took away"},
 }
 
-// offerCommands tells the client the slash commands.
-func (a *agent) offerCommands(session string) {
-	a.update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": commands})
+// offerCommands tells the client the slash commands: KairoCode's, then the
+// project's (opencode's commands/*.md).
+func (a *agent) offerCommands(ctx context.Context, session string) {
+	all := append([]map[string]any(nil), builtinCommands...)
+	cs, err := a.b.Commands(ctx, session)
+	if err != nil {
+		a.o.Logger.Warn("acp: the project's commands", "err", err)
+	}
+	for _, c := range cs {
+		if c.Name == "undo" || c.Name == "redo" {
+			continue // KairoCode's own
+		}
+		desc := c.Description
+		if desc == "" {
+			desc = "/" + c.Name
+		}
+		all = append(all, map[string]any{"name": c.Name, "description": desc, "input": map[string]any{"hint": "arguments"}})
+	}
+	a.update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": all})
 }
 
 // Options are the agent's settings.
@@ -112,7 +132,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if _, err := a.watch(s); err != nil {
 			return nil, err
 		}
-		a.offerCommands(s)
+		a.offerCommands(ctx, s)
 		return map[string]any{"sessionId": s}, nil
 	case "session/load":
 		var p struct {
@@ -128,7 +148,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if _, err := a.watch(p.SessionID); err != nil {
 			return nil, err
 		}
-		a.offerCommands(p.SessionID)
+		a.offerCommands(ctx, p.SessionID)
 		return map[string]any{}, nil
 	case "session/prompt":
 		return a.prompt(ctx, params)
@@ -173,11 +193,23 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	prompt := strings.Join(text, "\n")
 	start := a.b.Send
 	undo := false
-	switch strings.TrimSpace(prompt) {
-	case "/undo":
+	name, args, _ := strings.Cut(strings.TrimSpace(prompt), " ")
+	switch {
+	case name == "/undo":
 		start, undo = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
-	case "/redo":
+	case name == "/redo":
 		start, undo = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	case strings.HasPrefix(name, "/"):
+		// A project's command; any other /word is the user's text.
+		cs, err := a.b.Commands(ctx, p.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(cs, func(c opencode.Command) bool { return c.Name == name[1:] }) {
+			start = func(ctx context.Context, s, _ string) (int, error) {
+				return a.b.RunCommand(ctx, s, name[1:], strings.TrimSpace(args))
+			}
+		}
 	}
 	n, err := start(ctx, p.SessionID, prompt)
 	if err != nil {

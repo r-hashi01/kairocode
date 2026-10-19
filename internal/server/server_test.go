@@ -187,3 +187,23 @@ func TestSSEDeliversTurnEvents(t *testing.T) {
 		t.Fatalf("events %v, want %v; turn end %+v", got, want, ev)
 	}
 }
+
+func TestMain(m *testing.M) {
+	home := isolatedHome()
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
+// isolatedHome points HOME and XDG_CONFIG_HOME at a fresh directory, so the
+// user's own settings, agents and skills stay out of the tests (and of the
+// processes they start). It returns the directory, to remove.
+func isolatedHome() string {
+	home, err := os.MkdirTemp("", "kc-home")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	return home
+}

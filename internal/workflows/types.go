@@ -100,8 +100,12 @@ type SessionOutput struct {
 // SessionEvent is what a client sends to a session: a message (stored
 // beforehand; only its hash travels) or the end of the session.
 type SessionEvent struct {
-	Kind    string `json:"kind"` // EventMessage or EventClose
+	Kind    string `json:"kind"` // EventMessage, EventClose, EventUndo, EventRedo
 	Message string `json:"message,omitempty"`
+	// Agent and Model, if set, run this message's turn instead of the
+	// session's (a command's, opencode's commands/*.md). Version 4 on.
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
 }
 
 const (

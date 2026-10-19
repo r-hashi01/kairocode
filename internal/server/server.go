@@ -39,6 +39,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
 	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
+	s.mux.HandleFunc("GET /sessions/{id}/commands", s.commands)
+	s.mux.HandleFunc("POST /sessions/{id}/commands", s.runCommand)
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
 	return s
@@ -260,4 +262,40 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, u)
+}
+
+// commands are the commands the session can run (opencode's commands/*.md).
+func (s *Server) commands(w http.ResponseWriter, r *http.Request) {
+	cs, err := s.rt.Commands(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cs)
+}
+
+// runCommand runs one: {"name": "...", "arguments": "..."}.
+func (s *Server) runCommand(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"name": "...", "arguments": "..."}`))
+		return
+	}
+	n, err := s.rt.RunCommand(r.Context(), sessionOf(r), in.Name, in.Arguments)
+	if errors.Is(err, runtime.ErrNoCommand) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
 }

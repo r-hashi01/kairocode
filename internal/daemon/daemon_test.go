@@ -28,7 +28,10 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	home := isolatedHome()
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 // drainTimeout is the child daemon's DrainTimeout (KC_DRAIN; default when unset).
@@ -846,4 +849,17 @@ func TestCrashDaemonEventsAfterRestart(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(ws, "count.txt")); string(got) != "ran\n" {
 		t.Fatalf("the command ran again: %q", got)
 	}
+}
+
+// isolatedHome points HOME and XDG_CONFIG_HOME at a fresh directory, so the
+// user's own settings, agents and skills stay out of the tests (and of the
+// processes they start). It returns the directory, to remove.
+func isolatedHome() string {
+	home, err := os.MkdirTemp("", "kc-home")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	return home
 }
