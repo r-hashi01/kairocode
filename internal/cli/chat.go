@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/trust"
 	"github.com/r-hashi01/kairocode/internal/tui"
@@ -78,9 +79,27 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}()
 
 	if in, out, ok := terminal(stdout); ok {
-		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Version: buildVersion(),
-			Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
-			Trusted: trusted, Trust: func() error { return trust.Trust(*data, abs) },
+		if !trusted {
+			yes, err := tui.AskTrust(ctx, in, out, abs)
+			if err != nil {
+				return err
+			}
+			if !yes {
+				fmt.Fprintf(out, "Nothing in %s was read.\n", abs)
+				return nil
+			}
+			if err := trust.Trust(*data, abs); err != nil {
+				return err
+			}
+		}
+		engine, model := os.Getenv("KAIROCODE_ENGINE"), os.Getenv("KAIROCODE_MODEL")
+		if model == "" {
+			model = provider.DefaultModel
+			if engine == "claude-code" {
+				model = "Claude Code's model"
+			}
+		}
+		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Version: buildVersion(), Engine: engine, Model: model,
 			Usage: func(ctx context.Context, s string) (int64, error) {
 				u, err := c.Usage(ctx, s)
 				return u.Total.Input + u.Total.Output, err

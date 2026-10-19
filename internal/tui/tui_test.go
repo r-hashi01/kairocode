@@ -141,30 +141,38 @@ func typed(d *driver, text string) {
 	d.send(key("enter"))
 }
 
-// A folder not trusted is asked about before the session starts: yes
-// records it and starts; no leaves with nothing started.
+// The trust question: yes by default, the arrows and numbers choose, Esc
+// is no; answered, it goes from the screen.
 func TestTrustQuestion(t *testing.T) {
-	trusted := 0
-	d, a := start(t, Options{Trust: func() error { trusted++; return nil }})
-	if v := d.view(); !strings.Contains(v, "Do you trust the files in this folder?") || !strings.Contains(v, "❯ 1. Yes, I trust this folder") {
-		t.Fatalf("view\n%s", v)
-	}
-	if a.sessions != 0 {
-		t.Fatal("a session before the answer")
-	}
-	d.send(key("enter"))
-	if trusted != 1 || a.sessions != 1 || d.m.session != "s/0123456789abcdef" {
-		t.Fatalf("yes: trusted %d, sessions %d, session %q", trusted, a.sessions, d.m.session)
-	}
-
-	d, a = start(t, Options{Trust: func() error { trusted++; return nil }})
-	d.send(key("down"))
-	if v := d.view(); !strings.Contains(v, "❯ 2. No, exit") {
-		t.Fatalf("view\n%s", v)
-	}
-	d.send(key("enter"))
-	if !d.quit || a.sessions != 0 || trusted != 1 || !strings.Contains(d.out(), "Nothing in /work/repo was read.") {
-		t.Fatalf("no: quit %v, sessions %d, trusted %d\n%s", d.quit, a.sessions, trusted, d.out())
+	for _, c := range []struct {
+		keys []string
+		yes  bool
+	}{
+		{[]string{"enter"}, true},
+		{[]string{"down", "enter"}, false},
+		{[]string{"down", "up", "enter"}, true},
+		{[]string{"2"}, false},
+		{[]string{"esc"}, false},
+		{[]string{"ctrl+c"}, false},
+	} {
+		m := &trustModel{dir: "/work/repo", width: 80}
+		if !m.View().AltScreen {
+			t.Fatal("the question is not on a screen of its own")
+		}
+		v := plain(m.View().Content)
+		if !strings.Contains(v, "Do you trust the files in this folder?") || !strings.Contains(v, "❯ 1. Yes, I trust this folder") {
+			t.Fatalf("view\n%s", v)
+		}
+		var cmd tea.Cmd
+		for _, k := range c.keys {
+			_, cmd = m.Update(key(k))
+		}
+		if yes := m.done && m.sel == 0; yes != c.yes || cmd == nil {
+			t.Errorf("%v: yes %v, want %v (quit %v)", c.keys, yes, c.yes, cmd != nil)
+		}
+		if v := m.View().Content; v != "" {
+			t.Errorf("%v: still on the screen\n%s", c.keys, v)
+		}
 	}
 }
 
@@ -172,7 +180,7 @@ func TestTrustQuestion(t *testing.T) {
 // and its result, in the order they came; the screen keeps the input box
 // and the status line.
 func TestTurn(t *testing.T) {
-	d, a := start(t, Options{Trusted: true, Engine: "claude-code", Model: "claude-opus-5-5", Version: "abc1234567"})
+	d, a := start(t, Options{Engine: "claude-code", Model: "claude-opus-5-5", Version: "abc1234567"})
 	a.turn = []acp.Update{
 		{Kind: "agent_message_chunk", Text: "I will "},
 		{Kind: "agent_message_chunk", Text: "write it.\n\nFirst"},
@@ -191,7 +199,9 @@ func TestTurn(t *testing.T) {
 		t.Fatalf("prompts %q", a.prompts)
 	}
 	out := d.out()
-	want := []string{"> write the notes", "⏺ I will write it.", "⏺ First", "⏺ write notes.txt", "⎿  created notes.txt (2 lines)", "⏺ Done."}
+	// One mark for a reply's paragraphs; a reply after a tool call is a new
+	// one.
+	want := []string{"> write the notes", "⏺ I will write it.", "\n\n  First", "⏺ write notes.txt", "⎿  created notes.txt (2 lines)", "⏺ Done."}
 	at := 0
 	for _, w := range want {
 		i := strings.Index(out[at:], w)
@@ -213,7 +223,7 @@ func TestTurn(t *testing.T) {
 
 // Typed during a turn, a message waits for the turn's end, then is sent.
 func TestQueuedDuringATurn(t *testing.T) {
-	d, a := start(t, Options{Trusted: true})
+	d, a := start(t, Options{})
 	d.m.running = true // a turn under way
 	typed(d, "and then this")
 	if len(a.prompts) != 0 || !strings.Contains(d.out(), "(sent when this turn ends) and then this") {
@@ -229,7 +239,7 @@ func TestQueuedDuringATurn(t *testing.T) {
 // with nothing chosen: Enter alone does not say a call took effect. A
 // question withdrawn (answered elsewhere) goes away.
 func TestAsk(t *testing.T) {
-	d, _ := start(t, Options{Trusted: true})
+	d, _ := start(t, Options{})
 	allow := []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}
 	review := []acp.PermissionOption{{ID: "did_not_take_effect", Name: "It did not take effect", Kind: "reject_once"},
 		{ID: "took_effect", Name: "It took effect", Kind: "reject_once"}}
@@ -273,7 +283,7 @@ func TestAsk(t *testing.T) {
 // input, and twice leaves; leaving answers nothing (the questions stay in
 // the daemon).
 func TestKeys(t *testing.T) {
-	d, a := start(t, Options{Trusted: true})
+	d, a := start(t, Options{})
 	d.send(updateMsg{Kind: "available_commands_update", Commands: []acp.Command{{Name: "undo", Description: "Put the files back"}, {Name: "review", Description: "Review"}}})
 	d.m.input.SetValue("/u")
 	if v := d.view(); !strings.Contains(v, "/undo") || strings.Contains(v, "/review") {
@@ -313,7 +323,7 @@ func TestKeys(t *testing.T) {
 
 // Help lists the commands and keys.
 func TestHelp(t *testing.T) {
-	d, _ := start(t, Options{Trusted: true})
+	d, _ := start(t, Options{})
 	typed(d, "/help")
 	for _, w := range []string{"/exit", "shift+enter", "ctrl+c"} {
 		if !strings.Contains(d.out(), w) {
@@ -324,7 +334,7 @@ func TestHelp(t *testing.T) {
 
 // A terminal that says its size is 0 keeps the width the UI had.
 func TestNoSize(t *testing.T) {
-	d, _ := start(t, Options{Trusted: true})
+	d, _ := start(t, Options{})
 	d.send(tea.WindowSizeMsg{})
 	if d.m.width != 80 {
 		t.Fatalf("width %d", d.m.width)
@@ -333,7 +343,7 @@ func TestNoSize(t *testing.T) {
 
 // The reply is marked and wrapped to the screen.
 func TestReplyWraps(t *testing.T) {
-	r := plain(reply(strings.Repeat("word ", 30), 40))
+	r := plain(reply(strings.Repeat("word ", 30), 40, true))
 	for i, l := range strings.Split(r, "\n") {
 		if lipgloss.Width(l) > 40 {
 			t.Fatalf("line %d is %d wide: %q", i, lipgloss.Width(l), l)

@@ -35,10 +35,6 @@ type Options struct {
 	Dir, Session string
 	// Version, Engine and Model are shown in the header and status line.
 	Version, Engine, Model string
-	// Trusted: the folder is trusted already. Otherwise the UI asks, and
-	// Trust records the yes.
-	Trusted bool
-	Trust   func() error
 	// Usage is the tokens the session's model calls used, if known.
 	Usage func(ctx context.Context, session string) (int64, error)
 }
@@ -105,8 +101,7 @@ type (
 type state int
 
 const (
-	stateTrust state = iota
-	stateStarting
+	stateStarting state = iota
 	stateReady
 )
 
@@ -124,11 +119,10 @@ type model struct {
 	a   Agent
 	o   Options
 
-	state    state
-	trustSel int // 0: yes, 1: no
-	session  string
-	running  bool
-	queued   []string // typed during a turn, sent after it
+	state   state
+	session string
+	running bool
+	queued  []string // typed during a turn, sent after it
 
 	input   textarea.Model
 	spin    spinner.Model
@@ -143,6 +137,9 @@ type model struct {
 	note    string    // a hint under the input, until the next key
 	ctrlC   time.Time // the first Ctrl-C of two
 	leaving bool
+	// header: the header is written (once the width is known); inReply: a
+	// reply has begun (its first paragraph has the mark).
+	header, inReply bool
 
 	// The lines to write, in order: one batch is out at a time.
 	toPrint  []string
@@ -162,12 +159,9 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	st.Focused.Prompt = accent
 	in.SetStyles(st)
 	in.SetWidth(76)
+	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
-	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}}
-	if o.Trusted {
-		m.state = stateStarting
-	}
-	return m
+	return &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}}
 }
 
 var (
@@ -176,18 +170,21 @@ var (
 	bold   = lipgloss.NewStyle().Bold(true)
 	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5C07B"))
 	bad    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E06C75"))
-	you    = lipgloss.NewStyle().Foreground(lipgloss.Color("#ABB2BF"))
+	you    = lipgloss.NewStyle().Foreground(lipgloss.Color("#D7DAE0")).Background(lipgloss.Color("#3A3F4B"))
 )
 
-func (m *model) Init() tea.Cmd {
-	m.print(m.header())
-	if m.state == stateStarting {
-		return tea.Batch(m.flush(), m.start())
+func (m *model) Init() tea.Cmd { return m.start() }
+
+// writeHeader writes the header once, as wide as the terminal allows.
+func (m *model) writeHeader() {
+	if m.header {
+		return
 	}
-	return m.flush()
+	m.header = true
+	m.print(m.headerBox())
 }
 
-func (m *model) header() string {
+func (m *model) headerBox() string {
 	engine := m.o.Engine
 	if engine == "" {
 		engine = "api"
@@ -197,12 +194,38 @@ func (m *model) header() string {
 		what += " · " + m.o.Model
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#5FB3B3")).Padding(0, 1)
+	room := max(m.width-5, 12) // the border and padding, and a column spare
 	version := m.o.Version
 	if len(version) > 8 {
 		version = version[:8]
 	}
 	return box.Render(accent.Bold(true).Render("✻ kairo") + faint.Render(" "+version) + "\n" +
-		faint.Render(what) + "\n" + faint.Render(m.o.Dir))
+		faint.Render(cut(what, room)) + "\n" + faint.Render(cutLeft(m.o.Dir, room)))
+}
+
+// cut is s in at most n columns, cut at its end.
+func cut(s string, n int) string {
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r))+1 > n {
+		r = r[:len(r)-1]
+	}
+	return string(r) + "…"
+}
+
+// cutLeft is s in at most n columns, cut at its start (a path's end is
+// what tells it apart).
+func cutLeft(s string, n int) string {
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r))+1 > n {
+		r = r[1:]
+	}
+	return "…" + string(r)
 }
 
 // start creates the session, or takes it up again.
@@ -220,6 +243,12 @@ func (m *model) start() tea.Cmd {
 
 // print queues lines to write above the screen.
 func (m *model) print(s string) { m.toPrint = append(m.toPrint, s) }
+
+// block queues a block of its own: a blank line before it.
+func (m *model) block(s string) {
+	m.inReply = false
+	m.print("\n" + s)
+}
 
 // flush writes what is queued, one batch at a time: commands run
 // concurrently, and the lines must keep their order.
@@ -243,13 +272,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.printing = false
 		return nil
 	case tea.WindowSizeMsg:
-		if msg.Width <= 0 { // a terminal that does not say its size
-			return nil
+		if msg.Width > 0 { // a terminal that says its size
+			m.width = msg.Width
+			m.input.SetWidth(max(msg.Width-2, 10))
 		}
-		m.width = msg.Width
-		m.input.SetWidth(max(msg.Width-2, 10))
+		m.writeHeader()
 		return nil
 	case startedMsg:
+		m.writeHeader()
 		if msg.err != nil {
 			m.print(bad.Render("Could not start the session: " + msg.err.Error()))
 			return m.leave()
@@ -278,6 +308,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case turnDoneMsg:
 		m.running = false
 		m.flushLive()
+		m.inReply = false
 		switch {
 		case msg.err != nil && m.ctx.Err() == nil:
 			m.print(bad.Render("  ⎿  " + msg.err.Error()))
@@ -324,20 +355,23 @@ func (m *model) take(u acp.Update) {
 	switch u.Kind {
 	case "agent_message_chunk":
 		m.live += u.Text
-		// Whole paragraphs go into the scrollback as they end.
-		if i := strings.LastIndex(m.live, "\n\n"); i >= 0 {
-			done := m.live[:i]
-			m.live = m.live[i+2:]
-			m.printReply(done)
+		// Whole paragraphs go into the scrollback as they end (not inside
+		// a fenced block: it is rendered whole).
+		for i := strings.LastIndex(m.live, "\n\n"); i >= 0; i = strings.LastIndex(m.live[:i], "\n\n") {
+			if done := m.live[:i]; strings.Count(done, "```")%2 == 0 {
+				m.live = m.live[i+2:]
+				m.printReply(done)
+				break
+			}
 		}
 	case "user_message_chunk": // a session taken up again: what was said
 		m.flushLive()
-		m.print(userLine(u.Text))
+		m.block(userLine(u.Text))
 	case "tool_call":
 		m.flushLive()
 		m.tools[u.ToolCallID] = u.Title
 		m.last = u.ToolCallID
-		m.print(accent.Render("⏺ ") + bold.Render(u.Title))
+		m.block(accent.Render("⏺ ") + bold.Render(cut(u.Title, m.width-2)))
 	case "tool_call_update":
 		if u.Status != "completed" && u.Status != "failed" {
 			return
@@ -367,31 +401,46 @@ func (m *model) flushLive() {
 	m.live = ""
 }
 
+// printReply writes a part of the reply: the first with the mark, as a
+// block of its own; the next ones under it.
 func (m *model) printReply(text string) {
 	text = strings.Trim(text, "\n")
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	m.print(reply(text, m.width))
+	if m.inReply {
+		m.print("\n" + reply(text, m.width, false))
+		return
+	}
+	m.block(reply(text, m.width, true))
+	m.inReply = true
 }
 
-// reply is the model's text, marked as claude marks it.
-func reply(text string, width int) string {
-	body := lipgloss.NewStyle().Width(max(width-2, 10)).Render(text)
-	lines := strings.Split(body, "\n")
+// reply is the model's text, rendered, and marked as claude marks it when
+// it begins.
+func reply(text string, width int, first bool) string {
+	lines := strings.Split(markdown(text, max(width-2, 10)), "\n")
 	for i := range lines {
-		lines[i] = strings.TrimRight(lines[i], " ") // the padding Width adds
-		if i == 0 {
+		if i == 0 && first {
 			lines[i] = "⏺ " + lines[i]
-		} else {
+		} else if lines[i] != "" {
 			lines[i] = "  " + lines[i]
 		}
 	}
 	return strings.Join(lines, "\n")
 }
 
+// userLine is what the user said, set apart as claude sets it.
 func userLine(text string) string {
-	return you.Render("> " + strings.ReplaceAll(strings.TrimSpace(text), "\n", "\n  "))
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i, l := range lines {
+		lead := "  "
+		if i == 0 {
+			lead = "> "
+		}
+		lines[i] = you.Render(lead + l + " ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // firstLines is the first n lines of s, each cut to width runes.
@@ -424,7 +473,7 @@ func hasAllow(options []acp.PermissionOption) bool {
 
 // submit sends text as the next turn.
 func (m *model) submit(text string) tea.Cmd {
-	m.print(userLine(text))
+	m.block(userLine(text))
 	m.running = true
 	ctx, a, s := m.ctx, m.a, m.session
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
@@ -462,8 +511,6 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 	note := m.note
 	m.note = ""
 	switch {
-	case m.state == stateTrust:
-		return m.trustKey(key)
 	case m.state == stateStarting:
 		if key == "ctrl+c" {
 			return m.leave()
@@ -579,33 +626,6 @@ func (m *model) help() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *model) trustKey(key string) tea.Cmd {
-	switch key {
-	case "up", "k", "down", "j", "tab":
-		m.trustSel = 1 - m.trustSel
-	case "1":
-		m.trustSel = 0
-	case "2":
-		m.trustSel = 1
-	case "esc", "ctrl+c":
-		m.trustSel = 1
-		fallthrough
-	case "enter":
-		if m.trustSel == 1 {
-			m.print(faint.Render("Nothing in " + m.o.Dir + " was read."))
-			return m.leave()
-		}
-		if m.o.Trust != nil {
-			if err := m.o.Trust(); err != nil {
-				m.print(bad.Render("Could not record the trust: " + err.Error()))
-				return m.leave()
-			}
-		}
-		return m.start()
-	}
-	return nil
-}
-
 func (m *model) askKey(key string) tea.Cmd {
 	a := m.asks[0]
 	n := len(a.req.Options)
@@ -650,13 +670,15 @@ func (m *model) View() tea.View {
 		return tea.NewView("")
 	}
 	var b strings.Builder
-	w := max(m.width, 20)
-	if m.live != "" {
-		b.WriteString(reply(strings.Trim(m.live, "\n"), w) + "\n")
+	w := max(m.width-1, 20) // a line as wide as the terminal throws its count of lines off
+	if live := strings.Trim(m.live, "\n"); live != "" {
+		if !m.inReply {
+			b.WriteString("\n")
+		}
+		b.WriteString(reply(live, w, !m.inReply) + "\n")
 	}
+	var cursor *tea.Cursor
 	switch {
-	case m.state == stateTrust:
-		b.WriteString(m.trustView(w))
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
 	default:
@@ -664,7 +686,12 @@ func (m *model) View() tea.View {
 			b.WriteString(m.spin.View() + accent.Render(" Working…") + faint.Render(" (esc to interrupt)") + "\n")
 		}
 		line := faint.Render(strings.Repeat("─", w))
-		b.WriteString(line + "\n" + m.input.View() + "\n" + line + "\n")
+		b.WriteString("\n" + line + "\n")
+		if c := m.input.Cursor(); c != nil {
+			c.Y += strings.Count(b.String(), "\n")
+			cursor = c
+		}
+		b.WriteString(m.input.View() + "\n" + line + "\n")
 		for i, c := range m.completions() {
 			name := "/" + c.Name
 			if i == m.compSel {
@@ -675,7 +702,9 @@ func (m *model) View() tea.View {
 		}
 	}
 	b.WriteString(m.status(w))
-	return tea.NewView(b.String())
+	v := tea.NewView(b.String())
+	v.Cursor = cursor
+	return v
 }
 
 func (m *model) status(w int) string {
@@ -716,26 +745,6 @@ func short(session string) string {
 		return s[:8]
 	}
 	return s
-}
-
-func (m *model) trustView(w int) string {
-	rule := warn.Render(strings.Repeat("─", w))
-	opts := []string{"Yes, I trust this folder", "No, exit"}
-	var b strings.Builder
-	b.WriteString(rule + "\n" + warn.Bold(true).Render("Do you trust the files in this folder?") + "\n\n")
-	b.WriteString(bold.Render(m.o.Dir) + "\n\n")
-	b.WriteString(lipgloss.NewStyle().Width(w).Render("kairo will follow what this folder sets for it: the permission rules in kairocode.json, "+
-		"and the agents, commands and skills in .opencode and .claude. Its files are read and written, and commands run, in a sandbox. "+
-		"If you did not write it, or it is not a project you know, look at those first.") + "\n\n")
-	for i, o := range opts {
-		if i == m.trustSel {
-			b.WriteString(accent.Render(fmt.Sprintf("❯ %d. %s", i+1, o)) + "\n")
-		} else {
-			b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, o))
-		}
-	}
-	b.WriteString("\n" + faint.Render("Enter to confirm · Esc to exit") + "\n")
-	return b.String()
 }
 
 func (m *model) askView(w int) string {
