@@ -64,6 +64,10 @@ func (l *local) History(ctx context.Context, s string) ([]msg.Message, error) {
 	return l.r.History(ctx, s)
 }
 
+func (l *local) Undo(ctx context.Context, s string) (int, error) { return l.r.Undo(ctx, s) }
+
+func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Redo(ctx, s) }
+
 // writeScript: the model writes notes.txt, then says done.
 var writeScript = []provider.FakeReply{
 	{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hello\n"}`)}}},
@@ -401,7 +405,7 @@ func TestACPContract(t *testing.T) {
 	for _, m := range replayed {
 		kinds = append(kinds, updateOf(t, m).SessionUpdate)
 	}
-	want := []string{"user_message_chunk", "tool_call", "tool_call_update", "agent_message_chunk"}
+	want := []string{"user_message_chunk", "tool_call", "tool_call_update", "agent_message_chunk", "available_commands_update"}
 	if fmt.Sprint(kinds) != fmt.Sprint(want) {
 		t.Fatalf("replayed %v, want %v", kinds, want)
 	}
@@ -641,5 +645,62 @@ func crashReview(t *testing.T, option, recorded string) {
 	}
 	if !strings.Contains(result, recorded) {
 		t.Fatalf("recorded %q, want %q", result, recorded)
+	}
+}
+
+// /undo and /redo are slash commands: offered on session/new, they put the
+// working files back and forth, and say what they did (design 7).
+func TestACPUndoRedo(t *testing.T) {
+	b, ws := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
+	resp, before := c.until(isResponse(id))
+	var r struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	offered := false
+	for _, m := range before {
+		if m.Method == "session/update" && strings.Contains(string(m.Params), `"name":"undo"`) {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Fatal("/undo was not offered")
+	}
+	s := r.SessionID
+	id = prompt(c, s, "write notes")
+	req, _ := c.until(isMethod("session/request_permission"))
+	allow(c, req, "allow_once")
+	c.until(isResponse(id))
+	for _, st := range []struct {
+		command, say string
+		exists       bool
+	}{
+		{"/undo", "undid turn 0", false},
+		{"/redo", "redid turn 0", true},
+	} {
+		id = prompt(c, s, st.command)
+		resp, before := c.until(isResponse(id))
+		if resp.Error != nil {
+			t.Fatalf("%s: %v", st.command, resp.Error)
+		}
+		said := ""
+		for _, m := range before {
+			if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "agent_message_chunk" {
+				said += updateOf(t, m).text()
+			}
+		}
+		if !strings.Contains(said, st.say) {
+			t.Fatalf("%s said %q", st.command, said)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "notes.txt")); (err == nil) != st.exists {
+			t.Fatalf("after %s notes.txt exists: %v", st.command, err == nil)
+		}
 	}
 }

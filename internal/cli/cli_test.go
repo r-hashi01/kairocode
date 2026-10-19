@@ -341,7 +341,7 @@ func TestACPCommand(t *testing.T) {
 			replayed = append(replayed, u["sessionUpdate"].(string))
 		}
 	}
-	want := []string{"user_message_chunk", "tool_call", "tool_call_update", "agent_message_chunk"}
+	want := []string{"user_message_chunk", "tool_call", "tool_call_update", "agent_message_chunk", "available_commands_update"}
 	if !slices.Equal(replayed, want) {
 		t.Fatalf("replayed %v, want %v", replayed, want)
 	}

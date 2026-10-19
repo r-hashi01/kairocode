@@ -54,9 +54,9 @@ type Config struct {
 	// Now is kairo's clock (tests; the real clock when nil).
 	Now func() time.Time
 
-	// onlyV2 declares the session and the turn at version 2 only, as a
-	// build before version 3 did (tests).
-	onlyV2 bool
+	// onlyVersion, in tests, declares the session and the turn at that old
+	// version only ("2" or "3"), as a build of that version did.
+	onlyVersion string
 }
 
 type Runtime struct {
@@ -233,14 +233,19 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 }
 
 func (r *Runtime) declare() {
-	if r.cfg.onlyV2 {
-		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion2))
-		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion2))
+	if v := r.cfg.onlyVersion; v != "" {
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV3, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV3, kairo.WorkflowVersion(v))
 	} else {
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
-		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion2), kairo.Draining())
-		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion2), kairo.Draining())
+		// Versions 3 and 2 finish with the functions they started with.
+		for _, v := range []string{workflows.SessionVersion3, workflows.SessionVersion2} {
+			kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV3, kairo.WorkflowVersion(v), kairo.Draining())
+		}
+		for _, v := range []string{workflows.TurnVersion3, workflows.TurnVersion2} {
+			kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV3, kairo.WorkflowVersion(v), kairo.Draining())
+		}
 	}
 	kairo.Workflow(r.K, workflows.MCPCall, workflows.RunMCPCall, kairo.WorkflowVersion(workflows.MCPCallVersion))
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
@@ -289,6 +294,10 @@ func (r *Runtime) declare() {
 	}
 	eff, opts := effect(tools.Idempotent)
 	kairo.Action(r.K, workflows.ActFileApply, eff, r.applyWrite, opts...)
+	// A snapshot writes only to its store; a restore makes the files what a
+	// tree has, the same however often it runs.
+	kairo.Action(r.K, workflows.ActSnapshot, eff, r.snapshotAction, opts...)
+	kairo.Action(r.K, workflows.ActRestore, eff, r.restoreAction, opts...)
 }
 
 // toolArgs is a call's arguments: given (MCP), or read from its message.
@@ -495,13 +504,46 @@ func (r *Runtime) Send(ctx context.Context, session, text string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h})
+}
+
+// ErrNoUndo: the session started before undo existed (version 3 or
+// older): it would take an undo for a message.
+var ErrNoUndo = errors.New("this session started before undo existed: start a new session to undo")
+
+// Undo asks the session to put the working files back as they were before
+// its last turn in effect (design 7). It returns the number of the turn
+// that does it.
+func (r *Runtime) Undo(ctx context.Context, session string) (int, error) {
+	return r.undo(ctx, session, workflows.EventUndo)
+}
+
+// Redo asks the session to put back what its last undo took away.
+func (r *Runtime) Redo(ctx context.Context, session string) (int, error) {
+	return r.undo(ctx, session, workflows.EventRedo)
+}
+
+func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
+	info, err := r.K.Get(ctx, session)
+	if err != nil {
+		return 0, err
+	}
+	if info.Version != workflows.SessionVersion {
+		return 0, ErrNoUndo
+	}
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: kind})
+}
+
+// signal gives the session an event and returns the number of the turn
+// that takes it.
+func (r *Runtime) signal(ctx context.Context, session string, ev workflows.SessionEvent) (int, error) {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
 	n, err := r.sent(ctx, session)
 	if err != nil {
 		return 0, err
 	}
-	if err := r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h}); err != nil {
+	if err := r.K.Signal(ctx, session, workflows.SignalMessage, ev); err != nil {
 		return 0, err
 	}
 	return n, nil

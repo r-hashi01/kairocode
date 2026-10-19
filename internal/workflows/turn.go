@@ -8,10 +8,50 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 )
 
-// RunTurn is one turn (design 5): model, tools, model, ... until the model
-// stops asking for tools. Every decision is made from recorded values: the
-// agent's definition as loaded at the start, and the model's replies.
+// RunTurn is one turn (design 5) of version 4: RunTurnV3 between two
+// snapshots of the working files, or, for an undo or a redo, a restore
+// (design 7).
 func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
+	if in.Undo != nil {
+		return runUndo(ctx, in)
+	}
+	snap := SnapshotInput{Dir: in.Dir, Session: in.Session, N: in.N, At: "start"}
+	before, err := kairo.Call[SnapshotOutput](ctx, ActSnapshot, snap)
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	out, err := RunTurnV3(ctx, in)
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	snap.At = "end"
+	after, err := kairo.Call[SnapshotOutput](ctx, ActSnapshot, snap)
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	out.Before, out.After = before.Tree, after.Tree
+	return out, nil
+}
+
+// runUndo restores the working files as the session asked, and adds what
+// was done to the conversation, so the model knows.
+func runUndo(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
+	res, err := kairo.Call[RestoreOutput](ctx, ActRestore, RestoreInput{Dir: in.Dir, Session: in.Session, N: in.N, Undo: *in.Undo})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: []string{res.Message}})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	return TurnOutput{Head: head, Reply: res.Message, Restored: res.Restored, Skipped: res.Skipped, Prior: res.Prior}, nil
+}
+
+// RunTurnV3 is one turn of version 3 (design 5): model, tools, model, ...
+// until the model stops asking for tools. Every decision is made from
+// recorded values: the agent's definition as loaded at the start, and the
+// model's replies.
+func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	agent, err := kairo.Call[Agent](ctx, ActAgentLoad, AgentLoadInput{Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model})
 	if err != nil {
 		return TurnOutput{}, err

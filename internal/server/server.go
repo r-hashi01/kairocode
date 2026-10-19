@@ -1,6 +1,6 @@
 // Package server is KairoCode's HTTP API (design 8.1): sessions, messages,
-// turns, approvals and a session's events (SSE). The daemon serves it (ADR
-// 0008); undo comes later.
+// turns, approvals, undo and redo, and a session's events (SSE). The daemon serves it (ADR
+// 0008).
 package server
 
 import (
@@ -39,6 +39,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
 	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
+	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
+	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
 	return s
 }
 
@@ -101,6 +103,27 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+// undo starts a turn that undoes (or redoes) the session's last turn's
+// changes to the working files (design 7).
+func (s *Server) undo(redo bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ask := s.rt.Undo
+		if redo {
+			ask = s.rt.Redo
+		}
+		n, err := ask(r.Context(), sessionOf(r))
+		if errors.Is(err, runtime.ErrNoUndo) {
+			fail(w, http.StatusConflict, err)
+			return
+		}
+		if err != nil {
+			fail(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+	}
 }
 
 func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {

@@ -28,6 +28,19 @@ type Backend interface {
 	Approve(ctx context.Context, key string, ok bool, reason string) error
 	Events(ctx context.Context, session string) (<-chan runtime.Event, error)
 	History(ctx context.Context, session string) ([]msg.Message, error)
+	Undo(ctx context.Context, session string) (int, error)
+	Redo(ctx context.Context, session string) (int, error)
+}
+
+// commands are the slash commands the agent offers (available_commands_update).
+var commands = []map[string]any{
+	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
+	{"name": "redo", "description": "Put back what the last undo took away"},
+}
+
+// offerCommands tells the client the slash commands.
+func (a *agent) offerCommands(session string) {
+	a.update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": commands})
 }
 
 // Options are the agent's settings.
@@ -99,6 +112,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if _, err := a.watch(s); err != nil {
 			return nil, err
 		}
+		a.offerCommands(s)
 		return map[string]any{"sessionId": s}, nil
 	case "session/load":
 		var p struct {
@@ -114,6 +128,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if _, err := a.watch(p.SessionID); err != nil {
 			return nil, err
 		}
+		a.offerCommands(p.SessionID)
 		return map[string]any{}, nil
 	case "session/prompt":
 		return a.prompt(ctx, params)
@@ -155,7 +170,16 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	n, err := a.b.Send(ctx, p.SessionID, strings.Join(text, "\n"))
+	prompt := strings.Join(text, "\n")
+	start := a.b.Send
+	undo := false
+	switch strings.TrimSpace(prompt) {
+	case "/undo":
+		start, undo = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
+	case "/redo":
+		start, undo = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	}
+	n, err := start(ctx, p.SessionID, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +190,9 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	// The answer ends the turn for the client: its updates go first.
 	if err := w.wait(ctx, n); err != nil {
 		return nil, err
+	}
+	if undo { // no model speaks in an undo: what it did is the reply
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(turn.Reply)})
 	}
 	return map[string]any{"stopReason": stopReason(turn.Stopped)}, nil
 }

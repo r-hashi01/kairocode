@@ -6,11 +6,11 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 )
 
-// RunSession is a session (design 2.1): it waits for messages and runs a turn
-// for each, one after another. A resumed session reads back each turn's
-// recorded result instead of running it again, so only the turn under way is
-// replayed.
-func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+// RunSessionV3 is a session of version 3 (design 2.1): it waits for
+// messages and runs a turn for each, one after another. A resumed session
+// reads back each turn's recorded result instead of running it again, so
+// only the turn under way is replayed.
+func RunSessionV3(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 	head := ""
 	for n := 0; ; n++ {
 		ev, err := kairo.WaitFor[SessionEvent](ctx, SignalMessage)
@@ -37,5 +37,77 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 			return SessionOutput{Turns: n, Head: head}, err
 		}
 		head = out.Head
+	}
+}
+
+// done is a turn whose effect on the working files can be undone (from
+// after back to before) or, undone, redone (from before back to after).
+type done struct {
+	n             int
+	before, after string
+}
+
+// RunSession is a session of version 4: RunSessionV3, with undo and redo
+// (design 7). What an undo or a redo restores is worked out from the turns'
+// recorded outputs alone (their snapshots), so a resumed session undoes the
+// same turns.
+func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	head := ""
+	// applied: turns in effect, the last undone first; undone: turns undone,
+	// the last redone first. A new turn clears undone.
+	var applied, undone []done
+	for n := 0; ; n++ {
+		ev, err := kairo.WaitFor[SessionEvent](ctx, SignalMessage)
+		if err != nil {
+			return SessionOutput{Turns: n, Head: head}, err
+		}
+		if ev.Kind == EventClose {
+			return SessionOutput{Turns: n, Head: head}, nil
+		}
+		tin := TurnInput{
+			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, History: head, Message: ev.Message,
+		}
+		switch ev.Kind {
+		case EventUndo:
+			tin.Undo = &UndoInput{Of: -1}
+			if len(applied) > 0 {
+				d := applied[len(applied)-1]
+				tin.Undo.Of, tin.Undo.Tree, tin.Undo.From = d.n, d.before, d.after
+			}
+		case EventRedo:
+			tin.Undo = &UndoInput{Redo: true, Of: -1}
+			if len(undone) > 0 {
+				d := undone[len(undone)-1]
+				tin.Undo.Of, tin.Undo.Tree, tin.Undo.From = d.n, d.after, d.before
+			}
+		}
+		out, err := kairo.Child[TurnOutput](ctx, Turn, tin)
+		if err != nil {
+			// As in RunSessionV3: a recorded failure or cancellation leaves
+			// things as they were; anything else is not an outcome.
+			var failed *kairo.WorkflowError
+			if errors.As(err, &failed) || errors.Is(err, kairo.ErrCancelled) {
+				continue
+			}
+			return SessionOutput{Turns: n, Head: head}, err
+		}
+		head = out.Head
+		switch {
+		case tin.Undo != nil && (tin.Undo.Of < 0 || !(out.Restored || out.Skipped)):
+		case tin.Undo != nil && !tin.Undo.Redo:
+			// A redo puts back the files as they were just before the undo.
+			d := applied[len(applied)-1]
+			d.after = out.Prior
+			undone = append(undone, d)
+			applied = applied[:len(applied)-1]
+		case tin.Undo != nil:
+			// The files are now d.after: an undo takes them from there.
+			d := undone[len(undone)-1]
+			applied = append(applied, d)
+			undone = undone[:len(undone)-1]
+		default:
+			applied = append(applied, done{n: n, before: out.Before, after: out.After})
+			undone = nil
+		}
 	}
 }

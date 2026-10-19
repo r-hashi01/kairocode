@@ -340,3 +340,22 @@ func (c *Client) Usage(ctx context.Context, session string) (runtime.SessionUsag
 	err := c.do(ctx, "GET", sessionPath(session)+"/usage", nil, &out)
 	return out, err
 }
+
+// Undo starts a turn that puts the working files back as they were before
+// the session's last turn in effect; Redo puts back what an undo took away.
+// They return the turn's number.
+func (c *Client) Undo(ctx context.Context, session string) (int, error) {
+	return c.undo(ctx, session, "undo")
+}
+
+func (c *Client) Redo(ctx context.Context, session string) (int, error) {
+	return c.undo(ctx, session, "redo")
+}
+
+func (c *Client) undo(ctx context.Context, session, which string) (int, error) {
+	var out struct {
+		Turn int `json:"turn"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/"+which, nil, &out)
+	return out.Turn, err
+}

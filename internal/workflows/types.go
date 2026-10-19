@@ -14,12 +14,17 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "3"
+	SessionVersion = "4"
 	Turn           = "turn"
-	TurnVersion    = "3"
+	TurnVersion    = "4"
+	// SessionVersion3 and TurnVersion3 are the versions before snapshots
+	// and undo (design 7). Their runs are finished by RunSessionV3 and
+	// RunTurnV3, the functions of that version.
+	SessionVersion3 = "3"
+	TurnVersion3    = "3"
 	// SessionVersion2 and TurnVersion2 are the versions before sessions
-	// carried their engine and model. Their runs are finished by the same
-	// functions (the fields are empty there); a build that knows only "2"
+	// carried their engine and model. Their runs are finished by the
+	// functions of version 3 (the fields are empty there); a build that knows only "2"
 	// does not drive a session of "3", which it would read without them and
 	// so start its turns again under other ids.
 	SessionVersion2 = "2"
@@ -32,6 +37,10 @@ const (
 	ActAgentLoad     = "agent.load"
 	ActModel         = "model"
 	ActHistoryExtend = "history.extend"
+	// ActSnapshot records the working files as a tree, and ActRestore puts
+	// them back as a tree has them (design 7).
+	ActSnapshot = "snapshot"
+	ActRestore  = "restore"
 	// ActClaudeTurn runs a turn in the user's Claude Code (ADR 0007).
 	ActClaudeTurn = "claude.turn"
 	// ActPermissionCheck decides whether a tool call may run; ActToolDenied
@@ -98,6 +107,10 @@ type SessionEvent struct {
 const (
 	EventMessage = "message"
 	EventClose   = "close"
+	// EventUndo and EventRedo start a turn that puts the working files back
+	// (design 7).
+	EventUndo = "undo"
+	EventRedo = "redo"
 )
 
 type TurnInput struct {
@@ -117,6 +130,57 @@ type TurnInput struct {
 	// History is the conversation before this turn, by its last link.
 	History string `json:"history,omitempty"`
 	Message string `json:"message"`
+	// Undo, if set, makes the turn an undo or a redo: it restores the
+	// working files instead of asking the model (design 7).
+	Undo *UndoInput `json:"undo,omitempty"`
+}
+
+// UndoInput is what an undo or a redo restores, as the session worked it
+// out from its turns' recorded outputs.
+type UndoInput struct {
+	Redo bool `json:"redo,omitempty"`
+	// Of is the turn undone or redone; -1: there is none.
+	Of int `json:"of"`
+	// Tree is the snapshot to restore ("": the turn has none).
+	Tree string `json:"tree,omitempty"`
+	// From is the snapshot at the other end of the change being taken
+	// back: only files it has, and Tree does not, are removed. Files made
+	// outside the turn stay.
+	From string `json:"from,omitempty"`
+}
+
+// SnapshotInput records the working files at the start or end of a turn.
+type SnapshotInput struct {
+	Dir     string `json:"dir"`
+	Session string `json:"session"`
+	N       int    `json:"n"`
+	At      string `json:"at"` // "start" or "end"
+}
+
+// SnapshotOutput is the tree of the working files; empty if none could be
+// made (no git, no sandbox), with why.
+type SnapshotOutput struct {
+	Tree  string `json:"tree,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// RestoreInput restores the working files for an undo or a redo.
+type RestoreInput struct {
+	Dir     string    `json:"dir"`
+	Session string    `json:"session"`
+	N       int       `json:"n"`
+	Undo    UndoInput `json:"undo"`
+}
+
+// RestoreOutput tells whether the files were put back (or the turn was
+// skipped, having no snapshot), and the message that says so (stored, by
+// hash) for the conversation. Prior is the files as they were just before:
+// what a redo puts back (design 7).
+type RestoreOutput struct {
+	Restored bool   `json:"restored,omitempty"`
+	Skipped  bool   `json:"skipped,omitempty"`
+	Prior    string `json:"prior,omitempty"`
+	Message  string `json:"message"`
 }
 
 type TurnOutput struct {
@@ -129,6 +193,15 @@ type TurnOutput struct {
 	// Stopped says why the turn ended before the model was done: "max_steps",
 	// "refusal", "max_tokens". Empty when the model finished.
 	Stopped string `json:"stopped,omitempty"`
+	// Before and After are the snapshots of the working files at the start
+	// and the end of the turn (design 7).
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+	// Restored: an undo or redo turn put the files back (Prior: as they
+	// were just before); Skipped: it passed over a turn with no snapshot.
+	Restored bool   `json:"restored,omitempty"`
+	Skipped  bool   `json:"skipped,omitempty"`
+	Prior    string `json:"prior,omitempty"`
 }
 
 type AgentLoadInput struct {

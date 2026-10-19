@@ -23,6 +23,10 @@ func TestMain(m *testing.M) {
 		crashChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_UNDO_CHILD") == "1" {
+		crashUndoChild()
+		return
+	}
 	// Checked before KC_FAKE_CLAUDE, which this child inherits for the claude
 	// it starts.
 	if os.Getenv("KC_CRASH_CLAUDE_CHILD") == "1" {
@@ -551,5 +555,91 @@ func TestCrashEventsAfterRestart(t *testing.T) {
 	}
 	if resolved.Key != review.Pending.Key || !strings.Contains(end.Output, "says it did take effect") || end.IsError || end.Tool != "bash" {
 		t.Fatalf("resolved %+v, tool end %+v", resolved, end)
+	}
+}
+
+// crashUndoChild runs two turns that write a.txt and b.txt, then an undo,
+// and stops once the undo has put the files back, its result not recorded.
+func crashUndoChild() {
+	ctx := context.Background()
+	hold := os.Getenv("KC_HOLD")
+	afterRestore = func() {
+		os.WriteFile(hold, nil, 0o600)
+		select {}
+	}
+	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: &provider.Fake{HoldAt: -1, Script: twoWrites}, Owner: "crash"})
+	if err != nil {
+		panic(err)
+	}
+	s, err := r.CreateSession(ctx, "undo", workflows.SessionInput{Dir: os.Getenv("KC_DIR")})
+	if err != nil {
+		panic(err)
+	}
+	for _, text := range []string{"write a", "write b"} {
+		n, err := r.Send(ctx, s, text)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := r.WaitTurn(ctx, s, n); err != nil {
+			panic(err)
+		}
+	}
+	if _, err := r.Undo(ctx, s); err != nil {
+		panic(err)
+	}
+	select {} // killed in the restore
+}
+
+// TestCrashUndo: the process dies once an undo has put the files back,
+// before that is recorded. Resumed, the restore runs again to the same
+// files, the undo is recorded once, and the next undo goes on from it
+// (design 7).
+func TestCrashUndo(t *testing.T) {
+	needSnapshots(t)
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	dir := t.TempDir()
+	db := filepath.Join(dir, "k.db")
+	hold := filepath.Join(dir, "restored")
+	ws := workspaceWith(t, `{"write": "allow"}`)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_UNDO_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_HOLD="+hold)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, hold, cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if got := files(t, ws); got != "a.txt=A" {
+		t.Fatalf("the killed undo left %q", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	// The same owner as the killed process: its leases are taken over at once.
+	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1, Script: twoWrites}, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("undo")
+	out, err := r.WaitTurn(ctx, s, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if say, _ := r.Reply(ctx, out.Reply); !strings.Contains(say, "undid turn 1") || !out.Restored {
+		t.Fatalf("the undo: %q restored %v", say, out.Restored)
+	}
+	if got := files(t, ws); got != "a.txt=A" {
+		t.Fatalf("after resuming: %q", got)
+	}
+	if say := undoTurn(t, r, s, false); !strings.Contains(say, "undid turn 0") {
+		t.Fatalf("the next undo: %q", say)
+	}
+	if got := files(t, ws); got != "" {
+		t.Fatalf("after the next undo: %q", got)
 	}
 }
