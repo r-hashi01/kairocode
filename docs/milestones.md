@@ -74,9 +74,9 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] デーモンの版の確かめ（ADR 0008 の追記）: 版の違うクライアントは、ステップが走っておらずほかに使われていないデーモンを入れ替え（`TestOtherBuildReplacesTheDaemon`）、そうでなければ使い続けて利用者に伝える（`TestOtherBuildKeepsABusyDaemon`、`TestOtherBuildKeepsADaemonThatRuns`）。
 - [x] エンジンとモデルをセッションごとに選ぶ（ADR 0008 の追記）: `TestEngineAndModelPerSession`。
 - [x] `kairocode daemon stop`: デーモンがデータの置き場を手放してから応答する（`TestStopTheDaemon`）。走っているステップは、最大 30 秒、終わるまで待ってから止まる（kairo 0.4.1 の `Drain`、`TestStopLetsTheRunningStepFinish`）。
-- [ ] 待っている承認を、複数のクライアントで扱う（ADR 0008 の追記）: 同じセッションを見ているクライアント全員に承認の求めが届き、最初の答えが通り、ほかのクライアントには「答えが出た」が届く。後からつないだクライアント（ACP の `session/load` を含む）には、待っている承認が送り直される。
+- [ ] 待っている承認を、複数のクライアントで扱う（ADR 0008 の追記）: 同じセッションを見ているクライアント全員に承認の求めが届き、最初の答えが通り、ほかのクライアントには「答えが出た」が届く。後からつないだクライアント（ACP の `session/load` を含む）には、待っている承認が送り直される。 → SSE の側は済み（`TestApprovalToManyClients`、`TestEventsReplayPendingOnJoin`、`TestCrashDaemonEventsAfterRestart`）。ACP の `session/load` が残り（#10）。
 
-- [ ] SSE で、トークン、ツールの開始と終了、承認の求め、要確認、ターンの終わりが届く。
+- [x] SSE で、トークン、ツールの開始と終了、承認の求め、要確認、ターンの終わりが届く（`TestSSEDeliversTurnEvents`、`TestEventsOfATurn`、`TestEventsStreamTokens`、`TestEventsOfAClaudeTurn`、`TestCrashEventsAfterRestart`）。
 - [ ] `TestACPContract`: 実装した ACP のメソッドの要求と応答が、固定した版の ACP の JSON Schema に合う。
 - [ ] 決まった順のメッセージを流す ACP のクライアントで、`session/new` → `prompt` → `tool_call` の更新 → `request_permission` → 答え → ターンの終わりが通る。要確認も `request_permission` で答えられる。
 - [ ] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。

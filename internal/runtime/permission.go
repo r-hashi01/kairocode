@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
@@ -298,13 +299,49 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 
 const reviewPrefix = "review:"
 
-// Approve answers the request key names (see Pending). It can come from any
-// process, any time after the request.
+// ErrAnswered: the request was answered already (by another client), or
+// waits no more.
+var ErrAnswered = errors.New("already answered, or no longer waiting")
+
+// Approve answers the request key names (see Pending), any time after the
+// request. Only the first answer goes through: one given while the request
+// no longer waits, or after another answer to it, returns ErrAnswered.
+// Those who watch the session are told the answer (Event.OK).
 //
 // For an approval, ok lets the call run. For a review, ok says the call took
 // effect: either way the call is settled with a result that tells the model
 // what the user said, and the turn goes on; the call is not run again.
 func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason string) error {
+	session := sessionOf(strings.TrimPrefix(key, reviewPrefix))
+	if session == "" {
+		return fmt.Errorf("not an approval key: %q", key)
+	}
+	r.approveMu.Lock()
+	defer r.approveMu.Unlock()
+	pending, err := r.Pending(ctx, session)
+	if err != nil {
+		return err
+	}
+	// kairo's Signal and Resolve end the wait (or the review) within the
+	// call, so under approveMu a request that waits has not been answered.
+	// This holds within one process: the one daemon of a data directory
+	// (ADR 0008). Processes sharing a database would need more (kairo-gap
+	// #21). Pending lists the waits of the session's turns: a wait for
+	// approval elsewhere (a subagent's) must be listed there to be answered.
+	if !slices.ContainsFunc(pending, func(p Pending) bool { return p.Key == key }) {
+		return ErrAnswered
+	}
+	// Kept before it is given: the request may be seen resolved at once.
+	r.ev.answered(session, key, ok)
+	if err := r.answer(ctx, key, ok, reason); err != nil {
+		r.ev.forget(session, key)
+		return err
+	}
+	return nil
+}
+
+// answer gives the answer to kairo.
+func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string) error {
 	if run, isReview := strings.CutPrefix(key, reviewPrefix); isReview {
 		text := "The run of this call was cut off. The user says it did not take effect; it was not run again."
 		if ok {

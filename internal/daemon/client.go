@@ -262,7 +262,67 @@ func (c *Client) Pending(ctx context.Context, session string) ([]runtime.Pending
 	return out, err
 }
 
-// Approve answers one of them.
+// Approve answers one of them. Only the first answer goes through: a later
+// one returns runtime.ErrAnswered.
 func (c *Client) Approve(ctx context.Context, key string, ok bool, reason string) error {
-	return c.do(ctx, "POST", "/approvals", map[string]any{"key": key, "ok": ok, "reason": reason}, nil)
+	err := c.do(ctx, "POST", "/approvals", map[string]any{"key": key, "ok": ok, "reason": reason}, nil)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusConflict {
+		return runtime.ErrAnswered
+	}
+	return err
+}
+
+// Events follows the session's events (GET /sessions/{id}/events): first
+// what waits for a person, then what happens. The channel closes when ctx
+// ends or the stream does (the daemon stopped, or this client fell
+// behind); call it again to go on.
+func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Event, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://kairocode"+sessionPath(session)+"/events", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.info.Token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return nil, &statusError{code: resp.StatusCode, msg: strings.TrimSpace(string(b))}
+	}
+	out := make(chan runtime.Event)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+		r := bufio.NewReader(resp.Body)
+		var data []byte
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimSuffix(line, "\n")
+			if d, ok := strings.CutPrefix(line, "data: "); ok {
+				data = append(data, d...)
+				continue
+			}
+			if line != "" || len(data) == 0 {
+				continue
+			}
+			var ev runtime.Event
+			err = json.Unmarshal(data, &ev)
+			data = data[:0]
+			if err != nil {
+				return
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }

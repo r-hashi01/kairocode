@@ -549,7 +549,7 @@ func TestCrashEventsAfterRestart(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("events %v, want %v", got, want)
 	}
-	if resolved.Key != review.Pending.Key || !strings.Contains(end.Output, "says it did take effect") || end.IsError {
+	if resolved.Key != review.Pending.Key || !strings.Contains(end.Output, "says it did take effect") || end.IsError || end.Tool != "bash" {
 		t.Fatalf("resolved %+v, tool end %+v", resolved, end)
 	}
 }

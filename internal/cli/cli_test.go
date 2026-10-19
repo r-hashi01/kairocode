@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -78,8 +79,78 @@ func TestRunWithFakeProvider(t *testing.T) {
 	if got := strings.TrimSpace(stdout.String()); got != "the module is example.com/x" {
 		t.Fatalf("stdout %q", got)
 	}
-	if !strings.Contains(stderr.String(), "steps 2") {
-		t.Errorf("stderr %q", stderr.String())
+	// The tool call is shown as it starts and ends (issue #6).
+	for _, want := range []string{"steps 2", `· glob {"pattern":"*.mod"}`, "  ✓ glob"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("no %q in stderr %q", want, stderr.String())
+		}
+	}
+}
+
+// lockedBuffer is a buffer two goroutines can use.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// `kairocode run` says what waits for approval and how to give it; the
+// answer, from another command, lets the turn go on (issue #6).
+func TestRunShowsApprovals(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "kairocode.json"), []byte(`{"permission": {"write": "ask"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, dir,
+		provider.FakeReply{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hi\n"}`)}}},
+		provider.FakeReply{Text: "written"},
+	))
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var stdout bytes.Buffer
+	var stderr lockedBuffer
+	code := make(chan int, 1)
+	go func() {
+		code <- Main(ctx, []string{"run", "-dir", ws, "-data", data, "write", "notes"}, &stdout, &stderr)
+	}()
+	var key string
+	until(t, ctx, "the approval is shown", func() bool {
+		_, rest, ok := strings.Cut(stderr.String(), "kairocode approve ")
+		key, _, _ = strings.Cut(rest, "\n")
+		return ok && strings.HasSuffix(rest, "\n")
+	})
+	var out bytes.Buffer
+	if c := Main(ctx, []string{"approve", "-data", data, key}, &out, &out); c != 0 {
+		t.Fatalf("approve: exit %d: %s", c, out.String())
+	}
+	if c := <-code; c != 0 {
+		t.Fatalf("exit %d: %s", c, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "written" {
+		t.Fatalf("stdout %q", got)
+	}
+	if !strings.Contains(stderr.String(), "waiting for approval: write notes.txt") || !strings.Contains(stderr.String(), "approved") {
+		t.Fatalf("stderr %q", stderr.String())
 	}
 }
 

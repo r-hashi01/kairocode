@@ -154,7 +154,11 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.rt.Approve(r.Context(), in.Key, in.OK, in.Reason); err != nil {
-		fail(w, http.StatusBadRequest, err)
+		code := http.StatusBadRequest
+		if errors.Is(err, runtime.ErrAnswered) {
+			code = http.StatusConflict // another client answered first
+		}
+		fail(w, code, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

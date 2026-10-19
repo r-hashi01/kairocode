@@ -69,6 +69,8 @@ type Runtime struct {
 
 	sendMu sync.Mutex
 
+	approveMu sync.Mutex // serializes answers (Approve)
+
 	closeOnce sync.Once
 	closeErr  error
 

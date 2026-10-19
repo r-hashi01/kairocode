@@ -171,6 +171,10 @@ func TestSSEDeliversTurnEvents(t *testing.T) {
 		t.Fatalf("first event %s %s %+v", id, typ, ev)
 	}
 	call("POST", "/approvals", map[string]any{"key": ev.Pending.Key, "ok": true}).Body.Close()
+	// A second answer, from another client, is refused (issue #5).
+	if resp := call("POST", "/approvals", map[string]any{"key": ev.Pending.Key, "ok": false}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("a second answer got %d", resp.StatusCode)
+	}
 	var got []string
 	for typ != runtime.EventTurnEnd {
 		_, typ, ev = stream.next(t)

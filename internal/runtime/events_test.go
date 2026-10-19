@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,7 +80,7 @@ func TestEventsOfATurn(t *testing.T) {
 	if e := expect(EventApprovalResolved); e.Key != ask.Pending.Key {
 		t.Fatalf("resolved %+v", e)
 	}
-	if e := expect(EventToolEnd); e.Call != start.Call || e.IsError || e.Output == "" {
+	if e := expect(EventToolEnd); e.Call != start.Call || e.Tool != "write" || e.IsError || e.Output == "" {
 		t.Fatalf("tool end %+v", e)
 	}
 	if e := expect(EventTurnEnd); e.N != n || e.Reply != "done" || e.Steps != 2 {
@@ -187,7 +188,7 @@ func TestEventsOfAClaudeTurn(t *testing.T) {
 		t.Fatalf("events %v (turn %d to %d)", types, got[0].N, got[len(got)-1].N)
 	}
 	start, end := got[1], got[2]
-	if start.Tool != "read" || string(start.Input) != `{"path":"main.go"}` || !inMCPCall(start.Call+"/x") || end.Call != start.Call || end.IsError ||
+	if start.Tool != "read" || string(start.Input) != `{"path":"main.go"}` || !inMCPCall(start.Call+"/x") || end.Call != start.Call || end.Tool != "read" || end.IsError ||
 		!strings.Contains(end.Output, `println("hi")`) {
 		t.Fatalf("tool start %+v, end %+v", start, end)
 	}
@@ -255,5 +256,67 @@ func TestEventsDropASlowWatcher(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("the slow watcher's channel did not close")
 		}
+	}
+}
+
+// Two clients answer the same approval at once: the first answer goes
+// through, the other is told it was already answered, and everyone who
+// watches is told the answer (issue #5).
+func TestApprovalToManyClients(t *testing.T) {
+	ws := workspaceWith(t, `{"write": "ask"}`)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "many", workflows.SessionInput{Dir: ws})
+	a, _ := r.Events(ctx, s)
+	b, _ := r.Events(ctx, s)
+	n, _ := r.Send(ctx, s, "write notes")
+	var key string
+	for _, events := range []<-chan Event{a, b} {
+		for {
+			ev := next(t, ctx, events)
+			if ev.Type == EventApprovalRequested {
+				key = ev.Pending.Key
+				break
+			}
+		}
+	}
+	errs := make(chan error, 2)
+	for _, ok := range []bool{true, false} {
+		go func() { errs <- r.Approve(ctx, key, ok, "") }()
+	}
+	var answered int
+	for range 2 {
+		err := <-errs
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrAnswered):
+			answered++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if answered != 1 {
+		t.Fatalf("%d of 2 answers were refused, want 1", answered)
+	}
+	out, err := r.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := !strings.HasPrefix(toolResultText(t, r, out), "not run")
+	for _, events := range []<-chan Event{a, b} {
+		for {
+			ev := next(t, ctx, events)
+			if ev.Type == EventApprovalResolved {
+				if ev.Key != key || ev.OK == nil || *ev.OK != approved {
+					t.Fatalf("resolved %+v (approved %v)", ev, approved)
+				}
+				break
+			}
+		}
+	}
+	// An answer after the turn has gone on is refused too.
+	if err := r.Approve(ctx, key, true, ""); !errors.Is(err, ErrAnswered) {
+		t.Fatalf("a late answer: %v", err)
 	}
 }

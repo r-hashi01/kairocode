@@ -51,9 +51,12 @@ type Event struct {
 	// Text is a token's text.
 	Text string `json:"text,omitempty"`
 	// Pending is what waits (approval.requested, review.requested); Key
-	// what was answered (approval.resolved, review.resolved).
+	// what was answered (approval.resolved, review.resolved), and OK the
+	// answer when it was given in this process: the call may run, or (a
+	// review) it took effect.
 	Pending *Pending `json:"pending,omitempty"`
 	Key     string   `json:"key,omitempty"`
+	OK      *bool    `json:"ok,omitempty"`
 	// turn.end
 	Reply   string     `json:"reply,omitempty"`
 	Steps   int        `json:"steps,omitempty"`
@@ -86,6 +89,8 @@ type events struct {
 	watchers map[string]map[*watcher]bool // by session
 	seq      map[string]int64
 	pending  map[string]map[string]Pending // what waited, at the last look
+	answers  map[string]map[string]bool    // answers given, not yet told
+	calls    map[string]map[string]string  // tool calls started, by call: their tool
 	tokens   map[string]*tokens            // a session's token stream
 	queue    []item
 	wake     chan struct{}
@@ -118,7 +123,7 @@ type item struct {
 func newEvents(r *Runtime) *events {
 	ctx, stop := context.WithCancel(context.Background())
 	e := &events{r: r, watchers: map[string]map[*watcher]bool{}, seq: map[string]int64{},
-		pending: map[string]map[string]Pending{}, tokens: map[string]*tokens{},
+		pending: map[string]map[string]Pending{}, answers: map[string]map[string]bool{}, calls: map[string]map[string]string{}, tokens: map[string]*tokens{},
 		wake: make(chan struct{}, 1), ctx: ctx, stop: stop, done: make(chan struct{})}
 	go e.run()
 	return e
@@ -204,12 +209,35 @@ func (e *events) drop(w *watcher) {
 	if len(ws) == 0 {
 		delete(e.watchers, w.session)
 		delete(e.pending, w.session)
+		delete(e.answers, w.session)
+		delete(e.calls, w.session)
 		delete(e.seq, w.session)
 		if t := e.tokens[w.session]; t != nil {
 			t.stop()
 			delete(e.tokens, w.session)
 		}
 	}
+}
+
+// answered keeps the answer given to key, to tell it when the request is
+// seen to be resolved.
+func (e *events) answered(session, key string, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.watchers[session] == nil {
+		return
+	}
+	if e.answers[session] == nil {
+		e.answers[session] = map[string]bool{}
+	}
+	e.answers[session][key] = ok
+}
+
+// forget drops an answer that could not be given.
+func (e *events) forget(session, key string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.answers[session], key)
 }
 
 // observe queues an observation of a watched session.
@@ -384,7 +412,14 @@ func (e *events) refresh(session string) bool {
 	})
 	for _, k := range gone {
 		p := before[k]
-		e.emit(session, Event{Type: resolved(p), Turn: p.Turn, Tool: p.Tool, Key: k})
+		ev := Event{Type: resolved(p), Turn: p.Turn, Tool: p.Tool, Key: k}
+		e.mu.Lock()
+		if ok, found := e.answers[session][k]; found {
+			ev.OK = &ok
+			delete(e.answers[session], k)
+		}
+		e.mu.Unlock()
+		e.emit(session, ev)
 	}
 	return true
 }
@@ -426,7 +461,7 @@ func (e *events) observed(session string, o kairo.Observation) {
 		e.modelReply(session, o.RunID)
 	case !started && (strings.HasPrefix(o.Action, workflows.ActToolPrefix) || o.Action == workflows.ActFileApply) &&
 		!inMCPCall(o.RunID):
-		e.toolEnd(session, o.RunID)
+		e.toolEnd(session, o.RunID, o.Action)
 	}
 	if !started || strings.HasPrefix(o.Plan, "kairo.wait/") {
 		e.refresh(session)
@@ -478,13 +513,34 @@ func (e *events) modelReply(session, run string) {
 	}
 	for _, p := range m.Parts {
 		if p.Type == msg.ToolUse {
+			e.mu.Lock()
+			if e.calls[session] == nil {
+				e.calls[session] = map[string]string{}
+			}
+			e.calls[session][p.ID] = p.Name
+			e.mu.Unlock()
 			e.emit(session, Event{Type: EventToolStart, Turn: turnOf(run), Call: p.ID, Tool: p.Name, Input: p.Input})
 		}
 	}
 }
 
+// toolOfAction is the tool an action of a tool call runs, if it says:
+// tool.<name>, tool.<name>.plan, tool.<name>.apply.
+func toolOfAction(action string) string {
+	name, ok := strings.CutPrefix(action, workflows.ActToolPrefix)
+	if !ok {
+		return ""
+	}
+	name = strings.TrimSuffix(strings.TrimSuffix(name, workflows.ActPlanSuffix), workflows.ActApplySuffix)
+	switch action {
+	case workflows.ActToolDenied, workflows.ActToolMissing, workflows.ActToolSkipped:
+		return ""
+	}
+	return name
+}
+
 // toolEnd: a call that answers a tool call settled.
-func (e *events) toolEnd(session, run string) {
+func (e *events) toolEnd(session, run, action string) {
 	info, err := e.r.K.Get(e.ctx, run)
 	if err != nil || info.Status != "completed" {
 		return
@@ -511,7 +567,14 @@ func (e *events) toolEnd(session, run string) {
 	}
 	for _, p := range m.Parts {
 		if p.Type == msg.ToolResult {
-			e.emit(session, Event{Type: EventToolEnd, Turn: turnOf(run), Call: p.ToolUseID, Output: p.Text, IsError: p.IsError})
+			e.mu.Lock()
+			tool, ok := e.calls[session][p.ToolUseID]
+			delete(e.calls[session], p.ToolUseID)
+			e.mu.Unlock()
+			if !ok { // started before this watch (or this process): its run's action names it
+				tool = toolOfAction(action)
+			}
+			e.emit(session, Event{Type: EventToolEnd, Turn: turnOf(run), Call: p.ToolUseID, Tool: tool, Output: p.Text, IsError: p.IsError})
 		}
 	}
 }
@@ -522,14 +585,15 @@ func (e *events) mcpCall(session, run string, started bool) {
 	if err != nil {
 		return
 	}
-	if started {
-		var in workflows.MCPCallInput
-		if json.Unmarshal(input(info), &in) == nil {
-			e.emit(session, Event{Type: EventToolStart, Turn: turnOf(run), Call: run, Tool: in.Tool, Input: in.Args})
-		}
+	var in workflows.MCPCallInput
+	if json.Unmarshal(input(info), &in) != nil {
 		return
 	}
-	ev := Event{Type: EventToolEnd, Turn: turnOf(run), Call: run}
+	if started {
+		e.emit(session, Event{Type: EventToolStart, Turn: turnOf(run), Call: run, Tool: in.Tool, Input: in.Args})
+		return
+	}
+	ev := Event{Type: EventToolEnd, Turn: turnOf(run), Call: run, Tool: in.Tool}
 	out, err := kairo.Await[workflows.ToolOutput](e.ctx, e.r.K, run)
 	if err != nil {
 		ev.IsError, ev.Output = true, err.Error()

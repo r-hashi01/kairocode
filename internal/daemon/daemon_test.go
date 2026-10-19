@@ -689,3 +689,161 @@ func TestIdleDaemonStops(t *testing.T) {
 		t.Fatal("did not stop when idle")
 	}
 }
+
+// nextEvent is the next event that is not a token.
+func nextEvent(t *testing.T, ctx context.Context, events <-chan runtime.Event) runtime.Event {
+	t.Helper()
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("the events ended")
+			}
+			if ev.Type != runtime.EventToken {
+				return ev
+			}
+		case <-ctx.Done():
+			t.Fatal("no event:", ctx.Err())
+		}
+	}
+}
+
+// Two clients watch a session through the daemon. Both are asked for the
+// approval; the first answer goes through, the other is refused, and both
+// are told the answer and follow the turn to its end (issue #5).
+func TestApprovalToManyClients(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	data := dataDir(t)
+	ws := workspace(t, `{"write": "ask"}`)
+	start := childStart(data, writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{Script: writeScript, HoldAt: -1}))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ea, err := a.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eb, err := b.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Send(ctx, s, "write the notes"); err != nil {
+		t.Fatal(err)
+	}
+	var key string
+	for _, events := range []<-chan runtime.Event{ea, eb} {
+		for {
+			ev := nextEvent(t, ctx, events)
+			if ev.Type == runtime.EventApprovalRequested {
+				if key != "" && ev.Pending.Key != key {
+					t.Fatalf("two keys: %s %s", key, ev.Pending.Key)
+				}
+				key = ev.Pending.Key
+				break
+			}
+		}
+	}
+	if err := b.Approve(ctx, key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Approve(ctx, key, false, ""); !errors.Is(err, runtime.ErrAnswered) {
+		t.Fatalf("the second answer: %v", err)
+	}
+	for _, events := range []<-chan runtime.Event{ea, eb} {
+		var resolved bool
+		for {
+			ev := nextEvent(t, ctx, events)
+			if ev.Type == runtime.EventApprovalResolved {
+				if ev.Key != key || ev.OK == nil || !*ev.OK {
+					t.Fatalf("resolved %+v", ev)
+				}
+				resolved = true
+			}
+			if ev.Type == runtime.EventTurnEnd {
+				if !resolved || ev.Reply != "done" {
+					t.Fatalf("turn end %+v (resolved %v)", ev, resolved)
+				}
+				break
+			}
+		}
+	}
+}
+
+// TestCrashDaemonEventsAfterRestart: the daemon is killed while a command
+// runs. A client that comes back starts a new daemon and is told first that
+// the call waits for review; its answer settles it, and the turn ends
+// (issue #7).
+func TestCrashDaemonEventsAfterRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a daemon")
+	}
+	data := dataDir(t)
+	ws := workspace(t, `{"bash": "allow"}`)
+	start := childStart(data, writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo ran >> count.txt; touch started; sleep 5"}`)}}},
+		{Text: "done"},
+	}}))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.Send(ctx, s, "count")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, ctx, filepath.Join(ws, "started"))
+	if err := syscall.Kill(a.PID(), syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+
+	b, err := Connect(ctx, data, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	events, err := b.Events(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := nextEvent(t, ctx, events)
+	if review.Type != runtime.EventReviewRequested || review.Pending == nil || review.Tool != "bash" {
+		t.Fatalf("first event %+v", review)
+	}
+	if err := b.Approve(ctx, review.Pending.Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		ev := nextEvent(t, ctx, events)
+		if ev.Type == runtime.EventTurnEnd {
+			if ev.N != n || ev.Reply != "done" {
+				t.Fatalf("turn end %+v", ev)
+			}
+			break
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(ws, "count.txt")); string(got) != "ran\n" {
+		t.Fatalf("the command ran again: %q", got)
+	}
+}

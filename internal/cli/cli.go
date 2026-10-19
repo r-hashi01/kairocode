@@ -208,14 +208,35 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stderr, "session %s\n", s)
-	n, err := c.Send(ctx, s, request)
+	// What the turn does is shown as it happens; its result comes from
+	// WaitTurn, which does not depend on the stream.
+	// Watching begins before the message is sent, so no event of the turn
+	// is missed.
+	watch, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	events, err := c.Events(watch, s)
+	if err != nil {
+		return err
+	}
+	turnDone := make(chan struct{})
+	shown := make(chan struct{})
+	n := -1
+	sent := make(chan struct{})
+	go func() {
+		defer close(shown)
+		showEvents(watch, c, s, events, stderr, sent, &n, turnDone)
+	}()
+	n, err = c.Send(ctx, s, request)
+	close(sent)
 	if err != nil {
 		return err
 	}
 	out, err := c.WaitTurn(ctx, s, n)
+	close(turnDone)
 	if err != nil {
 		return err
 	}
+	<-shown
 	fmt.Fprintln(stdout, out.Reply)
 	if out.Stopped != "" {
 		fmt.Fprintf(stderr, "stopped: %s\n", out.Stopped)
@@ -302,4 +323,87 @@ func stopOnSignals(ctx context.Context) (context.Context, <-chan struct{}, func(
 		close(done)
 		stop()
 	}
+}
+
+// showEvents writes what session s does to w, from events, until the turn
+// sent (n, known once sent is closed) ends. The stream may end early (the
+// client fell behind): it watches again while the turn has not ended
+// (turnDone). A stream begun again may have missed the turn's end, so it is
+// read only until the turn is known to have ended.
+func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan runtime.Event, w io.Writer,
+	sent <-chan struct{}, n *int, turnDone <-chan struct{}) {
+	var until <-chan struct{} // nil: read to the turn's end
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				select {
+				case <-turnDone:
+					return
+				case <-ctx.Done():
+					return
+				default:
+				}
+				var err error
+				if events, err = c.Events(ctx, s); err != nil {
+					return
+				}
+				until = turnDone
+				continue
+			}
+			if ev.Type == runtime.EventTurnEnd {
+				<-sent
+				if ev.N == *n {
+					return
+				}
+			}
+			showEvent(w, ev)
+		case <-until:
+			return
+		}
+	}
+}
+
+// showEvent writes one event as a line, if it is one to show. Tokens are
+// not: the reply is written whole when the turn ends.
+func showEvent(w io.Writer, ev runtime.Event) {
+	answer := func(ok *bool, yes, no string) string {
+		switch {
+		case ok == nil:
+			return "answered"
+		case *ok:
+			return yes
+		default:
+			return no
+		}
+	}
+	switch ev.Type {
+	case runtime.EventToolStart:
+		fmt.Fprintf(w, "· %s %s\n", ev.Tool, oneLine(string(ev.Input), 80))
+	case runtime.EventToolEnd:
+		if ev.IsError {
+			fmt.Fprintf(w, "  ✗ %s: %s\n", ev.Tool, oneLine(ev.Output, 80))
+		} else {
+			fmt.Fprintf(w, "  ✓ %s\n", ev.Tool)
+		}
+	case runtime.EventApprovalRequested:
+		fmt.Fprintf(w, "waiting for approval: %s %s (%s)\n  kairocode approve %s\n",
+			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Rule, ev.Pending.Key)
+	case runtime.EventReviewRequested:
+		fmt.Fprintf(w, "cut off while it ran, did it take effect? %s %s\n  kairocode approve %s   (or -deny: it did not)\n",
+			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Key)
+	case runtime.EventApprovalResolved:
+		fmt.Fprintf(w, "  %s\n", answer(ev.OK, "approved", "declined"))
+	case runtime.EventReviewResolved:
+		fmt.Fprintf(w, "  %s\n", answer(ev.OK, "it took effect", "it did not take effect"))
+	}
+}
+
+// oneLine is s on one line, cut to max runes.
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }
