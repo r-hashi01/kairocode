@@ -715,6 +715,31 @@ func (r *Runtime) sent(ctx context.Context, session string) (int, error) {
 	return n, nil
 }
 
+// LastTurn is the number of the session's latest turn; false if it has
+// none.
+func (r *Runtime) LastTurn(ctx context.Context, session string) (int, bool, error) {
+	kids, err := r.K.Children(ctx, session)
+	if err != nil {
+		return 0, false, err
+	}
+	last, found := 0, false
+	for _, k := range kids {
+		if k.Workflow != workflows.Turn {
+			continue
+		}
+		var w struct {
+			Input workflows.TurnInput `json:"input"`
+		}
+		if err := json.Unmarshal(k.Input, &w); err != nil {
+			return 0, false, fmt.Errorf("turn %s: %w", k.RunID, err)
+		}
+		if !found || w.Input.N > last {
+			last, found = w.Input.N, true
+		}
+	}
+	return last, found, nil
+}
+
 // TurnRun is the kairo run of turn n of a session, or "" if the session has
 // not started it yet.
 func (r *Runtime) TurnRun(ctx context.Context, session string, n int) (kairo.RunInfo, bool, error) {

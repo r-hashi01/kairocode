@@ -33,7 +33,9 @@ import (
 
 const usage = `usage:
   kairocode [chat] [-dir DIR] [-data DIR] [-session ID]   talk with it in the terminal (kairo is the same)
-  kairocode run [-dir DIR] [-data DIR] "<request>"   answer one request, then exit
+  kairocode run [-dir DIR] [-data DIR] [-detach] "<request>"   answer one request, then exit
+                                                     (-detach: stop when it waits for a person, exit 3)
+  kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
@@ -73,6 +75,9 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	default:
 		err = command(ctx, args[0], args[1:], stdout, stderr)
 	}
+	if errors.Is(err, errWaiting) {
+		return 3
+	}
 	if errors.Is(err, errUnknownCommand) {
 		fmt.Fprintf(stderr, "kairocode: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -101,6 +106,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = chat(ctx, args, stdout, stderr)
 	case "run":
 		err = run(ctx, args, stdout, stderr)
+	case "resume":
+		err = resume(ctx, args, stdout, stderr)
 	case "daemon":
 		err = runDaemon(ctx, args, stdout, stderr)
 	case "approvals":
@@ -228,6 +235,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", ".", "working directory")
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3); go on with kairocode resume")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -253,10 +261,57 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stderr, "session %s\n", s)
+	return follow(ctx, c, s, *detach, stdout, stderr, func() (int, error) {
+		if flow, ok := strings.CutPrefix(request, "/flow "); ok { // a flow (ADR 0003)
+			name, args, _ := strings.Cut(strings.TrimSpace(flow), " ")
+			if name == "new" {
+				return c.NewFlow(ctx, s, args)
+			}
+			return c.RunFlow(ctx, s, name, strings.TrimSpace(args))
+		}
+		return c.Send(ctx, s, request)
+	})
+}
+
+// resume goes on with a session run left (kairocode run -detach, or
+// stopped): its latest turn is followed to its end, as run does, and the
+// session is then closed, as run closes it. It is for run's sessions: one
+// of chat or an editor is closed too.
+func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: kairocode resume [-data DIR] [-detach] <session>")
+	}
+	s := fs.Arg(0)
+	if !strings.HasPrefix(s, "s/") {
+		s = runtime.SessionID(s)
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return follow(ctx, c, s, *detach, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
+}
+
+// errWaiting: the turn waits for a person, and the command stopped
+// (exit 3); the session goes on with kairocode resume.
+var errWaiting = errors.New("the turn waits for a person")
+
+// follow shows what turn n of session s does as it happens, n being what
+// start returns (a turn it starts, or one under way), and prints its reply
+// at its end, then closes the session. With detach, it stops when the
+// turn waits for a person; stopped (Ctrl-C), it says how to go on.
+func follow(ctx context.Context, c *daemon.Client, s string, detach bool, stdout, stderr io.Writer, start func() (int, error)) error {
 	// What the turn does is shown as it happens; its result comes from
-	// WaitTurn, which does not depend on the stream.
-	// Watching begins before the message is sent, so no event of the turn
-	// is missed.
+	// WaitTurn, which does not depend on the stream. Watching begins before
+	// the turn starts, so no event of it is missed.
 	watch, stopWatch := context.WithCancel(ctx)
 	defer stopWatch()
 	events, err := c.Events(watch, s)
@@ -265,38 +320,61 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	turnDone := make(chan struct{})
 	shown := make(chan struct{})
+	waiting := make(chan struct{}, 1)
 	n := -1
 	sent := make(chan struct{})
 	go func() {
 		defer close(shown)
-		showEvents(watch, c, s, events, stderr, sent, &n, turnDone)
+		showEvents(watch, c, s, events, stderr, sent, &n, turnDone, waiting)
 	}()
-	if flow, ok := strings.CutPrefix(request, "/flow "); ok { // a flow (ADR 0003)
-		name, args, _ := strings.Cut(strings.TrimSpace(flow), " ")
-		if name == "new" {
-			n, err = c.NewFlow(ctx, s, args)
-		} else {
-			n, err = c.RunFlow(ctx, s, name, strings.TrimSpace(args))
-		}
-	} else {
-		n, err = c.Send(ctx, s, request)
-	}
+	n, err = start()
 	close(sent)
 	if err != nil {
 		return err
 	}
-	out, err := c.WaitTurn(ctx, s, n)
-	close(turnDone)
-	if err != nil {
-		return err
+	type result struct {
+		out daemon.Turn
+		err error
 	}
-	<-shown
-	fmt.Fprintln(stdout, out.Reply)
-	if out.Stopped != "" {
-		fmt.Fprintf(stderr, "stopped: %s\n", out.Stopped)
+	done := make(chan result, 1)
+	go func() {
+		out, err := c.WaitTurn(watch, s, n)
+		done <- result{out, err}
+	}()
+	var stopAt <-chan struct{} // nil: the turn is followed through its waits
+	if detach {
+		stopAt = waiting
+	}
+	var r result
+	select {
+	case r = <-done:
+	case <-stopAt:
+		fmt.Fprintf(stderr, "stopped while the turn waits; answer it, then go on with: kairocode resume %s\n", s)
+		return errWaiting
+	case <-ctx.Done():
+		fmt.Fprintf(stderr, "\nstopped; the session goes on without this command: kairocode resume %s\n", s)
+		return ctx.Err()
+	}
+	close(turnDone)
+	if r.err != nil {
+		return r.err
+	}
+	// The turn's last events come with its end, and the display returns at
+	// turn.end. A turn that ended before this command watched (resume) has
+	// sent its turn.end already, and the stream does not send past events:
+	// the display gets a moment for what is still on its way, then stops.
+	select {
+	case <-shown:
+	case <-time.After(time.Second):
+		stopWatch()
+		<-shown
+	}
+	fmt.Fprintln(stdout, r.out.Reply)
+	if r.out.Stopped != "" {
+		fmt.Fprintf(stderr, "stopped: %s\n", r.out.Stopped)
 	}
 	fmt.Fprintf(stderr, "steps %d, tokens in %d out %d (cache read %d)\n",
-		out.Steps, out.Usage.Input, out.Usage.Output, out.Usage.CacheRead)
+		r.out.Steps, r.out.Usage.Input, r.out.Usage.Output, r.out.Usage.CacheRead)
 	return c.CloseSession(ctx, s)
 }
 
@@ -408,7 +486,7 @@ func stopOnSignals(ctx context.Context) (context.Context, <-chan struct{}, func(
 // (turnDone). A stream begun again may have missed the turn's end, so it is
 // read only until the turn is known to have ended.
 func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan runtime.Event, w io.Writer,
-	sent <-chan struct{}, n *int, turnDone <-chan struct{}) {
+	sent <-chan struct{}, n *int, turnDone <-chan struct{}, waiting chan<- struct{}) {
 	var until <-chan struct{} // nil: read to the turn's end
 	for {
 		select {
@@ -435,6 +513,13 @@ func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan r
 				}
 			}
 			showEvent(w, ev)
+			switch ev.Type {
+			case runtime.EventApprovalRequested, runtime.EventReviewRequested, runtime.EventQuestionRequested:
+				select {
+				case waiting <- struct{}{}:
+				default:
+				}
+			}
 		case <-until:
 			return
 		}

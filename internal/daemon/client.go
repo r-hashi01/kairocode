@@ -245,6 +245,22 @@ type Turn struct {
 	Usage   msg.Usage `json:"usage"`
 }
 
+// ErrNoTurn: the session has no turn (or is not there).
+var ErrNoTurn = errors.New("the session has no turn")
+
+// LastTurn is the number of the session's latest turn.
+func (c *Client) LastTurn(ctx context.Context, session string) (int, error) {
+	var out struct {
+		Turn int `json:"turn"`
+	}
+	err := c.do(ctx, "GET", sessionPath(session)+"/turns", nil, &out)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return 0, ErrNoTurn
+	}
+	return out.Turn, err
+}
+
 // WaitTurn waits for turn n of the session to finish.
 func (c *Client) WaitTurn(ctx context.Context, session string, n int) (Turn, error) {
 	var out Turn

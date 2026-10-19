@@ -189,6 +189,76 @@ func TestRunShowsApprovals(t *testing.T) {
 	}
 }
 
+// kairocode run -detach stops when the turn waits for approval (exit 3),
+// leaving the session to go on; kairocode resume follows it to its end
+// once answered, and, still waiting, stops again (M4).
+func TestRunDetachAndResume(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "kairocode.json"), []byte(`{"permission": {"write": "ask"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, dir,
+		provider.FakeReply{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hi\n"}`)}}},
+		provider.FakeReply{Text: "written"},
+	))
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	if c := Main(ctx, []string{"run", "-detach", "-dir", ws, "-data", data, "write", "notes"}, &stdout, &stderr); c != 3 {
+		t.Fatalf("run -detach: exit %d: %s", c, stderr.String())
+	}
+	_, rest, ok := strings.Cut(stderr.String(), "kairocode approve ")
+	key, _, _ := strings.Cut(rest, "\n")
+	_, rest, _ = strings.Cut(stderr.String(), "kairocode resume ")
+	session, _, _ := strings.Cut(rest, "\n")
+	if !ok || key == "" || session == "" || stdout.Len() != 0 {
+		t.Fatalf("stdout %q stderr %q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(ws, "notes.txt")); err == nil {
+		t.Fatal("written before the approval")
+	}
+	// Still waiting: resume -detach stops again.
+	stderr.Reset()
+	if c := Main(ctx, []string{"resume", "-detach", "-data", data, session}, &stdout, &stderr); c != 3 || !strings.Contains(stderr.String(), "kairocode approve "+key) {
+		t.Fatalf("resume -detach: exit %d: %s", c, stderr.String())
+	}
+	var out bytes.Buffer
+	if c := Main(ctx, []string{"approve", "-data", data, key}, &out, &out); c != 0 {
+		t.Fatalf("approve: exit %d: %s", c, out.String())
+	}
+	// The turn ends with no one following it; resume then finds it ended.
+	c, err := connect(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.WaitTurn(ctx, session, 0); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	stderr.Reset()
+	if c := Main(ctx, []string{"resume", "-data", data, session}, &stdout, &stderr); c != 0 {
+		t.Fatalf("resume: exit %d: %s", c, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "written" {
+		t.Fatalf("stdout %q", got)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "hi\n" {
+		t.Fatalf("notes.txt: %q %v", b, err)
+	}
+	if c := Main(ctx, []string{"resume", "-data", data, "s/none"}, &stdout, &stderr); c == 0 {
+		t.Fatal("resumed a session that is not there")
+	}
+}
+
 func TestRunNeedsARequest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Main(context.Background(), []string{"run"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "needs a request") {

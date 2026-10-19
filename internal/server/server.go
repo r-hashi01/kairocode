@@ -32,6 +32,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("POST /sessions", s.createSession)
 	s.mux.HandleFunc("POST /sessions/{id}/messages", s.sendMessage)
+	s.mux.HandleFunc("GET /sessions/{id}/turns", s.lastTurn)
 	s.mux.HandleFunc("GET /sessions/{id}/turns/{n}", s.getTurn)
 	s.mux.HandleFunc("POST /sessions/{id}/close", s.closeSession)
 	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
@@ -159,6 +160,21 @@ func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 
 // getTurn waits for the turn to finish (the request's context bounds the
 // wait) and returns its reply.
+// lastTurn is the number of the session's latest turn; 404 if it has
+// none.
+func (s *Server) lastTurn(w http.ResponseWriter, r *http.Request) {
+	n, ok, err := s.rt.LastTurn(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) || err == nil && !ok {
+		fail(w, http.StatusNotFound, errors.New("the session has no turn"))
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"turn": n})
+}
+
 func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 	n, err := strconv.Atoi(r.PathValue("n"))
 	if err != nil || n < 0 {
