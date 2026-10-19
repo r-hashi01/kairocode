@@ -83,6 +83,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] `kairo` は端末では TUI（ADR 0010）: 見出し、入力の枠、状態の行、返答とツールの行、矢印で選ぶ承認（要確認は何も選んでいない状態から）、取り下げ、コマンドの補完、Ctrl-C 2 回で抜ける（`TestTurn`、`TestAsk`、`TestKeys`、`TestQueuedDuringATurn`、`TestHelp`、`TestReplyWraps`、`TestNoSize`）。初めてのフォルダは信頼を聞き、「いいえ」なら何も読まない（`TestTrustQuestion`、`TestChatInAFolderNotTrusted`、`TestTrust`）。Esc でターンを止めるのは ADR 0011 の承認待ち。
 - [x] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。
 - [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。 → テストは通る（`TestClaudeEngineResumeDoesNotRepeatARealCall`、`TestCrashClaudeEngine`）。本物の `claude` での確認が残り。
+- [ ] ターンの取り消し（ADR 0011、#11）: モデルの呼び出しの最中に止めるとターンが cancelled で終わり、次のターンの履歴に利用者のメッセージと書き添えが入る。承認の待ちの最中に止めると待ちが消え、ツールは動かない。取り消しの後に落ちて再開しても書き添えは二重にならない。版 4 のセッションは止めたターンを捨てる。ACP の `session/cancel` と TUI の Esc で止まる。
 - [ ] edit のあと、LSP の診断のエラーがツールの出力に足される。
 - [x] `.opencode/agents/*.md`、`.opencode/commands/*.md`、`.opencode/skills/` を、opencode と同じ意味で読む。（`TestAgents`、`TestCommands`、`TestExpand`、`TestSkills`、`TestOpencodeAgent`、`TestOpencodeAgentRefused`、`TestOpencodeSkills`、`TestOpencodeCommand`、`TestACPProjectCommand`）
 - [x] `/undo` で作業ファイルが前のターンの状態に戻り、`/redo` で戻る。記録は消えない。（`TestUndoRedo`、`TestUndoThenNewTurnClearsRedo`、`TestUndoAfterRestart`、`TestCrashUndo`、`TestACPUndoRedo`。セッションとターンの版 4）
@@ -94,22 +95,24 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 状態: 未着手
 
-中身: task（サブエージェント）。Starlark のワークフロー（ADR 0003: `.kairocode/workflows/<name>.star`、プリミティブ `agent`・`parallel`・`decide`・`tool`・`ask`、ずれの検出、上限）。入口はコマンド（`/<name>`）、hook（`turn.end`、`tool.after`、`session.start`）、エージェントの `workflow:`。モデルがその場で書くスクリプト（`workflow` のツール）。`kairocode workflow graph`・`show`・`stats`。
+中身: task（サブエージェント）。Starlark のフロー（ADR 0003: `.kairocode/workflows/<name>.star`、プリミティブ `agent`・`parallel`・`decide`・`tool`・`ask`・`phase`、ずれの検出、上限）。入口は `/flow <name>`、hook（`turn.end`、`tool.after`、`session.start`）、エージェントの `workflow:`。言葉から作る（`/flow new <説明>`）。端末のフローの図（作るとき、動いている間、`kairocode flow graph`・`show`・`stats`）と、図の上での変更。
 
-前提: ADR 0003 の承認。
+前提: ADR 0003 の承認（2026-10-19）、ADR 0011（親を止めると子も止まる）。
 
 受け入れ条件:
 
 - [ ] `TestCrashWorkflowScriptResume`: 10 個の `agent` を `parallel` で並べたスクリプトを途中で強制終了して再開すると、終わった葉はやり直さない。
 - [ ] `TestWorkflowScriptDivergence`: 記録と違う呼び出しをするスクリプトで再開すると、実行せずに止まる。
 - [ ] `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。
-- [ ] `TestTurnEndHookBlocks`: `turn.end` のワークフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
-- [ ] `TestWorkflowGraph`: 静的な図が、`for`、`if`、`parallel` の入れ子を正しく表す。
-- [ ] `kairocode workflow show <実行> --follow` が、各ノードの状態とスクリプトの行を示す。
+- [ ] `TestTurnEndHookBlocks`: `turn.end` のフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
+- [ ] `TestWorkflowGraph`: フローの図が、順番、`if`、`parallel`、`for`、`def` の展開、`phase` を正しく表し、幅が足りないときはまとめ、木の図に切り替える。
+- [ ] `TestWorkflowLive`: 実行の木の状態が、図の箱の印と色、繰り返しの回に写る。`kairocode flow show <実行> --follow` が同じ図を出す。
+- [ ] `TestDraftFromWords`: `/flow new` で、モデルが書いたスクリプトが検査を通ってファイルになり、図で見え、`/flow <name>` で動く。入力欄から頼んだ変更で図が描き直される。
+- [ ] `TestEditOnTheChart`: 図の上で箱の中身を書き換える、消す、入れ替えると、スクリプトのその引数と文の並びだけが変わる。
 - [ ] 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。
 - [ ] リポジトリの hook が初めて走る前に、利用者に確認する。
-- [ ] エージェントの定義に `workflow:` を書くと、そのエージェントのターンがそのワークフローで進む。
-- [ ] 親を止めると、子も止まる。
+- [ ] エージェントの定義に `workflow:` を書くと、そのエージェントのターンがそのフローで進む。
+- [ ] 親を止めると、子も止まる（ADR 0011）。
 
 ## M4 非対話とサーバーレス
 

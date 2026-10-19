@@ -9,7 +9,7 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0000](0000-record-decisions.md) | 設計判断を ADR として記録する | 承認（2026-10-09） |
 | [0001](0001-go-on-the-kairo-go-sdk.md) | KairoCode を Go で書き、kairo の Go の SDK（埋め込みのランタイム）の上で動かす | 承認（2026-10-09） |
 | [0002](0002-opencode-features-and-acp.md) | 機能と設定の形は opencode を手本にし、利用者の側の入口は ACP にする | 承認（2026-10-09） |
-| [0003](0003-workflows-started-by-people-and-events.md) | ワークフローは、人と出来事が始める。中身は Starlark で書き、TUI と CLI で見える | 提案 |
+| [0003](0003-workflows-started-by-people-and-events.md) | ワークフローは、人と出来事が始める。中身は Starlark で、言葉から作り、端末にフローの図として見せる | 承認（2026-10-19） |
 | [0004](0004-dspchr-integration.md) | dspchr の中でよく振る舞うエージェントになる | 提案 |
 | [0005](0005-sandbox-for-processes.md) | KairoCode が動かすプロセスは、Codex にならった OS の sandbox の中で動かす | 承認（2026-10-09） |
 | [0006](0006-conversation-storage.md) | 会話は、内容のハッシュで引く 1 つの表と、ターンごとのリンクの鎖で持つ。セッションはターンを子として順に動かす | 承認（2026-10-09） |
@@ -17,4 +17,4 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0008](0008-one-daemon-per-data-directory.md) | データの置き場ごとに、kairo を動かすデーモンを 1 つだけ置く。ほかはすべてクライアントにする | 承認（2026-10-09） |
 | [0009](0009-lsp-diagnostics-after-edits.md) | ファイルを書いたツールの結果に、言語サーバーの診断のエラーを足す | 提案 |
 | [0010](0010-terminal-ui.md) | 端末の対話を、claude と同じ形の TUI にする（Bubble Tea）。初めてのフォルダは信頼を聞く | 承認（2026-10-19） |
-| [0011](0011-cancel-a-turn.md) | ターンの取り消し: kairo の取り消しで止め、止めたことを会話に残す | 提案 |
+| [0011](0011-cancel-a-turn.md) | ターンの取り消し: kairo の取り消しで止め、止めたことを会話に残す | 承認（2026-10-19） |
