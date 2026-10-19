@@ -203,22 +203,22 @@ func (c *conn) take(ctx context.Context, line []byte, h handler, wg *sync.WaitGr
 		}
 	case m.Method == "":
 		_ = c.write(message{ID: json.RawMessage("null"), Error: &rpcError{Code: codeInvalidRequest, Message: "no method"}})
+	case len(m.ID) == 0:
+		// A notification is taken here, before the next message is read:
+		// notifications keep their order (a reply's chunks), and come
+		// before the response that follows them.
+		_, _ = h(ctx, m.Method, m.Params)
 	default:
 		rctx, cancel := context.WithCancel(ctx)
 		id := string(m.ID)
-		if len(m.ID) > 0 {
-			c.mu.Lock()
-			c.running[id] = cancel
-			c.mu.Unlock()
-		}
+		c.mu.Lock()
+		c.running[id] = cancel
+		c.mu.Unlock()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer cancel()
 			result, err := h(rctx, m.Method, m.Params)
-			if len(m.ID) == 0 {
-				return // a notification: no response
-			}
 			c.mu.Lock()
 			delete(c.running, id)
 			c.mu.Unlock()

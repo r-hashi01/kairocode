@@ -79,6 +79,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] SSE で、トークン、ツールの開始と終了、承認の求め、要確認、ターンの終わりが届く（`TestSSEDeliversTurnEvents`、`TestEventsOfATurn`、`TestEventsStreamTokens`、`TestEventsOfAClaudeTurn`、`TestCrashEventsAfterRestart`）。
 - [x] `TestACPContract`: 実装した ACP のメソッドの要求と応答が、固定した版の ACP の JSON Schema（v1、`schema-v1.26.0`）に合う。
 - [x] 決まった順のメッセージを流す ACP のクライアントで、`session/new` → `prompt` → `tool_call` の更新 → `request_permission` → 答え → ターンの終わりが通る（`TestACPTurn`、`TestACPCommand`）。要確認も `request_permission` で答えられる（`TestCrashACPReview`）。
+- [x] 端末の対話（`kairocode chat`、引数なしの `kairo`）を、自分の ACP のクライアントとして作る（ADR 0002）: 返答を届いたそばから書き、ツールの呼び出しを示し、権限を端末で聞き、`-session` で会話を表示し直して続ける（`TestChat`、`TestChatAsks`、`TestNoCommandIsTheChat`、`TestClientKeepsTheOrderOfUpdates`、`TestClientPermission`）。
 - [x] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。
 - [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。 → テストは通る（`TestClaudeEngineResumeDoesNotRepeatARealCall`、`TestCrashClaudeEngine`）。本物の `claude` での確認が残り。
 - [ ] edit のあと、LSP の診断のエラーがツールの出力に足される。

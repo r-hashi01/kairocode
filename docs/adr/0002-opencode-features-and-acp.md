@@ -104,11 +104,18 @@ KairoCode の設定は KairoCode の置き場（`kairocode.json`、`.kairocode/`
 - **要確認の選択肢は、どちらも `reject_once` の種類にしました。** ACP の選択肢の種類は表示の手がかりですが、ツールを自動で許すクライアントがあります。「効いた」を `allow_once` にすると、人が答えずに要確認が決着し得ます（不変条件 4）。選択肢の ID は `did_not_take_effect` と `took_effect` です。提示していない ID の答えは受け取らず、待ちは kairo に残ります（`TestCrashACPReview`）。
 - 要確認と、Claude Code のエンジンの承認には、まだクライアントに伝えた `tool_call` がありません。そのため、`request_permission` の前に、同じ ID の `tool_call` を送ります。
 - `session/prompt` の応答は、そのターンの更新をすべて送ってから返します。見張りは、`Send` の前に始めます。
+- **端末の対話（`kairo`、`kairocode chat`）を、自分の ACP のクライアントとして作りました**（2026-10-19。上の「端末で使う画面」）。
+  - 利用者の求め（claude と同じく、引数の無い `kairo` で対話が始まる）に合わせました。`kairo` は同じバイナリへのリンクです（`make build`）。
+  - 同じプロセスの中で ACP のエージェントを動かし、パイプでつなぎます。エディタと同じ経路を通るので、承認、要確認、`session/load` による再開、スラッシュのコマンドが、エディタと同じに動きます。
+  - 行単位で、TUI のライブラリは使いません（依存は足していない）。返答は届いたそばから書きます。
+  - 権限の確認は、選択肢の番号で答えます。許すものと断るものが 1 つずつあるときは y と n も使えます。要確認は選択肢がどちらも `reject_once` なので、番号だけで答えます。
+  - 抜けても、セッションはデーモンに残ります。`kairo -session <ID>` で、会話を表示し直してから続けます。
+  - ACP の通知は、受け取った順に、続く応答より前に処理するようにしました（`TestClientKeepsTheOrderOfUpdates`）。
+  - テストは `TestChat`、`TestChatAsks`、`TestNoCommandIsTheChat`、`TestClientPermission` です。
 - まだ入れていないもの:
-  - `session/cancel`（#11）
+  - `session/cancel`（#11。対話で Ctrl-C を押すと、対話は抜けるが、ターンはデーモンで続く）
   - `allow_always`（規則として記録する）
   - `plan`
-  - スラッシュのコマンド
   - 差分の表示（`tool_call` の `diff`）
 
 ### opencode のエージェント・コマンド・スキル（2026-10-19、M2）

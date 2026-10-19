@@ -28,6 +28,7 @@ import (
 )
 
 const usage = `usage:
+  kairocode [chat] [-dir DIR] [-data DIR] [-session ID]   talk with it in the terminal (kairo is the same)
   kairocode run [-dir DIR] [-data DIR] "<request>"   answer one request, then exit
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
@@ -54,28 +55,18 @@ KAIROCODE_FAKE=<script.json> to script the API engine's replies (tests).
 // Main runs the command with args (without the program name) and returns the
 // process's exit code.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2
-	}
 	var err error
-	switch args[0] {
-	case "run":
-		err = run(ctx, args[1:], stdout, stderr)
-	case "daemon":
-		err = runDaemon(ctx, args[1:], stdout, stderr)
-	case "approvals":
-		err = approvals(ctx, args[1:], stdout, stderr)
-	case "approve":
-		err = approve(ctx, args[1:], stderr)
-	case "usage":
-		err = showUsage(ctx, args[1:], stdout, stderr)
-	case "acp":
-		err = runACP(ctx, args[1:], stdout, stderr)
-	case "-h", "-help", "--help", "help":
+	switch {
+	case len(args) > 0 && isHelp(args[0]):
 		fmt.Fprint(stdout, usage)
 		return 0
+	case len(args) == 0 || strings.HasPrefix(args[0], "-"):
+		// No command: the chat, as claude has it.
+		err = chat(ctx, args, stdout, stderr)
 	default:
+		err = command(ctx, args[0], args[1:], stdout, stderr)
+	}
+	if errors.Is(err, errUnknownCommand) {
 		fmt.Fprintf(stderr, "kairocode: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
@@ -84,6 +75,39 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func isHelp(arg string) bool {
+	switch arg {
+	case "-h", "-help", "--help", "help":
+		return true
+	}
+	return false
+}
+
+var errUnknownCommand = errors.New("unknown command")
+
+// command runs the command named cmd.
+func command(ctx context.Context, cmd string, args []string, stdout, stderr io.Writer) (err error) {
+	switch cmd {
+	case "chat":
+		err = chat(ctx, args, stdout, stderr)
+	case "run":
+		err = run(ctx, args, stdout, stderr)
+	case "daemon":
+		err = runDaemon(ctx, args, stdout, stderr)
+	case "approvals":
+		err = approvals(ctx, args, stdout, stderr)
+	case "approve":
+		err = approve(ctx, args, stderr)
+	case "usage":
+		err = showUsage(ctx, args, stdout, stderr)
+	case "acp":
+		err = runACP(ctx, args, stdout, stderr)
+	default:
+		err = errUnknownCommand
+	}
+	return err
 }
 
 func newProvider() (provider.Provider, error) {
