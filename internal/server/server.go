@@ -38,6 +38,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /approvals", s.approve)
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
+	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
 	return s
 }
 
@@ -222,4 +223,18 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		out = append(out, msg.Message{Role: m.Role, Parts: m.Parts})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// usage is what the session's model calls recorded they used.
+func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
+	u, err := s.rt.Usage(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }

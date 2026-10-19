@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/daemon"
+	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -31,6 +33,7 @@ const usage = `usage:
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
+  kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
   kairocode acp [-data DIR]                          an ACP agent on stdin and stdout, for editors (ADR 0002)
 
 One daemon per data directory runs the sessions (ADR 0008); the commands
@@ -65,6 +68,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = approvals(ctx, args[1:], stdout, stderr)
 	case "approve":
 		err = approve(ctx, args[1:], stderr)
+	case "usage":
+		err = showUsage(ctx, args[1:], stdout, stderr)
 	case "acp":
 		err = runACP(ctx, args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
@@ -433,4 +438,49 @@ func runACP(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	return acp.Serve(ctx, c, stdin, stdout, acp.Options{Version: buildVersion(),
 		Engine: os.Getenv("KAIROCODE_ENGINE"), Model: os.Getenv("KAIROCODE_MODEL"),
 		Logger: slog.New(slog.NewTextHandler(stderr, nil))})
+}
+
+// showUsage prints what a session's model calls recorded they used.
+func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	session := fs.String("session", "", "the session (as run prints it)")
+	asJSON := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *session == "" {
+		return errors.New("usage needs -session <ID>")
+	}
+	s := *session
+	if !strings.HasPrefix(s, "s/") {
+		s = runtime.SessionID(s)
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	u, err := c.Usage(ctx, s)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(u)
+	}
+	line := func(name string, u msg.Usage) {
+		fmt.Fprintf(stdout, "%-8s in %d  out %d  cache read %d  cache write %d\n", name, u.Input, u.Output, u.CacheRead, u.CacheWrite)
+	}
+	for _, t := range u.Turns {
+		name := fmt.Sprintf("turn %d", t.N)
+		if !t.Finished {
+			name += "*"
+		}
+		line(name, t.Usage)
+	}
+	line("total", u.Total)
+	return nil
 }

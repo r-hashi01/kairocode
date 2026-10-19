@@ -76,7 +76,8 @@ func TestRunWithFakeProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	code := Main(ctx, []string{"run", "-dir", ws, "-data", dataDir(t), "what", "module", "is", "this?"}, &stdout, &stderr)
+	data := dataDir(t)
+	code := Main(ctx, []string{"run", "-dir", ws, "-data", data, "what", "module", "is", "this?"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
@@ -88,6 +89,29 @@ func TestRunWithFakeProvider(t *testing.T) {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("no %q in stderr %q", want, stderr.String())
 		}
+	}
+
+	// `kairocode usage --session <ID> --json`: what the model calls
+	// recorded (the fake reports 10 in and 5 out per call; two calls).
+	session, _, _ := strings.Cut(strings.TrimPrefix(stderr.String(), "session "), "\n")
+	var out bytes.Buffer
+	if c := Main(ctx, []string{"usage", "-data", data, "--session", session, "--json"}, &out, &out); c != 0 {
+		t.Fatalf("usage: exit %d: %s", c, out.String())
+	}
+	var u struct {
+		Session string `json:"session"`
+		Total   struct {
+			Input, Output, CacheRead int64
+		} `json:"total"`
+		Turns []struct {
+			N int `json:"n"`
+		} `json:"turns"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &u); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	if u.Session != session || u.Total.Input != 20 || u.Total.Output != 10 || len(u.Turns) != 1 {
+		t.Fatalf("usage %s", out.String())
 	}
 }
 

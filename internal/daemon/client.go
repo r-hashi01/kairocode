@@ -333,3 +333,10 @@ func (c *Client) History(ctx context.Context, session string) ([]msg.Message, er
 	err := c.do(ctx, "GET", sessionPath(session)+"/history", nil, &out)
 	return out, err
 }
+
+// Usage is what the session's model calls recorded they used.
+func (c *Client) Usage(ctx context.Context, session string) (runtime.SessionUsage, error) {
+	var out runtime.SessionUsage
+	err := c.do(ctx, "GET", sessionPath(session)+"/usage", nil, &out)
+	return out, err
+}

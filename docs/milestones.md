@@ -80,12 +80,12 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] `TestACPContract`: 実装した ACP のメソッドの要求と応答が、固定した版の ACP の JSON Schema（v1、`schema-v1.26.0`）に合う。
 - [x] 決まった順のメッセージを流す ACP のクライアントで、`session/new` → `prompt` → `tool_call` の更新 → `request_permission` → 答え → ターンの終わりが通る（`TestACPTurn`、`TestACPCommand`）。要確認も `request_permission` で答えられる（`TestCrashACPReview`）。
 - [x] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。
-- [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。
+- [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。 → テストは通る（`TestClaudeEngineResumeDoesNotRepeatARealCall`、`TestCrashClaudeEngine`）。本物の `claude` での確認が残り。
 - [ ] edit のあと、LSP の診断のエラーがツールの出力に足される。
 - [ ] `.opencode/agents/*.md`、`.opencode/commands/*.md`、`.opencode/skills/` を、opencode と同じ意味で読む。
 - [ ] `/undo` で作業ファイルが前のターンの状態に戻り、`/redo` で戻る。記録は消えない。
 - [ ] `TestDspchrStateReports`: `DSPCHR_SESSION` があるとき、ターンの始まり・終わり・承認の求め・要確認・失敗・閉じるときに、`dspchr state` が ADR 0004 の表のとおりに起動される（`dspchr` は引数を記録する偽のコマンドに差し替える）。`DSPCHR_SESSION` が無ければ何も起動しない。
-- [ ] `kairocode usage --session <ID> --json` が、記録された使用量（入力・出力・キャッシュ）を返す。
+- [x] `kairocode usage --session <ID> --json` が、記録された使用量（入力・出力・キャッシュ）を返す。（`TestUsageOfASession`、`TestRunWithFakeProvider`）
 - [ ] 普段の作業（バグの修正、機能の追加、リファクタリング）を、ACP のクライアント（Zed）から、opencode と同等の手間でこなせる（手で確かめる）。
 
 ## M3 サブエージェントと、人と出来事が始めるワークフロー
