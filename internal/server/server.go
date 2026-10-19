@@ -47,6 +47,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/cancel", s.cancel)
 	s.mux.HandleFunc("GET /sessions/{id}/flows", s.flows)
 	s.mux.HandleFunc("POST /sessions/{id}/flows", s.runFlow)
+	s.mux.HandleFunc("POST /sessions/{id}/flows/new", s.newFlow)
 	return s
 }
 
@@ -348,6 +349,27 @@ func (s *Server) runFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, err := s.rt.RunFlow(r.Context(), sessionOf(r), in.Name, in.Arguments)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+// newFlow has the model write a flow from words: {"request": "..."}.
+func (s *Server) newFlow(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Request string `json:"request"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		fail(w, http.StatusBadRequest, errors.New(`want {"request": "..."}`))
+		return
+	}
+	n, err := s.rt.NewFlow(r.Context(), sessionOf(r), in.Request)
+	if errors.Is(err, runtime.ErrNoFlowRequest) {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return

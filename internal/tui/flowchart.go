@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -117,6 +119,9 @@ func fit(s string, w int) string {
 func (d *drawer) box(n flowchart.Node, maxw int) block {
 	mark, style := stateMark(d.state(n))
 	label := flowchart.Label(n)
+	if n.Mark != "" { // changed since before
+		label = n.Mark + " " + label
+	}
 	if r := d.rounds(n); r > 1 {
 		label += fmt.Sprintf(" ×%d", r)
 	}
@@ -326,4 +331,56 @@ func FlowGraph(dir, name string, width int) (string, error) {
 		return "", err
 	}
 	return Chart(c, width, nil), nil
+}
+
+// readFlows is the scripts of the project's flows in dir, by name.
+func readFlows(dir string) map[string]string {
+	out := map[string]string{}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return out
+	}
+	defer root.Close()
+	f, err := root.Open(flowchart.Dir)
+	if err != nil {
+		return out
+	}
+	entries, _ := f.ReadDir(-1)
+	f.Close()
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".star")
+		if !ok || e.IsDir() || !flowchart.ValidName(name) {
+			continue
+		}
+		if b, err := root.ReadFile(filepath.Join(flowchart.Dir, e.Name())); err == nil {
+			out[name] = string(b)
+		}
+	}
+	return out
+}
+
+// changedFlows draws the flows that are new or changed in after since
+// before: a new one as it is, a changed one with what changed marked.
+func changedFlows(before, after map[string]string, width int) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(after)) {
+		src := after[name]
+		if before[name] == src {
+			continue
+		}
+		c, err := flowchart.Build(name, []byte(src))
+		if err != nil {
+			out = append(out, bad.Render("✎ flow "+name+": "+err.Error()))
+			continue
+		}
+		what := "new flow"
+		if old, ok := before[name]; ok {
+			what = "changed flow"
+			if prev, err := flowchart.Build(name, []byte(old)); err == nil {
+				flowchart.Diff(prev, c)
+			}
+		}
+		out = append(out, accent.Render("✎ "+what+" ")+bold.Render(name)+faint.Render("  /flow "+name+" runs it")+"\n"+Chart(c, width, nil))
+	}
+	return out
 }

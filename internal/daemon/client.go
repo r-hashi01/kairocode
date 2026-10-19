@@ -410,6 +410,16 @@ func (c *Client) RunFlow(ctx context.Context, session, name, args string) (int, 
 	return out.Turn, err
 }
 
+// NewFlow has the model write a flow from request (/flow new) and returns
+// the turn's number.
+func (c *Client) NewFlow(ctx context.Context, session, request string) (int, error) {
+	var out struct {
+		Turn int `json:"turn"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/flows/new", map[string]string{"request": request}, &out)
+	return out.Turn, err
+}
+
 // RunCommand runs one with args and returns the turn's number.
 func (c *Client) RunCommand(ctx context.Context, session, name, args string) (int, error) {
 	var out struct {

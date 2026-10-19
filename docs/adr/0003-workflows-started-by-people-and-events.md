@@ -322,4 +322,13 @@ def main(input):
   - 図は実行ごとに 1 度だけ作ってとっておき、状態は、そのフローの下の実行の観測のときだけ計算し直します（durability-reviewer の指摘。出来事のハブは 1 本の goroutine なので、重い計算はすべてのセッションの出来事を遅らせる）。
   - 版 1 で始まったフローは、新しいコードでも版 1 の関数で続き、終わったエージェントをやり直しません（`TestFlowVersion1GoesOn`。版 2 の関数で動かすと落ちることを確かめた）。
   - テスト: `TestFlowEvents`、`TestFlowAgentWaiting`、`TestFlowVersion1GoesOn`、`TestACPFlowPlan`、`TestClientReadsAFlowPlan`、`TestFlowLive`。
-- **まだ:** `/flow new`（言葉から作る、図の上での変更）、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。
+- **`/flow new`（5 歩目、言葉から作る）:**
+  - `/flow new <説明>` は、フローの書き方（プリミティブ、返る値、Starlark と Python の違い、置き場所）を添えた頼みとして、ふつうのターンになります（`Runtime.NewFlow`、`POST /sessions/{id}/flows/new`、`kairocode run "/flow new …"`）。頼みは会話に残るので、続くターンで言葉で直せます。
+  - **書くのは新しいツール `flow_write` です（利用者の承認、2026-10-19）。** `.kairocode` は、ADR 0005 でモデルのツールが書けない場所です（設定と権限の規則があるため）。そこは変えず、`.git` を git のツールだけが書くのと同じく、`.kairocode/workflows/<name>.star` だけを書く専用のツールを足しました。
+    - 書く前に `flowchart.Check` で検査します（構文、知らない名前、`main(input)` の有無。f-string、`try`、`import` には直し方を添える）。問題のある台本は書かず、問題をモデルに返します。
+    - 既定の規則がないので、書くたびに利用者に聞きます（`"*": "ask"`）。プロジェクトの規則で `flow_write` を許すこともできます。
+    - 作用の型は `Idempotent` で、`write` と同じく、計画してから「比べて置き換える」形で書きます（設計 3.1）。もう一度動いても二重に書かず、その間に誰かが変えた台本は上書きせずに衝突として返します。適用の段は、計画が `.kairocode/workflows/<name>.star` を指しているときだけ書きます。
+  - `flow_check` は、書かずに検査だけするツールです（読むだけ。既定で許可）。
+  - TUI は、ターンの始めと終わりで `.kairocode/workflows` を比べ、作られたフローや変わったフローの図を描きます。変わった箱には `~`、足した箱には `+` を付けます（`flowchart.Diff`）。言葉で直したときも同じです。
+  - テスト: `TestNewFlow`（書けない台本を直して、承認されて書かれ、`/flow hello` で動く）、`TestFlowWrite`、`TestCheck`、`TestDiff`、`TestFlowsTheTurnMade`。
+- **まだ:** 図の上での変更（箱を選んで書き換える・消す・入れ替える）、`kairocode flow show --follow`、`wait`、`agent` の `schema`、ずれの検出、hook、エージェントの `workflow:`、フローの図、`/flow new`。

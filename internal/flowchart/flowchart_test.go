@@ -76,3 +76,41 @@ func TestBuildNeedsMain(t *testing.T) {
 		t.Fatal("a script that does not parse")
 	}
 }
+
+// Check finds what would stop a script before it runs: a parse error, a
+// name that is not there, no main; and says how to put Python habits right.
+func TestCheck(t *testing.T) {
+	if p := Check("ok", []byte(develop)); len(p) != 0 {
+		t.Fatalf("problems in a good script: %q", p)
+	}
+	for src, want := range map[string]string{
+		"def main(input):\n    return agnet(agent = \"a\", prompt = \"b\")\n": "2:12: undefined: agnet",
+		"def main(input):\n    x = 1\n  y = 2\n":                              "3:",
+		"def main():\n    pass\n":                                             "main(input)",
+		"X = 1\n":                                                             "main(input)",
+		"def main(input):\n    try:\n        pass\n":                          "try/except",
+		"import os\ndef main(input):\n    pass\n":                             "no import",
+		"def main(input):\n    return f\"a {input}\"\n":                       "no f-strings",
+	} {
+		p := Check("x", []byte(src))
+		if len(p) == 0 || !strings.Contains(strings.Join(p, "\n"), want) {
+			t.Errorf("%q: %q, want %q", src, p, want)
+		}
+	}
+}
+
+// Diff marks what changed: a node with new text "~", a new node "+", the
+// rest nothing.
+func TestDiff(t *testing.T) {
+	before, _ := Build("f", []byte("def main(input):\n    agent(agent = \"build\", prompt = \"fix it\")\n    tool(\"bash\", command = \"go test ./...\")\n"))
+	after, _ := Build("f", []byte("def main(input):\n    agent(agent = \"build\", prompt = \"fix it well\")\n    tool(\"bash\", command = \"go test ./...\")\n    ask(\"Done?\")\n"))
+	Diff(before, after)
+	want := strings.TrimSpace(`
+f
+├─ ~ agent build  "fix it well"
+├─ tool bash  "go test ./..."
+└─ + ask  "Done?"`)
+	if got := Tree(after, nil); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}

@@ -142,6 +142,9 @@ type model struct {
 	cmds    []acp.Command
 	compSel int
 	tokens  int64
+	// flowsBefore: the project's flows when the turn began, to draw those
+	// it made or changed when it ends.
+	flowsBefore map[string]string
 	// flow: the flow running in the turn, as it has gone (its chart and
 	// states); height: the terminal's.
 	flow    *flowchart.View
@@ -337,6 +340,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.flushLive()
 		m.endFlow()
 		m.inReply = false
+		if m.flowsBefore != nil { // the flows the turn made or changed (/flow new, and after)
+			for _, c := range changedFlows(m.flowsBefore, readFlows(m.o.Dir), m.width-1) {
+				m.block(c)
+			}
+			m.flowsBefore = nil
+		}
 		for len(m.calls) > 0 { // their end was not told: written as they are
 			id := m.calls[0]
 			m.tools[id] = m.tools[id] + " (no result)"
@@ -606,6 +615,9 @@ func (m *model) submit(text string) tea.Cmd {
 	m.block(userLine(text))
 	m.running = true
 	m.began = time.Now()
+	if m.o.Dir != "" {
+		m.flowsBefore = readFlows(m.o.Dir)
+	}
 	ctx, a, s := m.ctx, m.a, m.session
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		stop, err := a.Prompt(ctx, s, text)

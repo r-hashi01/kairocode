@@ -40,6 +40,8 @@ var defaultRules = []permission.Rule{
 	{Tool: "git_commit", Action: permission.Allow},
 	// A skill only gives the model instructions to read.
 	{Tool: "skill", Action: permission.Allow},
+	// Checking a flow reads its script, and runs nothing.
+	{Tool: "flow_check", Action: permission.Allow},
 }
 
 // userConfigDir is where the user's kairocode.json lives.

@@ -40,6 +40,11 @@ func exists(path string) bool {
 
 // conversation is the session's messages, a line each: role and text.
 func conversation(t *testing.T, r *Runtime, session string) []string {
+	return conversationOf(t, r, session, false)
+}
+
+// conversationOf is conversation, with the tool results if withTools.
+func conversationOf(t *testing.T, r *Runtime, session string, withTools bool) []string {
 	t.Helper()
 	ms, err := r.History(context.Background(), session)
 	if err != nil {
@@ -50,6 +55,9 @@ func conversation(t *testing.T, r *Runtime, session string) []string {
 		for _, p := range m.Parts {
 			if p.Type == msg.Text {
 				out = append(out, string(m.Role)+": "+p.Text)
+			}
+			if p.Type == msg.ToolResult && withTools {
+				out = append(out, "tool: "+p.Text)
 			}
 		}
 	}

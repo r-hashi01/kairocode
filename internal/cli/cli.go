@@ -271,7 +271,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}()
 	if flow, ok := strings.CutPrefix(request, "/flow "); ok { // a flow (ADR 0003)
 		name, args, _ := strings.Cut(strings.TrimSpace(flow), " ")
-		n, err = c.RunFlow(ctx, s, name, strings.TrimSpace(args))
+		if name == "new" {
+			n, err = c.NewFlow(ctx, s, args)
+		} else {
+			n, err = c.RunFlow(ctx, s, name, strings.TrimSpace(args))
+		}
 	} else {
 		n, err = c.Send(ctx, s, request)
 	}

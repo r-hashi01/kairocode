@@ -59,6 +59,9 @@ func tree(b *strings.Builder, nodes []Node, indent string, mark func(Node) strin
 			branch, next = "└─ ", "   "
 		}
 		line := Label(n)
+		if n.Mark != "" {
+			line = n.Mark + " " + line
+		}
 		if mark != nil {
 			if m := mark(n); m != "" {
 				line = m + " " + line
@@ -105,4 +108,46 @@ func quote(n Node) string {
 		return n.Text
 	}
 	return "\"" + n.Text + "\""
+}
+
+// Diff marks the nodes of after that before does not have as they are: "~"
+// where before has a node of that kind and title (changed), "+" where it
+// has none (added).
+func Diff(before, after *Chart) {
+	if before == nil {
+		return
+	}
+	same := map[string]int{}
+	kinds := map[string]int{}
+	walk(before.Nodes, func(n *Node) {
+		same[signature(*n)]++
+		kinds[n.Kind+"|"+n.Title]++
+	})
+	walk(after.Nodes, func(n *Node) {
+		switch sig := signature(*n); {
+		case same[sig] > 0:
+			same[sig]--
+		case kinds[n.Kind+"|"+n.Title] > 0:
+			n.Mark = "~"
+		default:
+			n.Mark = "+"
+		}
+	})
+}
+
+func signature(n Node) string {
+	return strings.Join([]string{n.Kind, n.Title, n.Text, n.Cond}, "|")
+}
+
+// walk calls f on each node, in order, inside branches and loops too.
+func walk(nodes []Node, f func(*Node)) {
+	for i := range nodes {
+		f(&nodes[i])
+		walk(nodes[i].Then, f)
+		walk(nodes[i].Else, f)
+		walk(nodes[i].Body, f)
+		for _, b := range nodes[i].Branches {
+			walk(b, f)
+		}
+	}
 }

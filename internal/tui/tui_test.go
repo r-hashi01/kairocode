@@ -106,6 +106,7 @@ type fakeAgent struct {
 	prompts  []string
 	turn     []acp.Update
 	cancels  []string
+	onPrompt func() // what the turn does to the files
 }
 
 func (a *fakeAgent) Cancel(session string) error {
@@ -125,6 +126,9 @@ func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error 
 
 func (a *fakeAgent) Prompt(ctx context.Context, session, text string) (string, error) {
 	a.prompts = append(a.prompts, text)
+	if a.onPrompt != nil {
+		a.onPrompt()
+	}
 	for _, u := range a.turn {
 		a.d.send(updateMsg(u))
 	}
@@ -491,5 +495,34 @@ func TestScreenKeepsItsHeightWhilePrinting(t *testing.T) {
 	d.m.printing = false
 	if n := strings.Count(d.m.View().Content, "\n") + 1; n >= 40 {
 		t.Fatalf("%d lines once printed: it did not shrink", n)
+	}
+}
+
+// A turn that makes a flow draws it when it ends; one that changes it
+// draws it again with what changed marked.
+func TestFlowsTheTurnMade(t *testing.T) {
+	dir := t.TempDir()
+	flows := filepath.Join(dir, ".kairocode", "workflows")
+	d, a := start(t, Options{Dir: dir})
+	a.onPrompt = func() {
+		os.MkdirAll(flows, 0o755)
+		os.WriteFile(filepath.Join(flows, "hello.star"), []byte("def main(input):\n    agent(agent = \"build\", prompt = \"say hello\")\n"), 0o644)
+	}
+	typed(d, "/flow new say hello")
+	if out := d.out(); !strings.Contains(out, "✎ new flow hello") || !strings.Contains(out, "○ agent build") {
+		t.Fatalf("out\n%s", out)
+	}
+	a.onPrompt = func() {
+		os.WriteFile(filepath.Join(flows, "hello.star"), []byte("def main(input):\n    agent(agent = \"build\", prompt = \"say hello twice\")\n    ask(\"Again?\")\n"), 0o644)
+	}
+	typed(d, "and ask if it should go again")
+	out := d.out()
+	if !strings.Contains(out, "✎ changed flow hello") || !strings.Contains(out, "~ agent build") || !strings.Contains(out, "+ ask") {
+		t.Fatalf("out\n%s", out)
+	}
+	before := strings.Count(out, "✎")
+	typed(d, "thanks")
+	if strings.Count(d.out(), "✎") != before {
+		t.Fatal("a flow drawn again with no change")
 	}
 }

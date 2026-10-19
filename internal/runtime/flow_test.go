@@ -623,3 +623,56 @@ def main(input):
 		t.Fatalf("%d model calls after the upgrade, want 1 (the second agent)", got)
 	}
 }
+
+// /flow new: the model is asked to write a flow from the user's words; it
+// writes one with flow_write, which finds what is wrong and does not write
+// it; it puts it right, the user lets it write, and the flow is there to
+// run (ADR 0003).
+func TestNewFlow(t *testing.T) {
+	ws := repo(t)
+	bad := "DESCRIPTION = \"Say hello\"\ndef main(input):\n    return f\"hello {input}\"\n"
+	good := "DESCRIPTION = \"Say hello\"\ndef main(input):\n    return \"hello \" + input[\"args\"]\n"
+	write := func(src string) provider.FakeReply {
+		b, _ := json.Marshal(map[string]string{"name": "hello", "source": src})
+		return provider.FakeReply{Tools: []provider.FakeTool{{Name: "flow_write", Input: json.RawMessage(b)}}}
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		write(bad), write(good), {Text: "Made hello."},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "new", workflows.SessionInput{Dir: ws})
+	if _, err := r.NewFlow(ctx, s, "  "); !errors.Is(err, ErrNoFlowRequest) {
+		t.Fatalf("no request: %v", err)
+	}
+	n, err := r.NewFlow(ctx, s, "greet whoever is named")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each write is the user's to allow: .kairocode is not the model's.
+	for range 2 {
+		var p []Pending
+		waitUntil(t, ctx, "flow_write's approval", func() bool {
+			p, _ = r.Pending(ctx, s)
+			return len(p) == 1
+		})
+		if p[0].Tool != "flow_write" || p[0].Subject != "hello" {
+			t.Fatalf("pending %+v", p[0])
+		}
+		if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	conv := strings.Join(conversationOf(t, r, s, true), "\n")
+	for _, want := range []string{"greet whoever is named", "not written", "no f-strings", "Wrote .kairocode/workflows/hello.star: run it with /flow hello", "Made hello."} {
+		if !strings.Contains(conv, want) {
+			t.Errorf("no %q in\n%s", want, conv)
+		}
+	}
+	if _, text, _ := flowTurn(t, r, ws, "hello", "world"); text != "hello world" {
+		t.Fatalf("the flow made: %q", text)
+	}
+}

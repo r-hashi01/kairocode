@@ -40,6 +40,7 @@ type Backend interface {
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
 	Answer(ctx context.Context, key, option string) error
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
+	NewFlow(ctx context.Context, session, request string) (int, error)
 }
 
 // builtinCommands are the slash commands KairoCode itself has.
@@ -226,6 +227,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		flow, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
 		if flow == "" { // the list, without a turn
 			return a.listFlows(ctx, p.SessionID)
+		}
+		if flow == "new" { // the model writes one from the words (ADR 0003)
+			start = func(ctx context.Context, s, _ string) (int, error) { return a.b.NewFlow(ctx, s, rest) }
+			break
 		}
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) {
 			return a.b.RunFlow(ctx, s, flow, strings.TrimSpace(rest))

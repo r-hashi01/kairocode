@@ -93,6 +93,10 @@ func (l *local) Answer(ctx context.Context, key, option string) error {
 	return l.r.Answer(ctx, key, option)
 }
 
+func (l *local) NewFlow(ctx context.Context, s, request string) (int, error) {
+	return l.r.NewFlow(ctx, s, request)
+}
+
 func (l *local) RunFlow(ctx context.Context, s, name, args string) (int, error) {
 	return l.r.RunFlow(ctx, s, name, args)
 }

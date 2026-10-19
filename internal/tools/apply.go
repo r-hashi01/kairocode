@@ -45,6 +45,11 @@ func Apply(env Env, p, before, after string, content []byte, summary string) Res
 	if protected(p) {
 		return failed("%s is protected", p)
 	}
+	return replace(env, p, before, after, content, summary)
+}
+
+// replace is Apply's compare and replace, for a path already allowed.
+func replace(env Env, p, before, after string, content []byte, summary string) Result {
 	if st, err := env.Root.Lstat(p); err == nil && st.Mode()&fs.ModeSymlink != 0 {
 		return failed("%s is a symbolic link; edit the file it points to", p)
 	}

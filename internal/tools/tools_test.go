@@ -312,3 +312,95 @@ func TestApplyKeepsModeAndRefusesSymlinks(t *testing.T) {
 		t.Errorf("got %+v", r)
 	}
 }
+
+// flow_write writes only a flow's script, and only one with nothing wrong:
+// a bad name or a script with problems is not written; a good one is,
+// new or over the old; and write still may not write .kairocode.
+func TestFlowWrite(t *testing.T) {
+	dir := t.TempDir()
+	e := env(t, dir)
+	run := func(name, src string) Result {
+		b, _ := json.Marshal(map[string]string{"name": name, "source": src})
+		p := FlowWriteTool.Plan(context.Background(), e, b)
+		if p.Fail != nil {
+			return *p.Fail
+		}
+		return FlowWriteTool.Apply(context.Background(), e, p.Data)
+	}
+	path := filepath.Join(dir, ".kairocode", "workflows", "hello.star")
+	for _, c := range []struct{ name, src, want string }{
+		{"../x", "def main(input):\n    pass\n", "not a flow's name"},
+		{"new", "def main(input):\n    pass\n", "not a flow's name"},
+		{"hello", "def main(input):\n    return f\"x\"\n", "no f-strings"},
+		{"hello", "X = 1\n", "main(input)"},
+	} {
+		if res := run(c.name, c.src); !res.IsError || !strings.Contains(res.Output, c.want) {
+			t.Errorf("%s %q: %+v", c.name, c.src, res)
+		}
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a script with problems was written")
+	}
+	for _, src := range []string{"def main(input):\n    return \"one\"\n", "def main(input):\n    return \"two\"\n"} {
+		if res := run("hello", src); res.IsError || !strings.Contains(res.Output, "/flow hello") {
+			t.Fatalf("%+v", res)
+		}
+		if b, _ := os.ReadFile(path); string(b) != src {
+			t.Fatalf("hello.star is %q", b)
+		}
+	}
+	b, _ := json.Marshal(map[string]string{"path": ".kairocode/workflows/other.star", "content": "x"})
+	if p := WriteTool.Plan(context.Background(), e, b); p.Fail == nil || !strings.Contains(p.Fail.Output, "protected") {
+		t.Fatalf("write wrote into .kairocode: %+v", p)
+	}
+	// A plan that names anything else of .kairocode is not applied.
+	forged, _ := json.Marshal(map[string]string{"path": ".kairocode/settings.json", "before": "absent", "content": "{}"})
+	if res := FlowWriteTool.Apply(context.Background(), e, forged); !res.IsError {
+		t.Fatalf("applied a plan for another file: %+v", res)
+	}
+	// Done again (an unknown outcome retried), it does not write twice; a
+	// file changed meanwhile is a conflict, not overwritten.
+	b, _ = json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    return \"three\"\n"})
+	p := FlowWriteTool.Plan(context.Background(), e, b)
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); res.IsError {
+		t.Fatal(res)
+	}
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); res.IsError {
+		t.Fatalf("done again: %+v", res)
+	}
+	p = FlowWriteTool.Plan(context.Background(), e, b)
+	os.WriteFile(path, []byte("def main(input):\n    return \"mine\"\n"), 0o644)
+	b2, _ := json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    return \"four\"\n"})
+	p = FlowWriteTool.Plan(context.Background(), e, b2)
+	os.WriteFile(path, []byte("def main(input):\n    return \"someone else's\"\n"), 0o644)
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); !res.IsError || !strings.Contains(res.Output, "changed since") {
+		t.Fatalf("overwrote a change: %+v", res)
+	}
+}
+
+// flow_write does not write through a link: a .kairocode/workflows that
+// points elsewhere in the working directory is refused.
+func TestFlowWriteRefusesLinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".kairocode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../.git/hooks", filepath.Join(dir, ".kairocode", "workflows")); err != nil {
+		t.Fatal(err)
+	}
+	e := env(t, dir)
+	b, _ := json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    pass\n"})
+	p := FlowWriteTool.Plan(context.Background(), e, b)
+	if p.Fail != nil {
+		t.Fatal(p.Fail.Output)
+	}
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); !res.IsError || !strings.Contains(res.Output, "symbolic link") {
+		t.Fatalf("wrote through the link: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "hello.star")); err == nil {
+		t.Fatal("hello.star is in .git/hooks")
+	}
+}

@@ -52,6 +52,10 @@ type Node struct {
 	Line int `json:"line,omitempty"`
 	Col  int `json:"col,omitempty"`
 
+	// Mark: how the node differs from the flow before a change: "+"
+	// added, "~" changed ("" the same). Set by Diff.
+	Mark string `json:"mark,omitempty"`
+
 	Cond     string   `json:"cond,omitempty"`
 	Then     []Node   `json:"then,omitempty"`
 	Else     []Node   `json:"else,omitempty"`
