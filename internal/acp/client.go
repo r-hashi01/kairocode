@@ -55,6 +55,24 @@ type ConfigValue struct {
 	Value       string `json:"value"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Install, for a provider KairoCode installs when chosen (ADR 0015):
+	// what it fetches.
+	Install *InstallInfo `json:"-"`
+	Meta    struct {
+		Install *InstallInfo `json:"kairocode/install,omitempty"`
+	} `json:"_meta"`
+}
+
+// InstallInfo is what installing a provider fetches.
+type InstallInfo struct {
+	Source  string `json:"source"`
+	Version string `json:"version"`
+}
+
+// InstallProvider installs a provider of ACP's registry, the user having
+// chosen to (ADR 0015). Only KairoCode's agent has it.
+func (cl *Client) InstallProvider(ctx context.Context, id, version string) error {
+	return cl.c.Call(ctx, InstallMethod, map[string]any{"provider": id, "version": version}, nil)
 }
 
 // Command is a slash command the agent offers.
@@ -130,6 +148,7 @@ func (cl *Client) handler(h ClientHandler) handler {
 			up := Update{Session: p.SessionID, Kind: u.SessionUpdate, Text: contentText(u.Content),
 				ToolCallID: u.ToolCallID, Title: u.Title, ToolKind: u.Kind, Status: u.Status, Commands: u.AvailableCommands, Meta: u.Meta,
 				Config: u.ConfigOptions}
+			installs(up.Config)
 			if u.SessionUpdate == "plan" && len(u.Meta) > 0 {
 				var meta map[string]json.RawMessage
 				if json.Unmarshal(u.Meta, &meta) == nil && len(meta[FlowMeta]) > 0 {
@@ -250,8 +269,18 @@ func (cl *Client) SetConfigOption(ctx context.Context, session, id, value string
 	return err
 }
 
+// installs fills each value's Install from its _meta.
+func installs(opts []ConfigOption) {
+	for i := range opts {
+		for j := range opts[i].Options {
+			opts[i].Options[j].Install = opts[i].Options[j].Meta.Install
+		}
+	}
+}
+
 // configured gives the handler the session's settings as an update.
 func (cl *Client) configured(session string, opts []ConfigOption) {
+	installs(opts)
 	if len(opts) > 0 && cl.h.Update != nil {
 		cl.h.Update(Update{Session: session, Kind: "config_option_update", Config: opts})
 	}

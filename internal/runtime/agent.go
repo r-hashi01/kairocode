@@ -49,7 +49,10 @@ func (r *Runtime) engineFor(engine, model string) (string, string, error) {
 	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
 		// The model is the CLI's own default unless one is named.
 	default:
-		return "", "", fmt.Errorf("unknown engine %q", engine)
+		if !strings.HasPrefix(engine, workflows.EngineACP) || engine == workflows.EngineACP {
+			return "", "", fmt.Errorf("unknown engine %q", engine)
+		}
+		// An agent of ACP's registry: its own model unless one is named.
 	}
 	return engine, model, nil
 }

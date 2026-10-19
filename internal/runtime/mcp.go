@@ -143,6 +143,13 @@ func (s *mcpServer) acknowledge(ctx context.Context, t *mcpTurn) error {
 }
 
 // takeAsks are the calls of the run that wait for the user, each once.
+// addAsk records a question for the user that the run's round ends on.
+func (t *mcpTurn) addAsk(a workflows.AskRequest) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.asks = append(t.asks, a)
+}
+
 func (t *mcpTurn) takeAsks() []workflows.AskRequest {
 	t.mu.Lock()
 	defer t.mu.Unlock()

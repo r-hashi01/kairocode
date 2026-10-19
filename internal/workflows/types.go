@@ -6,6 +6,7 @@ package workflows
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -96,6 +97,9 @@ const (
 	ActClaudeTurn  = "claude.turn"
 	ActCodexTurn   = "codex.turn"
 	ActCopilotTurn = "copilot.turn"
+	// ActACPTurn runs a turn in an agent installed from ACP's registry
+	// (ADR 0015); ClaudeTurnInput.Engine names it.
+	ActACPTurn = "acp.turn"
 	// ActPermissionCheck decides whether a tool call may run; ActToolDenied
 	// answers one that may not.
 	ActPermissionCheck = "permission.check"
@@ -137,12 +141,16 @@ const (
 	EngineClaudeCode = "claude-code"
 	EngineCodex      = "codex"
 	EngineCopilot    = "copilot"
+	// EngineACP, before an agent's id in ACP's registry, is that agent,
+	// installed from the registry (ADR 0015): acp:gemini.
+	EngineACP = "acp:"
 )
 
-// CLIEngine reports whether engine is one of the user's CLIs: it runs the
-// model loop itself, and KairoCode's tools reach it over MCP.
+// CLIEngine reports whether engine is one of the user's CLIs or agents: it
+// runs the model loop itself, and KairoCode's tools reach it over MCP or
+// ACP.
 func CLIEngine(engine string) bool {
-	return engine == EngineClaudeCode || engine == EngineCodex || engine == EngineCopilot
+	return engine == EngineClaudeCode || engine == EngineCodex || engine == EngineCopilot || strings.HasPrefix(engine, EngineACP)
 }
 
 type SessionInput struct {
@@ -637,8 +645,10 @@ type ClaudeTurnInput struct {
 	Note string `json:"note,omitempty"`
 	// Epoch is the turn's (TurnInput.Epoch); History, the conversation
 	// before the turn, given to a CLI session that starts without it.
-	Epoch   int      `json:"epoch,omitempty"`
-	History string   `json:"history,omitempty"`
+	Epoch   int    `json:"epoch,omitempty"`
+	History string `json:"history,omitempty"`
+	// Engine, for ActACPTurn, is the agent's (acp:<id>).
+	Engine  string   `json:"engine,omitempty"`
 	Round   int      `json:"round,omitempty"`
 	Policy  Policy   `json:"policy"`
 	Session string   `json:"session"`

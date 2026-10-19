@@ -30,18 +30,22 @@ import (
 // it starts, from its session and epoch, and records the agent's id under
 // that name.
 
-// acpArgv is how to start engine's agent, with tools, KairoCode's, its
-// only ones where the agent can be told so: Copilot then has none of its
-// own to act with (checked with copilot 1.0.54, ADR 0014).
-func (r *Runtime) acpArgv(engine string, tools []string) []string {
-	if engine == workflows.EngineCopilot {
-		names := make([]string, len(tools))
-		for i, n := range tools {
-			names[i] = MCPServerName + "-" + n
-		}
-		return []string{r.cfg.CopilotPath, "--acp", "--available-tools=" + strings.Join(names, ",")}
+// acpArgv is how to start engine's agent, and whether it then has no
+// tools of its own: Copilot is told KairoCode's are its only ones
+// (checked with copilot 1.0.54, ADR 0014). Env is the registry's for it.
+func (r *Runtime) acpArgv(engine string, tools []string) ([]string, map[string]string, bool, error) {
+	argv, env, err := r.agentCommand(engine)
+	if err != nil {
+		return nil, nil, false, err
 	}
-	return []string{r.cfg.CodexPath}
+	if registryAgent(engine) != copilotAgent {
+		return argv, env, false, nil
+	}
+	names := make([]string, len(tools))
+	for i, n := range tools {
+		names[i] = MCPServerName + "-" + n
+	}
+	return append(argv, "--available-tools="+strings.Join(names, ",")), env, true, nil
 }
 
 // lockedBuffer is a strings.Builder for a process's stderr, read while the
@@ -74,23 +78,29 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 		}
-		argv := r.acpArgv(engine, in.Tools)
-		// The agent a run of this session left, if it still runs: its pid
-		// is kept under the session's name, and it is still that command.
-		if err := r.stopStale(t, name, filepath.Base(argv[0])); err != nil {
-			return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
-		}
 		url, mt, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy)
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, err
 		}
 		defer closeMCP()
+		argv, agentEnv, bare, err := r.acpArgv(engine, in.Tools)
+		if err != nil { // not there to run: the user is told
+			return r.finishCLITurn(t, mt, fmt.Sprintf("[%s cannot run: %v]", registryAgent(engine), err), 0, msg.Usage{})
+		}
+		// The agent a run of this session left, if it still runs: its pid
+		// is kept under the session's name, and it is still that command.
+		if err := r.stopStale(t, name, filepath.Base(argv[0])); err != nil {
+			return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
+		}
 
 		ctx, stop := context.WithCancel(t)
 		defer stop()
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = in.Dir
 		cmd.Env = cliEnv()
+		for k, v := range agentEnv {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 		cmd.SysProcAttr = claudeProcAttr()
 		// Stopped, the agent's process group goes, and the turn does not
 		// wait long for what it started.
@@ -120,7 +130,8 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		defer r.Store.SetClaudeProc(context.WithoutCancel(t), name, 0)
 		// Copilot has none of its own tools here (acpArgv): a bare name is
 		// ours. An agent that keeps its own must name ours with the server.
-		c := &acpClient{r: r, t: t, mt: mt, dir: in.Dir, tools: in.Tools, bare: engine == workflows.EngineCopilot, terms: map[string]*acpTerminal{}}
+		c := &acpClient{r: r, t: t, mt: mt, dir: in.Dir, tools: in.Tools, bare: bare, turn: in.Turn, round: in.Round,
+			terms: map[string]*acpTerminal{}, uses: map[string]int{}}
 		conn := jsonrpc.NewConn(toAgent)
 		served := make(chan error, 1)
 		go func() { served <- conn.Serve(ctx, fromAgent, c.handle) }()
@@ -296,7 +307,10 @@ type acpClient struct {
 	tools []string // KairoCode's tools the agent has
 	// bare: the agent has no tools of its own, so a call named bare is
 	// one of KairoCode's.
-	bare    bool
+	bare bool
+	// turn and round: the turn's run, and its round (asks are per round).
+	turn    string
+	round   int
 	session string
 
 	// replaying: session/load is replaying the session; replayed, what the
@@ -307,6 +321,7 @@ type acpClient struct {
 	reply     strings.Builder
 	terms     map[string]*acpTerminal
 	nterm     int
+	uses      map[string]int // asks for an agent's own call, by its key
 }
 
 type atomicBool struct {
@@ -357,7 +372,9 @@ func (c *acpClient) handle(ctx context.Context, method string, params json.RawMe
 		// else would act outside KairoCode, and is refused.
 		var p struct {
 			ToolCall struct {
-				Title string `json:"title"`
+				ToolCallID string          `json:"toolCallId"`
+				Title      string          `json:"title"`
+				RawInput   json.RawMessage `json:"rawInput"`
 			} `json:"toolCall"`
 			Options []struct {
 				OptionID string `json:"optionId"`
@@ -367,9 +384,15 @@ func (c *acpClient) handle(ctx context.Context, method string, params json.RawMe
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()}
 		}
-		want := "reject_once"
-		if c.ours(p.ToolCall.Title) {
-			want = "allow_once"
+		want := "allow_once"
+		if !c.ours(p.ToolCall.Title) {
+			allowed, err := c.agentTool(ctx, p.ToolCall.ToolCallID, p.ToolCall.Title, p.ToolCall.RawInput)
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				want = "reject_once"
+			}
 		}
 		for _, o := range p.Options {
 			if o.Kind == want {
@@ -484,6 +507,39 @@ func (c *acpClient) handle(ctx context.Context, method string, params json.RawMe
 		return map[string]any{}, nil
 	}
 	return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "unknown method " + method}
+}
+
+// agentTool decides a call of the agent's own tool (ADR 0015): it runs
+// in the agent, outside KairoCode, so the user is asked. An answer given
+// lets the same call (by title and input) once; else the call is refused
+// for now, the question recorded, and the turn's round ends to wait for
+// the answer (as an MCP call's, ADR 0007).
+func (c *acpClient) agentTool(ctx context.Context, callID, title string, input json.RawMessage) (bool, error) {
+	key, err := callKey("agent:"+title, input)
+	if err != nil {
+		return false, nil
+	}
+	// The answer is used by this run of the agent (its MCP endpoint's
+	// token is new each run), never by the agent's own id for the call: a
+	// run after a crash, whose agent asks again, is asked again.
+	c.mu.Lock()
+	c.uses[key]++
+	use := fmt.Sprintf("acp:%s:%s:%d", c.mt.proc, key, c.uses[key])
+	c.mu.Unlock()
+	found, ok, _, err := c.r.Store.UseGrant(ctx, c.turn, key, use)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		return ok, nil
+	}
+	subject := strings.TrimSpace(string(input))
+	if len(subject) > 200 {
+		subject = subject[:200] + "…"
+	}
+	c.mt.addAsk(workflows.AskRequest{Key: fmt.Sprintf("agent-%s-%d", key, c.round), Content: key,
+		Tool: title, Subject: subject, Rule: "the agent's own tool: it runs in the agent, outside KairoCode's sandbox and record"})
+	return false, nil
 }
 
 // ours reports whether a call the agent asks permission for, by its

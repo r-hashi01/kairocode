@@ -359,12 +359,14 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	if in.Sub {
 		session = ctx.ID()
 	}
-	act := ActClaudeTurn
-	switch agent.Engine {
-	case EngineCodex:
+	act, engine := ActClaudeTurn, ""
+	switch {
+	case agent.Engine == EngineCodex:
 		act = ActCodexTurn
-	case EngineCopilot:
+	case agent.Engine == EngineCopilot:
 		act = ActCopilotTurn
+	case strings.HasPrefix(agent.Engine, EngineACP):
+		act, engine = ActACPTurn, agent.Engine
 	}
 	// A turn gives the CLI the conversation before it, for a CLI session
 	// that starts without it (ADR 0014): after a switch of engine, or an
@@ -377,7 +379,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	}
 	for round := 0; ; round++ {
 		r, err := kairo.Call[ClaudeTurnOutput](ctx, act, ClaudeTurnInput{
-			Note: note, Round: round, Epoch: in.Epoch, History: history,
+			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message,
 			Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},

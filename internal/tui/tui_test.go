@@ -115,6 +115,11 @@ func (a *fakeAgent) SetConfigOption(ctx context.Context, session, id, value stri
 	return nil
 }
 
+func (a *fakeAgent) InstallProvider(ctx context.Context, id, version string) error {
+	a.set = append(a.set, "install "+id+"@"+version)
+	return nil
+}
+
 func (a *fakeAgent) Cancel(session string) error {
 	a.cancels = append(a.cancels, session)
 	return nil
@@ -567,5 +572,34 @@ func TestProviderAndModel(t *testing.T) {
 	d.send(key("esc"))
 	if d.m.pick != nil || len(a.set) != 2 {
 		t.Fatalf("esc did not leave the list: %q", a.set)
+	}
+
+	// A provider not installed: the user is asked, shown what is fetched;
+	// esc goes back; Enter installs it, then switches.
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "provider", Name: "Provider", CurrentValue: "anthropic", Options: []acp.ConfigValue{
+			{Value: "anthropic", Name: "Claude API"},
+			{Value: "gemini", Name: "Gemini CLI", Install: &acp.InstallInfo{Source: "@google/gemini-cli@0.64.0", Version: "0.64.0"}}}}}})
+	d.m.input.SetValue("/provider")
+	d.send(key("enter"))
+	d.send(key("down"))
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Install Gemini CLI?") || !strings.Contains(v, "@google/gemini-cli@0.64.0") || len(a.set) != 2 {
+		t.Fatalf("no question before installing (%q)\n%s", a.set, v)
+	}
+	d.send(key("esc"))
+	if d.m.pick == nil || d.m.pick.install != nil {
+		t.Fatal("esc did not go back to the list")
+	}
+	d.send(key("enter"))
+	// On the question, the arrows and numbers choose nothing else.
+	d.send(key("up"))
+	d.send(key("1"))
+	if d.m.pick == nil || d.m.pick.install == nil || d.m.pick.install.Value != "gemini" || len(a.set) != 2 {
+		t.Fatalf("a key left the question: %q", a.set)
+	}
+	d.send(key("enter"))
+	if got := strings.Join(a.set[2:], ","); got != "install gemini@0.64.0,provider=gemini" {
+		t.Fatalf("set %q", got)
 	}
 }

@@ -98,8 +98,12 @@ func (l *local) NewFlow(ctx context.Context, s, request string) (int, error) {
 	return l.r.NewFlow(ctx, s, request)
 }
 
-func (l *local) Providers(context.Context) ([]runtime.ProviderInfo, error) {
-	return l.r.Providers(), nil
+func (l *local) Providers(ctx context.Context) ([]runtime.ProviderInfo, error) {
+	return l.r.Providers(ctx), nil
+}
+
+func (l *local) InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error) {
+	return l.r.InstallProvider(ctx, id, version)
 }
 
 func (l *local) Models(ctx context.Context, p string) ([]string, error) { return l.r.Models(ctx, p) }
@@ -543,6 +547,8 @@ func TestACPPermissionAnsweredElsewhere(t *testing.T) {
 func TestMain(m *testing.M) {
 	// No language server of this machine is started (ADR 0009).
 	os.Setenv(lsp.Off, "off")
+	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
+	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	if os.Getenv("KC_ACP_CHILD") == "1" {
 		crashChild()
 		return

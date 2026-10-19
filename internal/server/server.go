@@ -14,6 +14,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -53,6 +54,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /flows/stats", s.flowStats)
 	s.mux.HandleFunc("GET /providers", s.providers)
 	s.mux.HandleFunc("GET /providers/{id}/models", s.models)
+	s.mux.HandleFunc("POST /providers/{id}/install", s.installProvider)
 	s.mux.HandleFunc("GET /sessions/{id}/settings", s.settings)
 	s.mux.HandleFunc("POST /sessions/{id}/settings", s.switchSettings)
 	return s
@@ -166,7 +168,26 @@ func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 // wait) and returns its reply.
 // providers are the providers a session can switch to (ADR 0014).
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.rt.Providers())
+	writeJSON(w, http.StatusOK, s.rt.Providers(r.Context()))
+}
+
+// installProvider installs an agent of ACP's registry (ADR 0015): the
+// user chose to.
+func (s *Server) installProvider(w http.ResponseWriter, r *http.Request) {
+	p, err := s.rt.InstallProvider(r.Context(), r.PathValue("id"), r.URL.Query().Get("version"))
+	if errors.Is(err, runtime.ErrNoProvider) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if errors.Is(err, agents.ErrChanged) {
+		fail(w, http.StatusConflict, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
 }
 
 // models are a provider's models to choose from.
@@ -216,7 +237,7 @@ func (s *Server) switchSettings(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, kairo.ErrUnknownRun), errors.Is(err, runtime.ErrNoProvider):
 		fail(w, http.StatusNotFound, err)
 		return
-	case errors.Is(err, runtime.ErrUnavailable):
+	case errors.Is(err, runtime.ErrUnavailable), errors.Is(err, runtime.ErrNotInstalled):
 		fail(w, http.StatusConflict, err)
 		return
 	case err != nil:

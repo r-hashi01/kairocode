@@ -192,6 +192,8 @@ func TestSSEDeliversTurnEvents(t *testing.T) {
 func TestMain(m *testing.M) {
 	// No language server of this machine is started (ADR 0009).
 	os.Setenv(lsp.Off, "off")
+	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
+	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	home := isolatedHome()
 	code := m.Run()
 	os.RemoveAll(home)

@@ -18,6 +18,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 	_ "modernc.org/sqlite"
 
+	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
@@ -42,6 +43,11 @@ type Config struct {
 	ClaudePath  string
 	CodexPath   string // the ACP agent: codex-acp
 	CopilotPath string // copilot, run with --acp
+	// AgentsDir keeps the ACP agents installed from the registry (ADR
+	// 0015; default: agents beside DB); AgentRegistry is the registry's
+	// URL (agents.RegistryURL for ACP's; "" reads none).
+	AgentsDir     string
+	AgentRegistry string
 	// ExtraTools are offered besides the built-in ones (tests).
 	ExtraTools []tools.Def
 	// Model is the model an agent uses unless it names one.
@@ -81,6 +87,8 @@ type Runtime struct {
 	// lsp keeps the language servers whose errors are added to a write's
 	// result (ADR 0009).
 	lsp *lsp.Manager
+	// agents are the ACP agents of the registry (ADR 0015).
+	agents *agents.Manager
 
 	sendMu sync.Mutex
 
@@ -154,7 +162,11 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger)}
+	if cfg.AgentsDir == "" {
+		cfg.AgentsDir = filepath.Join(filepath.Dir(cfg.DB), "agents")
+	}
+	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger),
+		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
 	r.ev = newEvents(r)
 	fail := func(err error) (*Runtime, error) {
 		r.ev.close()
@@ -317,6 +329,10 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActCodexTurn, kairo.Unprotected, r.acpTurn(workflows.EngineCodex), kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActCopilotTurn, kairo.Unprotected, r.acpTurn(workflows.EngineCopilot), kairo.Timeout(time.Hour))
+	kairo.Action(r.K, workflows.ActACPTurn, kairo.Unprotected,
+		func(t *kairo.TaskContext, in workflows.ClaudeTurnInput) (workflows.ClaudeTurnOutput, error) {
+			return r.acpTurn(in.Engine)(t, in)
+		}, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
 	kairo.Action(r.K, workflows.ActToolDenied, kairo.Unprotected, r.toolDenied)
 	kairo.Action(r.K, workflows.ActMCPAsk, kairo.Unprotected, r.mcpAsk)

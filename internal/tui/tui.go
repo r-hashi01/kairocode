@@ -33,6 +33,8 @@ type Agent interface {
 	// SetConfigOption sets one of the session's settings: its provider or
 	// model (ADR 0014).
 	SetConfigOption(ctx context.Context, session, id, value string) error
+	// InstallProvider installs an agent of ACP's registry (ADR 0015).
+	InstallProvider(ctx context.Context, id, version string) error
 }
 
 // Options are what the UI shows and does around the conversation.

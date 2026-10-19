@@ -23,6 +23,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
@@ -154,6 +155,15 @@ func openRuntime(ctx context.Context, cfg runtime.Config) (*runtime.Runtime, err
 	cfg.Engine, cfg.Model = os.Getenv("KAIROCODE_ENGINE"), os.Getenv("KAIROCODE_MODEL")
 	cfg.ClaudePath = os.Getenv("KAIROCODE_CLAUDE")
 	cfg.CodexPath, cfg.CopilotPath = os.Getenv("KAIROCODE_CODEX"), os.Getenv("KAIROCODE_COPILOT")
+	// ACP's registry of agents (ADR 0015); KAIROCODE_ACP_REGISTRY names
+	// another, or "off" none.
+	switch reg := os.Getenv("KAIROCODE_ACP_REGISTRY"); reg {
+	case "":
+		cfg.AgentRegistry = agents.RegistryURL
+	case "off":
+	default:
+		cfg.AgentRegistry = reg
+	}
 	p, err := newProvider()
 	if err != nil {
 		return nil, err

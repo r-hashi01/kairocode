@@ -252,6 +252,13 @@ func (c *Client) Providers(ctx context.Context) ([]runtime.ProviderInfo, error) 
 	return out, err
 }
 
+// InstallProvider installs agent id of ACP's registry (ADR 0015).
+func (c *Client) InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error) {
+	var out runtime.ProviderInfo
+	err := c.do(ctx, "POST", "/providers/"+url.PathEscape(id)+"/install?version="+url.QueryEscape(version), nil, &out)
+	return out, err
+}
+
 // Models are provider id's models to choose from.
 func (c *Client) Models(ctx context.Context, id string) ([]string, error) {
 	var out []string

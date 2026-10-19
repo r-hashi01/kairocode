@@ -27,6 +27,8 @@ import (
 func TestMain(m *testing.M) {
 	// No language server of this machine is started (ADR 0009).
 	os.Setenv(lsp.Off, "off")
+	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
+	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	if os.Getenv("KC_CLI_DAEMON") == "1" {
 		os.Exit(Main(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	}

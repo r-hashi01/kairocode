@@ -26,7 +26,8 @@ const ProviderAnthropic = "anthropic"
 // cliTurnPlan reports whether plan is a run of a CLI engine's turn.
 func cliTurnPlan(plan string) bool {
 	switch plan {
-	case "kairo.call/" + workflows.ActClaudeTurn, "kairo.call/" + workflows.ActCodexTurn, "kairo.call/" + workflows.ActCopilotTurn:
+	case "kairo.call/" + workflows.ActClaudeTurn, "kairo.call/" + workflows.ActCodexTurn, "kairo.call/" + workflows.ActCopilotTurn,
+		"kairo.call/" + workflows.ActACPTurn:
 		return true
 	}
 	return false

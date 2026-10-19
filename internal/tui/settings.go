@@ -19,6 +19,9 @@ const pickRows = 10
 type pick struct {
 	opt acp.ConfigOption
 	sel int
+	// install: the chosen provider is not installed; the user is asked
+	// first (ADR 0015).
+	install *acp.ConfigValue
 }
 
 // setMsg: a setting was set, or could not be.
@@ -95,6 +98,17 @@ func (m *model) setting(id, value string) tea.Cmd {
 func (m *model) pickKey(key string) tea.Cmd {
 	p := m.pick
 	n := len(p.opt.Options)
+	if p.install != nil {
+		// The question: only Enter installs what it shows, esc goes back.
+		switch key {
+		case "enter":
+			m.pick = nil
+			return m.installThen(*p.install)
+		case "esc", "ctrl+c":
+			p.install = nil
+		}
+		return nil
+	}
 	switch {
 	case key == "up" || key == "k":
 		p.sel = (p.sel + n - 1) % n
@@ -104,18 +118,45 @@ func (m *model) pickKey(key string) tea.Cmd {
 		p.sel = int(key[0] - '1')
 		fallthrough
 	case key == "enter":
+		v := p.opt.Options[p.sel]
+		if v.Install != nil {
+			p.install = &v // asked before anything is fetched
+			return nil
+		}
 		m.pick = nil
-		return m.setting(p.opt.ID, p.opt.Options[p.sel].Value)
+		return m.setting(p.opt.ID, v.Value)
 	case key == "esc" || key == "ctrl+c":
 		m.pick = nil
 	}
 	return nil
 }
 
+// installThen installs provider v, then switches to it.
+func (m *model) installThen(v acp.ConfigValue) tea.Cmd {
+	m.print(faint.Render(fmt.Sprintf("  ⎿  installing %s (%s)…", v.Name, v.Install.Source)))
+	ctx, a, s := m.ctx, m.a, m.session
+	return func() tea.Msg {
+		if err := a.InstallProvider(ctx, v.Value, v.Install.Version); err != nil {
+			return setMsg{err: fmt.Errorf("could not install %s: %w", v.Name, err)}
+		}
+		return setMsg{err: a.SetConfigOption(ctx, s, "provider", v.Value)}
+	}
+}
+
 func (m *model) pickView(w int) string {
 	p := m.pick
 	rule := accent.Render(strings.Repeat("─", w))
 	var b strings.Builder
+	if v := p.install; v != nil {
+		b.WriteString(rule + "\n" + warn.Bold(true).Render("Install "+v.Name+"?") + "\n\n")
+		b.WriteString("It is not installed. KairoCode fetches and installs:\n  " + bold.Render(v.Install.Source) + "\n")
+		if v.Install.Version != "" {
+			b.WriteString(faint.Render("  version "+v.Install.Version) + "\n")
+		}
+		b.WriteString(faint.Render("  from ACP's registry, into KairoCode's data directory; it runs as you, outside the sandbox") + "\n")
+		b.WriteString("\n" + faint.Render("Enter to install and switch · esc to go back") + "\n")
+		return b.String()
+	}
 	b.WriteString(rule + "\n" + bold.Render(p.opt.Name) + faint.Render("  from the next turn") + "\n\n")
 	// At most pickRows, around the one chosen.
 	from := max(min(p.sel-pickRows/2, len(p.opt.Options)-pickRows), 0)

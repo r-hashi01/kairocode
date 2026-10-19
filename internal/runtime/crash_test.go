@@ -105,6 +105,14 @@ func crashChild() {
 	if _, err := r.Send(ctx, s, "what does main do?"); err != nil {
 		panic(err)
 	}
+	// KC_APPROVE_ALL: what waits for a person is allowed, as it comes.
+	for os.Getenv("KC_APPROVE_ALL") == "1" {
+		ps, _ := r.Pending(ctx, s)
+		for _, p := range ps {
+			r.Approve(ctx, p.Key, true, "")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	select {} // killed here, in the fake's second call
 }
 

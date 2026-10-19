@@ -5,41 +5,65 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"slices"
+	"strings"
 
+	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// ProviderInfo is a provider a session can switch to (ADR 0014): who runs
-// the model loop, and whether it can here.
+// ProviderInfo is a provider a session can switch to (ADR 0014, 0015): who
+// runs the model loop, whether it can here, and, for an agent of ACP's
+// registry not installed yet, what installing it fetches.
 type ProviderInfo struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"` // "api" or "cli"
-	Available bool   `json:"available"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"` // "api", "cli" or "acp"
+	Description string `json:"description,omitempty"`
+	// Available: it can run here now. Else Installable says the user can
+	// install it (Version from Source); else Reason says why not.
+	Available   bool   `json:"available"`
+	Installable bool   `json:"installable,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
-// providerIDs are the providers, in the order they are shown. The API
-// engine is anthropic.
-var providerIDs = []string{ProviderAnthropic, workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot}
+// The registry's ids of the agents ADR 0014 named codex and copilot.
+const (
+	codexAgent   = "codex-acp"
+	copilotAgent = "github-copilot-cli"
+)
 
-var providerNames = map[string]string{
-	ProviderAnthropic:          "Claude API",
-	workflows.EngineClaudeCode: "Claude Code (your plan)",
-	workflows.EngineCodex:      "Codex (your plan)",
-	workflows.EngineCopilot:    "GitHub Copilot CLI (your plan)",
+// registryAgent is the registry id of an ACP engine; "" if engine is not one.
+func registryAgent(engine string) string {
+	switch {
+	case engine == workflows.EngineCodex:
+		return codexAgent
+	case engine == workflows.EngineCopilot:
+		return copilotAgent
+	case strings.HasPrefix(engine, workflows.EngineACP):
+		return strings.TrimPrefix(engine, workflows.EngineACP)
+	}
+	return ""
 }
 
-// engineOf is the engine of provider id; ok false if there is none.
+// engineOf is the engine of provider id: an agent's id is its ACP engine.
 func engineOf(id string) (string, bool) {
 	switch id {
+	case "":
+		return "", false
 	case ProviderAnthropic, workflows.EngineAPI:
 		return workflows.EngineAPI, true
 	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
 		return id, true
 	}
-	return "", false
+	if strings.HasPrefix(id, workflows.EngineACP) {
+		return id, true
+	}
+	return workflows.EngineACP + id, true
 }
 
 // providerOf is engine's name as a provider.
@@ -47,29 +71,97 @@ func providerOf(engine string) string {
 	if engine == workflows.EngineAPI || engine == "" {
 		return ProviderAnthropic
 	}
+	if a := registryAgent(engine); a != "" {
+		return a
+	}
 	return engine
 }
 
-// Providers are the providers, and whether each can run here.
-func (r *Runtime) Providers() []ProviderInfo {
-	out := make([]ProviderInfo, 0, len(providerIDs))
-	for _, id := range providerIDs {
-		p := ProviderInfo{ID: id, Name: providerNames[id], Kind: "cli"}
-		if id == ProviderAnthropic {
-			p.Kind, p.Available = "api", r.cfg.Provider != nil
+// agentCommand is how to start the agent of an ACP engine: as installed
+// from the registry, else the command on the PATH that ADR 0014 used for
+// codex and copilot. Env is the registry's for it.
+func (r *Runtime) agentCommand(engine string) ([]string, map[string]string, error) {
+	id := registryAgent(engine)
+	if in, ok := r.agents.Command(id); ok {
+		return slices.Clone(in.Command), in.Env, nil
+	}
+	switch id {
+	case codexAgent:
+		if p, err := exec.LookPath(r.cfg.CodexPath); err == nil {
+			return []string{p}, nil, nil
+		}
+	case copilotAgent:
+		if p, err := exec.LookPath(r.cfg.CopilotPath); err == nil {
+			return []string{p, "--acp"}, nil, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("%w: %s (choose it with /provider to install it)", ErrNotInstalled, id)
+}
+
+// Providers are the providers: the API, Claude Code, and the agents of
+// ACP's registry, with whether each runs here or can be installed. If the
+// registry cannot be read, the agents installed are still there.
+func (r *Runtime) Providers(ctx context.Context) []ProviderInfo {
+	_, claudeErr := exec.LookPath(r.cfg.ClaudePath)
+	out := []ProviderInfo{
+		{ID: ProviderAnthropic, Name: "Claude API", Kind: "api", Available: r.cfg.Provider != nil},
+		{ID: workflows.EngineClaudeCode, Name: "Claude Code (your plan)", Kind: "cli", Available: claudeErr == nil},
+	}
+	list, err := r.agents.List(ctx)
+	if err != nil {
+		r.logf("the ACP registry: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, e := range list {
+		seen[e.ID] = true
+		p := ProviderInfo{ID: e.ID, Name: e.Name, Kind: "acp", Description: e.Description, Version: e.Version, Source: e.Source}
+		if _, _, err := r.agentCommand(workflows.EngineACP + e.ID); err == nil {
+			p.Available = true
+		} else if e.Usable {
+			p.Installable = true
 		} else {
-			p.Available = r.cliAvailable(id)
+			p.Reason = e.Reason
 		}
 		out = append(out, p)
 	}
+	// What is there to run though the registry did not say.
+	for _, id := range []string{codexAgent, copilotAgent} {
+		if !seen[id] {
+			if _, _, err := r.agentCommand(workflows.EngineACP + id); err == nil {
+				out = append(out, ProviderInfo{ID: id, Name: id, Kind: "acp", Available: true})
+			}
+		}
+	}
 	return out
+}
+
+// InstallProvider installs agent id of ACP's registry at version (the one
+// the user was shown; "" for the registry's), the user having chosen to
+// (ADR 0015).
+func (r *Runtime) InstallProvider(ctx context.Context, id, version string) (ProviderInfo, error) {
+	if _, err := r.agents.Install(ctx, id, version); err != nil {
+		if errors.Is(err, agents.ErrUnknown) {
+			return ProviderInfo{}, fmt.Errorf("%w: %s", ErrNoProvider, id)
+		}
+		return ProviderInfo{}, err
+	}
+	for _, p := range r.Providers(ctx) {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return ProviderInfo{ID: id, Available: true}, nil
 }
 
 // anthropicModels are the API's models offered for /model.
 var anthropicModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"}
 
-// ErrNoProvider: no such provider.
-var ErrNoProvider = errors.New("no such provider")
+// ErrNoProvider: no such provider. ErrNotInstalled: an agent of the
+// registry not installed (yet).
+var (
+	ErrNoProvider   = errors.New("no such provider")
+	ErrNotInstalled = errors.New("not installed")
+)
 
 // Models are the models of provider id to choose from; any other name may
 // be given too.
@@ -78,14 +170,23 @@ func (r *Runtime) Models(ctx context.Context, id string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoProvider, id)
 	}
-	if engine == workflows.EngineAPI {
+	switch engine {
+	case workflows.EngineAPI:
 		out := slices.Clone(anthropicModels)
 		if !slices.Contains(out, provider.DefaultModel) {
 			out = append([]string{provider.DefaultModel}, out...)
 		}
 		return out, nil
+	case workflows.EngineClaudeCode:
+		return r.cliModels(ctx, engine), nil
 	}
-	return r.cliModels(ctx, engine), nil
+	switch registryAgent(engine) {
+	case codexAgent:
+		return r.cliModels(ctx, workflows.EngineCodex), nil
+	case copilotAgent:
+		return r.cliModels(ctx, workflows.EngineCopilot), nil
+	}
+	return nil, nil // the agent's own; any name may be given
 }
 
 // Settings are a session's provider and model: those its next turn runs
@@ -155,12 +256,16 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model string) (Settin
 	}
 	sw := workflows.Switch{Model: model}
 	if id != "" {
-		engine, ok := engineOf(id)
-		if !ok {
+		engine, _ := engineOf(id)
+		ps := r.Providers(ctx)
+		i := slices.IndexFunc(ps, func(p ProviderInfo) bool { return p.ID == providerOf(engine) })
+		switch {
+		case i < 0:
 			return Settings{}, fmt.Errorf("%w: %s", ErrNoProvider, id)
-		}
-		if i := slices.IndexFunc(r.Providers(), func(p ProviderInfo) bool { return p.ID == providerOf(engine) }); i < 0 || !r.Providers()[i].Available {
-			return Settings{}, fmt.Errorf("%w: %s", ErrUnavailable, id)
+		case ps[i].Installable:
+			return Settings{}, fmt.Errorf("%w: %s", ErrNotInstalled, id)
+		case !ps[i].Available:
+			return Settings{}, fmt.Errorf("%w: %s %s", ErrUnavailable, id, ps[i].Reason)
 		}
 		sw.Engine = engine
 	}

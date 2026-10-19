@@ -42,6 +42,7 @@ type Backend interface {
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
 	NewFlow(ctx context.Context, session, request string) (int, error)
 	Providers(ctx context.Context) ([]runtime.ProviderInfo, error)
+	InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error)
 	Models(ctx context.Context, provider string) ([]string, error)
 	Settings(ctx context.Context, session string) (runtime.Settings, error)
 	Switch(ctx context.Context, session, provider, model string) (runtime.Settings, error)
@@ -55,6 +56,14 @@ var builtinCommands = []map[string]any{
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
 }
+
+// InstallMeta, in a provider's value's _meta, says it is installed when
+// chosen (ADR 0015): {"source", "version"}. InstallMethod installs it:
+// {"provider": id, "version": the version shown}.
+const (
+	InstallMeta   = "kairocode/install"
+	InstallMethod = "_kairocode/install_provider"
+)
 
 // defaultModel is the value of the model option that leaves the choice to
 // the provider.
@@ -74,8 +83,18 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 	var providers []map[string]any
 	for _, p := range ps {
 		o := map[string]any{"value": p.ID, "name": p.Name}
-		if !p.Available {
+		switch {
+		case p.Installable:
+			// Chosen, it is installed first (ADR 0015): the client asks
+			// the user, showing what is fetched.
+			o["description"] = fmt.Sprintf("not installed: %s", p.Source)
+			o["_meta"] = map[string]any{InstallMeta: map[string]any{"source": p.Source, "version": p.Version}}
+		case !p.Available && p.Reason != "":
+			o["description"] = "cannot run here: " + p.Reason
+		case !p.Available:
 			o["description"] = "not available here"
+		case p.Description != "":
+			o["description"] = p.Description
 		}
 		providers = append(providers, o)
 	}
@@ -244,6 +263,19 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		}
 		a.offerCommands(ctx, p.SessionID)
 		return map[string]any{"configOptions": opts}, nil
+	case InstallMethod:
+		var p struct {
+			Provider string `json:"provider"`
+			Version  string `json:"version"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Provider == "" {
+			return nil, invalid(errors.New(`want {"provider": "<id>", "version": "<the version shown>"}`))
+		}
+		info, err := a.b.InstallProvider(ctx, p.Provider, p.Version)
+		if err != nil {
+			return nil, invalid(err)
+		}
+		return info, nil
 	case "session/set_config_option":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -323,6 +355,15 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
 	case name == "/redo":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	case name == "/provider" && strings.HasPrefix(strings.TrimSpace(args), "install "):
+		// Typed: installed here, the user having asked for it (ADR 0015).
+		id := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), "install "))
+		text := "Installed " + id + ". /provider " + id + " switches to it."
+		if _, err := a.b.InstallProvider(ctx, id, ""); err != nil {
+			text = "Could not install " + id + ": " + err.Error()
+		}
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+		return map[string]any{"stopReason": "end_turn"}, nil
 	case name == "/provider" || name == "/model":
 		// Without a turn: the settings change, or are listed (ADR 0014).
 		return a.settingsCommand(ctx, p.SessionID, name[1:], strings.TrimSpace(args))

@@ -1,9 +1,17 @@
 package runtime
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +22,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/jsonrpc"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -108,6 +117,38 @@ func fakeCLI() {
 				f.Close()
 			}
 			result := "no call"
+			// KC_FAKE_CLI_OWN: on each prompt, it asks to run its own
+			// tool (KC_FAKE_CLI_OWN_TITLE, else shell), and says what it
+			// was told. Allowed, it notes that it ran in KC_FAKE_CLI_RAN,
+			// and with KC_FAKE_CLI_HOLD stops there, to be killed.
+			if os.Getenv("KC_FAKE_CLI_OWN") == "1" {
+				title := os.Getenv("KC_FAKE_CLI_OWN_TITLE")
+				if title == "" {
+					title = "shell"
+				}
+				var perm struct {
+					Outcome struct {
+						OptionID string `json:"optionId"`
+					} `json:"outcome"`
+				}
+				if err := conn.Call(ctx, "session/request_permission", map[string]any{"sessionId": p.SessionID,
+					"toolCall": map[string]any{"toolCallId": "own-" + title, "title": title, "kind": "execute",
+						"rawInput": map[string]any{"command": "ls"}},
+					"options": []any{map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"}}}, &perm); err != nil {
+					return nil, err
+				}
+				result = title + " " + perm.Outcome.OptionID
+				if perm.Outcome.OptionID == "yes" {
+					if f, err := os.OpenFile(os.Getenv("KC_FAKE_CLI_RAN"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+						f.WriteString("ran\n")
+						f.Close()
+					}
+					if os.Getenv("KC_FAKE_CLI_HOLD") == "1" {
+						time.Sleep(time.Hour)
+					}
+				}
+			}
 			// KC_FAKE_CLI_REDO: told to go on after being cut short, it
 			// makes its write again, as an agent that lost its result does.
 			redo := os.Getenv("KC_FAKE_CLI_REDO") == "1" && p.Prompt[0].Text == continuePrompt
@@ -126,25 +167,17 @@ func fakeCLI() {
 							map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"}}}, &perm)
 					return perm.Outcome.OptionID, err
 				}
-				shell, err := ask("shell")
-				if err != nil {
-					return nil, err
-				}
 				// Copilot names KairoCode's tools bare; others, with the
 				// server.
 				name := MCPServerName + "-write"
 				if engine == "copilot" {
 					name = "write"
 				}
-				bare, err := ask("write")
-				if err != nil {
-					return nil, err
-				}
 				write, err := ask(name)
 				if err != nil {
 					return nil, err
 				}
-				result = "shell " + shell + ", bare write " + bare + ", write " + write
+				result = "write " + write
 				err = conn.Call(ctx, "fs/write_text_file", map[string]any{"sessionId": p.SessionID,
 					"path": filepath.Join(s.Cwd, file), "content": "from an agent\n"}, nil)
 				if err != nil {
@@ -218,22 +251,22 @@ func TestSwitchProviderAndModel(t *testing.T) {
 	if got := reply("hello"); got != "api says hi" {
 		t.Fatalf("turn 0: %q", got)
 	}
-	if st, err := r.Switch(ctx, s, "codex", "gpt-x"); err != nil || st != (Settings{Provider: "codex", Model: "gpt-x"}) {
+	if st, err := r.Switch(ctx, s, "codex", "gpt-x"); err != nil || st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
 		t.Fatalf("switch to codex: %+v %v", st, err)
 	}
-	if got := reply("write notes"); got != "codex gpt-x: shell no, bare write no, write yes, written" {
+	if got := reply("write notes"); got != "codex gpt-x: write yes, written" {
 		t.Fatalf("turn 1: %q", got)
 	}
 	if got := reply("and?"); got != "codex gpt-x: no call" {
 		t.Fatalf("turn 2: %q", got)
 	}
-	if st, _ := r.Settings(ctx, s); st != (Settings{Provider: "codex", Model: "gpt-x"}) {
+	if st, _ := r.Settings(ctx, s); st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
 		t.Fatalf("settings: %+v", st)
 	}
 	if _, err := r.Switch(ctx, s, "copilot", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := reply("your turn"); got != "copilot : shell no, bare write yes, write yes, written" {
+	if got := reply("your turn"); got != "copilot : write yes, written" {
 		t.Fatalf("turn 3: %q", got)
 	}
 	if _, err := r.Switch(ctx, s, "anthropic", ""); err != nil {
@@ -367,5 +400,198 @@ func TestCrashACPWrite(t *testing.T) {
 	}
 	if len(calls) != 1 {
 		t.Fatalf("%d runs of the agent's write, want 1", len(calls))
+	}
+}
+
+// An agent's own tool (not KairoCode's) is put to the user (ADR 0015): the
+// call is refused for now and the turn waits, without the process, for
+// the answer; allowed, the same call is let through in the next round;
+// declined, it stays refused. Codex's bare "write" is its own, not
+// KairoCode's.
+func TestAgentOwnToolAsksTheUser(t *testing.T) {
+	setupFakeCLI(t, "")
+	t.Setenv("KC_FAKE_CLI_OWN", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for _, allow := range []bool{true, false} {
+		s, _ := r.CreateSession(ctx, fmt.Sprintf("own-%v", allow), workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+		n, err := r.Send(ctx, s, "list the files")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var p []Pending
+		waitUntil(t, ctx, "the question", func() bool {
+			p, _ = r.Pending(ctx, s)
+			return len(p) == 1
+		})
+		if p[0].Tool != "shell" || !strings.Contains(p[0].Subject, "ls") || !strings.Contains(p[0].Rule, "outside KairoCode") {
+			t.Fatalf("pending %+v", p[0])
+		}
+		if err := r.Approve(ctx, p[0].Key, allow, ""); err != nil {
+			t.Fatal(err)
+		}
+		out, err := r.WaitTurn(ctx, s, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "shell yes"
+		if !allow {
+			want = "shell no"
+		}
+		if got, _ := r.Reply(ctx, out.Reply); !strings.HasSuffix(got, want) {
+			t.Fatalf("allow %v: reply %q", allow, got)
+		}
+	}
+}
+
+// An agent of ACP's registry (here a fake registry, and an archive whose
+// command starts the fake agent) is listed as installable; switching to
+// it before it is installed is refused; installed, it is available, and
+// the session's next turn runs in it (ADR 0015).
+func TestInstallProviderFromRegistry(t *testing.T) {
+	setupFakeCLI(t, "")
+	script := "#!/bin/sh\nexec " + os.Args[0] + "\n"
+	var buf bytes.Buffer
+	z := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(z)
+	tw.WriteHeader(&tar.Header{Name: "agent", Mode: 0o755, Size: int64(len(script)), Typeflag: tar.TypeReg})
+	tw.Write([]byte(script))
+	tw.Close()
+	z.Close()
+	archive := buf.Bytes()
+	sum := sha256.Sum256(archive)
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/registry.json", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"agents": []any{map[string]any{
+			"id": "fake-agent", "name": "Fake Agent", "version": "1.0.0", "description": "for tests",
+			"distribution": map[string]any{"binary": map[string]any{agents.Platform(): map[string]any{
+				"archive": srv.URL + "/agent.tar.gz", "cmd": "./agent", "sha256": hex.EncodeToString(sum[:])}}}}}})
+	})
+	mux.HandleFunc("/agent.tar.gz", func(w http.ResponseWriter, r *http.Request) { w.Write(archive) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", AgentRegistry: srv.URL + "/registry.json",
+		Provider:  &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "api"}}},
+		CodexPath: filepath.Join(t.TempDir(), "none"), CopilotPath: filepath.Join(t.TempDir(), "none")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	find := func() ProviderInfo {
+		for _, p := range r.Providers(ctx) {
+			if p.ID == "fake-agent" {
+				return p
+			}
+		}
+		t.Fatal("not listed")
+		return ProviderInfo{}
+	}
+	if p := find(); p.Available || !p.Installable || !strings.HasSuffix(p.Source, "/agent.tar.gz") {
+		t.Fatalf("before installing: %+v", p)
+	}
+	s, _ := r.CreateSession(ctx, "reg", workflows.SessionInput{Dir: repo(t)})
+	if _, err := r.Switch(ctx, s, "fake-agent", ""); !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("switched to it before it was installed: %v", err)
+	}
+	if p, err := r.InstallProvider(ctx, "fake-agent", "1.0.0"); err != nil || !p.Available {
+		t.Fatalf("install: %+v %v", p, err)
+	}
+	if st, err := r.Switch(ctx, s, "fake-agent", ""); err != nil || st.Provider != "fake-agent" {
+		t.Fatalf("switch: %+v %v", st, err)
+	}
+	out := turn(t, r, s, "hello")
+	if got, _ := r.Reply(ctx, out.Reply); got != "codex : no call" { // the fake, started by the installed command
+		t.Fatalf("reply %q", got)
+	}
+}
+
+// Codex has tools of its own: its bare "write" is its own, and is put to
+// the user (ADR 0015); Copilot's bare "write" is KairoCode's (it has no
+// tools of its own here), allowed in TestSwitchProviderAndModel.
+func TestCodexBareNameIsItsOwn(t *testing.T) {
+	setupFakeCLI(t, "")
+	t.Setenv("KC_FAKE_CLI_OWN", "1")
+	t.Setenv("KC_FAKE_CLI_OWN_TITLE", "write")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s, _ := r.CreateSession(ctx, "bare", workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+	if _, err := r.Send(ctx, s, "write it"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, ctx, "the question", func() bool {
+		p, _ := r.Pending(ctx, s)
+		return len(p) == 1 && p[0].Tool == "write"
+	})
+}
+
+// TestCrashAgentToolAnswerUsedOnce: an agent's own tool, allowed, runs;
+// the process is killed before the turn records it. Restarted, the agent
+// asks again for the same call: the answer, used, is not used again, and
+// the user is asked again (invariant 4, ADR 0015).
+func TestCrashAgentToolAnswerUsedOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	dir := t.TempDir()
+	db, ran := filepath.Join(dir, "k.db"), filepath.Join(dir, "ran")
+	setupFakeCLI(t, "")
+	t.Setenv("KC_FAKE_CLI_OWN", "1")
+	t.Setenv("KC_FAKE_CLI_RAN", ran)
+	t.Setenv("KC_FAKE_CLI_HOLD", "1")
+	ws := repo(t)
+	fakeFile := filepath.Join(dir, "fake.json")
+	os.WriteFile(fakeFile, []byte(`{"script": [], "hold_at": -1}`), 0o600)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_ENGINE=codex", "KC_APPROVE_ALL=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, ran, cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("KC_FAKE_CLI_HOLD", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: db, Owner: "crash", CodexPath: os.Args[0], Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("crash")
+	var p []Pending
+	waitUntil(t, ctx, "the question again", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if err := r.Approve(ctx, p[0].Key, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.WaitTurn(ctx, s, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Reply(ctx, out.Reply); !strings.HasSuffix(got, "shell no") {
+		t.Fatalf("reply %q", got)
+	}
+	if b, _ := os.ReadFile(ran); strings.Count(string(b), "ran") != 1 {
+		t.Fatalf("the agent's tool ran %d times", strings.Count(string(b), "ran"))
 	}
 }
