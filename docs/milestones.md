@@ -2,7 +2,7 @@
 
 設計 10 節の段階を、受け入れ条件のテストに落としたものです。段階の作業は `/milestone` スキルで進めます。受け入れ条件は、実装の前にテストとして書きます（最初は落ちる）。すべて通ったら、その段階の「状態」を「完了（日付）」にします。
 
-今の段階: **M2（作業中）**
+今の段階: **M2（作業中）**。M3 は完了。M2 の残りは、LSP の診断（ADR 0009 の承認待ち）、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。
 
 ## M0 骨組み
 
@@ -93,9 +93,9 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 ## M3 サブエージェントと、人と出来事が始めるワークフロー
 
-状態: 作業中
+状態: 完了（2026-10-19）
 
-中身: task（サブエージェント）。Starlark のフロー（ADR 0003: `.kairocode/workflows/<name>.star`、プリミティブ `agent`・`parallel`・`decide`・`tool`・`ask`・`phase`、ずれの検出、上限）。入口は `/flow <name>`、hook（`turn.end`、`tool.after`、`session.start`）、エージェントの `workflow:`。言葉から作る（`/flow new <説明>`）。端末のフローの図（作るとき、動いている間、`kairocode flow graph`・`show`・`stats`）と、図の上での変更。
+中身: task（サブエージェント）。Starlark のフロー（ADR 0003: `.kairocode/workflows/<name>.star`、プリミティブ `agent`・`parallel`・`decide`・`tool`・`ask`・`phase`、ずれの検出、上限。外の出来事を待つ `wait` は M4）。入口は `/flow <name>`、hook（`turn.end`、`tool.after`、`session.start`）、エージェントの `workflow:`。言葉から作る（`/flow new <説明>`）。端末のフローの図（作るとき、動いている間、`kairocode flow graph`・`show`・`stats`）と、図の上での変更。
 
 前提: ADR 0003 の承認（2026-10-19）、ADR 0011（親を止めると子も止まる）。
 
@@ -118,7 +118,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 状態: 未着手
 
-中身: PostgreSQL、サスペンドモード（`kairo.Suspend`、`k.Handler()` の `/tick`）、HTTP(S) のツール、GitHub からの起動。
+中身: フローの `wait(event, timeout=)`（ADR 0003）、PostgreSQL、サスペンドモード（`kairo.Suspend`、`k.Handler()` の `/tick`）、HTTP(S) のツール、GitHub からの起動。
 
 受け入れ条件:
 
