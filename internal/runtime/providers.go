@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/provider"
@@ -37,6 +38,10 @@ const (
 	copilotAgent = "github-copilot-cli"
 )
 
+// agentAliases are the names an agent of the registry is known by besides
+// its id.
+var agentAliases = map[string]string{"codex": codexAgent, "copilot": copilotAgent, "claude": "claude-acp"}
+
 // registryAgent is the registry id of an ACP engine; "" if engine is not one.
 func registryAgent(engine string) string {
 	switch {
@@ -60,8 +65,14 @@ func engineOf(id string) (string, bool) {
 	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
 		return id, true
 	}
+	if id == workflows.EngineACP {
+		return "", false
+	}
 	if strings.HasPrefix(id, workflows.EngineACP) {
 		return id, true
+	}
+	if a, ok := agentAliases[id]; ok && a != codexAgent && a != copilotAgent {
+		id = a // codex and copilot are engines of their own (ADR 0014)
 	}
 	return workflows.EngineACP + id, true
 }
@@ -96,6 +107,23 @@ func (r *Runtime) agentCommand(engine string) ([]string, map[string]string, erro
 		}
 	}
 	return nil, nil, fmt.Errorf("%w: %s (choose it with /provider to install it)", ErrNotInstalled, id)
+}
+
+// knownAgent reports whether id is an agent there is: installed, on the
+// PATH (codex, copilot), or in the registry.
+// The registry is read from its copy kept; only if there is none, from
+// the registry, for a few seconds at most.
+func (r *Runtime) knownAgent(ctx context.Context, id string) bool {
+	if _, _, err := r.agentCommand(workflows.EngineACP + id); err == nil {
+		return true
+	}
+	as, err := r.agents.Cached()
+	if err != nil {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		as, _ = r.agents.Agents(ctx)
+	}
+	return slices.ContainsFunc(as, func(a agents.Agent) bool { return a.ID == id })
 }
 
 // Providers are the providers: the API, Claude Code, and the agents of
@@ -139,6 +167,9 @@ func (r *Runtime) Providers(ctx context.Context) []ProviderInfo {
 // the user was shown; "" for the registry's), the user having chosen to
 // (ADR 0015).
 func (r *Runtime) InstallProvider(ctx context.Context, id, version string) (ProviderInfo, error) {
+	if a, ok := agentAliases[id]; ok {
+		id = a
+	}
 	if _, err := r.agents.Install(ctx, id, version); err != nil {
 		if errors.Is(err, agents.ErrUnknown) {
 			return ProviderInfo{}, fmt.Errorf("%w: %s", ErrNoProvider, id)
@@ -263,7 +294,8 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model string) (Settin
 		case i < 0:
 			return Settings{}, fmt.Errorf("%w: %s", ErrNoProvider, id)
 		case ps[i].Installable:
-			return Settings{}, fmt.Errorf("%w: %s", ErrNotInstalled, id)
+			return Settings{}, fmt.Errorf("%w: %s is not installed; /provider install %s installs it (%s)",
+				ErrNotInstalled, ps[i].ID, ps[i].ID, ps[i].Source)
 		case !ps[i].Available:
 			return Settings{}, fmt.Errorf("%w: %s %s", ErrUnavailable, id, ps[i].Reason)
 		}

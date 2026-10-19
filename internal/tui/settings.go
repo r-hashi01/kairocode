@@ -15,10 +15,12 @@ import (
 // pickRows is how many values a list shows at once.
 const pickRows = 10
 
-// pick is a setting being chosen from its values.
+// pick is a setting being chosen from its values: those that can be used
+// first, narrowed by what is typed.
 type pick struct {
-	opt acp.ConfigOption
-	sel int
+	opt    acp.ConfigOption
+	filter string
+	sel    int // in visible()
 	// install: the chosen provider is not installed; the user is asked
 	// first (ADR 0015).
 	install *acp.ConfigValue
@@ -69,8 +71,73 @@ func (m *model) settings() string {
 	return provider + " · " + model
 }
 
+// usable reports whether v can be chosen as it is (no install, nothing
+// that stops it).
+func usable(v acp.ConfigValue) bool {
+	return v.Install == nil && !strings.HasPrefix(v.Description, "cannot run") && !strings.HasPrefix(v.Description, "not available")
+}
+
+// visible are the values shown: usable ones first, then the rest, each in
+// the agent's order, narrowed to those whose id or name has the filter.
+func (p *pick) visible() []acp.ConfigValue {
+	f := strings.ToLower(p.filter)
+	var first, rest []acp.ConfigValue
+	for _, v := range p.opt.Options {
+		if f != "" && !strings.Contains(strings.ToLower(v.Value), f) && !strings.Contains(strings.ToLower(v.Name), f) {
+			continue
+		}
+		if usable(v) {
+			first = append(first, v)
+		} else {
+			rest = append(rest, v)
+		}
+	}
+	return append(first, rest...)
+}
+
+// aliases are the names a provider is known by besides its id.
+var aliases = map[string]string{"codex": "codex-acp", "copilot": "github-copilot-cli", "claude": "claude-acp", "api": "anthropic"}
+
+// resolve finds the value typed: by id, alias or name, else, for a
+// provider, the only one whose id or name has it. many: more than one has
+// it.
+func resolve(o acp.ConfigOption, typed string) (v acp.ConfigValue, ok, many bool) {
+	t := strings.ToLower(strings.TrimSpace(typed))
+	exact := func(t string) (acp.ConfigValue, bool) {
+		for _, v := range o.Options {
+			if strings.ToLower(v.Value) == t || strings.ToLower(v.Name) == t {
+				return v, true
+			}
+		}
+		return acp.ConfigValue{}, false
+	}
+	if v, ok := exact(t); ok {
+		return v, true, false
+	}
+	if a, ok := aliases[t]; ok && o.ID == "provider" {
+		if v, ok := exact(a); ok {
+			return v, true, false
+		}
+	}
+	if o.ID != "provider" { // a model is taken as typed: no part of a name
+		return acp.ConfigValue{}, false, false
+	}
+	var found []acp.ConfigValue
+	for _, v := range o.Options {
+		if strings.Contains(strings.ToLower(v.Value), t) || strings.Contains(strings.ToLower(v.Name), t) {
+			found = append(found, v)
+		}
+	}
+	if len(found) == 1 {
+		return found[0], true, false
+	}
+	return acp.ConfigValue{}, false, len(found) > 1
+}
+
 // setting sets id to value, or, with no value, lists its values to choose
-// from.
+// from. A value is found by id, alias or name; a provider not installed is
+// asked about before it is installed (ADR 0015); a model not listed is
+// taken as typed.
 func (m *model) setting(id, value string) tea.Cmd {
 	o, ok := m.option(id)
 	if !ok {
@@ -83,7 +150,7 @@ func (m *model) setting(id, value string) tea.Cmd {
 			return nil
 		}
 		p := &pick{opt: o}
-		for i, v := range o.Options {
+		for i, v := range p.visible() {
 			if v.Value == o.CurrentValue {
 				p.sel = i
 			}
@@ -91,13 +158,26 @@ func (m *model) setting(id, value string) tea.Cmd {
 		m.pick = p
 		return nil
 	}
+	v, found, many := resolve(o, value)
+	switch {
+	case many: // the list, narrowed to them
+		m.pick = &pick{opt: o, filter: value}
+		return nil
+	case !found && id == "provider":
+		m.print(bad.Render(fmt.Sprintf("  ⎿  no provider %q: /provider lists them", value)))
+		return nil
+	case !found: // a model the list does not have: as typed
+		v = acp.ConfigValue{Value: value}
+	case v.Install != nil:
+		m.pick = &pick{opt: o, install: &v}
+		return nil
+	}
 	ctx, a, s := m.ctx, m.a, m.session
-	return func() tea.Msg { return setMsg{err: a.SetConfigOption(ctx, s, id, value)} }
+	return func() tea.Msg { return setMsg{err: a.SetConfigOption(ctx, s, id, v.Value)} }
 }
 
 func (m *model) pickKey(key string) tea.Cmd {
 	p := m.pick
-	n := len(p.opt.Options)
 	if p.install != nil {
 		// The question: only Enter installs what it shows, esc goes back.
 		switch key {
@@ -106,27 +186,50 @@ func (m *model) pickKey(key string) tea.Cmd {
 			return m.installThen(*p.install)
 		case "esc", "ctrl+c":
 			p.install = nil
+			if len(p.opt.Options) == 0 {
+				m.pick = nil
+			}
 		}
 		return nil
 	}
+	vis := p.visible()
+	n := len(vis)
 	switch {
-	case key == "up" || key == "k":
-		p.sel = (p.sel + n - 1) % n
-	case key == "down" || key == "j" || key == "tab":
-		p.sel = (p.sel + 1) % n
-	case len(key) == 1 && key[0] >= '1' && key[0] <= '9' && int(key[0]-'0') <= n:
-		p.sel = int(key[0] - '1')
-		fallthrough
+	case key == "up":
+		if n > 0 {
+			p.sel = (p.sel + n - 1) % n
+		}
+	case key == "down" || key == "tab":
+		if n > 0 {
+			p.sel = (p.sel + 1) % n
+		}
 	case key == "enter":
-		v := p.opt.Options[p.sel]
+		if n == 0 {
+			return nil
+		}
+		v := vis[min(p.sel, n-1)]
 		if v.Install != nil {
 			p.install = &v // asked before anything is fetched
 			return nil
 		}
 		m.pick = nil
 		return m.setting(p.opt.ID, v.Value)
+	case key == "backspace":
+		if p.filter != "" {
+			r := []rune(p.filter)
+			p.filter, p.sel = string(r[:len(r)-1]), 0
+		}
 	case key == "esc" || key == "ctrl+c":
+		if p.filter != "" {
+			p.filter, p.sel = "", 0
+			return nil
+		}
 		m.pick = nil
+	case len([]rune(key)) == 1 || key == "space":
+		if key == "space" {
+			key = " "
+		}
+		p.filter, p.sel = p.filter+key, 0 // narrows the list
 	}
 	return nil
 }
@@ -157,31 +260,40 @@ func (m *model) pickView(w int) string {
 		b.WriteString("\n" + faint.Render("Enter to install and switch · esc to go back") + "\n")
 		return b.String()
 	}
-	b.WriteString(rule + "\n" + bold.Render(p.opt.Name) + faint.Render("  from the next turn") + "\n\n")
+	vis := p.visible()
+	b.WriteString(rule + "\n" + bold.Render(p.opt.Name) + faint.Render("  from the next turn") + "\n")
+	b.WriteString(faint.Render("  type to narrow: ") + p.filter + accent.Render("▏") + "\n\n")
+	if len(vis) == 0 {
+		b.WriteString(faint.Render("  nothing has "+p.filter) + "\n")
+	}
 	// At most pickRows, around the one chosen.
-	from := max(min(p.sel-pickRows/2, len(p.opt.Options)-pickRows), 0)
-	to := min(from+pickRows, len(p.opt.Options))
+	sel := min(p.sel, max(len(vis)-1, 0))
+	from := max(min(sel-pickRows/2, len(vis)-pickRows), 0)
+	to := min(from+pickRows, len(vis))
 	if from > 0 {
 		b.WriteString(faint.Render(fmt.Sprintf("  ↑ %d more", from)) + "\n")
 	}
 	for i := from; i < to; i++ {
-		v := p.opt.Options[i]
-		line := fmt.Sprintf("%d. %s", i+1, v.Name)
+		v := vis[i]
+		line := v.Name
+		if v.Value != v.Name {
+			line += faint.Render("  " + v.Value)
+		}
 		if v.Value == p.opt.CurrentValue {
 			line += " ✓"
 		}
 		if v.Description != "" {
-			line += faint.Render("  " + v.Description)
+			line += faint.Render("  " + cut(v.Description, 60))
 		}
-		if i == p.sel {
-			b.WriteString(accent.Render("❯ "+line) + "\n")
+		if i == sel {
+			b.WriteString(accent.Render("❯ ") + line + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
 	}
-	if to < len(p.opt.Options) {
-		b.WriteString(faint.Render(fmt.Sprintf("  ↓ %d more", len(p.opt.Options)-to)) + "\n")
+	if to < len(vis) {
+		b.WriteString(faint.Render(fmt.Sprintf("  ↓ %d more", len(vis)-to)) + "\n")
 	}
-	b.WriteString("\n" + faint.Render("Enter to choose · ↑↓ or a number · esc to leave it") + "\n")
+	b.WriteString("\n" + faint.Render("↑↓ to choose · Enter · esc to clear or leave") + "\n")
 	return b.String()
 }

@@ -110,6 +110,12 @@ func Platform() string {
 	return runtime.GOOS + "-" + arch
 }
 
+// Cached are the registry's agents as last read, however long ago; an
+// error if it was never read.
+func (m *Manager) Cached() ([]Agent, error) {
+	return readRegistry(filepath.Join(m.Dir, "registry.json"))
+}
+
 // Agents are the registry's agents, read at most once in CacheFor; when it
 // cannot be read, the copy kept is used.
 func (m *Manager) Agents(ctx context.Context) ([]Agent, error) {

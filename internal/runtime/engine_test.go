@@ -69,6 +69,14 @@ func TestEngineAndModelPerSession(t *testing.T) {
 	if _, err := r.CreateSession(ctx, "bad", workflows.SessionInput{Dir: ws, Engine: "gpt"}); err == nil {
 		t.Error("a session with an unknown engine was created")
 	}
+	// Nor does a daemon open with one as its default (a typo in
+	// KAIROCODE_ENGINE).
+	for _, e := range []string{"gpt", "acp:"} {
+		if bad, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Engine: e, Owner: "bad"}); err == nil {
+			bad.Close()
+			t.Errorf("opened with the engine %q", e)
+		}
+	}
 }
 
 // A session and a turn of an older version (2: before sessions carried an

@@ -592,14 +592,72 @@ func TestProviderAndModel(t *testing.T) {
 		t.Fatal("esc did not go back to the list")
 	}
 	d.send(key("enter"))
-	// On the question, the arrows and numbers choose nothing else.
+	// On the question, the arrows and keys choose nothing else.
 	d.send(key("up"))
-	d.send(key("1"))
+	d.send(key("x"))
 	if d.m.pick == nil || d.m.pick.install == nil || d.m.pick.install.Value != "gemini" || len(a.set) != 2 {
 		t.Fatalf("a key left the question: %q", a.set)
 	}
 	d.send(key("enter"))
 	if got := strings.Join(a.set[2:], ","); got != "install gemini@0.64.0,provider=gemini" {
 		t.Fatalf("set %q", got)
+	}
+}
+
+// Typed, a provider is found by its alias or a part of its name; one not
+// installed is asked about first (ADR 0015). In the list, typing narrows
+// it, and those that can be used come first.
+func TestProviderByNameAndFilter(t *testing.T) {
+	d, a := start(t, Options{})
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "provider", Name: "Provider", CurrentValue: "anthropic", Options: []acp.ConfigValue{
+			{Value: "anthropic", Name: "Claude API"},
+			{Value: "cline", Name: "Cline", Install: &acp.InstallInfo{Source: "cline@3", Version: "3"}},
+			{Value: "codex-acp", Name: "Codex", Install: &acp.InstallInfo{Source: "@agentclientprotocol/codex-acp@2.2.2", Version: "2.2.2"}},
+			{Value: "github-copilot-cli", Name: "Copilot"}}}}})
+	d.m.input.SetValue("/provider codex")
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Install Codex?") || !strings.Contains(v, "codex-acp@2.2.2") {
+		t.Fatalf("/provider codex\n%s", v)
+	}
+	d.send(key("enter"))
+	if got := strings.Join(a.set, ","); got != "install codex-acp@2.2.2,provider=codex-acp" {
+		t.Fatalf("set %q", got)
+	}
+	d.m.input.SetValue("/provider copilot") // installed: switched at once
+	d.send(key("enter"))
+	if got := a.set[len(a.set)-1]; got != "provider=github-copilot-cli" {
+		t.Fatalf("set %q", a.set)
+	}
+	d.m.input.SetValue("/provider")
+	d.send(key("enter"))
+	if v := d.view(); strings.Index(v, "Copilot") > strings.Index(v, "Cline") {
+		t.Fatalf("the usable ones are not first\n%s", v)
+	}
+	for _, k := range []string{"c", "o", "d"} {
+		d.send(key(k))
+	}
+	if v := d.view(); !strings.Contains(v, "Codex") || strings.Contains(v, "Cline") || strings.Contains(v, "Copilot") {
+		t.Fatalf("not narrowed\n%s", v)
+	}
+	d.send(key("esc")) // clears the filter
+	d.send(key("esc")) // leaves
+	if d.m.pick != nil {
+		t.Fatal("esc did not leave")
+	}
+	// A model is taken as typed, not the listed one that has it.
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "model", Name: "Model", CurrentValue: "default", Options: []acp.ConfigValue{{Value: "gpt-5-codex", Name: "gpt-5-codex"}}}}})
+	d.m.input.SetValue("/model gpt-5")
+	d.send(key("enter"))
+	if got := a.set[len(a.set)-1]; got != "model=gpt-5" {
+		t.Fatalf("set %q", a.set)
+	}
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "provider", Name: "Provider", CurrentValue: "anthropic", Options: []acp.ConfigValue{{Value: "anthropic", Name: "Claude API"}}}}})
+	d.m.input.SetValue("/provider nothing-like-it")
+	d.send(key("enter"))
+	if !strings.Contains(d.out(), "no provider") {
+		t.Fatalf("out\n%s", d.out())
 	}
 }

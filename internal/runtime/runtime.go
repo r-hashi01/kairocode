@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,8 +124,15 @@ func DBIn(dir string) string { return filepath.Join(dir, "kairo.db") }
 func DefaultDB() string { return DBIn(DefaultDataDir()) }
 
 func Open(ctx context.Context, cfg Config) (*Runtime, error) {
+	if cfg.Engine != "" {
+		e, ok := engineOf(cfg.Engine) // a provider's name: its engine's
+		if !ok {
+			return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+		}
+		cfg.Engine = e
+	}
 	switch cfg.Engine {
-	case "", workflows.EngineAPI, ProviderAnthropic:
+	case "", workflows.EngineAPI:
 		cfg.Engine = workflows.EngineAPI
 		if cfg.Provider == nil {
 			return nil, errors.New("runtime: the API engine needs a model provider")
@@ -135,7 +143,9 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
 		// The model is the CLI's own default unless one is named.
 	default:
-		return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+		if !strings.HasPrefix(cfg.Engine, workflows.EngineACP) {
+			return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+		}
 	}
 	// A session may ask for any engine whatever the default.
 	if cfg.ClaudePath == "" {
@@ -168,6 +178,13 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger),
 		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
 	r.ev = newEvents(r)
+	if id := registryAgent(cfg.Engine); id != "" && cfg.Engine != workflows.EngineCodex && cfg.Engine != workflows.EngineCopilot &&
+		!r.knownAgent(ctx, id) {
+		r.lsp.Close()
+		r.ev.close()
+		db.Close()
+		return nil, fmt.Errorf("runtime: the engine %q: %w: %s", cfg.Engine, ErrNoProvider, id)
+	}
 	fail := func(err error) (*Runtime, error) {
 		r.ev.close()
 		r.lsp.Close()
@@ -591,10 +608,13 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 		in.Agent = "build"
 	}
 	if in.Engine != "" {
+		in.Engine, _ = engineOf(in.Engine) // a provider's name: its engine's
 		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {
 			return "", err
 		}
-		in.Engine, _ = engineOf(in.Engine) // a provider's name: its engine's
+		if id := registryAgent(in.Engine); id != "" && !r.knownAgent(ctx, id) {
+			return "", fmt.Errorf("%w: %s", ErrNoProvider, id)
+		}
 	}
 	abs, err := filepath.Abs(in.Dir)
 	if err != nil {

@@ -80,6 +80,17 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 	if err != nil {
 		return nil, err
 	}
+	// Those that run here first, then those to install, then the rest.
+	rank := func(p runtime.ProviderInfo) int {
+		switch {
+		case p.Available:
+			return 0
+		case p.Installable:
+			return 1
+		}
+		return 2
+	}
+	slices.SortStableFunc(ps, func(a, b runtime.ProviderInfo) int { return rank(a) - rank(b) })
 	var providers []map[string]any
 	for _, p := range ps {
 		o := map[string]any{"value": p.ID, "name": p.Name}
