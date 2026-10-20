@@ -259,6 +259,13 @@ func (c *Client) InstallProvider(ctx context.Context, id, version string) (runti
 	return out, err
 }
 
+// SetMode sets the session's mode from its next turn on (ADR 0016).
+func (c *Client) SetMode(ctx context.Context, session, mode string) (runtime.Settings, error) {
+	var out runtime.Settings
+	err := c.do(ctx, "POST", sessionPath(session)+"/settings", map[string]string{"mode": mode}, &out)
+	return out, err
+}
+
 // Efforts are provider id's efforts to choose from.
 func (c *Client) Efforts(ctx context.Context, id string) ([]string, error) {
 	var out []string

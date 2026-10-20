@@ -115,6 +115,11 @@ func (a *fakeAgent) SetConfigOption(ctx context.Context, session, id, value stri
 	return nil
 }
 
+func (a *fakeAgent) SetMode(ctx context.Context, session, mode string) error {
+	a.set = append(a.set, "mode="+mode)
+	return nil
+}
+
 func (a *fakeAgent) InstallProvider(ctx context.Context, id, version string) error {
 	a.set = append(a.set, "install "+id+"@"+version)
 	return nil
@@ -212,10 +217,14 @@ func TestTurn(t *testing.T) {
 		{Kind: "agent_message_chunk", Text: "Done."},
 	}
 	header := d.out()
-	for _, want := range []string{"ϟ kairo abc12345", "claude-code · claude-opus-5-5", "/work/repo"} {
+	for _, want := range []string{"ϟ kairo abc12345", "/work/repo"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("no %q in the header\n%s", want, header)
 		}
+	}
+	// The provider and model: in the status line only (2026-10-20).
+	if strings.Contains(header, "claude-opus-5-5") || !strings.Contains(d.view(), "claude-code · claude-opus-5-5") {
+		t.Errorf("the model in the header, or not in the status line\n%s\n%s", header, d.view())
 	}
 	typed(d, "write the notes")
 	if len(a.prompts) != 1 || a.prompts[0] != "write the notes" {
@@ -557,10 +566,10 @@ func TestProviderAndModel(t *testing.T) {
 	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5 · effort max") {
 		t.Fatalf("status with the effort\n%s", v)
 	}
-	// shift+tab: the next effort, after the last the first, at once.
-	d.send(key("shift+tab"))
+	// ctrl+e: the next effort, after the last the first, at once.
+	d.send(key("ctrl+e"))
 	if v := d.view(); !strings.Contains(v, "effort low") || strings.Join(a.set, ",") != "effort=low" {
-		t.Fatalf("shift+tab (%q)\n%s", a.set, d.view())
+		t.Fatalf("ctrl+e (%q)\n%s", a.set, d.view())
 	}
 	a.set = nil
 	d.m.input.SetValue("/effort low")
@@ -677,5 +686,27 @@ func TestProviderByNameAndFilter(t *testing.T) {
 	d.send(key("enter"))
 	if !strings.Contains(d.out(), "no provider") {
 		t.Fatalf("out\n%s", d.out())
+	}
+}
+
+// shift+tab: the next mode (ADR 0016), shown in the status line in its
+// colour; the provider and model are in the status line only, not the
+// header.
+func TestModes(t *testing.T) {
+	d, a := start(t, Options{Engine: "anthropic", Model: "claude-opus-5-5"})
+	d.send(updateMsg{Kind: "current_mode_update", Mode: "manual", Modes: []acp.SessionMode{{ID: "manual", Name: "Manual"}, {ID: "plan", Name: "Plan"}}})
+	if v := d.view(); !strings.Contains(v, "manual · anthropic · claude-opus-5-5") {
+		t.Fatalf("status\n%s", v)
+	}
+	if strings.Contains(d.m.headerBox(), "claude-opus-5-5") {
+		t.Fatalf("the header has the model\n%s", d.m.headerBox())
+	}
+	d.send(key("shift+tab"))
+	if v := d.view(); !strings.Contains(v, "⏸ plan mode") || strings.Join(a.set, ",") != "mode=plan" {
+		t.Fatalf("shift+tab (%q)\n%s", a.set, v)
+	}
+	d.send(key("shift+tab"))
+	if v := d.view(); !strings.Contains(v, "manual") || strings.Join(a.set, ",") != "mode=plan,mode=manual" {
+		t.Fatalf("back to manual (%q)\n%s", a.set, v)
 	}
 }

@@ -35,6 +35,8 @@ type Agent interface {
 	SetConfigOption(ctx context.Context, session, id, value string) error
 	// InstallProvider installs an agent of ACP's registry (ADR 0015).
 	InstallProvider(ctx context.Context, id, version string) error
+	// SetMode sets the session's mode (ADR 0016).
+	SetMode(ctx context.Context, session, mode string) error
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -153,6 +155,9 @@ type model struct {
 	// of them being chosen (/provider, /model).
 	config []acp.ConfigOption
 	pick   *pick
+	// mode and modes: the session's mode, and those there are (ADR 0016).
+	mode  string
+	modes []acp.SessionMode
 	// flowsBefore: the project's flows when the turn began, to draw those
 	// it made or changed when it ends.
 	flowsBefore map[string]string
@@ -219,15 +224,8 @@ func (m *model) writeHeader() {
 	m.print(m.headerBox())
 }
 
+// The provider, model, effort and mode are in the status line only.
 func (m *model) headerBox() string {
-	engine := m.o.Engine
-	if engine == "" {
-		engine = "api"
-	}
-	what := engine
-	if m.o.Model != "" {
-		what += " · " + m.o.Model
-	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent.GetForeground()).Padding(0, 1)
 	room := max(m.width-5, 12) // the border and padding, and a column spare
 	version := m.o.Version
@@ -235,7 +233,7 @@ func (m *model) headerBox() string {
 		version = version[:8]
 	}
 	return box.Render(accent.Bold(true).Render("ϟ kairo") + faint.Render(" "+version) + "\n" +
-		faint.Render(cut(what, room)) + "\n" + faint.Render(cutLeft(m.o.Dir, room)))
+		faint.Render(cutLeft(m.o.Dir, room)))
 }
 
 // cut is s in at most n columns, cut at its end.
@@ -331,10 +329,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.take(acp.Update(msg))
 		return nil
 	case setMsg:
+		// Set: the status line shows it; only what failed is written.
 		if msg.err != nil {
 			m.print(bad.Render("  ⎿  " + msg.err.Error()))
-		} else {
-			m.print(faint.Render("  ⎿  " + strings.TrimSuffix(m.settings(), " (shift+tab)") + " from the next turn"))
 		}
 		return nil
 	case askMsg:
@@ -443,6 +440,11 @@ func (m *model) take(u acp.Update) {
 		m.endCall(u.ToolCallID, u.Status == "failed", u.Text)
 	case "available_commands_update":
 		m.cmds = u.Commands
+	case "current_mode_update":
+		m.mode = u.Mode
+		if len(u.Modes) > 0 {
+			m.modes = u.Modes
+		}
 	case "config_option_update":
 		m.config = u.Config
 	case "plan":
@@ -711,7 +713,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			}
 		}
 		return nil
-	case "shift+tab": // the next effort, as in Claude Code
+	case "shift+tab": // the next mode, as in Claude Code (ADR 0016)
+		return m.nextMode()
+	case "ctrl+e": // the next effort
 		return m.nextEffort()
 	case "tab":
 		if c := m.completions(); len(c) > 0 {
@@ -817,7 +821,8 @@ func (m *model) help() string {
 		"  /flow edit <name>   change a flow on its chart; /flow graph <name> draws it",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
 		"  tab            complete a command",
-		"  shift+tab      the next effort (how hard the model thinks), where the provider has one",
+		"  shift+tab      the next mode: manual, plan",
+		"  ctrl+e         the next effort (how hard the model thinks), where the provider has one",
 		"  ctrl+c         clear the input; twice to leave",
 		"  ctrl+d         leave, when the input is empty")
 	return strings.Join(lines, "\n")
@@ -938,11 +943,9 @@ func (m *model) View() tea.View {
 }
 
 func (m *model) status(w int) string {
-	left := m.settings()
+	left := m.modeLabel() + faint.Render(" · "+m.settings())
 	if m.note != "" {
 		left = warn.Render(m.note)
-	} else {
-		left = faint.Render(left)
 	}
 	var right []string
 	if n := len(m.asks); n > 0 {

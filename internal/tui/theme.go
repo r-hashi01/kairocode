@@ -10,19 +10,19 @@ import (
 // too dim in many terminals). On a light background the yellow would not
 // be read: each colour has a darker one there.
 type palette struct {
-	accent, faint, good, warn, bad, youFg, youBg, code string
+	accent, faint, good, warn, bad, youFg, youBg, code, plan string
 }
 
 var (
 	dark = palette{accent: "#FFD43B", faint: "#A3ACBC", good: "#7DD87D", warn: "#FF9F45", bad: "#FF7B86",
-		youFg: "#F2F4F8", youBg: "#3B4252", code: "#C9A7FF"}
+		youFg: "#F2F4F8", youBg: "#3B4252", code: "#C9A7FF", plan: "#7AA2F7"}
 	light = palette{accent: "#A87400", faint: "#5C6370", good: "#2E8B3E", warn: "#C2570C", bad: "#C62828",
-		youFg: "#1F2328", youBg: "#E4E7ED", code: "#7B3FB5"}
+		youFg: "#1F2328", youBg: "#E4E7ED", code: "#7B3FB5", plan: "#2F5FBF"}
 )
 
 // The styles, set from the palette in use.
 var (
-	accent, faint, good, warn, bad, you, code, h1 lipgloss.Style
+	accent, faint, good, warn, bad, you, code, h1, plan lipgloss.Style
 
 	bold    = lipgloss.NewStyle().Bold(true)
 	heading = lipgloss.NewStyle().Bold(true)
@@ -46,5 +46,6 @@ func setTheme(isDark bool) {
 	bad = lipgloss.NewStyle().Foreground(c(p.bad))
 	you = lipgloss.NewStyle().Foreground(c(p.youFg)).Background(c(p.youBg)).Bold(true)
 	code = lipgloss.NewStyle().Foreground(c(p.code))
+	plan = lipgloss.NewStyle().Foreground(c(p.plan)).Bold(true)
 	h1 = lipgloss.NewStyle().Bold(true).Foreground(c(p.accent))
 }

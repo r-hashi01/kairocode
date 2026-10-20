@@ -246,12 +246,20 @@ func (s *Server) switchSettings(w http.ResponseWriter, r *http.Request) {
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
 		Effort   string `json:"effort"`
+		Mode     string `json:"mode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Provider == "" && in.Model == "" && in.Effort == "" {
-		fail(w, http.StatusBadRequest, errors.New(`want {"provider": "...", "model": "...", "effort": "..."}`))
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Provider == "" && in.Model == "" && in.Effort == "" && in.Mode == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"provider": "...", "model": "...", "effort": "...", "mode": "..."}`))
 		return
 	}
-	st, err := s.rt.Switch(r.Context(), sessionOf(r), in.Provider, in.Model, in.Effort)
+	var st runtime.Settings
+	var err error
+	if in.Mode != "" {
+		st, err = s.rt.SetMode(r.Context(), sessionOf(r), in.Mode)
+	}
+	if err == nil && (in.Provider != "" || in.Model != "" || in.Effort != "") {
+		st, err = s.rt.Switch(r.Context(), sessionOf(r), in.Provider, in.Model, in.Effort)
+	}
 	switch {
 	case errors.Is(err, kairo.ErrUnknownRun), errors.Is(err, runtime.ErrNoProvider):
 		fail(w, http.StatusNotFound, err)

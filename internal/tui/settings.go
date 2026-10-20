@@ -77,7 +77,38 @@ func (m *model) settings() string {
 			effort = "default"
 		}
 	}
-	return out + " · effort " + effort + " (shift+tab)"
+	return out + " · effort " + effort
+}
+
+// modeLabel is the mode as the status line shows it, in its colour:
+// manual plain, plan blue, auto kairo's yellow (ADR 0016).
+func (m *model) modeLabel() string {
+	switch m.mode {
+	case "plan":
+		return plan.Render("⏸ plan mode")
+	case "auto":
+		return accent.Bold(true).Render("⏵⏵ auto mode")
+	}
+	return faint.Render("manual")
+}
+
+// nextMode moves to the next of the session's modes (after the last, the
+// first), at once on the screen, and sets it.
+func (m *model) nextMode() tea.Cmd {
+	if len(m.modes) == 0 {
+		m.note = "This agent has no modes"
+		return nil
+	}
+	k := 0
+	for i, md := range m.modes {
+		if md.ID == m.mode {
+			k = (i + 1) % len(m.modes)
+		}
+	}
+	next := m.modes[k].ID
+	m.mode = next
+	ctx, a, s := m.ctx, m.a, m.session
+	return func() tea.Msg { return setMsg{err: a.SetMode(ctx, s, next)} }
 }
 
 // nextEffort moves the effort to the next of the provider's (after the

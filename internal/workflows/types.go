@@ -197,7 +197,16 @@ type Switch struct {
 	// Effort is how hard the model thinks (its reasoning effort), where
 	// the provider has one (ADR 0014, 追記).
 	Effort string `json:"effort,omitempty"`
+	// Mode is how the session's turns go (ADR 0016): ModeManual, ModePlan.
+	Mode string `json:"mode,omitempty"`
 }
+
+// Modes (ADR 0016): manual asks the user as the rules say; plan runs the
+// turns in the plan agent, which only reads.
+const (
+	ModeManual = "manual"
+	ModePlan   = "plan"
+)
 
 const (
 	EventMessage = "message"
@@ -227,8 +236,10 @@ type TurnInput struct {
 	// Epoch counts the session's switches of engine before this turn
 	// (ADR 0014): a CLI engine starts a session of its own in each, given
 	// the conversation so far.
-	Epoch   int    `json:"epoch,omitempty"`
-	Effort  string `json:"effort,omitempty"`
+	Epoch  int    `json:"epoch,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// Mode is the session's mode for the turn (ADR 0016): "" is manual.
+	Mode    string `json:"mode,omitempty"`
 	Message string `json:"message"`
 	// Undo, if set, makes the turn an undo or a redo: it restores the
 	// working files instead of asking the model (design 7).

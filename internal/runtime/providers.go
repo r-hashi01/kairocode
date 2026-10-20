@@ -256,6 +256,7 @@ type Settings struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Effort   string `json:"effort,omitempty"` // "": the provider's default
+	Mode     string `json:"mode"`             // manual, plan (ADR 0016)
 }
 
 // Settings are what the session's next turn runs with: its latest turn's,
@@ -269,7 +270,7 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 	if err := json.Unmarshal(input(info), &in); err != nil {
 		return Settings{}, err
 	}
-	engine, model, effort := in.Engine, in.Model, in.Effort
+	engine, model, effort, mode := in.Engine, in.Model, in.Effort, ""
 	if n, ok, err := r.LastTurn(ctx, session); err != nil {
 		return Settings{}, err
 	} else if ok {
@@ -279,7 +280,7 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 		}
 		var tin workflows.TurnInput
 		if json.Unmarshal(input(run), &tin) == nil {
-			engine, model, effort = tin.Engine, tin.Model, tin.Effort
+			engine, model, effort, mode = tin.Engine, tin.Model, tin.Effort, tin.Mode
 		}
 	}
 	if engine == "" {
@@ -301,11 +302,17 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 		if sw.Effort != "" {
 			effort = sw.Effort
 		}
+		if sw.Mode != "" {
+			mode = sw.Mode
+		}
 	}
 	if engine == workflows.EngineAPI && model == "" {
 		model = provider.DefaultModel
 	}
-	return Settings{Provider: providerOf(engine), Model: model, Effort: effort}, nil
+	if mode == "" {
+		mode = workflows.ModeManual
+	}
+	return Settings{Provider: providerOf(engine), Model: model, Effort: effort, Mode: mode}, nil
 }
 
 // ErrUnavailable: the provider cannot run here.
@@ -387,10 +394,41 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 				sw.Effort = prev.Effort
 			}
 		}
+		if sw.Mode == "" {
+			sw.Mode = prev.Mode // a mode set waits too
+		}
 	}
 	if r.switches == nil {
 		r.switches = map[string]*workflows.Switch{}
 	}
+	r.switches[session] = &sw
+	r.switchMu.Unlock()
+	return r.Settings(ctx, session)
+}
+
+// Modes are the modes a session can be in (ADR 0016).
+var Modes = []string{workflows.ModeManual, workflows.ModePlan}
+
+// SetMode sets the session's mode from its next turn on (ADR 0016),
+// recorded with its next message as a switch is.
+func (r *Runtime) SetMode(ctx context.Context, session, mode string) (Settings, error) {
+	if !slices.Contains(Modes, mode) {
+		return Settings{}, fmt.Errorf("%w: the mode %q (there are %s)", ErrUnavailable, mode, strings.Join(Modes, ", "))
+	}
+	if _, err := r.K.Get(ctx, session); err != nil {
+		return Settings{}, err
+	}
+	r.switchMu.Lock()
+	if r.switches == nil {
+		r.switches = map[string]*workflows.Switch{}
+	}
+	// A new switch, never one changed in place: Settings reads one it
+	// took out of the map without the lock.
+	var sw workflows.Switch
+	if prev := r.switches[session]; prev != nil {
+		sw = *prev
+	}
+	sw.Mode = mode
 	r.switches[session] = &sw
 	r.switchMu.Unlock()
 	return r.Settings(ctx, session)

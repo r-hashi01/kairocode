@@ -47,6 +47,7 @@ type Backend interface {
 	Settings(ctx context.Context, session string) (runtime.Settings, error)
 	Switch(ctx context.Context, session, provider, model, effort string) (runtime.Settings, error)
 	Efforts(ctx context.Context, provider string) ([]string, error)
+	SetMode(ctx context.Context, session, mode string) (runtime.Settings, error)
 }
 
 // builtinCommands are the slash commands KairoCode itself has.
@@ -160,6 +161,26 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 			"description": "How hard the model thinks, from the next turn on", "currentValue": cur, "options": efforts})
 	}
 	return opts, nil
+}
+
+// modeNames are the modes as a client shows them (ADR 0016).
+var modeNames = map[string][2]string{
+	workflows.ModeManual: {"Manual", "Asks you as the rules say"},
+	workflows.ModePlan:   {"Plan", "Only reads: plans the change, makes none"},
+}
+
+// modes are the session's modes as ACP's session modes.
+func (a *agent) modes(ctx context.Context, session string) (map[string]any, error) {
+	st, err := a.b.Settings(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	var available []map[string]any
+	for _, id := range runtime.Modes {
+		n := modeNames[id]
+		available = append(available, map[string]any{"id": id, "name": n[0], "description": n[1]})
+	}
+	return map[string]any{"currentModeId": st.Mode, "availableModes": available}, nil
 }
 
 // setConfig switches the session's provider or model (ADR 0014) and gives
@@ -277,11 +298,15 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
+		modes, err := a.modes(ctx, s)
+		if err != nil {
+			return nil, err
+		}
 		if _, err := a.watch(s); err != nil {
 			return nil, err
 		}
 		a.offerCommands(ctx, s)
-		return map[string]any{"sessionId": s, "configOptions": opts}, nil
+		return map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, nil
 	case "session/load":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -298,12 +323,29 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
+		modes, err := a.modes(ctx, p.SessionID)
+		if err != nil {
+			return nil, err
+		}
 		// What waits for a person is asked again: the watch is told it first.
 		if _, err := a.watch(p.SessionID); err != nil {
 			return nil, err
 		}
 		a.offerCommands(ctx, p.SessionID)
-		return map[string]any{"configOptions": opts}, nil
+		return map[string]any{"configOptions": opts, "modes": modes}, nil
+	case "session/set_mode":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			ModeID    string `json:"modeId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, invalid(err)
+		}
+		if _, err := a.b.SetMode(ctx, p.SessionID, p.ModeID); err != nil {
+			return nil, invalid(err)
+		}
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": p.ModeID})
+		return map[string]any{}, nil
 	case InstallMethod:
 		var p struct {
 			Provider string `json:"provider"`

@@ -119,6 +119,7 @@ func (m *Manager) diagnose(ctx context.Context, cfg Server, dir, root, file stri
 	if err != nil {
 		return nil, err
 	}
+	defer m.release(s)
 	select {
 	case <-s.ready:
 	case <-ctx.Done():
@@ -146,6 +147,7 @@ func (m *Manager) server(cfg Server, dir, root string) (*server, error) {
 	defer m.mu.Unlock()
 	if s := m.servers[key]; s != nil && !s.dead() {
 		s.used()
+		s.inUse++
 		return s, nil
 	}
 	if len(cfg.Command) == 0 {
@@ -158,8 +160,14 @@ func (m *Manager) server(cfg Server, dir, root string) (*server, error) {
 	s := &server{cfg: cfg, root: root, ready: make(chan struct{}), pending: map[int]chan response{},
 		diags: map[string][]Diagnostic{}, pubs: map[string]int{}, published: make(chan struct{}), docs: map[string]int{}, log: m.log}
 	s.ctx, s.cancel = context.WithCancel(m.ctx)
-	s.idle = time.AfterFunc(Idle, func() {
+	s.idleFor = Idle
+	s.idle = time.AfterFunc(s.idleFor, func() {
 		m.mu.Lock()
+		if s.inUse > 0 { // not idle: a write waits on it (it may be starting)
+			m.mu.Unlock()
+			s.idle.Reset(s.idleFor)
+			return
+		}
 		if m.servers[key] == s {
 			delete(m.servers, key)
 		}
@@ -167,8 +175,17 @@ func (m *Manager) server(cfg Server, dir, root string) (*server, error) {
 		s.stop()
 	})
 	m.servers[key] = s
+	s.inUse++
 	go s.start(dir, path)
 	return s, nil
+}
+
+// release ends a use of s: it is idle from now, if no other use is on.
+func (m *Manager) release(s *server) {
+	m.mu.Lock()
+	s.inUse--
+	m.mu.Unlock()
+	s.used()
 }
 
 type response struct {
@@ -186,6 +203,9 @@ type server struct {
 	cancel context.CancelFunc
 	log    *slog.Logger
 	idle   *time.Timer
+	inUse  int // uses under way (under the manager's mu)
+	// idleFor is Idle as it was when the server started.
+	idleFor time.Duration
 
 	ready chan struct{} // closed once initialized, or failed (err)
 	err   error
@@ -204,7 +224,7 @@ type server struct {
 	exited    bool
 }
 
-func (s *server) used() { s.idle.Reset(Idle) }
+func (s *server) used() { s.idle.Reset(s.idleFor) }
 
 func (s *server) dead() bool {
 	s.mu.Lock()

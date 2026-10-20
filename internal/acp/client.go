@@ -34,10 +34,28 @@ type Update struct {
 	// agent is KairoCode's.
 	Meta json.RawMessage
 	Flow *flowchart.View
+	// Mode: current_mode_update's (and a made or loaded session's) mode;
+	// Modes, a made or loaded session's modes (ADR 0016).
+	Mode  string
+	Modes []SessionMode
 	// Config: config_option_update's, the session's settings (ADR 0014).
 	// The client gives one too when a session is made or loaded, and when a
 	// setting is set.
 	Config []ConfigOption
+}
+
+// SessionMode is one of a session's modes.
+type SessionMode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// modeState is a session's modes, as session/new and session/load give
+// them.
+type modeState struct {
+	CurrentModeID  string        `json:"currentModeId"`
+	AvailableModes []SessionMode `json:"availableModes"`
 }
 
 // ConfigOption is one of a session's settings: a selector, its current
@@ -138,6 +156,7 @@ func (cl *Client) handler(h ClientHandler) handler {
 					Status            string          `json:"status"`
 					AvailableCommands []Command       `json:"availableCommands"`
 					ConfigOptions     []ConfigOption  `json:"configOptions"`
+					CurrentModeID     string          `json:"currentModeId"`
 					Meta              json.RawMessage `json:"_meta"`
 				} `json:"update"`
 			}
@@ -147,7 +166,7 @@ func (cl *Client) handler(h ClientHandler) handler {
 			u := p.Update
 			up := Update{Session: p.SessionID, Kind: u.SessionUpdate, Text: contentText(u.Content),
 				ToolCallID: u.ToolCallID, Title: u.Title, ToolKind: u.Kind, Status: u.Status, Commands: u.AvailableCommands, Meta: u.Meta,
-				Config: u.ConfigOptions}
+				Config: u.ConfigOptions, Mode: u.CurrentModeID}
 			installs(up.Config)
 			if u.SessionUpdate == "plan" && len(u.Meta) > 0 {
 				var meta map[string]json.RawMessage
@@ -235,10 +254,12 @@ func (cl *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 	var out struct {
 		SessionID     string         `json:"sessionId"`
 		ConfigOptions []ConfigOption `json:"configOptions"`
+		Modes         *modeState     `json:"modes"`
 	}
 	err := cl.c.Call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": []any{}}, &out)
 	if err == nil {
 		cl.configured(out.SessionID, out.ConfigOptions)
+		cl.moded(out.SessionID, out.Modes)
 	}
 	return out.SessionID, err
 }
@@ -248,10 +269,12 @@ func (cl *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 func (cl *Client) LoadSession(ctx context.Context, session, cwd string) error {
 	var out struct {
 		ConfigOptions []ConfigOption `json:"configOptions"`
+		Modes         *modeState     `json:"modes"`
 	}
 	err := cl.c.Call(ctx, "session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}}, &out)
 	if err == nil {
 		cl.configured(session, out.ConfigOptions)
+		cl.moded(session, out.Modes)
 	}
 	return err
 }
@@ -267,6 +290,22 @@ func (cl *Client) SetConfigOption(ctx context.Context, session, id, value string
 		cl.configured(session, out.ConfigOptions)
 	}
 	return err
+}
+
+// SetMode sets the session's mode (ADR 0016).
+func (cl *Client) SetMode(ctx context.Context, session, mode string) error {
+	err := cl.c.Call(ctx, "session/set_mode", map[string]any{"sessionId": session, "modeId": mode}, nil)
+	if err == nil && cl.h.Update != nil {
+		cl.h.Update(Update{Session: session, Kind: "current_mode_update", Mode: mode})
+	}
+	return err
+}
+
+// moded gives the handler a made or loaded session's modes.
+func (cl *Client) moded(session string, m *modeState) {
+	if m != nil && cl.h.Update != nil {
+		cl.h.Update(Update{Session: session, Kind: "current_mode_update", Mode: m.CurrentModeID, Modes: m.AvailableModes})
+	}
 }
 
 // installs fills each value's Install from its _meta.

@@ -264,7 +264,7 @@ func TestSwitchProviderAndModel(t *testing.T) {
 	if got := reply("hello"); got != "api says hi" {
 		t.Fatalf("turn 0: %q", got)
 	}
-	if st, err := r.Switch(ctx, s, "codex", "gpt-x", ""); err != nil || st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
+	if st, err := r.Switch(ctx, s, "codex", "gpt-x", ""); err != nil || st != (Settings{Provider: "codex-acp", Model: "gpt-x", Mode: "manual"}) {
 		t.Fatalf("switch to codex: %+v %v", st, err)
 	}
 	if got := reply("write notes"); got != "codex gpt-x: write yes, written" {
@@ -273,7 +273,7 @@ func TestSwitchProviderAndModel(t *testing.T) {
 	if got := reply("and?"); got != "codex gpt-x: no call" {
 		t.Fatalf("turn 2: %q", got)
 	}
-	if st, _ := r.Settings(ctx, s); st != (Settings{Provider: "codex-acp", Model: "gpt-x"}) {
+	if st, _ := r.Settings(ctx, s); st != (Settings{Provider: "codex-acp", Model: "gpt-x", Mode: "manual"}) {
 		t.Fatalf("settings: %+v", st)
 	}
 	if _, err := r.Switch(ctx, s, "copilot", "", ""); err != nil {
@@ -668,5 +668,34 @@ func TestModelAndEffortKept(t *testing.T) {
 	s2, _ := r.CreateSession(ctx, "keep2", workflows.SessionInput{Dir: ws, Engine: "codex"})
 	if st, _ := r.Settings(ctx, s2); st.Model != "m2" || st.Effort != "ultra" {
 		t.Fatalf("a new session: %+v", st)
+	}
+}
+
+// In plan mode the session's turns run in the plan agent, which only
+// reads; back in manual, in its own (ADR 0016). The mode is recorded with
+// the turn: Settings read it back.
+func TestPlanMode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}, {Text: "b"}, {Text: "c"}}})
+	s, _ := r.CreateSession(ctx, "modes", workflows.SessionInput{Dir: repo(t)})
+	turn(t, r, s, "one")
+	if st, err := r.SetMode(ctx, s, "plan"); err != nil || st.Mode != "plan" {
+		t.Fatalf("plan: %+v %v", st, err)
+	}
+	turn(t, r, s, "two")
+	if a := agentOf(t, ctx, r, s, 1); a.Name != "plan" || !a.ReadOnly {
+		t.Fatalf("turn 1 ran in %s (read only %v)", a.Name, a.ReadOnly)
+	}
+	if st, _ := r.Settings(ctx, s); st.Mode != "plan" {
+		t.Fatalf("settings %+v", st)
+	}
+	r.SetMode(ctx, s, "manual")
+	turn(t, r, s, "three")
+	if a := agentOf(t, ctx, r, s, 2); a.Name != "build" {
+		t.Fatalf("turn 2 ran in %s", a.Name)
+	}
+	if _, err := r.SetMode(ctx, s, "yolo"); err == nil {
+		t.Fatal("took a mode there is not")
 	}
 }
