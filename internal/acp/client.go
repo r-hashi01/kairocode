@@ -157,8 +157,11 @@ type Section struct {
 	Name string `json:"name"`
 	Text string `json:"text"`
 	// Refs: for each line of Text, the script's lines it is ({0, 0} for
-	// none).
-	Refs [][2]int `json:"refs,omitempty"`
+	// none); Details: more of each line to show ("" none). Chart: the
+	// flow as a chart (flowchart.Chart), to draw in place of Text.
+	Refs    [][2]int        `json:"refs,omitempty"`
+	Details []string        `json:"details,omitempty"`
+	Chart   json.RawMessage `json:"chart,omitempty"`
 }
 
 // contentSections are the sections of a tool call's content.
@@ -180,6 +183,10 @@ func contentSections(raw json.RawMessage) []Section {
 		}
 		s := Section{Name: name, Text: strings.TrimPrefix(c.Content.Text, "\n\n── "+name+" ──\n")}
 		_ = json.Unmarshal(c.Content.Meta[RefsMeta], &s.Refs) // none: no line is shown more of
+		_ = json.Unmarshal(c.Content.Meta[DetailsMeta], &s.Details)
+		if ch := c.Content.Meta[ChartMeta]; len(ch) > 0 && string(ch) != "null" {
+			s.Chart = ch
+		}
 		out = append(out, s)
 	}
 	return out

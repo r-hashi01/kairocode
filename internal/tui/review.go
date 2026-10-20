@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
 
 // The review of a flow the model wants to write: its sections (what it
@@ -28,10 +30,14 @@ type review struct {
 }
 
 // detail is a step's lines of the script (first to last, from 1), the
-// one chosen, and the section's line it was opened from.
+// one chosen, and the section's line it was opened from; or, for a line
+// with more to show (a change's before and after), text, its lines, and
+// src, the section's line.
 type detail struct {
 	from               string
 	first, last, chose int
+	text               []string
+	src                int
 }
 
 type comment struct {
@@ -42,10 +48,12 @@ type comment struct {
 }
 
 // reviewLine is a section's line as shown (wrapped), and the line of the
-// section it is part of (from 1).
+// section it is part of (from 1); drawn: a line of a chart, styled
+// already, of no line of the section (src 0).
 type reviewLine struct {
-	text string
-	src  int
+	text  string
+	src   int
+	drawn bool
 }
 
 func newReview(sections []acp.Section) *review {
@@ -73,7 +81,14 @@ func (m *model) open(a *ask) {
 	}
 	sec := a.req.Sections[r.tab]
 	src := lines[i].src
+	if lines[i].drawn {
+		return
+	}
 	from := strings.TrimSpace(strings.Split(sec.Text, "\n")[src-1])
+	if src-1 < len(sec.Details) && sec.Details[src-1] != "" { // a change: before and after
+		r.detail = &detail{from: from, text: strings.Split(sec.Details[src-1], "\n"), src: src}
+		return
+	}
 	first, last := src, src // on the script, its own line
 	if r.tab != st {
 		if src-1 >= len(sec.Refs) || sec.Refs[src-1][0] < 1 {
@@ -88,10 +103,21 @@ func (m *model) open(a *ask) {
 	r.detail = &detail{from: from, first: first, last: min(max(last, first), n), chose: first}
 }
 
-// reviewLines are section i's lines, wrapped to w.
+// reviewLines are section i's lines, wrapped to w; a section with a
+// chart, the chart drawn.
 func (m *model) reviewLines(a *ask, w int) []reviewLine {
 	var out []reviewLine
-	for i, l := range strings.Split(a.req.Sections[a.review.tab].Text, "\n") {
+	sec := a.req.Sections[a.review.tab]
+	if len(sec.Chart) > 0 {
+		var c flowchart.Chart
+		if json.Unmarshal(sec.Chart, &c) == nil {
+			for _, l := range strings.Split(Chart(&c, w-4, nil), "\n") {
+				out = append(out, reviewLine{text: l, drawn: true})
+			}
+			return out
+		}
+	}
+	for i, l := range strings.Split(sec.Text, "\n") {
 		for _, p := range strings.Split(wrap(l, w-4, "    "), "\n") {
 			out = append(out, reviewLine{text: p, src: i + 1})
 		}
@@ -199,9 +225,17 @@ func (m *model) detailKey(a *ask, k tea.KeyPressMsg) tea.Cmd {
 	d := r.detail
 	switch k.String() {
 	case "down", "j":
-		d.chose = min(d.chose+1, d.last)
+		if d.text != nil {
+			d.chose = min(d.chose+1, len(d.text)-1)
+		} else {
+			d.chose = min(d.chose+1, d.last)
+		}
 	case "up", "k":
-		d.chose = max(d.chose-1, d.first)
+		if d.text != nil {
+			d.chose = max(d.chose-1, 0)
+		} else {
+			d.chose = max(d.chose-1, d.first)
+		}
 	case "esc", "enter", "left", "h", "backspace", "q":
 		r.detail = nil
 	case "c":
@@ -232,13 +266,18 @@ func scriptComment(a *ask, n int, text string) comment {
 // commentHere is a comment on the chosen line.
 func (m *model) commentHere(a *ask, text string) comment {
 	r := a.review
-	if r.detail != nil {
-		return scriptComment(a, r.detail.chose, text)
-	}
 	s := a.req.Sections[r.tab]
+	switch d := r.detail; {
+	case d != nil && d.text != nil: // on the change it shows
+		return comment{tab: r.tab, src: d.src, section: s.Name, line: d.from, text: text}
+	case d != nil:
+		return scriptComment(a, d.chose, text)
+	}
 	lines := m.reviewLines(a, max(m.width-1, 20))
 	c := comment{tab: r.tab, section: s.Name, text: text}
-	if i := min(r.cursor[r.tab], len(lines)-1); i >= 0 {
+	if i := min(r.cursor[r.tab], len(lines)-1); i >= 0 && lines[i].drawn {
+		c.line = "the chart"
+	} else if i >= 0 {
 		c.src = lines[i].src
 		src := strings.Split(s.Text, "\n")[lines[i].src-1]
 		c.line = strings.TrimSpace(src)
@@ -321,7 +360,10 @@ func (m *model) reviewView(w int) string {
 		warn.Bold(true).Render("Review the flow") + "  " + bold.Render(cut(a.req.Title, w-18)) + "\n\n"
 	var body []string // all of it; cur: the line chosen
 	cur := 0
-	if d := r.detail; d != nil {
+	if d := r.detail; d != nil && d.text != nil {
+		head += " " + bold.Render(cut(d.from, w-2)) + "\n" + faint.Render(" before and after") + "\n"
+		body, cur = m.changeLines(a, w)
+	} else if d != nil {
 		where := fmt.Sprintf("line %d", d.first)
 		if d.last > d.first {
 			where = fmt.Sprintf("lines %d–%d", d.first, d.last)
@@ -415,7 +457,7 @@ func (m *model) sectionLines(a *ask, w int) ([]string, int) {
 	cur := min(r.cursor[r.tab], max(len(ls)-1, 0))
 	commented := map[int]bool{}
 	for _, c := range r.comments {
-		if c.tab == r.tab {
+		if c.tab == r.tab && c.src > 0 { // a chart's comment is on no one line
 			commented[c.src] = true
 		}
 	}
@@ -426,17 +468,29 @@ func (m *model) sectionLines(a *ask, w int) ([]string, int) {
 			mark = warn.Render("● ")
 		}
 		text := l.text
-		switch t := strings.TrimSpace(text); { // the overview's marks, in colour
-		case strings.HasPrefix(t, "⚠"):
+		switch t := strings.TrimSpace(text); {
+		case l.drawn: // a chart's, styled already
+		case strings.HasPrefix(text, "▌"): // a part's heading
+			text = accent.Bold(true).Render(text)
+		case strings.HasPrefix(text, "+ "): // a change: added, taken away, changed
+			text = good.Render(text)
+		case strings.HasPrefix(text, "- "):
+			text = bad.Render(text)
+		case strings.HasPrefix(text, "~ "):
+			text = warn.Render(text)
+		case strings.HasPrefix(t, "⚠"): // the overview's marks
 			text = warn.Render(text)
 		case strings.HasPrefix(t, "✗"):
 			text = bad.Render(text)
 		case strings.HasPrefix(t, "✓"):
 			text = good.Render(text)
 		}
-		if i == cur {
+		switch {
+		case i == cur && l.drawn:
+			out[i] = accent.Render("❯ ") + mark + text
+		case i == cur:
 			out[i] = accent.Render("❯ ") + mark + accent.Render(l.text)
-		} else {
+		default:
 			out[i] = "  " + mark + text
 		}
 	}
@@ -508,4 +562,32 @@ func resumeReview(r *review, sections []acp.Section) *review {
 		}
 	}
 	return n
+}
+
+// changeLines are a change's before (-, red) and after (+, green), its
+// lines wrapped; and the chosen line's place.
+func (m *model) changeLines(a *ask, w int) ([]string, int) {
+	d := a.review.detail
+	var out []string
+	cur := 0
+	for i, l := range d.text {
+		if i == d.chose {
+			cur = len(out)
+		}
+		for j, p := range strings.Split(wrap(l, w-6, "  "), "\n") {
+			style := faint
+			switch {
+			case strings.HasPrefix(l, "- "):
+				style = bad
+			case strings.HasPrefix(l, "+ "):
+				style = good
+			}
+			prefix := "    "
+			if i == d.chose && j == 0 {
+				prefix = accent.Render("❯ ") + "  "
+			}
+			out = append(out, prefix+style.Render(p))
+		}
+	}
+	return out, cur
 }

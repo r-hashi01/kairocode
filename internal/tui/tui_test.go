@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
 
 // driver runs a model as the program would, one message at a time and the
@@ -1094,5 +1096,50 @@ func TestFlowReviewTry(t *testing.T) {
 	d.send(key("t"))
 	if d.m.asks[0].review.trying {
 		t.Fatal("t tries a flow that cannot be tried")
+	}
+}
+
+// The review draws the flow as a chart, and opens a change on Enter: its
+// before (-) and after (+). The overview's headings are headings.
+func TestFlowReviewChartAndChanges(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.height = 50
+	chart, _ := json.Marshal(flowchart.Chart{Name: "f", Nodes: []flowchart.Node{
+		{Kind: flowchart.Agent, Title: "plan", Text: "draft"},
+		{Kind: flowchart.Tool, Title: "mcp__s__post ⚠", Text: "sends reply of agent plan"}}})
+	req := acp.PermissionRequest{Title: "flow_write f", ToolKind: "edit",
+		Sections: []acp.Section{
+			{Name: "Overview", Text: "f\n\n▌ REACHES\n  ⚠ mcp__s__post        outside service"},
+			{Name: "Flow", Text: "f\n├─ agent plan\n└─ tool mcp__s__post", Chart: chart},
+			{Name: "Changes", Text: "replaces  .kairocode/workflows/f.star\n\n~ agent plan  \"draft\"  (draft)\n… 1 the same",
+				Details: []string{"", "", "before\n-     agent(\"plan\", \"old\")\nafter\n+     agent(\"plan\", \"draft\")", ""}},
+			{Name: "Script", Text: "def main(input):\n    agent(\"plan\", \"draft\")"}},
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}
+	d.send(askMsg{req: req, reply: make(chan string, 1)})
+	if v := d.m.View().Content; !strings.Contains(v, accent.Bold(true).Render("▌ REACHES")) {
+		t.Fatalf("no heading\n%s", plain(v))
+	}
+	d.send(key("tab"))
+	if v := d.view(); !strings.Contains(v, "╭") || !strings.Contains(v, "mcp__s__post ⚠") || !strings.Contains(v, "sends reply of agent plan") {
+		t.Fatalf("no chart\n%s", v)
+	}
+	d.send(key("enter")) // a chart opens nothing
+	if d.m.asks[0].review.detail != nil {
+		t.Fatal("opened the chart")
+	}
+	d.send(key("tab"))
+	d.send(key("down"))
+	d.send(key("down"))
+	d.send(key("enter"))
+	v := d.view()
+	if !strings.Contains(v, "before and after") || !strings.Contains(v, `-     agent("plan", "old")`) || !strings.Contains(v, `+     agent("plan", "draft")`) {
+		t.Fatalf("the change\n%s", v)
+	}
+	d.send(key("c"))
+	d.m.input.SetValue("keep the old prompt")
+	d.send(key("enter"))
+	d.send(key("esc"))
+	if c := d.m.asks[0].review.comments; len(c) != 1 || c[0].section != "Changes" || !strings.Contains(c[0].line, "~ agent plan") {
+		t.Fatalf("comment %+v", c)
 	}
 }

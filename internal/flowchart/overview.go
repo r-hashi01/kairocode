@@ -107,49 +107,62 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 	}
 	visit(c.Nodes, false, state{})
 
-	// What it is, and how it runs.
+	// Rows: a label in a column, then its value; a heading starts a part.
+	const col = 26
+	head := func(title string) {
+		if b.Len() > 0 {
+			line(Lines{}, "")
+		}
+		line(Lines{}, "▌ %s", title)
+	}
+	row := func(src Lines, label, value string) {
+		if value == "" {
+			line(src, "  %s", label)
+			return
+		}
+		line(src, "  %s%s%s", label, strings.Repeat(" ", max(col-width(label), 2)), value)
+	}
+
 	title := c.Name
 	if d := oneLine(c.Description); d != "" {
-		title += "  " + d
+		title += " · " + d
 	}
 	line(Lines{}, "%s", title)
-	line(Lines{}, "Run it: /flow %s <words>", c.Name)
-	line(Lines{}, "")
+	line(Lines{}, "  run%s/flow %s <words>", strings.Repeat(" ", col-3), c.Name)
 
-	// What the user asked for.
+	// What the user asked for, against the phases.
+	head("ASKED FOR")
 	if in.Asked == nil {
-		line(Lines{}, "What you asked for: the model did not say how it took it")
-	} else {
-		line(Lines{}, "What you asked for, as the model took it:")
-		covered := map[string]bool{}
-		for _, nd := range in.Asked {
-			src, ok := phases[nd.Phase]
-			if ok {
-				covered[nd.Phase] = true
-				line(src, "  ✓ %s → %s", oneLine(nd.Need), nd.Phase)
-			} else {
-				line(Lines{}, "  ✗ %s → no phase %q in the flow", oneLine(nd.Need), nd.Phase)
-			}
+		row(Lines{}, "? not given by the model", "")
+	}
+	covered := map[string]bool{}
+	for _, nd := range in.Asked {
+		if src, ok := phases[nd.Phase]; ok {
+			covered[nd.Phase] = true
+			row(src, "✓ "+oneLine(nd.Need), "→ "+nd.Phase)
+		} else {
+			row(Lines{}, "✗ "+oneLine(nd.Need), "→ no phase "+nd.Phase)
 		}
+	}
+	if in.Asked != nil {
 		for _, p := range phaseOrder {
 			if !covered[p] && p != "" {
-				line(phases[p], "  + not asked for: %s", p)
+				row(phases[p], "+ not asked", "→ "+p)
 			}
 		}
 	}
-	line(Lines{}, "")
 
 	// What it reaches.
-	line(Lines{}, "What it reaches:")
+	head("REACHES")
 	var warnings []struct {
-		src  Lines
-		text string
+		src          Lines
+		label, value string
 	}
-	warn := func(src Lines, format string, args ...any) {
+	warn := func(src Lines, label, value string) {
 		warnings = append(warnings, struct {
-			src  Lines
-			text string
-		}{src, fmt.Sprintf(format, args...)})
+			src          Lines
+			label, value string
+		}{src, label, value})
 	}
 	var files []step
 	reached := false
@@ -163,36 +176,32 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 			files = append(files, s)
 		case ReachOutside:
 			reached = true
-			sends := ""
+			row(s.n.Src, "⚠ "+s.n.Title, what)
 			switch {
 			case len(s.n.Uses) > 0:
-				sends = ": with " + strings.Join(s.n.Uses, ", ")
+				row(s.n.Src, "    sends", strings.Join(s.n.Uses, ", "))
 			case s.n.Text != "":
-				sends = ": " + quote(s.n)
+				row(s.n.Src, "    sends", quote(s.n))
 			}
-			line(s.n.Src, "  ⚠ %s (%s)%s", s.n.Title, what, sends)
 			if s.asked {
-				line(s.n.Src, "      you are asked before it (%s)", strings.Join(nonEmpty(s.askers, "start"), ", "))
+				row(s.n.Src, "    asks you first", "✓ "+strings.Join(nonEmpty(s.askers, "start"), ", "))
 			} else {
-				line(s.n.Src, "      ⚠ nothing asks you before it")
-				warn(s.n.Src, "%s runs without asking you first", s.n.Title)
+				row(s.n.Src, "    asks you first", "⚠ no")
+				warn(s.n.Src, "⚠ "+s.n.Title, "not asked first")
 			}
 		}
 	}
 	if !reached {
-		line(Lines{}, "  nothing outside this machine, nothing that cannot be undone")
+		row(Lines{}, "outside", "none")
 	}
 	if len(files) == 0 {
-		line(Lines{}, "  Files it changes: none by its tools")
-	} else {
-		for _, s := range files {
-			line(s.n.Src, "  Files it changes: %s %s", s.n.Title, s.n.Text)
-		}
+		row(Lines{}, "files", "none")
 	}
-	// The models it runs, and the agents that can change files.
+	for _, s := range files {
+		row(s.n.Src, "files", strings.TrimSpace(s.n.Title+" "+s.n.Text))
+	}
 	counts := map[string]int{}
-	var order []string
-	var writers []string
+	var order, writers []string
 	looped := false
 	for _, s := range steps {
 		var key string
@@ -213,34 +222,30 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 			order = append(order, key)
 		}
 		counts[key]++
-		if s.loop {
-			looped = true
-		}
+		looped = looped || s.loop
 	}
-	if len(order) == 0 {
-		line(Lines{}, "  Models: none")
-	} else {
+	models := "none"
+	if len(order) > 0 {
 		var parts []string
 		for _, k := range order {
 			parts = append(parts, fmt.Sprintf("%s ×%d", k, counts[k]))
 		}
-		more := ""
+		models = strings.Join(parts, ", ")
 		if looped {
-			more = " (some in a loop: more as it goes round)"
+			models += " (+ more in a loop)"
 		}
-		line(Lines{}, "  Models: %s%s", strings.Join(parts, ", "), more)
 	}
+	row(Lines{}, "models", models)
 	if len(writers) > 0 {
-		line(Lines{}, "  Agents that can change files: %s", strings.Join(writers, ", "))
+		row(Lines{}, "can change files", "agent "+strings.Join(writers, ", agent "))
 	}
-	line(Lines{}, "")
 
 	// What to watch out for.
 	var loops func([]Node)
 	loops = func(nodes []Node) {
 		for _, n := range nodes {
 			if n.Kind == Loop && strings.HasPrefix(n.Cond, "while") {
-				warn(n.Src, "a loop that goes on %s: make sure it ends", n.Cond)
+				warn(n.Src, "⚠ "+n.Cond, "may not end")
 			}
 			loops(n.Then)
 			loops(n.Else)
@@ -253,23 +258,38 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 	loops(c.Nodes)
 	for _, r := range in.Removed {
 		if strings.HasPrefix(r, "ask") || strings.HasPrefix(r, "tool") {
-			warn(Lines{}, "no longer in the flow: %s", r)
+			warn(Lines{}, "⚠ removed", r)
 		}
 	}
 	for _, nd := range in.Asked {
 		if _, ok := phases[nd.Phase]; !ok {
-			warn(Lines{}, "what you asked, %q, has no phase that does it", oneLine(nd.Need))
+			warn(Lines{}, "⚠ no phase for", oneLine(nd.Need))
 		}
 	}
+	head("WATCH")
 	if len(warnings) == 0 {
-		line(Lines{}, "Watch out: nothing found")
-	} else {
-		line(Lines{}, "Watch out:")
-		for _, w := range warnings {
-			line(w.src, "  ⚠ %s", w.text)
-		}
+		row(Lines{}, "✓ nothing found", "")
+	}
+	for _, w := range warnings {
+		row(w.src, w.label, w.value)
 	}
 	return strings.TrimRight(b.String(), "\n"), refs
+}
+
+// width is how many columns s takes on a terminal: wide (East Asian)
+// characters two.
+func width(s string) int {
+	n := 0
+	for _, r := range s {
+		switch {
+		case r >= 0x1100 && r <= 0x115F, r >= 0x2E80 && r <= 0xA4CF, r >= 0xAC00 && r <= 0xD7A3,
+			r >= 0xF900 && r <= 0xFAFF, r >= 0xFE30 && r <= 0xFE4F, r >= 0xFF00 && r <= 0xFF60, r >= 0xFFE0 && r <= 0xFFE6:
+			n += 2
+		default:
+			n++
+		}
+	}
+	return n
 }
 
 // nonEmpty is s with "" said as or.

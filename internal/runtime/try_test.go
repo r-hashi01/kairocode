@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -306,5 +308,37 @@ func TestTryFlowOnClaudeCode(t *testing.T) {
 func TestTryFlowRefusedOnCodex(t *testing.T) {
 	if dryEngine(workflows.EngineCodex) || !dryEngine(workflows.EngineCopilot) || !dryEngine(workflows.EngineClaudeCode) || !dryEngine("") {
 		t.Fatal("the engines a try runs on")
+	}
+}
+
+// The review's chart marks a tool that reaches out, and says what it
+// sends; what it changes is not made of those marks: a step that stays as
+// it was is not a change.
+func TestReviewSections(t *testing.T) {
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx := context.Background()
+	before := "def main(input):\n    d = agent(\"plan\", \"old\")\n    tool(\"mcp__s__post\", text = d.output)\n"
+	after := "def main(input):\n    d = agent(\"plan\", \"new\")\n    a = ask(\"post?\", options = [\"post\", \"stop\"])\n    tool(\"mcp__s__post\", text = d.output)\n"
+	old, err := r.Store.Put(ctx, store.KindContent, []byte(before))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secs := r.reviewSections(ctx, "f", after, old)
+	if len(secs) != 2 || secs[0].Name != "Flow" || secs[1].Name != "Changes" {
+		t.Fatalf("%+v", secs)
+	}
+	var c flowchart.Chart
+	if err := json.Unmarshal(secs[0].Chart, &c); err != nil {
+		t.Fatal(err)
+	}
+	if n := c.Nodes[2]; n.Title != "mcp__s__post ⚠" || n.Text != "sends reply of agent plan" {
+		t.Errorf("the tool's box: %+v", n)
+	}
+	if n := c.Nodes[1]; n.Text != `post?  [post | stop]` {
+		t.Errorf("the question's box: %+v", n)
+	}
+	ch := secs[1].Text
+	if strings.Contains(ch, "mcp__s__post") || !strings.Contains(ch, `~ agent plan  "new"`) || !strings.Contains(ch, `+ ask  "post?"`) || !strings.Contains(ch, "… 1 the same") {
+		t.Fatalf("changes:\n%s", ch)
 	}
 }

@@ -24,6 +24,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/agents"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/jsonrpc"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -882,7 +883,7 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 		return len(p) == 1
 	})
 	// What it does, its shape, and the whole script.
-	for _, want := range []string{"What it reaches:", "Models: agent build ×1", `✗ draft an answer → no phase "draft" in the flow`, "inquiry-alert", "draft an answer", "── Script ──", src[:len(src)-1]} {
+	for _, want := range []string{"▌ REACHES", "models                    agent build ×1", "✗ draft an answer         → no phase draft", "inquiry-alert", "draft an answer", "── Script ──", src[:len(src)-1]} {
 		if !strings.Contains(p[0].Preview, want) {
 			t.Fatalf("no %q in preview %q", want, p[0].Preview)
 		}
@@ -891,14 +892,33 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 	for _, sec := range p[0].Sections {
 		names = append(names, sec.Name)
 	}
-	if strings.Join(names, ",") != "Overview,Steps,Changes,Script" || !strings.Contains(p[0].Sections[2].Text, "~ agent build") ||
-		!strings.Contains(p[0].Sections[2].Text, "- ask  \"post it?\"") || !strings.Contains(p[0].Sections[2].Text, "It replaces the flow inquiry-alert") {
+	// What it changes: a line a step, each with its before and after;
+	// the flow drawn as a chart.
+	changes := p[0].Sections[2]
+	if strings.Join(names, ",") != "Overview,Flow,Changes,Script" || !strings.Contains(changes.Text, "replaces  .kairocode/workflows/inquiry-alert.star") ||
+		len(changes.Details) != len(strings.Split(changes.Text, "\n")) {
 		t.Fatalf("sections %+v", p[0].Sections)
 	}
-	// Each line of the tree knows its step's lines of the script.
-	tree := p[0].Sections[1]
-	if lines := strings.Split(tree.Text, "\n"); len(lines) != len(tree.Refs) || !strings.Contains(lines[1], "agent build") || tree.Refs[1] != [2]int{2, 2} {
-		t.Fatalf("tree refs %+v", tree)
+	for i, l := range strings.Split(changes.Text, "\n") {
+		switch {
+		case strings.HasPrefix(l, "~ agent build"):
+			if !strings.Contains(changes.Details[i], `- `+"    return agent(agent = \"build\", prompt = \"old\")") ||
+				!strings.Contains(changes.Details[i], `+     a = agent(agent = "build", prompt = "draft an answer")`) {
+				t.Errorf("the change's before and after: %q", changes.Details[i])
+			}
+		case strings.HasPrefix(l, "- ask"):
+			if !strings.Contains(changes.Details[i], `-     ask("post it?")`) {
+				t.Errorf("what was taken away: %q", changes.Details[i])
+			}
+		}
+	}
+	if !strings.Contains(changes.Text, "~ agent build") || !strings.Contains(changes.Text, `- ask  "post it?"`) {
+		t.Fatalf("changes:\n%s", changes.Text)
+	}
+	flow := p[0].Sections[1]
+	var chart flowchart.Chart
+	if json.Unmarshal(flow.Chart, &chart) != nil || chart.Name != "inquiry-alert" || len(flow.Refs) != len(strings.Split(flow.Text, "\n")) {
+		t.Fatalf("the flow's chart %+v", flow)
 	}
 	// The script is in the store once, not in the permission check's record.
 	turns, err := r.K.Children(ctx, s)

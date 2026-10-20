@@ -23,7 +23,7 @@ def main(input):
 func reach(n Node) (string, Reach) {
 	switch {
 	case strings.HasPrefix(n.Title, "mcp__"):
-		return "an outside service", ReachOutside
+		return "outside service", ReachOutside
 	case n.Title == "write":
 		return "changes files", ReachFiles
 	}
@@ -45,24 +45,28 @@ func TestOverview(t *testing.T) {
 		t.Fatalf("%d lines, %d refs", len(lines), len(refs))
 	}
 	for _, want := range []string{
-		"inquiry  Draft a reply to an inquiry and post it to Slack",
-		"Run it: /flow inquiry <words>",
-		"  ✓ draft a reply → draft",
-		"  ✓ post it to Slack → notify",
-		`  ✗ every morning → no phase "schedule" in the flow`,
-		"  + not asked for: confirm",
-		`  ⚠ mcp__slack__post (an outside service): with the reply of agent plan (in draft)`,
-		"      you are asked before it (confirm)",
-		"  Files it changes: write replies.log",
-		"  Models: agent plan ×1",
-		`  ⚠ what you asked, "every morning", has no phase that does it`,
+		"inquiry · Draft a reply to an inquiry and post it to Slack",
+		"  run                       /flow inquiry <words>",
+		"▌ ASKED FOR",
+		"  ✓ draft a reply           → draft",
+		"  ✓ post it to Slack        → notify",
+		"  ✗ every morning           → no phase schedule",
+		"  + not asked               → confirm",
+		"▌ REACHES",
+		"  ⚠ mcp__slack__post        outside service",
+		"      sends                 reply of agent plan (draft)",
+		"      asks you first        ✓ confirm",
+		"  files                     write replies.log",
+		"  models                    agent plan ×1",
+		"▌ WATCH",
+		"  ⚠ no phase for            every morning",
 	} {
-		if !strings.Contains(text, want+"\n") && !strings.HasSuffix(text, want) {
+		if !strings.Contains(text+"\n", want+"\n") {
 			t.Errorf("no line %q in\n%s", want, text)
 		}
 	}
 	for i, l := range lines {
-		if strings.Contains(l, "mcp__slack__post (") && refs[i] != (Lines{11, 11}) {
+		if strings.Contains(l, "mcp__slack__post  ") && refs[i] != (Lines{11, 11}) {
 			t.Errorf("%q: %+v", l, refs[i])
 		}
 	}
@@ -79,15 +83,15 @@ func TestOverview(t *testing.T) {
 	}
 	text, _ = Overview(c, OverviewInput{Note: reach, Removed: []string{`ask  "post it?"`}})
 	for _, want := range []string{
-		"What you asked for: the model did not say how it took it",
-		"      ⚠ nothing asks you before it",
-		"  Models: agent build ×1 (some in a loop: more as it goes round)",
-		"  Agents that can change files: build",
-		"  ⚠ mcp__slack__post runs without asking you first",
-		"  ⚠ a loop that goes on while True: make sure it ends",
-		`  ⚠ no longer in the flow: ask  "post it?"`,
+		"  ? not given by the model",
+		"      asks you first        ⚠ no",
+		"  models                    agent build ×1 (+ more in a loop)",
+		"  can change files          agent build",
+		"  ⚠ mcp__slack__post        not asked first",
+		"  ⚠ while True              may not end",
+		`  ⚠ removed                 ask  "post it?"`,
 	} {
-		if !strings.Contains(text, want+"\n") && !strings.HasSuffix(text, want) {
+		if !strings.Contains(text+"\n", want+"\n") {
 			t.Errorf("no line %q in\n%s", want, text)
 		}
 	}
@@ -119,9 +123,9 @@ func TestOverview(t *testing.T) {
 	}
 	text, _ = Overview(c, OverviewInput{Note: note})
 	for _, want := range []string{
-		"  ⚠ bash (cannot be undone): \"rm -rf x\"\n      ⚠ nothing asks you before it",
-		"  ⚠ mcp__s__post (an outside service): with the reply of agent plan\n      ⚠ nothing asks you before it",
-		"  ⚠ mcp__s__post (an outside service): with your words when you run it\n      you are asked before it",
+		"  ⚠ bash                    cannot be undone\n      sends                 \"rm -rf x\"\n      asks you first        ⚠ no",
+		"  ⚠ mcp__s__post            outside service\n      sends                 reply of agent plan\n      asks you first        ⚠ no",
+		"  ⚠ mcp__s__post            outside service\n      sends                 your words\n      asks you first        ✓",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("no %q in\n%s", want, text)

@@ -62,6 +62,7 @@
   - kairo の SDK には、2 つのシグナルを同時に待つ手段がありません。そこで、出来事（`EventTryFlow`）は足さず、試運転の頼みを承認と同じシグナルに載せました（`Approval.Try`、`omitempty`）。
   - 承認を待つところ（`waitApproval`）は、`Try` を受け取ると、待っている実行の子として試運転のフロー（`kairo.Child`、`FlowInput{Dry, Script}`）を動かし、終わったらまた同じシグナルを待ちます。待つ場所は、ターンのツール、Claude Code など CLI のエンジンの MCP の承認、の 2 つです。フローの中のツールの承認では、試運転を受けません。
   - セッションは変えていないので、kairo-gap は要りませんでした。
+  - この決定 4 の変更は、利用者が了承しました（2026-10-20）。
 - **版を上げない理由**
   - 足したものはすべて `omitempty` の欄（`Policy.Dry`、`TurnInput.Dry`、`FlowInput.Dry`・`Script`、`FlowLoadInput.Script`、`Approval.Try`）と、`Dry` か `Try` があるときだけ通る道です。
   - この変更の前の記録には `Dry` も `Try` も無いので、再開しても同じ呼び出しの列になり、ID も変わりません（不変条件 1・8）。

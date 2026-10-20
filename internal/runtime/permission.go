@@ -198,10 +198,10 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	if err != nil {
 		return ""
 	}
-	// What it is, whether it is what was asked, what it reaches; its
-	// steps; what it changes of the flow there; and the script itself,
-	// stored by hash and put in when the question is listed (the record
-	// stays small, NFR-5).
+	// What it is, whether it is what was asked, what it reaches: kept in
+	// the record. The script, and the flow there now it replaces, are
+	// stored by hash: its chart and its changes are drawn from them when
+	// the question is listed (the record stays small, NFR-5).
 	// What was asked is the model's words: kept short in the record.
 	if len(a.Asked) > maxAsked {
 		a.Asked = a.Asked[:maxAsked]
@@ -210,36 +210,27 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 		a.Asked[i].Need = clip(a.Asked[i].Need, 200)
 		a.Asked[i].Phase = clip(a.Asked[i].Phase, 60)
 	}
-	before, there := r.flowBefore(in.Call.Dir, a.Name)
+	before, beforeSrc, there := r.flowBefore(in.Call.Dir, a.Name)
 	var removed []string
 	if before != nil {
 		removed = flowchart.Removed(before, c)
 	}
 	overview, orefs := flowchart.Overview(c, flowchart.OverviewInput{Asked: a.Asked, Note: r.stepReach, Removed: removed})
-	tree, trefs := flowchart.TreeLines(c, nil)
-	p := overview + withRefs(orefs) + sectionSep + "Steps\n" + tree + withRefs(trefs)
+	p := overview + withRefs(orefs)
+	h, err := r.Store.Put(ctx, store.KindContent, []byte(a.Source))
+	if err != nil {
+		return p
+	}
+	p += scriptRef + h + nameRef + a.Name // the name too, to try it (ADR 0017)
 	switch {
 	case before != nil:
-		flowchart.Diff(before, c)
-		changes := "It replaces the flow " + a.Name + " there now."
-		if !changed(c.Nodes) && len(removed) == 0 {
-			changes += " Its steps stay as they were.\n\n"
-		} else {
-			changes += " + added, ~ changed, - taken away:\n\n"
+		bh, err := r.Store.Put(ctx, store.KindContent, beforeSrc)
+		if err != nil {
+			bh = unreadable // it is replaced still
 		}
-		tree, trefs := flowchart.TreeLines(c, nil)
-		changes += tree
-		refs := append([]flowchart.Lines{{}, {}}, trefs...)
-		for _, l := range removed {
-			changes += "\n- " + l
-			refs = append(refs, flowchart.Lines{})
-		}
-		p += sectionSep + "Changes\n" + changes + withRefs(refs)
+		p += oldRef + bh
 	case there:
-		p += sectionSep + "Changes\nIt replaces the flow " + a.Name + " there now (which could not be read as a flow)."
-	}
-	if h, err := r.Store.Put(ctx, store.KindContent, []byte(a.Source)); err == nil {
-		p += scriptRef + h + nameRef + a.Name // the name too, to try it (ADR 0017)
+		p += oldRef + unreadable
 	}
 	return p
 }
@@ -350,17 +341,26 @@ const (
 	// refsSep ends a section's text: then for each of its lines, the
 	// script's lines it is ("first-last", 0-0 for none), by commas.
 	refsSep = "\n\x00refs:"
-	// nameRef, after scriptRef's hash, gives the flow's name.
-	nameRef = "\x00name:"
+	// nameRef, after scriptRef's hash, gives the flow's name; oldRef,
+	// after it, the hash of the flow there it replaces (unreadable: one
+	// that could not be read as a flow).
+	nameRef    = "\x00name:"
+	oldRef     = "\x00old:"
+	unreadable = "!"
 )
 
 // PreviewSection is a named part of what a call would do: Overview,
-// Steps, Changes, Script. Refs: for each line of Text, the script's lines it is
-// ({0, 0} for none), to show them.
+// Flow, Changes, Script, Try. Refs: for each line of Text, the script's
+// lines it is ({0, 0} for none), to show them; Details: for each line,
+// more to show of it ("" for none: a change's before and after). Chart:
+// the flow's chart (flowchart.Chart), for a client that draws it (Text is
+// its tree).
 type PreviewSection struct {
-	Name string   `json:"name"`
-	Text string   `json:"text"`
-	Refs [][2]int `json:"refs,omitempty"`
+	Name    string          `json:"name"`
+	Text    string          `json:"text"`
+	Refs    [][2]int        `json:"refs,omitempty"`
+	Details []string        `json:"details,omitempty"`
+	Chart   json.RawMessage `json:"chart,omitempty"`
 }
 
 // withRefs is a section's refs as recorded after its text.
@@ -400,12 +400,20 @@ type TryTarget struct {
 // and its name (empty for a preview of none, or one recorded before the
 // name was).
 func previewScript(p string) (hash, name string) {
+	hash, name, _ = previewScripts(p)
+	return hash, name
+}
+
+// previewScripts is previewScript, and the hash of the flow it replaces
+// ("": none; unreadable: one that could not be read).
+func previewScripts(p string) (hash, name, old string) {
 	_, ref, ok := strings.Cut(p, scriptRef)
 	if !ok {
-		return "", ""
+		return "", "", ""
 	}
-	hash, name, _ = strings.Cut(ref, nameRef)
-	return hash, name
+	hash, rest, _ := strings.Cut(ref, nameRef)
+	name, old, _ = strings.Cut(rest, oldRef)
+	return hash, name, old
 }
 
 // fullPreview is a recorded preview with the script it names put in: as
@@ -414,16 +422,19 @@ func (r *Runtime) fullPreview(ctx context.Context, p string) (string, []PreviewS
 	if p == "" {
 		return "", nil
 	}
-	h, _ := previewScript(p)
+	h, name, old := previewScripts(p)
 	p, _, hasScript := strings.Cut(p, scriptRef)
 	parts := strings.Split(p, sectionSep)
 	sections := []PreviewSection{section("Overview", parts[0])}
-	for _, s := range parts[1:] {
+	for _, s := range parts[1:] { // as recorded before the chart was drawn here
 		name, text, _ := strings.Cut(s, "\n")
 		sections = append(sections, section(name, text))
 	}
 	if hasScript {
 		if _, src, err := r.Store.Get(ctx, h); err == nil {
+			if len(parts) == 1 && name != "" {
+				sections = append(sections, r.reviewSections(ctx, name, string(src), old)...)
+			}
 			sections = append(sections, PreviewSection{Name: "Script", Text: strings.TrimRight(string(src), "\n")})
 		}
 	}
@@ -434,35 +445,35 @@ func (r *Runtime) fullPreview(ctx context.Context, p string) (string, []PreviewS
 	return text, sections
 }
 
-// flowBefore is the flow name as it is in dir now, and whether there is
-// one (nil but there: it cannot be read as a flow). Only a plain file of
-// at most flowMax bytes is read.
-func (r *Runtime) flowBefore(dir, name string) (*flowchart.Chart, bool) {
+// flowBefore is the flow name as it is in dir now, its script, and
+// whether there is one (nil but there: it cannot be read as a flow). Only
+// a plain file of at most flowMax bytes is read.
+func (r *Runtime) flowBefore(dir, name string) (*flowchart.Chart, []byte, bool) {
 	if !flowchart.ValidName(name) {
-		return nil, false
+		return nil, nil, false
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	defer root.Close()
 	path := filepath.Join(flowchart.Dir, name+".star")
 	fi, err := root.Lstat(path)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	if !fi.Mode().IsRegular() || fi.Size() > flowMax {
-		return nil, true
+		return nil, nil, true
 	}
 	src, err := root.ReadFile(path)
 	if err != nil {
-		return nil, true
+		return nil, nil, true
 	}
 	c, err := flowchart.Build(name, src)
 	if err != nil {
-		return nil, true
+		return nil, nil, true
 	}
-	return c, true
+	return c, src, true
 }
 
 // maxAsked is the most of what was asked shown in a flow's review.
@@ -470,21 +481,6 @@ const maxAsked = 20
 
 // flowMax is the most of a flow there now read to show what replaces it.
 const flowMax = 1 << 20
-
-// changed reports whether Diff marked any of nodes.
-func changed(nodes []flowchart.Node) bool {
-	for _, n := range nodes {
-		if n.Mark != "" || changed(n.Then) || changed(n.Else) || changed(n.Body) {
-			return true
-		}
-		for _, b := range n.Branches {
-			if changed(b) {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // stepReach says what a flow's tool step reaches, for the user deciding
 // on it: an outside service, what cannot be undone, or files.
@@ -495,7 +491,7 @@ func (r *Runtime) stepReach(n flowchart.Node) (string, flowchart.Reach) {
 	d, ok := r.tool(n.Title)
 	switch {
 	case strings.HasPrefix(n.Title, "mcp__") || !ok:
-		return "an outside service", flowchart.ReachOutside
+		return "outside service", flowchart.ReachOutside
 	case d.Effect == tools.Real:
 		return "cannot be undone", flowchart.ReachOutside
 	case d.Effect == tools.Idempotent:
@@ -1019,4 +1015,111 @@ func clipLines(s string, n int) string {
 		lines = append(lines[:n], fmt.Sprintf("… %d more lines", len(lines)-n))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// reviewSections are a flow's review drawn from its script: its chart
+// (each tool that reaches out marked, with what it sends; each question
+// with its options), and what it changes of the flow there (old, its
+// hash), a line a step, each with its before and after.
+func (r *Runtime) reviewSections(ctx context.Context, name, src, old string) []PreviewSection {
+	c, err := flowchart.Build(name, []byte(src))
+	if err != nil {
+		return nil
+	}
+	tree, refs := flowchart.TreeLines(c, nil)
+	var mark func([]flowchart.Node)
+	mark = func(nodes []flowchart.Node) {
+		for i := range nodes {
+			n := &nodes[i]
+			switch n.Kind {
+			case flowchart.Tool:
+				if _, reach := r.stepReach(*n); reach == flowchart.ReachOutside {
+					n.Title += " ⚠"
+				}
+				if len(n.Uses) > 0 {
+					n.Text, n.Code = "sends "+strings.Join(n.Uses, ", "), false
+				}
+			case flowchart.Ask:
+				if len(n.Options) > 0 {
+					n.Text += "  [" + strings.Join(n.Options, " | ") + "]"
+				}
+			}
+			mark(n.Then)
+			mark(n.Else)
+			mark(n.Body)
+			for _, b := range n.Branches {
+				mark(b)
+			}
+		}
+	}
+	mark(c.Nodes)
+	chart, err := json.Marshal(c)
+	if err != nil {
+		return nil
+	}
+	flow := PreviewSection{Name: "Flow", Text: tree, Chart: chart}
+	for _, l := range refs {
+		flow.Refs = append(flow.Refs, [2]int{l.First, l.Last})
+	}
+	out := []PreviewSection{flow}
+	switch old {
+	case "":
+		return out
+	case unreadable:
+		return append(out, PreviewSection{Name: "Changes",
+			Text: "replaces  " + filepath.Join(flowchart.Dir, name+".star") + "  (not readable as a flow)"})
+	}
+	// It replaces a flow: said, whether or not its changes can be drawn.
+	replaces := PreviewSection{Name: "Changes", Text: "replaces  " + filepath.Join(flowchart.Dir, name+".star")}
+	_, before, err := r.Store.Get(ctx, old)
+	if err != nil {
+		return append(out, replaces)
+	}
+	b, err := flowchart.Build(name, before)
+	if err != nil {
+		return append(out, replaces)
+	}
+	plain, err := flowchart.Build(name, []byte(src)) // not marked as the chart is
+	if err != nil {
+		return append(out, replaces)
+	}
+	cs, same := flowchart.Changes(b, plain, string(before), src)
+	sec := PreviewSection{Name: "Changes"}
+	var lines []string
+	add := func(line, detail string, src flowchart.Lines) {
+		lines = append(lines, line)
+		sec.Details = append(sec.Details, detail)
+		sec.Refs = append(sec.Refs, [2]int{src.First, src.Last})
+	}
+	add("replaces  "+filepath.Join(flowchart.Dir, name+".star"), "", flowchart.Lines{})
+	add("", "", flowchart.Lines{})
+	if len(cs) == 0 {
+		add("  no step changed", "", flowchart.Lines{})
+	}
+	diff := func(sign, text string) string {
+		var out []string
+		for _, l := range strings.Split(text, "\n") {
+			out = append(out, sign+" "+l)
+		}
+		return strings.Join(out, "\n")
+	}
+	for _, ch := range cs {
+		line := ch.Mark + " " + ch.Label
+		if ch.Phase != "" {
+			line += "  (" + ch.Phase + ")"
+		}
+		var d []string
+		if ch.Before != "" {
+			d = append(d, "before", diff("-", ch.Before))
+		}
+		if ch.After != "" {
+			d = append(d, "after", diff("+", ch.After))
+		}
+		add(line, strings.Join(d, "\n"), ch.Src)
+	}
+	if same > 0 {
+		add(fmt.Sprintf("… %d the same", same), "", flowchart.Lines{})
+	}
+	sec.Text = strings.Join(lines, "\n")
+	return append(out, sec)
 }

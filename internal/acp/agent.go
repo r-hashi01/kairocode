@@ -79,7 +79,11 @@ const (
 	TryOption = "try"
 	// RefsMeta, with SectionMeta: for each line of the section, the
 	// script's lines it is ([first, last], [0, 0] for none).
-	RefsMeta      = "kairocode/refs"
+	RefsMeta = "kairocode/refs"
+	// DetailsMeta: for each line, more of it to show ("" none); ChartMeta:
+	// the section's flow as a chart (flowchart.Chart), to draw.
+	DetailsMeta   = "kairocode/details"
+	ChartMeta     = "kairocode/chart"
 	InstallMeta   = "kairocode/install"
 	InstallMethod = "_kairocode/install_provider"
 	// ModelsMethod gives a provider's models: {"provider": id} →
@@ -954,7 +958,14 @@ func (a *agent) ask(session string, p runtime.Pending) {
 				text = "\n\n── " + s.Name + " ──\n" + text
 			}
 			block := textBlock(text)
-			block["_meta"] = map[string]any{SectionMeta: s.Name, RefsMeta: s.Refs}
+			meta := map[string]any{SectionMeta: s.Name, RefsMeta: s.Refs}
+			if len(s.Details) > 0 {
+				meta[DetailsMeta] = s.Details
+			}
+			if len(s.Chart) > 0 {
+				meta[ChartMeta] = s.Chart
+			}
+			block["_meta"] = meta
 			content = append(content, map[string]any{"type": "content", "content": block})
 		}
 		toolCall["content"] = content

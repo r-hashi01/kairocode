@@ -63,6 +63,8 @@ type Node struct {
 	// Uses: where the values its text is made of come from, in words (a
 	// step's result, the user's words), when its text is code.
 	Uses []string `json:"-"`
+	// Options: an ask's options, when the script gives them as a list.
+	Options []string `json:"options,omitempty"`
 
 	Cond     string   `json:"cond,omitempty"`
 	Then     []Node   `json:"then,omitempty"`
@@ -413,7 +415,16 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 		return at(n)
 	case "ask":
 		text, code := b.argOf(x, 0, "question")
-		return at(Node{Kind: Ask, Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "question")))})
+		n := Node{Kind: Ask, Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "question")))}
+		if list, ok := argExpr(x, 1, "options").(*syntax.ListExpr); ok {
+			for _, e := range list.List {
+				if lit := literal(e); lit != nil {
+					s, _ := lit.Value.(string)
+					n.Options = append(n.Options, short(s))
+				}
+			}
+		}
+		return at(n)
 	case "decide":
 		text, code := b.argOf(x, 0, "prompt")
 		return at(Node{Kind: Decide, Title: b.arg(x, 1, "type"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "prompt")))})
@@ -588,20 +599,20 @@ func (b *builder) remember(stmt syntax.Stmt, nodes []Node) {
 		what := ""
 		switch n.Kind {
 		case Agent:
-			what = "the reply of agent " + n.Title
+			what = "reply of agent " + n.Title
 		case Tool:
-			what = "the result of tool " + n.Title
+			what = "result of tool " + n.Title
 		case Ask:
 			what = "your answer"
 		case Decide:
-			what = "the model's decision"
+			what = "decision of the model"
 		case Parallel:
-			what = "the replies of the agents at once"
+			what = "replies of agents at once"
 		default:
 			continue
 		}
 		if b.phase != "" {
-			what += " (in " + b.phase + ")"
+			what += " (" + b.phase + ")"
 		}
 		b.vars[id.Name] = what
 		return
@@ -619,7 +630,7 @@ func (b *builder) uses(e syntax.Expr) []string {
 		}
 		what, known := b.vars[id.Name]
 		if id.Name == "input" {
-			what, known = "your words when you run it", true
+			what, known = "your words", true
 		}
 		if known && !contains(out, what) {
 			out = append(out, what)
