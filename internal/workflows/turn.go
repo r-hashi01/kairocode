@@ -140,6 +140,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, turnp *[]string) error {
 	turn := *turnp
 	defer func() { *turnp = turn }()
+	refused := 0 // calls auto mode's judge refused (ADR 0016)
 	for {
 		if out.Steps == agent.MaxSteps {
 			out.Stopped = "max_steps"
@@ -165,7 +166,6 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 		// A cut-off reply's tool calls may be incomplete: none of them runs,
 		// and each is answered "not run" so the conversation stays valid.
 		cut := reply.Stop == "refusal" || reply.Stop == "max_tokens"
-		policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}
 		inputs := make([]ToolInput, len(reply.Calls))
 		gates := make([]Gate, len(reply.Calls))
 		for i, c := range reply.Calls {
@@ -180,9 +180,18 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 				// wait for approval inside a Parallel branch was not reached
 				// by its signal (kairo-gap #18). It stays so, so the turn's
 				// calls keep their ids.
+				// In auto mode the judge decides, until it has refused
+				// MaxAutoRefusals calls; then the user is asked.
+				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}
+				if in.Mode == ModeAuto && refused < MaxAutoRefusals {
+					policy.Auto, policy.Request = true, in.Message
+				}
 				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil)
 				if err != nil {
 					return err
+				}
+				if g.Judged {
+					refused++
 				}
 				gates[i] = g
 			}
@@ -383,7 +392,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine, Effort: agent.Effort,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message,
-			Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly},
+			Policy: autoPolicy(agent, in),
 		})
 		if err != nil {
 			return TurnOutput{}, err
@@ -434,6 +443,8 @@ type Gate struct {
 	Planned bool         `json:"planned,omitempty"`
 	Denied  *DeniedInput `json:"denied,omitempty"`
 	Ask     *AskRequest  `json:"ask,omitempty"`
+	// Judged: auto mode's judge refused it (ADR 0016).
+	Judged bool `json:"judged,omitempty"`
 }
 
 // gateTool checks a tool call against the policy. A call the rules say to
@@ -449,10 +460,12 @@ func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in T
 	}
 	switch d.Action {
 	case "deny":
+		g, err := deny("denied by " + d.Rule)
 		if d.Reason != "" {
-			return deny(d.Reason)
+			g, err = deny(d.Reason)
 		}
-		return deny("denied by " + d.Rule)
+		g.Judged = d.Judged
+		return g, err
 	case "ask":
 		if mcp != nil {
 			// Over MCP, claude is not kept waiting: the turn waits instead.
@@ -501,6 +514,16 @@ func runGated(ctx *kairo.Context, g Gate, in ToolInput) (ToolOutput, error) {
 // cut off.
 func ran(g Gate) bool {
 	return g.Denied == nil && g.Ask == nil && g.Action != ActToolMissing && g.Action != ActToolSkipped
+}
+
+// autoPolicy is a CLI engine's turn's policy: in auto mode, judged
+// against the turn's message (ADR 0016).
+func autoPolicy(agent Agent, in TurnInput) Policy {
+	p := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}
+	if in.Mode == ModeAuto {
+		p.Auto, p.Request = true, in.Message
+	}
+	return p
 }
 
 // hasHook reports whether the agent has a hook of event.

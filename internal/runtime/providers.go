@@ -407,7 +407,7 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 }
 
 // Modes are the modes a session can be in (ADR 0016).
-var Modes = []string{workflows.ModeManual, workflows.ModePlan}
+var Modes = []string{workflows.ModeManual, workflows.ModeAuto, workflows.ModePlan}
 
 // SetMode sets the session's mode from its next turn on (ADR 0016),
 // recorded with its next message as a switch is.

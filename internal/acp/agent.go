@@ -166,6 +166,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 // modeNames are the modes as a client shows them (ADR 0016).
 var modeNames = map[string][2]string{
 	workflows.ModeManual: {"Manual", "Asks you as the rules say"},
+	workflows.ModeAuto:   {"Auto", "A model judges what the rules would ask you about; what it is unsure of, it asks"},
 	workflows.ModePlan:   {"Plan", "Only reads: plans the change, makes none"},
 }
 

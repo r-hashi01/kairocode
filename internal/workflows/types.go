@@ -201,12 +201,18 @@ type Switch struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// Modes (ADR 0016): manual asks the user as the rules say; plan runs the
-// turns in the plan agent, which only reads.
+// Modes (ADR 0016): manual asks the user as the rules say; auto has a
+// model judge the calls the rules would ask about; plan runs the turns in
+// the plan agent, which only reads.
 const (
 	ModeManual = "manual"
+	ModeAuto   = "auto"
 	ModePlan   = "plan"
 )
+
+// MaxAutoRefusals is how many calls the judge may refuse in a turn's model
+// loop; after that, what the rules would ask about is asked (ADR 0016).
+const MaxAutoRefusals = 3
 
 const (
 	EventMessage = "message"
@@ -445,6 +451,11 @@ type Agent struct {
 type Policy struct {
 	Rules    string `json:"rules"`
 	ReadOnly bool   `json:"read_only,omitempty"`
+	// Auto: what the rules would ask about is judged by a model (ADR 0016);
+	// Request is the turn's message, which the judge weighs the call
+	// against.
+	Auto    bool   `json:"auto,omitempty"`
+	Request string `json:"request,omitempty"`
 }
 
 type PermissionInput struct {
@@ -501,6 +512,8 @@ type PermissionOutput struct {
 	// Script, for a hook, is the hash of the script the decision is about:
 	// the hook's flow runs only that script.
 	Script string `json:"script,omitempty"`
+	// Judged: auto mode's judge decided it, not the rules (ADR 0016).
+	Judged bool `json:"judged,omitempty"`
 }
 
 // Hooks (ADR 0003): a flow a project or the user binds to an event, run

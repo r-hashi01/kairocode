@@ -821,7 +821,7 @@ func (m *model) help() string {
 		"  /flow edit <name>   change a flow on its chart; /flow graph <name> draws it",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
 		"  tab            complete a command",
-		"  shift+tab      the next mode: manual, plan",
+		"  shift+tab      the next mode: manual, auto, plan",
 		"  ctrl+e         the next effort (how hard the model thinks), where the provider has one",
 		"  ctrl+c         clear the input; twice to leave",
 		"  ctrl+d         leave, when the input is empty")

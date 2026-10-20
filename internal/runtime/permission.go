@@ -133,18 +133,31 @@ func subject(args json.RawMessage) string {
 // permissionCheck decides a call from the rules recorded at the start of the
 // turn (invariant 2): a change to the settings meanwhile does not change it.
 func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionInput) (workflows.PermissionOutput, error) {
-	out, err := r.decide(t, in)
+	out, forced, err := r.decide(t, in)
 	if err == nil && in.Tool == workflows.HookTool {
 		return r.hookCheck(t, in, out)
 	}
-	if err != nil || out.Action != string(permission.Ask) || in.MCP == nil {
+	if err != nil || out.Action != string(permission.Ask) {
 		return out, err
 	}
 	// An MCP call the user has answered (ADR 0007, 4). An answer serves one
-	// run: a repeat, an escalation or a push made again is asked again.
-	found, ok, reason, err := r.Store.UseGrant(t, in.MCP.Turn, in.MCP.Key, in.MCP.Run)
-	if err != nil || !found {
-		return out, err
+	// run: a repeat, an escalation or a push made again is asked again. The
+	// user's answer comes before auto mode's judge.
+	found, ok, reason := false, false, ""
+	if in.MCP != nil {
+		if found, ok, reason, err = r.Store.UseGrant(t, in.MCP.Turn, in.MCP.Key, in.MCP.Run); err != nil {
+			return out, err
+		}
+	}
+	if !found {
+		// Auto mode (ADR 0016): what the rules would ask about, the judge
+		// decides. What is asked whatever the rules say (a push, a command
+		// outside the sandbox, a call made again after an interruption)
+		// is still asked.
+		if in.Policy.Auto && !forced {
+			return r.judge(t, in, out)
+		}
+		return out, nil
 	}
 	if ok {
 		return workflows.PermissionOutput{Action: string(permission.Allow), Rule: "the user approved it", Subject: out.Subject}, nil
@@ -156,34 +169,36 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	return workflows.PermissionOutput{Action: string(permission.Deny), Rule: rule, Reason: rule, Subject: out.Subject}, nil
 }
 
-func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (workflows.PermissionOutput, error) {
+// decide is the rules' decision about a call; forced, an ask that is made
+// whatever the rules say.
+func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (workflows.PermissionOutput, bool, error) {
 	var rules []permission.Rule
 	if err := r.Store.GetJSON(t, in.Policy.Rules, store.KindPermissions, &rules); err != nil {
-		return workflows.PermissionOutput{}, err
+		return workflows.PermissionOutput{}, false, err
 	}
 	args, err := r.toolArgs(t, in.Call)
 	if err != nil {
-		return workflows.PermissionOutput{}, err
+		return workflows.PermissionOutput{}, false, err
 	}
 	subj := subject(args)
 	d, ok := r.tool(in.Tool)
 	if !ok && in.Tool != workflows.HookTool { // a hook is a flow, not a tool: the rules still apply
-		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "no such tool", Subject: subj}, nil
+		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "no such tool", Subject: subj}, false, nil
 	}
 	if in.Policy.ReadOnly && d.Effect != tools.Read {
-		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "plan mode: only tools that read", Subject: subj}, nil
+		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "plan mode: only tools that read", Subject: subj}, false, nil
 	}
 	if in.MCP != nil && in.MCP.Repeat {
 		// The same real call ran before Claude Code was cut off, and Claude
 		// Code makes it again: it may not have kept the result. Running it
 		// again could act twice; the user says (ADR 0007, invariant 4).
 		return workflows.PermissionOutput{Action: string(permission.Ask),
-			Rule: "the same call ran before an interruption; run it again?", Subject: subj}, nil
+			Rule: "the same call ran before an interruption; run it again?", Subject: subj}, true, nil
 	}
 	if in.Tool == tools.GitPushTool.Name {
 		// It reaches outside the machine and runs outside the sandbox: asked
 		// every time, whatever the rules say (ADR 0005).
-		return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "pushes outside the machine", Subject: subj}, nil
+		return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "pushes outside the machine", Subject: subj}, true, nil
 	}
 	if in.Tool == tools.BashTool.Name {
 		// Whatever the rules say (ADR 0005): running outside the sandbox
@@ -193,14 +208,14 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 			var b tools.BashInput
 			_ = json.Unmarshal(args, &b)
 			return workflows.PermissionOutput{Action: string(permission.Ask),
-				Rule: "runs outside the sandbox: " + b.Justification, Subject: subj}, nil
+				Rule: "runs outside the sandbox: " + b.Justification, Subject: subj}, true, nil
 		}
 		if err := sandbox.Available(); err != nil {
-			return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "no sandbox here: " + err.Error(), Subject: subj}, nil
+			return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "no sandbox here: " + err.Error(), Subject: subj}, true, nil
 		}
 	}
 	dec := permission.Decide(rules, in.Tool, subj)
-	return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, nil
+	return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, false, nil
 }
 
 func (r *Runtime) toolDenied(t *kairo.TaskContext, in workflows.DeniedInput) (workflows.ToolOutput, error) {

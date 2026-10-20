@@ -160,7 +160,8 @@ func fakeCLI() {
 			}
 			// KC_FAKE_CLI_REDO: told to go on after being cut short, it
 			// makes its write again, as an agent that lost its result does.
-			redo := os.Getenv("KC_FAKE_CLI_REDO") == "1" && p.Prompt[0].Text == continuePrompt
+			redo := os.Getenv("KC_FAKE_CLI_REDO") == "1" &&
+				(p.Prompt[0].Text == continuePrompt || strings.HasPrefix(p.Prompt[0].Text, "The user answered"))
 			if file := os.Getenv("KC_FAKE_CLI_WRITE"); (first || redo) && file != "" {
 				// As copilot asks: by the tool's name. Its own shell is not
 				// KairoCode's, and is refused.
@@ -697,5 +698,118 @@ func TestPlanMode(t *testing.T) {
 	}
 	if _, err := r.SetMode(ctx, s, "yolo"); err == nil {
 		t.Fatal("took a mode there is not")
+	}
+}
+
+// Auto mode (ADR 0016): what the rules would ask about, the judge (here a
+// fake's fixed answer) decides. Allowed, the call runs unasked; refused,
+// the model is told why; unsure, the user is asked; after
+// MaxAutoRefusals refusals in a turn, the user is asked; a command
+// outside the sandbox is asked whatever the judge would say.
+func TestAutoMode(t *testing.T) {
+	write := func(name string) provider.FakeTool {
+		return provider.FakeTool{Name: "write", Input: json.RawMessage(`{"path":"` + name + `","content":"x\n"}`)}
+	}
+	run := func(t *testing.T, decide string, calls []provider.FakeTool) (*Runtime, string, int, string) {
+		t.Helper()
+		ws := workspaceWith(t, `{"write": "ask", "bash": "ask"}`)
+		r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
+			Decide: json.RawMessage(`{"value": ` + decide + `}`),
+			Script: []provider.FakeReply{{Tools: calls}, {Text: "done"}}})
+		ctx := context.Background()
+		s, _ := r.CreateSession(ctx, "auto", workflows.SessionInput{Dir: ws})
+		if _, err := r.SetMode(ctx, s, "auto"); err != nil {
+			t.Fatal(err)
+		}
+		n, err := r.Send(ctx, s, "do it")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r, s, n, ws
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	t.Run("allow", func(t *testing.T) {
+		r, s, n, ws := run(t, `{"action": "allow", "reason": "a file of the task"}`, []provider.FakeTool{write("a.txt")})
+		if _, err := r.WaitTurn(ctx, s, n); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "a.txt")); err != nil {
+			t.Fatal("not written:", err)
+		}
+	})
+	t.Run("deny", func(t *testing.T) {
+		r, s, n, ws := run(t, `{"action": "deny", "reason": "too much"}`, []provider.FakeTool{write("a.txt")})
+		if _, err := r.WaitTurn(ctx, s, n); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "a.txt")); err == nil {
+			t.Fatal("written though refused")
+		}
+		if conv := strings.Join(conversationOf(t, r, s, true), "\n"); !strings.Contains(conv, "auto mode's judge refused it: too much") {
+			t.Fatalf("the model was not told why\n%s", conv)
+		}
+	})
+	t.Run("ask", func(t *testing.T) {
+		r, s, _, _ := run(t, `{"action": "ask", "reason": "not sure"}`, []provider.FakeTool{write("a.txt")})
+		waitUntil(t, ctx, "the question", func() bool {
+			p, _ := r.Pending(ctx, s)
+			return len(p) == 1 && strings.Contains(p[0].Rule, "auto mode asks you: not sure")
+		})
+	})
+	t.Run("refused enough", func(t *testing.T) {
+		calls := []provider.FakeTool{write("a"), write("b"), write("c"), write("d")}
+		r, s, _, _ := run(t, `{"action": "deny", "reason": "no"}`, calls)
+		waitUntil(t, ctx, "the fourth asked", func() bool {
+			p, _ := r.Pending(ctx, s)
+			return len(p) == 1 && !strings.Contains(p[0].Rule, "auto mode")
+		})
+	})
+	t.Run("outside the sandbox", func(t *testing.T) {
+		esc := provider.FakeTool{Name: "bash", Input: json.RawMessage(`{"command":"ls","sandbox":"escalate","justification":"needs the network"}`)}
+		r, s, _, _ := run(t, `{"action": "allow", "reason": "ok"}`, []provider.FakeTool{esc})
+		waitUntil(t, ctx, "the question", func() bool {
+			p, _ := r.Pending(ctx, s)
+			return len(p) == 1 && strings.Contains(p[0].Rule, "outside the sandbox")
+		})
+	})
+}
+
+// In auto mode, an agent's call over MCP that the user has answered is
+// let through by the answer, not judged again (ADR 0016, 0007): here the
+// judge always says "ask"; the user allows the write, and the agent's
+// next round makes it.
+func TestAutoModeKeepsTheUsersAnswer(t *testing.T) {
+	setupFakeCLI(t, "notes.txt")
+	t.Setenv("KC_FAKE_CLI_REDO", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1, Decide: json.RawMessage(`{"value": {"action": "ask", "reason": "not sure"}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ws := workspaceWith(t, `{"write": "ask"}`)
+	s, _ := r.CreateSession(ctx, "auto-mcp", workflows.SessionInput{Dir: ws, Engine: "codex"})
+	r.SetMode(ctx, s, "auto")
+	n, err := r.Send(ctx, s, "write the notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p []Pending
+	waitUntil(t, ctx, "the question", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "from an agent\n" {
+		t.Fatalf("not written after the user allowed it: %q %v", b, err)
 	}
 }

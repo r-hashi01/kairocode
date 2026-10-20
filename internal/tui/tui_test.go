@@ -694,19 +694,43 @@ func TestProviderByNameAndFilter(t *testing.T) {
 // header.
 func TestModes(t *testing.T) {
 	d, a := start(t, Options{Engine: "anthropic", Model: "claude-opus-5-5"})
-	d.send(updateMsg{Kind: "current_mode_update", Mode: "manual", Modes: []acp.SessionMode{{ID: "manual", Name: "Manual"}, {ID: "plan", Name: "Plan"}}})
-	if v := d.view(); !strings.Contains(v, "manual · anthropic · claude-opus-5-5") {
+	d.send(updateMsg{Kind: "current_mode_update", Mode: "manual", Modes: []acp.SessionMode{{ID: "manual", Name: "Manual"},
+		{ID: "auto", Name: "Auto"}, {ID: "plan", Name: "Plan"}}})
+	if v := d.view(); !strings.Contains(v, "● manual mode · anthropic · claude-opus-5-5") {
 		t.Fatalf("status\n%s", v)
 	}
 	if strings.Contains(d.m.headerBox(), "claude-opus-5-5") {
 		t.Fatalf("the header has the model\n%s", d.m.headerBox())
 	}
-	d.send(key("shift+tab"))
-	if v := d.view(); !strings.Contains(v, "⏸ plan mode") || strings.Join(a.set, ",") != "mode=plan" {
-		t.Fatalf("shift+tab (%q)\n%s", a.set, v)
+	// Each mode has a colour of its own.
+	labels := map[string]string{}
+	for _, mode := range []string{"manual", "auto", "plan"} {
+		d.m.mode = mode
+		labels[mode] = d.m.modeLabel()
 	}
-	d.send(key("shift+tab"))
-	if v := d.view(); !strings.Contains(v, "manual") || strings.Join(a.set, ",") != "mode=plan,mode=manual" {
-		t.Fatalf("back to manual (%q)\n%s", a.set, v)
+	d.m.mode = "manual"
+	if labels["manual"] == labels["auto"] || colourOf(labels["manual"]) == colourOf(labels["auto"]) ||
+		colourOf(labels["auto"]) == colourOf(labels["plan"]) || colourOf(labels["manual"]) == colourOf(labels["plan"]) {
+		t.Fatalf("modes not told apart by colour: %q", labels)
 	}
+	// shift+tab: manual, auto, plan, manual.
+	for i, want := range []string{"⏵⏵ auto mode", "⏸ plan mode", "● manual mode"} {
+		d.send(key("shift+tab"))
+		if v := d.view(); !strings.Contains(v, want) {
+			t.Fatalf("shift+tab %d: no %q (%q)\n%s", i, want, a.set, v)
+		}
+	}
+	if strings.Join(a.set, ",") != "mode=auto,mode=plan,mode=manual" {
+		t.Fatalf("set %q", a.set)
+	}
+}
+
+// colourOf is the first colour escape in s ("" if none).
+func colourOf(s string) string {
+	i := strings.Index(s, "\x1b[")
+	if i < 0 {
+		return ""
+	}
+	j := strings.IndexByte(s[i:], 'm')
+	return s[i : i+j+1]
 }

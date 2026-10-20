@@ -80,8 +80,8 @@ func (m *model) settings() string {
 	return out + " · effort " + effort
 }
 
-// modeLabel is the mode as the status line shows it, in its colour:
-// manual plain, plan blue, auto kairo's yellow (ADR 0016).
+// modeLabel is the mode as the status line shows it, each in its colour:
+// manual green, auto kairo's yellow, plan blue (ADR 0016).
 func (m *model) modeLabel() string {
 	switch m.mode {
 	case "plan":
@@ -89,7 +89,7 @@ func (m *model) modeLabel() string {
 	case "auto":
 		return accent.Bold(true).Render("⏵⏵ auto mode")
 	}
-	return faint.Render("manual")
+	return good.Bold(true).Render("● manual mode")
 }
 
 // nextMode moves to the next of the session's modes (after the last, the

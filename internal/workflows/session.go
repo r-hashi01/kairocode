@@ -101,7 +101,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool)
 			switch ev.Switch.Mode {
 			case ModeManual:
 				mode = ""
-			case ModePlan:
+			case ModePlan, ModeAuto:
 				mode = ev.Switch.Mode
 			}
 		}
