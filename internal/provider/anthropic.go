@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -77,6 +78,10 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 	}
 	resp, err := a.stream(ctx, params, r.OnText)
 	if err != nil {
+		if strings.Contains(err.Error(), "no Anthropic credentials") {
+			// Said once and plainly: what to do, not the SDK's page.
+			return Response{}, &PermanentError{Err: ErrNoCredentials}
+		}
 		var apierr *anthropic.Error
 		if errors.As(err, &apierr) {
 			switch apierr.StatusCode {

@@ -607,6 +607,17 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 	if in.Agent == "" {
 		in.Agent = "build"
 	}
+	if in.Engine == "" {
+		// The provider last chosen, if it still runs here (2026-10-20).
+		if last, err := r.Store.LastProvider(ctx); err == nil && last != "" && r.available(ctx, last) {
+			in.Engine = last
+		}
+	} else {
+		e, _ := engineOf(in.Engine)
+		if err := r.Store.SetLastProvider(ctx, providerOf(e)); err != nil {
+			return "", err
+		}
+	}
 	if in.Engine != "" {
 		in.Engine, _ = engineOf(in.Engine) // a provider's name: its engine's
 		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {

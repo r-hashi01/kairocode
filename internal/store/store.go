@@ -234,6 +234,18 @@ func (s *Store) ProviderPref(ctx context.Context, provider string) (ProviderPref
 	return p, nil
 }
 
+// LastProvider is the provider last chosen, in any session ("" if none).
+// It is kept in the row of provider "", in its model.
+func (s *Store) LastProvider(ctx context.Context) (string, error) {
+	p, err := s.ProviderPref(ctx, "")
+	return p.Model, err
+}
+
+// SetLastProvider keeps provider as the one last chosen.
+func (s *Store) SetLastProvider(ctx context.Context, provider string) error {
+	return s.SetProviderChoice(ctx, "", provider, "")
+}
+
 // SetProviderChoice keeps the model and the effort chosen for provider
 // ("" leaves one as it is).
 func (s *Store) SetProviderChoice(ctx context.Context, provider, model, effort string) error {

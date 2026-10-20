@@ -5,6 +5,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -45,6 +46,10 @@ const (
 	StopLength  = "max_tokens"
 	StopRefusal = "refusal"
 )
+
+// ErrNoCredentials: the Claude API has no key to call it with.
+var ErrNoCredentials = errors.New("the Claude API has no credentials: set ANTHROPIC_API_KEY (or run `ant auth login`), " +
+	"or switch with /provider to one that signs in on its own (claude-code, codex, copilot)")
 
 // PermanentError is a provider error that repeating the request will not
 // change (a malformed request, bad credentials): the model action fails at

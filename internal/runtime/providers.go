@@ -163,6 +163,16 @@ func (r *Runtime) Providers(ctx context.Context) []ProviderInfo {
 	return out
 }
 
+// available reports whether provider id runs here now.
+func (r *Runtime) available(ctx context.Context, id string) bool {
+	for _, p := range r.Providers(ctx) {
+		if p.ID == id {
+			return p.Available
+		}
+	}
+	return false
+}
+
 // InstallProvider installs agent id of ACP's registry at version (the one
 // the user was shown; "" for the registry's), the user having chosen to
 // (ADR 0015).
@@ -374,6 +384,11 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 				return Settings{}, fmt.Errorf("%w: %s has no effort to set", ErrUnavailable, target)
 			}
 			return Settings{}, fmt.Errorf("%w: %s's efforts are %s, not %q", ErrUnavailable, target, strings.Join(es, ", "), effort)
+		}
+	}
+	if sw.Engine != "" { // a new session starts with it
+		if err := r.Store.SetLastProvider(ctx, target); err != nil {
+			return Settings{}, err
 		}
 	}
 	if model != "" || effort != "" { // kept for the next time

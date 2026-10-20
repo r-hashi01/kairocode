@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -409,7 +410,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		switch {
 		case msg.err != nil && m.ctx.Err() == nil:
-			m.print(bad.Render("  ⎿  " + msg.err.Error()))
+			m.print(bad.Render("  ⎿  " + shortError(msg.err.Error())))
 		case msg.stop == "cancelled":
 			m.print(warn.Render("  ⎿  Stopped. What you asked stays in the conversation."))
 		case msg.stop != "" && msg.stop != "end_turn":
@@ -672,6 +673,21 @@ func hasAllow(options []acp.PermissionOption) bool {
 		}
 	}
 	return false
+}
+
+// failedRun is how kairo says which run and call failed, before why.
+var failedRun = regexp.MustCompile(`^(workflow \S+ failed: |call \S+ \([\w.]+\) failed: |step call: )+`)
+
+// shortError is an error as the user reads it: why, not which run and
+// call failed, on one line.
+func shortError(s string) string {
+	s = failedRun.ReplaceAllString(s, "")
+	s, _, _ = strings.Cut(s, "\n")
+	s = strings.TrimSuffix(strings.TrimSpace(s), ":")
+	if i := strings.LastIndex(s, " (-32"); i > 0 && strings.HasSuffix(s, ")") {
+		s = s[:i] // the JSON-RPC code
+	}
+	return s
 }
 
 // remember keeps text as the latest of what was sent, for ↑ (not twice
