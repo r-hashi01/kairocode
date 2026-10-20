@@ -789,3 +789,39 @@ func TestModelProviderFirst(t *testing.T) {
 		t.Fatalf("after installing (%q)\n%s", a.set, v)
 	}
 }
+
+// ↑ and ↓ go through what was sent, and back to what was being typed.
+func TestHistory(t *testing.T) {
+	d, _ := start(t, Options{})
+	for _, text := range []string{"first", "second"} {
+		typed(d, text)
+		d.send(turnDoneMsg{stop: "end_turn"})
+	}
+	d.m.input.SetValue("half")
+	d.send(key("up"))
+	if got := d.m.input.Value(); got != "second" {
+		t.Fatalf("up: %q", got)
+	}
+	d.send(key("up"))
+	d.send(key("up")) // no further back
+	if got := d.m.input.Value(); got != "first" {
+		t.Fatalf("up up: %q", got)
+	}
+	d.send(key("down"))
+	d.send(key("down"))
+	if got := d.m.input.Value(); got != "half" {
+		t.Fatalf("back to what was typed: %q", got)
+	}
+}
+
+// Asked to allow a flow's write, the user sees the flow's shape.
+func TestAskShowsWhatItWouldDo(t *testing.T) {
+	d, _ := start(t, Options{})
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{Title: "flow_write inquiry-alert", ToolKind: "edit",
+		Content: "inquiry-alert\n├─ agent build: draft an answer\n└─ tool slack_post",
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}}}, reply: reply})
+	if v := d.view(); !strings.Contains(v, "agent build: draft an answer") || !strings.Contains(v, "tool slack_post") {
+		t.Fatalf("the flow is not shown\n%s", v)
+	}
+}

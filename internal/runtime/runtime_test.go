@@ -21,7 +21,9 @@ func open(t *testing.T, db string, p provider.Provider) *Runtime {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test"})
+	// Never the real claude (invariant 9): a judge or a decision that
+	// falls back to Claude Code finds none.
+	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude")})
 	if err != nil {
 		t.Fatal(err)
 	}

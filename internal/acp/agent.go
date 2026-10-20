@@ -811,7 +811,11 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		answers = map[string]bool{"took_effect": true, "did_not_take_effect": false}
 		title = "Cut off while it ran — did it take effect? " + title
 	} else if p.Rule != "" {
-		title += " (" + p.Rule + ")"
+		rule, _, _ := strings.Cut(p.Rule, "\n") // one line: the title is not a page
+		if len([]rune(rule)) > 120 {
+			rule = string([]rune(rule)[:120]) + "…"
+		}
+		title += " (" + rule + ")"
 	}
 	call, known := "", false
 	if _, c, ok := strings.Cut(p.Key, "#"); ok && !strings.HasPrefix(c, workflows.MCPCallPrefix) && !strings.HasPrefix(c, workflows.FlowCallPrefix) {
@@ -824,9 +828,13 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		a.update(session, map[string]any{"sessionUpdate": "tool_call", "toolCallId": call, "title": title,
 			"kind": kind, "status": "pending"})
 	}
+	toolCall := map[string]any{"toolCallId": call, "title": title, "kind": kind, "status": "pending"}
+	if p.Preview != "" { // what it would do: a flow's shape
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
+	}
 	params := map[string]any{
 		"sessionId": session,
-		"toolCall":  map[string]any{"toolCallId": call, "title": title, "kind": kind, "status": "pending"},
+		"toolCall":  toolCall,
 		"options":   options,
 	}
 	a.wg.Add(1)

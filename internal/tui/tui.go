@@ -157,6 +157,11 @@ type model struct {
 	// of them being chosen (/provider, /model).
 	config []acp.ConfigOption
 	pick   *pick
+	// history: what was sent, oldest first (↑ ↓); histAt, the one shown
+	// (len: none); draft, what was being typed before it.
+	history []string
+	histAt  int
+	draft   string
 	// mode and modes: the session's mode, and those there are (ADR 0016).
 	mode  string
 	modes []acp.SessionMode
@@ -431,6 +436,7 @@ func (m *model) take(u acp.Update) {
 	case "user_message_chunk": // a session taken up again: what was said
 		m.flushLive()
 		m.block(userLine(u.Text))
+		m.remember(u.Text)
 	case "tool_call":
 		m.flushLive()
 		if _, known := m.tools[u.ToolCallID]; !known {
@@ -637,8 +643,39 @@ func hasAllow(options []acp.PermissionOption) bool {
 	return false
 }
 
+// remember keeps text as the latest of what was sent, for ↑ (not twice
+// in a row).
+func (m *model) remember(text string) {
+	if text = strings.TrimSpace(text); text != "" && (len(m.history) == 0 || m.history[len(m.history)-1] != text) {
+		m.history = append(m.history, text)
+	}
+	m.histAt = len(m.history)
+}
+
+// recall puts into the input what was sent before (by -1) or after (+1)
+// the one shown; past the latest, what was being typed. false: nothing
+// to move to.
+func (m *model) recall(by int) bool {
+	at := m.histAt + by
+	if at < 0 || at > len(m.history) || len(m.history) == 0 {
+		return false
+	}
+	if m.histAt == len(m.history) {
+		m.draft = m.input.Value() // what was being typed, kept
+	}
+	m.histAt = at
+	if at == len(m.history) {
+		m.input.SetValue(m.draft)
+	} else {
+		m.input.SetValue(m.history[at])
+	}
+	m.input.CursorEnd()
+	return true
+}
+
 // submit sends text as the next turn.
 func (m *model) submit(text string) tea.Cmd {
+	m.remember(text)
 	m.block(userLine(text))
 	m.running = true
 	m.began = time.Now()
@@ -735,6 +772,14 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			} else {
 				m.compSel = (m.compSel + 1) % len(c)
 			}
+			return nil
+		}
+		// What was sent before: up from the input's first line, down from
+		// its last (else the keys move in the input).
+		if key == "up" && m.input.Line() == 0 && m.recall(-1) {
+			return nil
+		}
+		if key == "down" && m.input.Line() == m.input.LineCount()-1 && m.recall(+1) {
 			return nil
 		}
 	case "enter":
@@ -990,7 +1035,22 @@ func (m *model) askView(w int) string {
 	case !hasAllow(a.req.Options):
 		q = "It was cut off while it ran. Did it take effect?"
 	}
-	b.WriteString(rule + "\n" + warn.Bold(true).Render(q) + "\n\n" + bold.Render(a.req.Title) + "\n\n")
+	b.WriteString(rule + "\n" + warn.Bold(true).Render(q) + "\n\n" + bold.Render(cut(a.req.Title, w)) + "\n\n")
+	if c := strings.TrimRight(a.req.Content, "\n"); c != "" {
+		// What it would do (a flow's shape), at most a screen's worth.
+		lines := strings.Split(c, "\n")
+		room := max(m.height-14, 8)
+		if m.height == 0 {
+			room = 30
+		}
+		if len(lines) > room {
+			lines = append(lines[:room], fmt.Sprintf("… %d more lines", len(lines)-room))
+		}
+		for _, l := range lines {
+			b.WriteString("  " + cut(l, w-2) + "\n")
+		}
+		b.WriteString("\n")
+	}
 	for i, o := range a.req.Options {
 		if i == a.sel {
 			b.WriteString(accent.Render(fmt.Sprintf("❯ %d. %s", i+1, o.Name)) + "\n")

@@ -514,6 +514,9 @@ type PermissionOutput struct {
 	Script string `json:"script,omitempty"`
 	// Judged: auto mode's judge decided it, not the rules (ADR 0016).
 	Judged bool `json:"judged,omitempty"`
+	// Preview, for a call the user is asked about, is what it would do,
+	// to show them: the shape of a flow to be written.
+	Preview string `json:"preview,omitempty"`
 }
 
 // Hooks (ADR 0003): a flow a project or the user binds to an event, run

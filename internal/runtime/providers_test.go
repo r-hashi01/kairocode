@@ -766,6 +766,22 @@ func TestAutoMode(t *testing.T) {
 			return len(p) == 1 && !strings.Contains(p[0].Rule, "auto mode")
 		})
 	})
+	t.Run("no judge", func(t *testing.T) {
+		// The API fails (a fake with no decision and no reply) and there is
+		// no Claude Code: the user is asked.
+		ws := workspaceWith(t, `{"write": "ask"}`)
+		r := open(t, filepath.Join(t.TempDir(), "k.db"), noJudge{&provider.Fake{HoldAt: -1,
+			Script: []provider.FakeReply{{Tools: []provider.FakeTool{write("a.txt")}}}}})
+		s, _ := r.CreateSession(ctx, "nojudge", workflows.SessionInput{Dir: ws})
+		r.SetMode(ctx, s, "auto")
+		if _, err := r.Send(ctx, s, "do it"); err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, ctx, "the question", func() bool {
+			p, _ := r.Pending(ctx, s)
+			return len(p) == 1 && strings.Contains(p[0].Rule, "the judge could not decide") && !strings.Contains(p[0].Rule, "\n")
+		})
+	})
 	t.Run("outside the sandbox", func(t *testing.T) {
 		esc := provider.FakeTool{Name: "bash", Input: json.RawMessage(`{"command":"ls","sandbox":"escalate","justification":"needs the network"}`)}
 		r, s, _, _ := run(t, `{"action": "allow", "reason": "ok"}`, []provider.FakeTool{esc})
@@ -812,4 +828,38 @@ func TestAutoModeKeepsTheUsersAnswer(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "from an agent\n" {
 		t.Fatalf("not written after the user allowed it: %q %v", b, err)
 	}
+}
+
+// A flow's write, asked about, carries the flow's shape to show the user.
+func TestFlowWriteAskShowsTheFlow(t *testing.T) {
+	src := "def main(input):\n    a = agent(agent = \"build\", prompt = \"draft an answer\")\n    return a\n"
+	in, _ := json.Marshal(map[string]string{"name": "inquiry-alert", "source": src})
+	ws := workspaceWith(t, `{"flow_write": "ask"}`)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
+		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "done"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "flowask", workflows.SessionInput{Dir: ws})
+	if _, err := r.Send(ctx, s, "make the flow"); err != nil {
+		t.Fatal(err)
+	}
+	var p []Pending
+	waitUntil(t, ctx, "the question", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if !strings.Contains(p[0].Preview, "inquiry-alert") || !strings.Contains(p[0].Preview, "draft an answer") {
+		t.Fatalf("preview %q", p[0].Preview)
+	}
+}
+
+// noJudge is a provider whose forced calls (a judge's, a decision's) fail,
+// as the API does without a key.
+type noJudge struct{ *provider.Fake }
+
+func (n noJudge) Complete(ctx context.Context, r provider.Request) (provider.Response, error) {
+	if r.Force != "" {
+		return provider.Response{}, errors.New("no credentials\nhow to set them, at length")
+	}
+	return n.Fake.Complete(ctx, r)
 }

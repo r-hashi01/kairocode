@@ -117,6 +117,9 @@ type PermissionRequest struct {
 	// ToolKind is ACP's kind of the tool call (read, edit, execute, ...).
 	ToolKind string
 	Options  []PermissionOption
+	// Content is what the call would do, as text, if the agent says (a
+	// flow's shape).
+	Content string
 }
 
 // PermissionOption is one answer offered.
@@ -194,9 +197,10 @@ func (cl *Client) handler(h ClientHandler) handler {
 			var p struct {
 				SessionID string `json:"sessionId"`
 				ToolCall  struct {
-					ToolCallID string `json:"toolCallId"`
-					Title      string `json:"title"`
-					Kind       string `json:"kind"`
+					ToolCallID string          `json:"toolCallId"`
+					Title      string          `json:"title"`
+					Kind       string          `json:"kind"`
+					Content    json.RawMessage `json:"content"`
 				} `json:"toolCall"`
 				Options []PermissionOption `json:"options"`
 			}
@@ -205,7 +209,8 @@ func (cl *Client) handler(h ClientHandler) handler {
 			}
 			id := ""
 			if h.Permission != nil {
-				id = h.Permission(ctx, PermissionRequest{Session: p.SessionID, ToolCallID: p.ToolCall.ToolCallID, Title: p.ToolCall.Title, ToolKind: p.ToolCall.Kind, Options: p.Options})
+				id = h.Permission(ctx, PermissionRequest{Session: p.SessionID, ToolCallID: p.ToolCall.ToolCallID, Title: p.ToolCall.Title,
+					ToolKind: p.ToolCall.Kind, Options: p.Options, Content: contentText(p.ToolCall.Content)})
 			}
 			if id == "" {
 				return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil

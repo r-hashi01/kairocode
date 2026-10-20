@@ -65,11 +65,16 @@ func (r *Runtime) judge(t *kairo.TaskContext, in workflows.PermissionInput, rule
 	} else {
 		d, err = r.claudeDecide(t, in.Call.Dir, prompt, "", schema)
 	}
+	if err != nil && r.cfg.Provider != nil && t.Err() == nil {
+		// The API would not answer (no key, say): the user's Claude Code.
+		d, err = r.claudeDecide(t, in.Call.Dir, prompt, "", schema)
+	}
 	if err != nil {
 		if t.Err() != nil {
 			return workflows.PermissionOutput{}, t.Err()
 		}
-		return asked("the judge could not decide (" + err.Error() + ")")
+		why, _, _ := strings.Cut(err.Error(), "\n") // one line, not the whole error
+		return asked("the judge could not decide (" + clip(why, 100) + ")")
 	}
 	var v struct {
 		Action string `json:"action"`
@@ -89,9 +94,10 @@ func (r *Runtime) judge(t *kairo.TaskContext, in workflows.PermissionInput, rule
 	return asked(reason)
 }
 
+// clip is s in at most n characters.
 func clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…"
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
 }

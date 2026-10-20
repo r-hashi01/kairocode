@@ -13,6 +13,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -137,6 +138,9 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	if err == nil && in.Tool == workflows.HookTool {
 		return r.hookCheck(t, in, out)
 	}
+	if err == nil && out.Action == string(permission.Ask) {
+		out.Preview = r.preview(t, in)
+	}
 	if err != nil || out.Action != string(permission.Ask) {
 		return out, err
 	}
@@ -167,6 +171,30 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 		rule += ": " + reason
 	}
 	return workflows.PermissionOutput{Action: string(permission.Deny), Rule: rule, Reason: rule, Subject: out.Subject}, nil
+}
+
+// preview is what a call would do, for the user asked about it: a flow's
+// shape, as a tree ("" for other calls, or a script that does not parse).
+func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) string {
+	if in.Tool != tools.FlowWriteTool.Name {
+		return ""
+	}
+	args, err := r.toolArgs(ctx, in.Call)
+	if err != nil {
+		return ""
+	}
+	var a struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return ""
+	}
+	c, err := flowchart.Build(a.Name, []byte(a.Source))
+	if err != nil {
+		return ""
+	}
+	return flowchart.Tree(c, nil)
 }
 
 // decide is the rules' decision about a call; forced, an ask that is made
@@ -247,6 +275,8 @@ type Pending struct {
 	Subject string   `json:"subject"`
 	Rule    string   `json:"rule"`
 	Options []string `json:"options,omitempty"`
+	// Preview is what the call would do (a flow's shape), to show.
+	Preview string `json:"preview,omitempty"`
 }
 
 // KindQuestion is a Pending that is a flow's question.
@@ -373,7 +403,8 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			continue
 		}
 		o := checks[call]
-		out = append(out, Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool[call], Subject: o.Subject, Rule: o.Rule})
+		out = append(out, Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool[call], Subject: o.Subject, Rule: o.Rule,
+			Preview: o.Preview})
 	}
 	return out, nil
 }
