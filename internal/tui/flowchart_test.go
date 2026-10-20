@@ -155,8 +155,27 @@ func TestFlowLive(t *testing.T) {
 	}
 	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
 	// On a short screen, the chart still: the part around what runs.
-	if v := d.view(); !strings.Contains(v, "⏺ agent build ×2") || !strings.Contains(v, "⋮") || strings.Contains(v, "├─ ") {
+	if v := d.view(); !strings.Contains(v, "⏺ agent build ×2") || !strings.Contains(v, "⋮") || strings.Contains(v, "├─ ") ||
+		!strings.Contains(v, "shift+↑↓") {
 		t.Fatalf("on a short screen:\n%s", v)
+	}
+	// shift+↑↓ looks over it, and it stays there as the flow goes on.
+	for range 60 {
+		d.send(key("shift+up"))
+	}
+	if v := d.view(); !strings.Contains(v, "▶ start") || strings.Contains(v, "⏺ agent build") {
+		t.Fatalf("at the top:\n%s", v)
+	}
+	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateRunning},
+		Rounds: map[string]int{build: 3}}})
+	if v := d.view(); !strings.Contains(v, "▶ start") {
+		t.Fatalf("moved back while looked over:\n%s", v)
+	}
+	for range 60 {
+		d.send(key("shift+down"))
+	}
+	if v := d.view(); !strings.Contains(v, "agent changelog") || strings.Contains(v, "▶ start") {
+		t.Fatalf("at the end:\n%s", v)
 	}
 	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateDone}, Done: true}})
 	if v := d.view(); strings.Contains(v, "agent build") {

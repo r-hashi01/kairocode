@@ -170,6 +170,9 @@ type model struct {
 	// tried: reviews of flows being tried (ADR 0017), by their call, to
 	// go on with when the review comes back.
 	tried map[string]*review
+	// flowTop: where the running flow's chart was moved to with shift+↑↓
+	// (-1: it follows what runs); shownTop: where it was drawn from last.
+	flowTop, shownTop, shownMax int
 
 	ctx context.Context
 	a   Agent
@@ -249,7 +252,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
 	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
-		tried: map[string]*review{}}
+		tried: map[string]*review{}, flowTop: -1}
 	m.restyle()
 	return m
 }
@@ -525,6 +528,9 @@ func (m *model) take(u acp.Update) {
 		if u.Flow == nil {
 			return
 		}
+		if m.flow == nil {
+			m.flowTop = -1 // a new flow: its chart follows what runs
+		}
 		m.flow = u.Flow
 		if u.Flow.Done {
 			m.endFlow()
@@ -564,20 +570,25 @@ func (m *model) flowView(w int) string {
 		room = 40
 	}
 	// The chart, as the review draws it; taller than the screen, the part
-	// of it around what runs or waits now. Only a chart too wide to draw
-	// is a tree.
+	// of it around what runs or waits now, or where shift+↑↓ moved it to.
+	// Only a chart too wide to draw is a tree.
 	out := ChartOf(m.flow, w)
 	lines := strings.Split(out, "\n")
 	if len(lines) <= room {
 		return out
 	}
-	return strings.Join(around(lines, room), "\n")
+	from := m.flowTop
+	if from < 0 {
+		from = around(lines, room)
+	}
+	from = min(max(from, 0), len(lines)-room)
+	m.shownTop, m.shownMax = from, len(lines)-room
+	return strings.Join(window(lines, room, from), "\n") + "\n" + faint.Render("  shift+↑↓ to look over the flow")
 }
 
-// around is room of lines, those around the first that runs or waits
-// (⏺, ⏸), else around the last done (✓): the first line (the flow's
-// name) kept, and ⋮ where lines are left out.
-func around(lines []string, room int) []string {
+// around is where a window of room of lines starts for the first that
+// runs or waits (⏺, ⏸) to be in its middle, else the last done (✓).
+func around(lines []string, room int) int {
 	at := -1
 	for i, l := range lines {
 		if strings.Contains(l, "⏺") || strings.Contains(l, "⏸") {
@@ -592,11 +603,16 @@ func around(lines []string, room int) []string {
 			}
 		}
 	}
-	at = max(at, 0)
+	return max(min(max(at, 0)-room/2, len(lines)-room), 0)
+}
+
+// window is room of lines from from: the first line (the flow's name)
+// kept, and ⋮ where lines are left out.
+func window(lines []string, room, from int) []string {
 	body := lines[1:]
 	n := room - 1
-	from := max(min(at-1-n/2, len(body)-n), 0)
-	part := append([]string(nil), body[from:from+n]...)
+	from = min(max(from, 0), max(len(body)-n, 0))
+	part := append([]string(nil), body[from:min(from+n, len(body))]...)
 	if from > 0 {
 		part[0] = faint.Render("  ⋮")
 	}
@@ -813,6 +829,19 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		if key == "ctrl+c" {
 			return m.leave()
 		}
+		return nil
+	case m.flow != nil && m.edit == nil && (key == "shift+up" || key == "shift+down"):
+		// The running flow's chart, looked over: it stays where it is put.
+		from := m.flowTop
+		if from < 0 { // from where it follows what runs
+			from = m.shownTop
+		}
+		if key == "shift+down" {
+			from++
+		} else {
+			from--
+		}
+		m.flowTop = min(max(from, 0), m.shownMax)
 		return nil
 	case len(m.asks) > 0:
 		return m.askKey(k)
