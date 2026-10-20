@@ -916,3 +916,32 @@ func TestSignInCommandIsShownFirst(t *testing.T) {
 		t.Fatalf("esc: %q", a.set)
 	}
 }
+
+// A flow too long for the screen is all there to read: PgDn and PgUp
+// scroll it, and nothing is cut away.
+func TestAskScrollsWhatItWouldDo(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.height = 24 // eight lines at a time
+	var lines []string
+	for i := range 30 {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{Title: "flow_write long", ToolKind: "edit", Content: strings.Join(lines, "\n"),
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}}}, reply: reply})
+	v := d.view()
+	if !strings.Contains(v, "line 00") || strings.Contains(v, "line 08") || !strings.Contains(v, "22 more lines · PgDn") {
+		t.Fatalf("first screen\n%s", v)
+	}
+	for range 5 {
+		d.send(key("pgdown"))
+	}
+	v = d.view()
+	if !strings.Contains(v, "line 29") || !strings.Contains(v, "22 lines above") || strings.Contains(v, "more lines") {
+		t.Fatalf("the end\n%s", v)
+	}
+	d.send(key("pgup"))
+	if v := d.view(); !strings.Contains(v, "line 15") {
+		t.Fatalf("back up\n%s", v)
+	}
+}

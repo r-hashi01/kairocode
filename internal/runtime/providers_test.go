@@ -872,8 +872,34 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 		p, _ = r.Pending(ctx, s)
 		return len(p) == 1
 	})
-	if !strings.Contains(p[0].Preview, "inquiry-alert") || !strings.Contains(p[0].Preview, "draft an answer") {
-		t.Fatalf("preview %q", p[0].Preview)
+	// What it does, its shape, and the whole script.
+	for _, want := range []string{"What it does:", "agent build", "inquiry-alert", "draft an answer", "── the script ──", src[:len(src)-1]} {
+		if !strings.Contains(p[0].Preview, want) {
+			t.Fatalf("no %q in preview %q", want, p[0].Preview)
+		}
+	}
+	// The script is in the store once, not in the permission check's record.
+	turns, err := r.K.Children(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := false
+	for _, tr := range turns {
+		calls, err := r.K.Children(ctx, tr.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range calls {
+			if c.Plan == "kairo.call/"+workflows.ActPermissionCheck {
+				checked = true
+				if strings.Contains(string(c.Output), "def main") {
+					t.Errorf("the script is recorded: %s", c.Output)
+				}
+			}
+		}
+	}
+	if !checked {
+		t.Error("no permission check found")
 	}
 }
 

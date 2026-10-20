@@ -115,3 +115,11 @@ KairoCode では、権限の判定（`permission.check`）が「許す」「断�
   - 行の対話（`kairocode chat` を端末の外で使うとき）では、`n <文>` と打ちます。
   - あわせて、CLI のエンジン（Claude Code など）の承認にも、フローの形（`AskRequest.Preview`）を出すようにしました。
   - テスト: `TestRefuseWithWhatToDoInstead`、`TestACPRefuseWithWhatToDoInstead`、`TestChatAsks`。
+- **フローの承認で全体を見せる（2026-10-20、利用者の指摘「全体像がわからないのに allow も reject もできない」）:**
+  - `flow_write` の承認の中身（`Preview`）は、次の 3 つを順に並べます。
+    - 「What it does」: 段（`phase`）ごとのエージェント・ツール・質問と、呼び得るツールの一覧（`flowchart.Summary`）。
+    - 木の形。
+    - スクリプトの全文。
+  - TUI は、中身を切らずに折り返します。画面に入らない分は PgUp・PgDn（とスペース）で送ります。
+  - スクリプトの全文は、権限の判定の記録（と MCP の承認の記録）に入れません。全文は `kc_message` に内容のハッシュで 1 度だけ置き、記録の `Preview` には要約、木、そのハッシュだけを入れます。全文は、承認の一覧（`Pending`）を作るときに読んで足します（durability-reviewer の指摘。記録を小さく保つ、NFR-5）。
+  - テスト: `TestSummary`、`TestAskScrollsWhatItWouldDo`、`TestFlowWriteAskShowsTheFlow`（スクリプトが判定の記録に無いことも確かめる）。

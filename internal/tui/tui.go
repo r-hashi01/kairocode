@@ -137,6 +137,8 @@ type ask struct {
 	sel int
 	// instead: the user is typing what to do instead of the call.
 	instead bool
+	// scroll: the first line of what it would do shown (PgUp, PgDn).
+	scroll int
 }
 
 // insteadOption is the choice, after an approval's options, of refusing
@@ -969,6 +971,13 @@ func (m *model) askKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	n := a.choices()
 	switch {
+	case key == "pgdown" || key == "space" || key == "pgup":
+		by := m.askRoom() - 1
+		if key == "pgup" {
+			by = -by
+		}
+		last := len(m.askLines(max(m.width-1, 20))) - m.askRoom()
+		a.scroll = min(max(a.scroll+by, 0), max(last, 0))
 	case key == "up" || key == "k":
 		if a.sel < 0 {
 			a.sel = n - 1
@@ -1117,6 +1126,27 @@ func short(session string) string {
 	return s
 }
 
+// askLines are the first question's content, wrapped to w.
+func (m *model) askLines(w int) []string {
+	c := strings.TrimRight(m.asks[0].req.Content, "\n")
+	if c == "" {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(c, "\n") {
+		out = append(out, strings.Split(wrap(l, w-2, "    "), "\n")...)
+	}
+	return out
+}
+
+// askRoom is how many lines of a question's content are shown at once.
+func (m *model) askRoom() int {
+	if m.height == 0 {
+		return 30
+	}
+	return max(m.height-16, 3)
+}
+
 func (m *model) askView(w int) string {
 	a := m.asks[0]
 	rule := warn.Render(strings.Repeat("─", w))
@@ -1129,18 +1159,20 @@ func (m *model) askView(w int) string {
 		q = "It was cut off while it ran. Did it take effect?"
 	}
 	b.WriteString(rule + "\n" + warn.Bold(true).Render(q) + "\n\n" + bold.Render(cut(a.req.Title, w)) + "\n\n")
-	if c := strings.TrimRight(a.req.Content, "\n"); c != "" {
-		// What it would do (a flow's shape), at most a screen's worth.
-		lines := strings.Split(c, "\n")
-		room := max(m.height-14, 8)
-		if m.height == 0 {
-			room = 30
+	if lines := m.askLines(w); len(lines) > 0 {
+		// What it would do (a flow's), all of it: a screen's worth at a
+		// time, scrolled with PgUp and PgDn.
+		room := m.askRoom()
+		a.scroll = min(max(a.scroll, 0), max(len(lines)-room, 0))
+		end := min(a.scroll+room, len(lines))
+		if a.scroll > 0 {
+			b.WriteString(faint.Render(fmt.Sprintf("  ↑ %d lines above · PgUp", a.scroll)) + "\n")
 		}
-		if len(lines) > room {
-			lines = append(lines[:room], fmt.Sprintf("… %d more lines", len(lines)-room))
+		for _, l := range lines[a.scroll:end] {
+			b.WriteString("  " + l + "\n")
 		}
-		for _, l := range lines {
-			b.WriteString("  " + cut(l, w-2) + "\n")
+		if end < len(lines) {
+			b.WriteString(faint.Render(fmt.Sprintf("  ↓ %d more lines · PgDn", len(lines)-end)) + "\n")
 		}
 		b.WriteString("\n")
 	}
@@ -1165,6 +1197,9 @@ func (m *model) askView(w int) string {
 		return b.String()
 	}
 	hint := "Enter to confirm · ↑↓ or a number to choose"
+	if a.req.Content != "" {
+		hint += " · PgUp PgDn to read it all"
+	}
 	if a.sel < 0 {
 		hint = "Choose with ↑↓ or a number, then Enter"
 	}

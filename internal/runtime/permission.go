@@ -194,7 +194,13 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	if err != nil {
 		return ""
 	}
-	return flowchart.Tree(c, nil)
+	// What it does and its shape; the script itself is stored by hash and
+	// put in when the question is listed (the record stays small, NFR-5).
+	p := flowchart.Summary(c) + "\n\n" + flowchart.Tree(c, nil)
+	if h, err := r.Store.Put(ctx, store.KindContent, []byte(a.Source)); err == nil {
+		p += scriptRef + h
+	}
+	return p
 }
 
 // decide is the rules' decision about a call; forced, an ask that is made
@@ -283,6 +289,22 @@ type Pending struct {
 const KindQuestion = "question"
 
 // Pending lists the calls of a session that wait for approval.
+// scriptRef, at the end of a recorded preview, names a flow's script by
+// its hash in the store.
+const scriptRef = "\n\x00script:"
+
+// fullPreview is a recorded preview with the script it names put in.
+func (r *Runtime) fullPreview(ctx context.Context, p string) string {
+	p, h, ok := strings.Cut(p, scriptRef)
+	if !ok {
+		return p
+	}
+	if _, src, err := r.Store.Get(ctx, h); err == nil {
+		p += "\n\n── the script ──\n" + strings.TrimRight(string(src), "\n")
+	}
+	return p
+}
+
 func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error) {
 	turns, err := r.K.Children(ctx, session)
 	if err != nil {
@@ -298,6 +320,9 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 			return nil, err
 		}
 		out = append(out, p...)
+	}
+	for i := range out {
+		out[i].Preview = r.fullPreview(ctx, out[i].Preview)
 	}
 	return out, nil
 }
