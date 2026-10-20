@@ -186,8 +186,9 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 		return ""
 	}
 	var a struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
+		Name   string           `json:"name"`
+		Source string           `json:"source"`
+		Asked  []flowchart.Need `json:"asked"`
 	}
 	if json.Unmarshal(args, &a) != nil {
 		return ""
@@ -196,16 +197,29 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	if err != nil {
 		return ""
 	}
-	// What it does and its shape; the script itself is stored by hash and
-	// put in when the question is listed (the record stays small, NFR-5).
-	summary, srefs := flowchart.SummaryLines(c, r.stepNote)
+	// What it is, whether it is what was asked, what it reaches; its
+	// steps; what it changes of the flow there; and the script itself,
+	// stored by hash and put in when the question is listed (the record
+	// stays small, NFR-5).
+	// What was asked is the model's words: kept short in the record.
+	if len(a.Asked) > maxAsked {
+		a.Asked = a.Asked[:maxAsked]
+	}
+	for i := range a.Asked {
+		a.Asked[i].Need = clip(a.Asked[i].Need, 200)
+		a.Asked[i].Phase = clip(a.Asked[i].Phase, 60)
+	}
+	before, there := r.flowBefore(in.Call.Dir, a.Name)
+	var removed []string
+	if before != nil {
+		removed = flowchart.Removed(before, c)
+	}
+	overview, orefs := flowchart.Overview(c, flowchart.OverviewInput{Asked: a.Asked, Note: r.stepReach, Removed: removed})
 	tree, trefs := flowchart.TreeLines(c, nil)
-	p := summary + withRefs(srefs) + sectionSep + "Tree\n" + tree + withRefs(trefs)
-	// A flow of the name there already: it is replaced, and how is shown.
-	switch before, there := r.flowBefore(in.Call.Dir, a.Name); {
+	p := overview + withRefs(orefs) + sectionSep + "Steps\n" + tree + withRefs(trefs)
+	switch {
 	case before != nil:
 		flowchart.Diff(before, c)
-		removed := flowchart.Removed(before, c)
 		changes := "It replaces the flow " + a.Name + " there now."
 		if !changed(c.Nodes) && len(removed) == 0 {
 			changes += " Its steps stay as they were.\n\n"
@@ -328,8 +342,8 @@ const (
 	refsSep = "\n\x00refs:"
 )
 
-// PreviewSection is a named part of what a call would do: Summary, Tree,
-// Changes, Script. Refs: for each line of Text, the script's lines it is
+// PreviewSection is a named part of what a call would do: Overview,
+// Steps, Changes, Script. Refs: for each line of Text, the script's lines it is
 // ({0, 0} for none), to show them.
 type PreviewSection struct {
 	Name string   `json:"name"`
@@ -371,7 +385,7 @@ func (r *Runtime) fullPreview(ctx context.Context, p string) (string, []PreviewS
 	}
 	p, h, hasScript := strings.Cut(p, scriptRef)
 	parts := strings.Split(p, sectionSep)
-	sections := []PreviewSection{section("Summary", parts[0])}
+	sections := []PreviewSection{section("Overview", parts[0])}
 	for _, s := range parts[1:] {
 		name, text, _ := strings.Cut(s, "\n")
 		sections = append(sections, section(name, text))
@@ -419,6 +433,9 @@ func (r *Runtime) flowBefore(dir, name string) (*flowchart.Chart, bool) {
 	return c, true
 }
 
+// maxAsked is the most of what was asked shown in a flow's review.
+const maxAsked = 20
+
 // flowMax is the most of a flow there now read to show what replaces it.
 const flowMax = 1 << 20
 
@@ -437,22 +454,22 @@ func changed(nodes []flowchart.Node) bool {
 	return false
 }
 
-// stepNote says what a flow's step reaches, for the user deciding on it:
-// a tool that acts outside KairoCode, or cannot be undone.
-func (r *Runtime) stepNote(n flowchart.Node) string {
+// stepReach says what a flow's tool step reaches, for the user deciding
+// on it: an outside service, what cannot be undone, or files.
+func (r *Runtime) stepReach(n flowchart.Node) (string, flowchart.Reach) {
 	if n.Kind != flowchart.Tool {
-		return ""
+		return "", flowchart.ReachNone
 	}
 	d, ok := r.tool(n.Title)
 	switch {
 	case strings.HasPrefix(n.Title, "mcp__") || !ok:
-		return "⚠ an outside service"
+		return "an outside service", flowchart.ReachOutside
 	case d.Effect == tools.Real:
-		return "⚠ cannot be undone"
+		return "cannot be undone", flowchart.ReachOutside
 	case d.Effect == tools.Idempotent:
-		return "changes files"
+		return "changes files", flowchart.ReachFiles
 	}
-	return ""
+	return "", flowchart.ReachNone
 }
 
 func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error) {

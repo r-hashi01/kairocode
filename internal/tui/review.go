@@ -388,10 +388,19 @@ func (m *model) sectionLines(a *ask, w int) ([]string, int) {
 		if commented[l.src] {
 			mark = warn.Render("● ")
 		}
+		text := l.text
+		switch t := strings.TrimSpace(text); { // the overview's marks, in colour
+		case strings.HasPrefix(t, "⚠"):
+			text = warn.Render(text)
+		case strings.HasPrefix(t, "✗"):
+			text = bad.Render(text)
+		case strings.HasPrefix(t, "✓"):
+			text = good.Render(text)
+		}
 		if i == cur {
 			out[i] = accent.Render("❯ ") + mark + accent.Render(l.text)
 		} else {
-			out[i] = "  " + mark + l.text
+			out[i] = "  " + mark + text
 		}
 	}
 	return out, cur

@@ -60,6 +60,9 @@ type Node struct {
 	// Src: the script's lines the node is (its statement; an if's or a
 	// loop's head line), to show them.
 	Src Lines `json:"-"`
+	// Uses: where the values its text is made of come from, in words (a
+	// step's result, the user's words), when its text is code.
+	Uses []string `json:"-"`
 
 	Cond     string   `json:"cond,omitempty"`
 	Then     []Node   `json:"then,omitempty"`
@@ -84,7 +87,7 @@ func Build(name string, src []byte) (*Chart, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &builder{src: strings.Split(string(src), "\n"), defs: map[string]*syntax.DefStmt{}}
+	b := &builder{src: strings.Split(string(src), "\n"), defs: map[string]*syntax.DefStmt{}, vars: map[string]string{}}
 	c := &Chart{Name: name}
 	var main *syntax.DefStmt
 	for _, stmt := range f.Stmts {
@@ -120,6 +123,10 @@ type builder struct {
 	// expanding: the defs being drawn, so a call of one inside itself (not
 	// allowed when it runs) does not go round.
 	expanding map[string]bool
+	// vars: what a name was last given, in words (a step's result); phase:
+	// the phase the statements read are in.
+	vars  map[string]string
+	phase string
 }
 
 // text is the source of n, on one line, cut short.
@@ -199,6 +206,7 @@ func (b *builder) stmts(list []syntax.Stmt) []Node {
 			b.whole = callOf(s.RHS)
 		}
 		nodes := b.stmt(stmt)
+		b.remember(stmt, nodes)
 		for j := range nodes {
 			if nodes[j].Src == (Lines{}) {
 				nodes[j].Src = block[i]
@@ -391,7 +399,18 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 				break
 			}
 		}
-		return at(Node{Kind: Tool, Title: name, Text: text, Code: code, Edit: b.edit(x, lit)})
+		n := Node{Kind: Tool, Title: name, Text: text, Code: code, Edit: b.edit(x, lit)}
+		for _, a := range x.Args[min(1, len(x.Args)):] { // what all its arguments are made of
+			if bin, ok := a.(*syntax.BinaryExpr); ok && bin.Op == syntax.EQ {
+				a = bin.Y
+			}
+			for _, u := range b.uses(a) {
+				if !contains(n.Uses, u) {
+					n.Uses = append(n.Uses, u)
+				}
+			}
+		}
+		return at(n)
 	case "ask":
 		text, code := b.argOf(x, 0, "question")
 		return at(Node{Kind: Ask, Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "question")))})
@@ -399,7 +418,8 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 		text, code := b.argOf(x, 0, "prompt")
 		return at(Node{Kind: Decide, Title: b.arg(x, 1, "type"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "prompt")))})
 	case "phase":
-		return []Node{{Kind: Phase, Text: b.arg(x, 0, "name")}}
+		b.phase = b.arg(x, 0, "name")
+		return []Node{{Kind: Phase, Text: b.phase}}
 	}
 	def, ok := b.defs[fn]
 	if !ok || b.expanding[fn] {
@@ -543,4 +563,68 @@ type View struct {
 	States map[string]string `json:"states"`
 	Rounds map[string]int    `json:"rounds,omitempty"`
 	Done   bool              `json:"done,omitempty"`
+}
+
+// remember notes what a name is given by an assignment of a step's
+// result: "the reply of agent plan (in draft)", say.
+func (b *builder) remember(stmt syntax.Stmt, nodes []Node) {
+	s, ok := stmt.(*syntax.AssignStmt)
+	if !ok {
+		return
+	}
+	id, ok := s.LHS.(*syntax.Ident)
+	if !ok { // a, b = ...: what they were is forgotten
+		syntax.Walk(s.LHS, func(n syntax.Node) bool {
+			if id, ok := n.(*syntax.Ident); ok {
+				delete(b.vars, id.Name)
+			}
+			return true
+		})
+		return
+	}
+	delete(b.vars, id.Name)
+	for i := len(nodes) - 1; i >= 0; i-- {
+		n := nodes[i]
+		what := ""
+		switch n.Kind {
+		case Agent:
+			what = "the reply of agent " + n.Title
+		case Tool:
+			what = "the result of tool " + n.Title
+		case Ask:
+			what = "your answer"
+		case Decide:
+			what = "the model's decision"
+		case Parallel:
+			what = "the replies of the agents at once"
+		default:
+			continue
+		}
+		if b.phase != "" {
+			what += " (in " + b.phase + ")"
+		}
+		b.vars[id.Name] = what
+		return
+	}
+}
+
+// uses are where the names e reads come from, in words, in order (input
+// is the user's words).
+func (b *builder) uses(e syntax.Expr) []string {
+	var out []string
+	syntax.Walk(e, func(n syntax.Node) bool {
+		id, ok := n.(*syntax.Ident)
+		if !ok {
+			return true
+		}
+		what, known := b.vars[id.Name]
+		if id.Name == "input" {
+			what, known = "your words when you run it", true
+		}
+		if known && !contains(out, what) {
+			out = append(out, what)
+		}
+		return true
+	})
+	return out
 }

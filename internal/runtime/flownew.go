@@ -30,9 +30,11 @@ What it can call (each returns a value with ok, output, error and value, never r
 - tool("bash", command = "..."), tool("read", path = "..."), and the other tools; the user's permission rules apply.
 - ask("question", options = ["...", "..."]) asks the user and waits for the answer; .value is the option chosen.
 - decide("question", type = "bool" | "number" | "choice", choices = [...]) has the model decide; .value is True/False, a number, or one of the choices.
-- phase("name") names the part of the flow that follows.
+- phase("name") names the part of the flow that follows. Give each part of the flow a phase.
 
 Starlark, not Python: no f-strings (use "%%s" %% x or "{}".format(x)), no try/except (check .ok), no import, no classes, no recursion; for and while loops, if, def, lists, dicts and comprehensions are there. Bound loops (for round in range(5)).
+
+With flow_write, give asked: what the user asked for, one thing at a time, as you took it, each with the phase that does it ({"need": "...", "phase": "..."}). The user reviews the flow against it before it is written.
 
 Choose a short name (lowercase letters, digits and -; not new or graph). When it is ready, say in one or two sentences what the flow does and how to run it.`
 

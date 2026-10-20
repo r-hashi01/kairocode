@@ -857,7 +857,8 @@ func TestAutoModeKeepsTheUsersAnswer(t *testing.T) {
 // A flow's write, asked about, carries the flow's shape to show the user.
 func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 	src := "def main(input):\n    a = agent(agent = \"build\", prompt = \"draft an answer\")\n    return a\n"
-	in, _ := json.Marshal(map[string]string{"name": "inquiry-alert", "source": src})
+	in, _ := json.Marshal(map[string]any{"name": "inquiry-alert", "source": src,
+		"asked": []map[string]string{{"need": "draft an answer", "phase": "draft"}}})
 	ws := workspaceWith(t, `{"flow_write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
 		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "done"}}})
@@ -881,7 +882,7 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 		return len(p) == 1
 	})
 	// What it does, its shape, and the whole script.
-	for _, want := range []string{"What it does:", "agent build", "inquiry-alert", "draft an answer", "── Script ──", src[:len(src)-1]} {
+	for _, want := range []string{"What it reaches:", "Models: agent build ×1", `✗ draft an answer → no phase "draft" in the flow`, "inquiry-alert", "draft an answer", "── Script ──", src[:len(src)-1]} {
 		if !strings.Contains(p[0].Preview, want) {
 			t.Fatalf("no %q in preview %q", want, p[0].Preview)
 		}
@@ -890,7 +891,7 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 	for _, sec := range p[0].Sections {
 		names = append(names, sec.Name)
 	}
-	if strings.Join(names, ",") != "Summary,Tree,Changes,Script" || !strings.Contains(p[0].Sections[2].Text, "~ agent build") ||
+	if strings.Join(names, ",") != "Overview,Steps,Changes,Script" || !strings.Contains(p[0].Sections[2].Text, "~ agent build") ||
 		!strings.Contains(p[0].Sections[2].Text, "- ask  \"post it?\"") || !strings.Contains(p[0].Sections[2].Text, "It replaces the flow inquiry-alert") {
 		t.Fatalf("sections %+v", p[0].Sections)
 	}
