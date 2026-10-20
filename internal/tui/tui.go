@@ -136,8 +136,8 @@ type ask struct {
 }
 
 // insteadOption is the choice, after an approval's options, of refusing
-// and saying what to do instead (as Claude Code has it).
-const insteadOption = "No, and tell it what to do instead"
+// with a message: what to do instead (as Claude Code has it).
+const insteadOption = "Others"
 
 // choices are how many choices an ask offers: its options, and for an
 // approval, refusing with what to do instead.
@@ -1129,7 +1129,7 @@ func (m *model) askView(w int) string {
 	if a.instead {
 		line := accent.Render(strings.Repeat("─", w))
 		b.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
-			faint.Render("What should it do instead? Enter to send · esc to go back") + "\n")
+			faint.Render("Your message (it is not run) · Enter to send · esc to go back") + "\n")
 		return b.String()
 	}
 	hint := "Enter to confirm · ↑↓ or a number to choose"

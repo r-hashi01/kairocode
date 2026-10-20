@@ -833,11 +833,11 @@ func TestRefuseWithWhatToDoInstead(t *testing.T) {
 	reply := make(chan string, 1)
 	d.send(askMsg{req: acp.PermissionRequest{Title: "write notes.txt", ToolKind: "edit", Options: []acp.PermissionOption{
 		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
-	if v := d.view(); !strings.Contains(v, "3. No, and tell it what to do instead") {
+	if v := d.view(); !strings.Contains(v, "3. Others") {
 		t.Fatalf("no third choice\n%s", d.view())
 	}
 	d.send(key("3"))
-	if v := d.view(); !strings.Contains(v, "What should it do instead?") {
+	if v := d.view(); !strings.Contains(v, "Your message") {
 		t.Fatalf("no input\n%s", v)
 	}
 	d.send(key("esc"))
