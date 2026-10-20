@@ -14,6 +14,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/locale"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -290,7 +291,8 @@ func Serve(ctx context.Context, b Backend, r io.Reader, w io.Writer, o Options) 
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	a := &agent{b: b, o: o, c: newConn(w), ctx: ctx, watching: map[string]*sessionWatch{}, asks: map[string]context.CancelFunc{}}
+	a := &agent{b: b, o: o, c: newConn(w), ctx: ctx, watching: map[string]*sessionWatch{}, asks: map[string]context.CancelFunc{},
+		lang: locale.Lang()}
 	defer a.wg.Wait()
 	defer stop() // ends the watches before waiting for them
 	return a.c.Serve(ctx, r, a.handle)
@@ -308,6 +310,9 @@ type agent struct {
 	// asks: requests for permission sent and not answered, by key. An
 	// answer from elsewhere cancels them.
 	asks map[string]context.CancelFunc
+	// lang: the language a flow's review is put in (its words, not its
+	// labels).
+	lang string
 }
 
 func invalid(err error) error { return &rpcError{Code: codeInvalidParams, Message: err.Error()} }
@@ -953,6 +958,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	case len(p.Sections) > 0: // what it would do, a block a section (SectionMeta names it)
 		var content []any
 		for i, s := range p.Sections {
+			s = localized(a.lang, s)
 			text := s.Text
 			if i > 0 {
 				text = "\n\n── " + s.Name + " ──\n" + text
@@ -1120,4 +1126,38 @@ func toolResult(id, tool, output string, isError bool) map[string]any {
 		u["kind"] = toolKind(tool)
 	}
 	return u
+}
+
+// localized is a section of a flow's review in lang: KairoCode's own
+// words in it, and in its chart's boxes what KairoCode says a call sends.
+// The script, and a change's before and after, are as written.
+func localized(lang string, s runtime.PreviewSection) runtime.PreviewSection {
+	if s.Name == "Script" {
+		return s
+	}
+	s.Text = locale.Review(lang, s.Text)
+	if len(s.Chart) > 0 {
+		var c flowchart.Chart
+		if json.Unmarshal(s.Chart, &c) == nil {
+			var walk func([]flowchart.Node)
+			walk = func(nodes []flowchart.Node) {
+				for i := range nodes {
+					if strings.HasPrefix(nodes[i].Text, "sends ") { // KairoCode's, not the script's
+						nodes[i].Text = locale.Review(lang, nodes[i].Text)
+					}
+					walk(nodes[i].Then)
+					walk(nodes[i].Else)
+					walk(nodes[i].Body)
+					for _, b := range nodes[i].Branches {
+						walk(b)
+					}
+				}
+			}
+			walk(c.Nodes)
+			if b, err := json.Marshal(c); err == nil {
+				s.Chart = b
+			}
+		}
+	}
+	return s
 }

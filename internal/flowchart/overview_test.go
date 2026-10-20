@@ -54,8 +54,8 @@ func TestOverview(t *testing.T) {
 		"  + not asked               → confirm",
 		"▌ REACHES",
 		"  ⚠ mcp__slack__post        outside service",
-		"      sends                 reply of agent plan (draft)",
-		"      asks you first        ✓ confirm",
+		"      text                  reply of agent plan (draft)",
+		"      asked before it       ✓ yes, in confirm",
 		"  files                     write replies.log",
 		"  models                    agent plan ×1",
 		"▌ WATCH",
@@ -84,7 +84,7 @@ func TestOverview(t *testing.T) {
 	text, _ = Overview(c, OverviewInput{Note: reach, Removed: []string{`ask  "post it?"`}})
 	for _, want := range []string{
 		"  ? not given by the model",
-		"      asks you first        ⚠ no",
+		"      asked before it       ⚠ no",
 		"  models                    agent build ×1 (+ more in a loop)",
 		"  can change files          agent build",
 		"  ⚠ mcp__slack__post        not asked first",
@@ -123,12 +123,42 @@ func TestOverview(t *testing.T) {
 	}
 	text, _ = Overview(c, OverviewInput{Note: note})
 	for _, want := range []string{
-		"  ⚠ bash                    cannot be undone\n      sends                 \"rm -rf x\"\n      asks you first        ⚠ no",
-		"  ⚠ mcp__s__post            outside service\n      sends                 reply of agent plan\n      asks you first        ⚠ no",
-		"  ⚠ mcp__s__post            outside service\n      sends                 your words\n      asks you first        ✓",
+		"  ⚠ bash                    cannot be undone\n      command               \"rm -rf x\"\n      asked before it       ⚠ no",
+		"  ⚠ mcp__s__post            outside service\n      channel               \"c\"\n      body                  reply of agent plan\n      asked before it       ⚠ no",
+		"  ⚠ mcp__s__post            outside service\n      channel               \"d\"\n      body                  your words\n      asked before it       ✓ yes",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("no %q in\n%s", want, text)
 		}
+	}
+
+	// A value made in the script is said as it is made: a command built
+	// of words and the user's.
+	c, err = Build("h", []byte(`def main(input):
+    url = "https://example.com/" + input["args"]
+    cmd = "curl -X POST " + url
+    ask("go?")
+    tool("bash", command = cmd)
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ = Overview(c, OverviewInput{Note: note})
+	if want := "      command               " + `"curl -X POST " + url (with "https://example.com/" + input["args"] (with your words))`; !strings.Contains(text+"\n", want+"\n") {
+		t.Errorf("no %q in\n%s", want, text)
+	}
+
+	// Another name for a step's result is that result.
+	c, err = Build("k", []byte(`def main(input):
+    draft = agent("plan", "draft")
+    text = draft.output
+    tool("mcp__s__post", body = text)
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ = Overview(c, OverviewInput{Note: note})
+	if want := "      body                  reply of agent plan"; !strings.Contains(text+"\n", want+"\n") {
+		t.Errorf("no %q in\n%s", want, text)
 	}
 }

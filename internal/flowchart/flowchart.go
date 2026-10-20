@@ -63,6 +63,9 @@ type Node struct {
 	// Uses: where the values its text is made of come from, in words (a
 	// step's result, the user's words), when its text is code.
 	Uses []string `json:"-"`
+	// Args: for a tool, each named argument and what it is, in words (a
+	// step's result, the user's words) or as written.
+	Args []Arg `json:"-"`
 	// Options: an ask's options, when the script gives them as a list.
 	Options []string `json:"options,omitempty"`
 
@@ -71,6 +74,12 @@ type Node struct {
 	Else     []Node   `json:"else,omitempty"`
 	Body     []Node   `json:"body,omitempty"`
 	Branches [][]Node `json:"branches,omitempty"`
+}
+
+// Arg is a tool's argument: its name, and what it is.
+type Arg struct {
+	Name string
+	Text string
 }
 
 // Chart is a flow's shape.
@@ -402,15 +411,29 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 			}
 		}
 		n := Node{Kind: Tool, Title: name, Text: text, Code: code, Edit: b.edit(x, lit)}
-		for _, a := range x.Args[min(1, len(x.Args)):] { // what all its arguments are made of
+		for _, a := range x.Args[min(1, len(x.Args)):] { // what each argument is made of
+			arg := "with"
 			if bin, ok := a.(*syntax.BinaryExpr); ok && bin.Op == syntax.EQ {
+				if id, ok := bin.X.(*syntax.Ident); ok {
+					arg = id.Name
+				}
 				a = bin.Y
 			}
-			for _, u := range b.uses(a) {
+			uses := b.uses(a)
+			for _, u := range uses {
 				if !contains(n.Uses, u) {
 					n.Uses = append(n.Uses, u)
 				}
 			}
+			words := strings.Join(uses, ", ")
+			if lit := literal(a); lit != nil || words == "" {
+				v, isCode := b.valueOf(a)
+				words = v
+				if !isCode {
+					words = quote(Node{Text: v})
+				}
+			}
+			n.Args = append(n.Args, Arg{Name: arg, Text: words})
 		}
 		return at(n)
 	case "ask":
@@ -594,6 +617,27 @@ func (b *builder) remember(stmt syntax.Stmt, nodes []Node) {
 		return
 	}
 	delete(b.vars, id.Name)
+	if len(nodes) == 0 { // a value made here: as written, and where what it is made of comes from
+		uses := strings.Join(b.uses(s.RHS), ", ")
+		switch s.RHS.(type) {
+		case *syntax.Ident, *syntax.DotExpr, *syntax.IndexExpr: // another name for a value
+			if uses != "" {
+				b.vars[id.Name] = uses
+				return
+			}
+		}
+		if what := b.value(s.RHS); what != "" && uses != "" {
+			b.vars[id.Name] = what + " (with " + uses + ")"
+			return
+		}
+		if what := b.value(s.RHS); what != "" {
+			if lit, ok := s.RHS.(*syntax.Literal); ok && lit.Token == syntax.STRING {
+				what = quote(Node{Text: what})
+			}
+			b.vars[id.Name] = what
+		}
+		return
+	}
 	for i := len(nodes) - 1; i >= 0; i-- {
 		n := nodes[i]
 		what := ""

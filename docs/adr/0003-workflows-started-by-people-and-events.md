@@ -478,3 +478,41 @@ def main(input):
   - `TestChanges`（足した・消えた・変えた段と、その before と after）。
   - `TestReviewSections`（図の印と、印が差分に混ざらないこと）。
   - `TestOverview`、`TestFlowWriteAskShowsTheFlow`、`TestFlowReviewChartAndChanges`（図を描く、変更を開く、見出し）。
+
+## 追記: REACHES の言い方と、読む人の言語（2026-10-20、利用者の要望）
+
+- **REACHES**（利用者の指摘「これは何を表してる？」）
+  - 動詞をツールの種類で変えます。
+    - bash: `runs a command · cannot be undone`
+    - MCP: `sends to <サーバー> · outside service`
+    - そのほかの実（`Real`）: `cannot be undone`
+  - 中身は、引数ごとに 1 行で出します（`command`、`text`、`channel` など、引数の名前を項目名にする）。
+    - 変数は、それを作った段か、代入した式まで辿ります（例: `"curl -X POST " + url`）。
+  - 確認の有無は `asked before it  ✓ yes, in confirm` か `⚠ no` です。
+- **読む人の言語**
+  - 利用者の判断（2026-10-20）: 項目名（REACHES、models、files、引数の名前など）は Pull Request のような固有名詞に近いので、英語のままにします。言語に合わせるのは、レビューの中身の言い回しとフローの中身だけです。
+  - 言語は次の順で決めます（`internal/locale`）。
+    1. `KAIROCODE_LANG`
+    2. 利用者の `~/.config/kairocode/kairocode.json` の `language`
+    3. 端末のロケール（`LC_ALL`、`LC_MESSAGES`、`LANG`）
+    - 今は英語と日本語です。
+  - 置き換えるのは、KairoCode のエージェント（ACP）が承認を送るところです。対象は、節の本文、各行の details、図の箱の文です（`locale.Review`）。
+    - 記録は英語のままなので、読む人ごとに違う言語で出せます。
+    - TUI は、KairoCode のエージェントを自分の環境で起動するので、端末の言語になります。
+  - `/flow new` の指示では、依頼の一覧（`asked`）、`DESCRIPTION`、質問、プロンプトを、利用者が依頼を書いた言語で書かせます。段の名前とフローの名前は、短い英小文字のままです。
+- **Try の節**も、文章をやめて行にしました（`words`、`ended`、`▌ WHAT HAPPENED`、`1 agent plan  replied`、`2 ⚠ write  not called`）。
+- **試運転中の承認の知らせ**
+  - 試運転を頼んだ直後、待ちが一瞬なくなってから「試運転中」として現れたときに、クライアントが Try の無いまま聞き直すことがありました。
+  - 「試運転中」の承認は「頼まれた」と知らせず、終わって中身が変わったときに知らせます。中身の変化で知らせるので、試運転中の状態を一度も見ないまま終わった場合も知らせます。
+- **durability-reviewer の指摘で直したこと**
+  - **置き換えるのは KairoCode の言葉だけにします。** 承認するものは、書かれ・送られるとおりに見えなければなりません。そのため、次のものは置き換えません。
+    - Script の節
+    - 変更の before と after
+    - 引用符を含む行（スクリプトの文字列）
+    - 字下げした塊（エージェントの返事、呼ぶはずだった引数）
+    - 図の箱のうち、スクリプトの文（KairoCode が付けた「sends …」だけを置き換える）
+  - **変数は出どころまで辿ります。**
+    - 別名（`text = draft.output`）: その出どころ（`reply of agent plan`）を出します。
+    - 組み立てた値: 式に出どころを添えます（`"curl " + url (with … your words)`）。
+  - 残した点: 承認の知らせの変更（試運転中は知らせない、中身が変われば知らせる）は、出来事の単体のテストがまだありません。ふだんの流れは `TestTryFlow`・`TestACPTryFlow` で確かめています。
+- **テスト:** `TestLang`、`TestReview`、`TestLocalizedReview`、`TestOverview`（引数ごとの行、式と出どころ、別名）。

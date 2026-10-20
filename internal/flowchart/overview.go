@@ -177,16 +177,23 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 		case ReachOutside:
 			reached = true
 			row(s.n.Src, "⚠ "+s.n.Title, what)
-			switch {
-			case len(s.n.Uses) > 0:
-				row(s.n.Src, "    sends", strings.Join(s.n.Uses, ", "))
-			case s.n.Text != "":
-				row(s.n.Src, "    sends", quote(s.n))
+			for _, a := range s.n.Args {
+				row(s.n.Src, "    "+a.Name, a.Text)
 			}
 			if s.asked {
-				row(s.n.Src, "    asks you first", "✓ "+strings.Join(nonEmpty(s.askers, "start"), ", "))
+				in := ""
+				var named []string
+				for _, p := range s.askers {
+					if p != "" {
+						named = append(named, p)
+					}
+				}
+				if len(named) > 0 {
+					in = ", in " + strings.Join(named, ", ")
+				}
+				row(s.n.Src, "    asked before it", "✓ yes"+in)
 			} else {
-				row(s.n.Src, "    asks you first", "⚠ no")
+				row(s.n.Src, "    asked before it", "⚠ no")
 				warn(s.n.Src, "⚠ "+s.n.Title, "not asked first")
 			}
 		}

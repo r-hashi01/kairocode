@@ -489,9 +489,14 @@ func (r *Runtime) stepReach(n flowchart.Node) (string, flowchart.Reach) {
 		return "", flowchart.ReachNone
 	}
 	d, ok := r.tool(n.Title)
+	if server, _, isMCP := strings.Cut(strings.TrimPrefix(n.Title, "mcp__"), "__"); strings.HasPrefix(n.Title, "mcp__") && isMCP {
+		return "sends to " + server + " · outside service", flowchart.ReachOutside
+	}
 	switch {
-	case strings.HasPrefix(n.Title, "mcp__") || !ok:
+	case !ok:
 		return "outside service", flowchart.ReachOutside
+	case d.Effect == tools.Real && n.Title == "bash":
+		return "runs a command · cannot be undone", flowchart.ReachOutside
 	case d.Effect == tools.Real:
 		return "cannot be undone", flowchart.ReachOutside
 	case d.Effect == tools.Idempotent:
@@ -873,21 +878,24 @@ func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, ca
 		return PreviewSection{}, false
 	}
 	var b strings.Builder
+	row := func(label, value string) {
+		fmt.Fprintf(&b, "  %s%s%s\n", label, strings.Repeat(" ", max(26-len([]rune(label)), 2)), value)
+	}
 	words := in.Call.Args
 	if words == "" {
-		words = "(no words)"
+		words = "none"
 	}
-	fmt.Fprintf(&b, "Tried with: %s\n", words)
+	row("words", words)
 	var fo workflows.FlowOutput
 	switch {
 	case last.Status != "completed" || runOutput(last.Output, &fo) != nil:
-		fmt.Fprintf(&b, "It stopped: %s\n", firstLineOf(last.Error))
+		row("ended", "✗ stopped: "+firstLineOf(last.Error))
 	case fo.OK:
-		fmt.Fprintf(&b, "It ended: %s\n", strings.TrimSpace(fo.Message))
+		row("ended", "✓ "+firstLineOf(fo.Message))
 	default:
-		fmt.Fprintf(&b, "It did not succeed: %s\n", strings.TrimSpace(fo.Message))
+		row("ended", "✗ "+firstLineOf(fo.Message))
 	}
-	b.WriteString("\nWhat happened, in order (nothing was sent or changed):\n")
+	b.WriteString("\n▌ WHAT HAPPENED\n")
 	n := 0
 	var walk func(id string, depth int)
 	walk = func(id string, depth int) {
@@ -919,7 +927,8 @@ func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, ca
 				}
 				args, _ := r.toolArgs(ctx, wi.In.In)
 				n++
-				fmt.Fprintf(&b, "  %d. would call %s with:\n%s\n", n, wi.In.Tool, indent(prettyJSON(args), "       "))
+				row(fmt.Sprintf("%d ⚠ %s", n, wi.In.Tool), "not called")
+				b.WriteString(indent(prettyJSON(args), "        ") + "\n")
 			case k.Workflow == workflows.Turn && k.Status == "completed":
 				var ti workflows.TurnInput
 				var to workflows.TurnOutput
@@ -932,7 +941,8 @@ func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, ca
 					reply = m.Text()
 				}
 				n++
-				fmt.Fprintf(&b, "  %d. agent %s replied:\n%s\n", n, ti.Agent, indent(clipLines(reply, 30), "       "))
+				row(fmt.Sprintf("%d agent %s", n, ti.Agent), "replied")
+				b.WriteString(indent(clipLines(reply, 30), "        ") + "\n")
 			case k.Workflow != "":
 				walk(k.RunID, depth+1)
 			}
@@ -940,7 +950,7 @@ func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, ca
 	}
 	walk(last.RunID, 0)
 	if n == 0 {
-		b.WriteString("  (no agent ran, and it would have called nothing)\n")
+		row("✓ nothing", "")
 	}
 	return PreviewSection{Name: "Try", Text: strings.TrimRight(b.String(), "\n")}, true
 }

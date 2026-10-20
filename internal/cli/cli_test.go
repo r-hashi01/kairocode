@@ -29,6 +29,7 @@ func TestMain(m *testing.M) {
 	os.Setenv(lsp.Off, "off")
 	// Nor the user's claude, codex and copilot (invariant 9).
 	os.Setenv("KAIROCODE_NO_CLIS", "1")
+	os.Setenv("KAIROCODE_LANG", "en") // the reviews' words as the tests read them
 	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
 	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	if os.Getenv("KC_CLI_DAEMON") == "1" {

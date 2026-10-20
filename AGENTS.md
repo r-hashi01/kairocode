@@ -37,6 +37,7 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/flowchart` | フローの形（ADR 0003）。Starlark のスクリプトの構文の木から、プリミティブの呼び出しを、順番・分岐・繰り返し・並列の形で読む。木の形の文字の図も | なし（読むだけ） |
 | `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力だけを持つ | 端末の入出力だけ |
 | `internal/lsp` | 書いたファイルの、言語サーバーの診断のエラー（ADR 0009）。サーバーは sandbox の中で起動し、デーモンの中で持ち続け、使われなければ止める | ここで I/O する |
+| `internal/locale` | 読む人の言語（`KAIROCODE_LANG`、利用者の `kairocode.json`、ロケール）と、フローのレビューの言い回しの置き換え（項目名とスクリプトは置き換えない） | 環境変数と利用者の設定を読むだけ |
 | `internal/trust` | 信頼したフォルダの一覧（ADR 0010。データの置き場の `trust.json`）。クライアントだけが読み書きする | ここで I/O する |
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
 | `cmd/kairocode` | エントリーポイント | — |

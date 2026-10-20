@@ -90,11 +90,12 @@ func TestTryFlow(t *testing.T) {
 	})
 	try := tried.Sections[len(tried.Sections)-1].Text
 	for _, want := range []string{
-		"Tried with: a late parcel",
-		"It ended: saved, seed",
+		"  words                     a late parcel",
+		"  ended                     ✓ saved, seed",
 		"1\tSEED",
-		"agent plan replied:\n       Dear customer, we refund it.",
-		"would call write with:",
+		"▌ WHAT HAPPENED",
+		"  1 agent plan              replied\n        Dear customer, we refund it.",
+		"  2 ⚠ write                 not called",
 		`"path": "reply.txt"`,
 		`"content": "Dear customer, we refund it."`,
 	} {
@@ -102,7 +103,7 @@ func TestTryFlow(t *testing.T) {
 			t.Errorf("no %q in the try:\n%s", want, try)
 		}
 	}
-	if strings.Index(try, "agent plan replied") > strings.Index(try, "would call write") {
+	if strings.Index(try, "agent plan") > strings.Index(try, "⚠ write") {
 		t.Errorf("not in order:\n%s", try)
 	}
 	if _, err := os.Stat(filepath.Join(ws, "reply.txt")); err == nil {
@@ -230,7 +231,7 @@ func TestCrashTryFlow(t *testing.T) {
 		return false
 	})
 	try := tried.Sections[len(tried.Sections)-1].Text
-	if !strings.Contains(try, "would call write with:") || !strings.Contains(try, "Dear customer, we refund it.") {
+	if !strings.Contains(try, "⚠ write                 not called") || !strings.Contains(try, "Dear customer, we refund it.") {
 		t.Fatalf("the try:\n%s", try)
 	}
 	if _, err := os.Stat(filepath.Join(ws, "reply.txt")); err == nil {
@@ -286,7 +287,7 @@ func TestTryFlowOnClaudeCode(t *testing.T) {
 		}
 		return false
 	})
-	if !strings.Contains(try, "would call count with:") || !strings.Contains(try, `"n": 7`) || !strings.Contains(try, "agent build replied:") {
+	if !strings.Contains(try, "⚠ count                 not called") || !strings.Contains(try, `"n": 7`) || !strings.Contains(try, "2 agent build             replied") {
 		t.Fatalf("the try:\n%s", try)
 	}
 	if got := countRuns(t, e); got != 0 {

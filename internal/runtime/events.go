@@ -485,8 +485,11 @@ func (e *events) refresh(session string) bool {
 		return true // the first look: the joining watcher is told all of it
 	}
 	for _, p := range now {
-		// New, or back from a try with what it did (ADR 0017): asked.
-		if b, ok := before[p.Key]; !ok || b.Trying && !p.Trying {
+		// New, or back from a try with what it did (ADR 0017): asked. One
+		// being tried is not asked: the user asked for the try, and is
+		// asked when it ends.
+		// A try ended unseen still changed what it shows (its Try).
+		if b, ok := before[p.Key]; !ok && !p.Trying || ok && !p.Trying && (b.Trying || b.Preview != p.Preview) {
 			e.emit(session, Event{Type: requested(p), Turn: p.Turn, Tool: p.Tool, Pending: &p})
 		}
 	}

@@ -34,7 +34,7 @@ What it can call (each returns a value with ok, output, error and value, never r
 
 Starlark, not Python: no f-strings (use "%%s" %% x or "{}".format(x)), no try/except (check .ok), no import, no classes, no recursion; for and while loops, if, def, lists, dicts and comprehensions are there. Bound loops (for round in range(5)).
 
-With flow_write, give asked: what the user asked for, one thing at a time, as you took it, each with the phase that does it ({"need": "...", "phase": "..."}). The user reviews the flow against it before it is written.
+With flow_write, give asked: what the user asked for, one thing at a time, as you took it, each with the phase that does it ({"need": "...", "phase": "..."}). The user reviews the flow against it before it is written. Write asked, DESCRIPTION, the questions of ask and the prompts in the language the user wrote the request in; phase names and the flow's name stay short lowercase words.
 
 Choose a short name (lowercase letters, digits and -; not new or graph). When it is ready, say in one or two sentences what the flow does and how to run it.`
 

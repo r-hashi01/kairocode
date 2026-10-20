@@ -20,6 +20,8 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/locale"
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
@@ -572,6 +574,7 @@ func TestMain(m *testing.M) {
 	os.Setenv(lsp.Off, "off")
 	// Nor the user's claude, codex and copilot (invariant 9).
 	os.Setenv("KAIROCODE_NO_CLIS", "1")
+	os.Setenv(locale.Env, locale.English) // the reviews' words as the tests read them
 	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
 	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	if os.Getenv("KC_ACP_CHILD") == "1" {
@@ -1193,7 +1196,7 @@ func TestACPTryFlow(t *testing.T) {
 	c.answer(req, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": TryOption},
 		"_meta": map[string]any{ReasonMeta: "a late parcel"}})
 	again, _ := c.until(isMethod("session/request_permission"))
-	for _, want := range []string{"── Try ──", "Tried with: a late parcel", "Dear customer"} {
+	for _, want := range []string{"── Try ──", "words                     a late parcel", "Dear customer"} {
 		if !strings.Contains(string(again.Params), want) {
 			t.Fatalf("no %q in the approval asked again: %s", want, again.Params)
 		}
@@ -1202,5 +1205,27 @@ func TestACPTryFlow(t *testing.T) {
 	c.until(isResponse(id))
 	if _, err := os.Stat(filepath.Join(ws, ".kairocode", "workflows", "reply.star")); err != nil {
 		t.Fatalf("the flow is not written: %v", err)
+	}
+}
+
+// A flow's review is put in the reader's language: its words, its lines'
+// details and its chart's boxes; its labels stay.
+func TestLocalizedReview(t *testing.T) {
+	chart, _ := json.Marshal(flowchart.Chart{Name: "f", Nodes: []flowchart.Node{
+		{Kind: flowchart.Tool, Title: "mcp__s__post ⚠", Text: "sends reply of agent plan (draft)"}}})
+	s := localized(locale.Japanese, runtime.PreviewSection{Name: "Overview",
+		Text:    "▌ REACHES\n  files                     none",
+		Details: []string{"", "… 2 the same"}, Chart: chart})
+	var c flowchart.Chart
+	if err := json.Unmarshal(s.Chart, &c); err != nil {
+		t.Fatal(err)
+	}
+	if s.Text != "▌ REACHES\n  files                     なし" || s.Details[1] != "… 2 the same" || c.Nodes[0].Text != "送る: agent plan の返事 (draft)" {
+		t.Fatalf("%q %q %q", s.Text, s.Details, c.Nodes[0].Text)
+	}
+	// The script is as written.
+	script := runtime.PreviewSection{Name: "Script", Text: "    tool(\"x\")  # outside service"}
+	if got := localized(locale.Japanese, script); got.Text != script.Text {
+		t.Fatalf("the script changed: %q", got.Text)
 	}
 }
