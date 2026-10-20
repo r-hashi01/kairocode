@@ -88,13 +88,13 @@ func TestClientPermission(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	asked := make(chan PermissionRequest, 2)
-	_, agent := dialFake(t, ctx, ClientHandler{Permission: func(ctx context.Context, p PermissionRequest) string {
+	_, agent := dialFake(t, ctx, ClientHandler{Permission: func(ctx context.Context, p PermissionRequest) PermissionAnswer {
 		asked <- p
 		if p.Title == "withdrawn" {
 			<-ctx.Done()
-			return ""
+			return PermissionAnswer{}
 		}
-		return p.Options[1].ID
+		return PermissionAnswer{ID: p.Options[1].ID}
 	}})
 	ask := func(id, title string) {
 		agent.send(t, `{"jsonrpc":"2.0","id":"`+id+`","method":"session/request_permission","params":{"sessionId":"s/x",`+

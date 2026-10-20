@@ -310,7 +310,8 @@ func (t *term) update(u acp.Update) {
 
 // permission asks the user, and waits for an answer: an option's number, or
 // y or n where one option allows and another rejects.
-func (t *term) permission(ctx context.Context, p acp.PermissionRequest) string {
+// "n <words>" refuses, and tells the model what to do instead.
+func (t *term) permission(ctx context.Context, p acp.PermissionRequest) acp.PermissionAnswer {
 	t.ask.Lock()
 	defer t.ask.Unlock()
 	answer := make(chan string)
@@ -329,7 +330,7 @@ func (t *term) permission(ctx context.Context, p acp.PermissionRequest) string {
 	}()
 	ask := fmt.Sprintf("choose 1-%d", len(p.Options))
 	if yes != "" {
-		ask += " (y/n)"
+		ask += " (y/n, or n and what to do instead)"
 	}
 	for {
 		t.mu.Lock()
@@ -339,18 +340,21 @@ func (t *term) permission(ctx context.Context, p acp.PermissionRequest) string {
 		select {
 		case <-ctx.Done():
 			t.line("(answered elsewhere)")
-			return ""
-		case l := <-answer:
+			return acp.PermissionAnswer{}
+		case typed := <-answer:
 			t.typed()
-			l = strings.ToLower(strings.TrimSpace(l))
+			typed = strings.TrimSpace(typed)
+			l := strings.ToLower(typed)
 			switch {
 			case l == "y" && yes != "":
-				return yes
+				return acp.PermissionAnswer{ID: yes}
 			case l == "n" && no != "":
-				return no
+				return acp.PermissionAnswer{ID: no}
+			case strings.HasPrefix(l, "n ") && no != "":
+				return acp.PermissionAnswer{ID: no, Reason: strings.TrimSpace(typed[2:])}
 			}
 			if n, err := strconv.Atoi(l); err == nil && n >= 1 && n <= len(p.Options) {
-				return p.Options[n-1].ID
+				return acp.PermissionAnswer{ID: p.Options[n-1].ID}
 			}
 		}
 	}

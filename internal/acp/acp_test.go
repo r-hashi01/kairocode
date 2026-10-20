@@ -1050,3 +1050,34 @@ func TestACPFlowPlan(t *testing.T) {
 		t.Fatalf("no chart in _meta: %s", m.Params)
 	}
 }
+
+// A refusal may say what to do instead (the response's _meta): the model
+// is told it with the refusal.
+func TestACPRefuseWithWhatToDoInstead(t *testing.T) {
+	b, ws := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	id := prompt(c, s, "write notes")
+	req, _ := c.until(isMethod("session/request_permission"))
+	c.answer(req, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "reject_once"},
+		"_meta": map[string]any{ReasonMeta: "write it to b.txt instead"}})
+	c.until(isResponse(id))
+	ms, err := b.r.History(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range ms {
+		for _, p := range m.Parts {
+			if strings.Contains(p.Text, "write it to b.txt instead") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the model was not told what to do instead")
+	}
+}

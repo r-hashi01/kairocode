@@ -469,7 +469,8 @@ func gateTool(ctx *kairo.Context, policy Policy, tool string, planned bool, in T
 	case "ask":
 		if mcp != nil {
 			// Over MCP, claude is not kept waiting: the turn waits instead.
-			return Gate{Action: ActMCPAsk, Ask: &AskRequest{Key: mcp.Ask, Content: mcp.Key, Tool: tool, Subject: d.Subject, Rule: d.Rule}}, nil
+			return Gate{Action: ActMCPAsk, Ask: &AskRequest{Key: mcp.Ask, Content: mcp.Key, Tool: tool, Subject: d.Subject, Rule: d.Rule,
+				Preview: d.Preview}}, nil
 		}
 		a, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+in.Call)
 		if err != nil {

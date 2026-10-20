@@ -851,6 +851,9 @@ func (a *agent) ask(session string, p runtime.Pending) {
 				Outcome  string `json:"outcome"`
 				OptionID string `json:"optionId"`
 			} `json:"outcome"`
+			Meta struct {
+				Reason string `json:"kairocode/reason"`
+			} `json:"_meta"`
 		}
 		if err := a.c.Call(ctx, "session/request_permission", params, &resp); err != nil {
 			return // withdrawn, or the client went away: it still waits in kairo
@@ -872,7 +875,8 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		if !offered {
 			return
 		}
-		if err := a.b.Approve(a.ctx, p.Key, ok, ""); err != nil && !errors.Is(err, runtime.ErrAnswered) {
+		// A refusal may say what to do instead: the model is told.
+		if err := a.b.Approve(a.ctx, p.Key, ok, resp.Meta.Reason); err != nil && !errors.Is(err, runtime.ErrAnswered) {
 			a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
 		}
 	}()

@@ -89,14 +89,14 @@ func TestChat(t *testing.T) {
 	c.say(t, "y")
 	c.wait(t, ctx, "> ", 1)
 	c.say(t, "write notes")
-	c.wait(t, ctx, "choose 1-2 (y/n): ", 1)
+	c.wait(t, ctx, "choose 1-2 (y/n, or n and what to do instead): ", 1)
 	for _, want := range []string{"· write notes.txt", "? write notes.txt", "1) Allow", "2) Reject"} {
 		if !strings.Contains(c.out.String(), want) {
 			t.Errorf("no %q in\n%s", want, c.out.String())
 		}
 	}
 	c.say(t, "maybe") // not an answer: asked again
-	c.wait(t, ctx, "choose 1-2 (y/n): ", 2)
+	c.wait(t, ctx, "choose 1-2 (y/n, or n and what to do instead): ", 2)
 	c.say(t, "y")
 	c.wait(t, ctx, "> ", 2)
 	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "hi\n" {
@@ -185,9 +185,16 @@ func TestChatAsks(t *testing.T) {
 		{allow, []string{"what", "3", "2"}, "reject_once"},
 		{review, []string{"y", "2"}, "took_effect"},
 		{review, []string{"1"}, "did_not_take_effect"},
+		{allow, []string{"n write it to b.txt instead"}, "reject_once: write it to b.txt instead"},
 	} {
 		got := make(chan string, 1)
-		go func() { got <- tm.permission(ctx, acp.PermissionRequest{Title: "write x", Options: c.options}) }()
+		go func() {
+			a := tm.permission(ctx, acp.PermissionRequest{Title: "write x", Options: c.options})
+			if a.Reason != "" {
+				a.ID += ": " + a.Reason
+			}
+			got <- a.ID
+		}()
 		for i, line := range c.typed {
 			until(t, ctx, "asked", tm.isAsking)
 			io.WriteString(inW, line+"\n")
@@ -201,7 +208,7 @@ func TestChatAsks(t *testing.T) {
 	}
 	withdrawn, stop := context.WithCancel(ctx)
 	got := make(chan string, 1)
-	go func() { got <- tm.permission(withdrawn, acp.PermissionRequest{Title: "write y", Options: allow}) }()
+	go func() { got <- tm.permission(withdrawn, acp.PermissionRequest{Title: "write y", Options: allow}).ID }()
 	until(t, ctx, "asked", tm.isAsking)
 	stop()
 	if g := <-got; g != "" || !strings.Contains(out.String(), "(answered elsewhere)") {

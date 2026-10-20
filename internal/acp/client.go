@@ -122,6 +122,18 @@ type PermissionRequest struct {
 	Content string
 }
 
+// PermissionAnswer is the user's answer: the option chosen ("" to
+// cancel), and, with a refusal, what to do instead, for the model (sent
+// in _meta, ReasonMeta).
+type PermissionAnswer struct {
+	ID     string
+	Reason string
+}
+
+// ReasonMeta is the key of a permission response's _meta that holds what
+// the user said to do instead (KairoCode's agent gives it to the model).
+const ReasonMeta = "kairocode/reason"
+
 // PermissionOption is one answer offered.
 type PermissionOption struct {
 	ID   string `json:"optionId"`
@@ -136,7 +148,7 @@ type PermissionOption struct {
 // answered elsewhere). It returns the chosen option's ID, or "" to cancel.
 type ClientHandler struct {
 	Update     func(Update)
-	Permission func(ctx context.Context, p PermissionRequest) string
+	Permission func(ctx context.Context, p PermissionRequest) PermissionAnswer
 }
 
 // Dial begins talking to an agent. The client stops when r ends or ctx
@@ -207,15 +219,19 @@ func (cl *Client) handler(h ClientHandler) handler {
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, invalid(err)
 			}
-			id := ""
+			var ans PermissionAnswer
 			if h.Permission != nil {
-				id = h.Permission(ctx, PermissionRequest{Session: p.SessionID, ToolCallID: p.ToolCall.ToolCallID, Title: p.ToolCall.Title,
+				ans = h.Permission(ctx, PermissionRequest{Session: p.SessionID, ToolCallID: p.ToolCall.ToolCallID, Title: p.ToolCall.Title,
 					ToolKind: p.ToolCall.Kind, Options: p.Options, Content: contentText(p.ToolCall.Content)})
 			}
-			if id == "" {
+			if ans.ID == "" {
 				return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil
 			}
-			return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": id}}, nil
+			resp := map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": ans.ID}}
+			if ans.Reason != "" {
+				resp["_meta"] = map[string]any{ReasonMeta: ans.Reason}
+			}
+			return resp, nil
 		}
 		return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 	}

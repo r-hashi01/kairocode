@@ -486,6 +486,8 @@ type AskRequest struct {
 	Tool    string `json:"tool"`
 	Subject string `json:"subject"`
 	Rule    string `json:"rule"`
+	// Preview is what the call would do (a flow's shape), to show.
+	Preview string `json:"preview,omitempty"`
 }
 
 type MCPAskInput struct {

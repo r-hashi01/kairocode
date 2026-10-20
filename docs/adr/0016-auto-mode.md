@@ -109,3 +109,9 @@ KairoCode では、権限の判定（`permission.check`）が「許す」「断�
   - **判定に渡すもの:** 判定には、ターンの依頼の文（`Policy.Request`。auto のときだけ入る）と、エージェントの発言を分けて渡します。エージェントの発言は「エージェント自身の言葉で、利用者の言葉ではない」と示します。
 - **まだ:** 判定の crash のテストはまだありません。判定は、作用の無いアクションの記録された出力なので、記録の前に落ちれば判定し直し、その間に作用は起きません。
 - **使ってみて直したこと（2026-10-20）:** API のキーが無い手元で、判定が API の認証のエラーで失敗し、その長い文が承認の題に入っていました。API で判定できなければ、利用者の Claude Code で判定し直します。それも失敗したら、1 行に切った理由で人に聞きます。承認の題に入れる規則の文も、1 行、120 文字までにしました。
+- **断るときに、代わりにすることを伝える（2026-10-20、利用者の要望）:**
+  - 承認の選択肢の最後に「No, and tell it what to do instead」を足しました（Claude Code と同じ）。選ぶと入力欄で文を打ち、Enter で、断った理由としてモデルに渡します。
+  - ACP では、承認の答えの `_meta`（`kairocode/reason`）で送り、KairoCode のエージェントは `Approve` の理由に入れます。
+  - 行の対話（`kairocode chat` を端末の外で使うとき）では、`n <文>` と打ちます。
+  - あわせて、CLI のエンジン（Claude Code など）の承認にも、フローの形（`AskRequest.Preview`）を出すようにしました。
+  - テスト: `TestRefuseWithWhatToDoInstead`、`TestACPRefuseWithWhatToDoInstead`、`TestChatAsks`。

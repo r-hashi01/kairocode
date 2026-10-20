@@ -343,7 +343,7 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			if json.Unmarshal(c.Output, &o) == nil {
 				for _, a := range o.Asks {
 					call := workflows.MCPCallPrefix + a.Key
-					checks[call] = workflows.PermissionOutput{Rule: a.Rule, Subject: a.Subject}
+					checks[call] = workflows.PermissionOutput{Rule: a.Rule, Subject: a.Subject, Preview: a.Preview}
 					tool[call] = a.Tool
 				}
 			}

@@ -825,3 +825,34 @@ func TestAskShowsWhatItWouldDo(t *testing.T) {
 		t.Fatalf("the flow is not shown\n%s", v)
 	}
 }
+
+// An approval's last choice refuses and says what to do instead: typed,
+// it goes with the refusal; esc goes back to the choices.
+func TestRefuseWithWhatToDoInstead(t *testing.T) {
+	d, _ := start(t, Options{})
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{Title: "write notes.txt", ToolKind: "edit", Options: []acp.PermissionOption{
+		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
+	if v := d.view(); !strings.Contains(v, "3. No, and tell it what to do instead") {
+		t.Fatalf("no third choice\n%s", d.view())
+	}
+	d.send(key("3"))
+	if v := d.view(); !strings.Contains(v, "What should it do instead?") {
+		t.Fatalf("no input\n%s", v)
+	}
+	d.send(key("esc"))
+	if d.m.asks[0].instead {
+		t.Fatal("esc did not go back")
+	}
+	d.send(key("3"))
+	for _, r := range "use b.txt" {
+		d.send(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	d.send(key("enter"))
+	if got := <-reply; got != "reject_once"+reasonSep+"use b.txt" {
+		t.Fatalf("reply %q", got)
+	}
+	if len(d.m.asks) != 0 {
+		t.Fatal("still asking")
+	}
+}

@@ -71,17 +71,22 @@ func (u *UI) Update(up acp.Update) { u.p.Send(updateMsg(up)) }
 
 // Permission asks the user, and waits for the answer or for ctx to end (the
 // request withdrawn: answered elsewhere).
-func (u *UI) Permission(ctx context.Context, req acp.PermissionRequest) string {
+func (u *UI) Permission(ctx context.Context, req acp.PermissionRequest) acp.PermissionAnswer {
 	reply := make(chan string, 1)
 	u.p.Send(askMsg{req: req, reply: reply})
 	select {
-	case id := <-reply:
-		return id
+	case got := <-reply:
+		id, reason, _ := strings.Cut(got, reasonSep)
+		return acp.PermissionAnswer{ID: id, Reason: reason}
 	case <-ctx.Done():
 		u.p.Send(withdrawnMsg{reply: reply})
-		return ""
+		return acp.PermissionAnswer{}
 	}
 }
+
+// reasonSep parts, in an ask's reply, the option chosen from what the user
+// said to do instead.
+const reasonSep = "\x00"
 
 // Run runs the UI on agent until the user leaves. It returns the session
 // ("" if none was started).
@@ -123,8 +128,34 @@ type ask struct {
 	req   acp.PermissionRequest
 	reply chan string
 	// sel: the option chosen, -1 for none yet (a review starts with none:
-	// Enter alone must not say a call took effect, invariant 4).
+	// Enter alone must not say a call took effect, invariant 4). One past
+	// the options: "tell it what to do instead".
 	sel int
+	// instead: the user is typing what to do instead of the call.
+	instead bool
+}
+
+// insteadOption is the choice, after an approval's options, of refusing
+// and saying what to do instead (as Claude Code has it).
+const insteadOption = "No, and tell it what to do instead"
+
+// choices are how many choices an ask offers: its options, and for an
+// approval, refusing with what to do instead.
+func (a *ask) choices() int {
+	if hasAllow(a.req.Options) && rejectID(a.req.Options) != "" {
+		return len(a.req.Options) + 1
+	}
+	return len(a.req.Options)
+}
+
+// rejectID is the option that refuses ("" if none).
+func rejectID(options []acp.PermissionOption) string {
+	for _, o := range options {
+		if strings.HasPrefix(o.Kind, "reject") {
+			return o.ID
+		}
+	}
+	return ""
 }
 
 type model struct {
@@ -724,7 +755,7 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case len(m.asks) > 0:
-		return m.askKey(key)
+		return m.askKey(k)
 	case m.pick != nil:
 		return m.pickKey(key)
 	case m.edit != nil:
@@ -878,9 +909,33 @@ func (m *model) help() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *model) askKey(key string) tea.Cmd {
+func (m *model) askKey(k tea.KeyPressMsg) tea.Cmd {
+	key := k.String()
 	a := m.asks[0]
-	n := len(a.req.Options)
+	if a.instead {
+		// Typing what to do instead: Enter sends it with the refusal, esc
+		// goes back to the options.
+		switch key {
+		case "enter":
+			text := strings.TrimSpace(m.input.Value())
+			if text == "" {
+				return nil
+			}
+			m.input.Reset()
+			m.asks = m.asks[1:]
+			a.reply <- rejectID(a.req.Options) + reasonSep + text
+			m.noteCall(a.req.ToolCallID, a.req.Title+": refused — "+text)
+			return nil
+		case "esc":
+			a.instead = false
+			m.input.Reset()
+			return nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(k)
+		return cmd
+	}
+	n := a.choices()
 	switch {
 	case key == "up" || key == "k":
 		if a.sel < 0 {
@@ -907,9 +962,15 @@ func (m *model) askKey(key string) tea.Cmd {
 	return nil
 }
 
-// answer gives the chosen option of the first question.
+// answer gives the chosen option of the first question; the last of an
+// approval's asks what to do instead first.
 func (m *model) answer() tea.Cmd {
 	a := m.asks[0]
+	if a.sel == len(a.req.Options) {
+		a.instead = true
+		m.input.Reset()
+		return m.input.Focus()
+	}
 	m.asks = m.asks[1:]
 	o := a.req.Options[a.sel]
 	a.reply <- o.ID
@@ -1051,12 +1112,25 @@ func (m *model) askView(w int) string {
 		}
 		b.WriteString("\n")
 	}
-	for i, o := range a.req.Options {
+	names := make([]string, 0, a.choices())
+	for _, o := range a.req.Options {
+		names = append(names, o.Name)
+	}
+	if a.choices() > len(a.req.Options) {
+		names = append(names, insteadOption)
+	}
+	for i, name := range names {
 		if i == a.sel {
-			b.WriteString(accent.Render(fmt.Sprintf("❯ %d. %s", i+1, o.Name)) + "\n")
+			b.WriteString(accent.Render(fmt.Sprintf("❯ %d. %s", i+1, name)) + "\n")
 		} else {
-			b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, o.Name))
+			b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, name))
 		}
+	}
+	if a.instead {
+		line := accent.Render(strings.Repeat("─", w))
+		b.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
+			faint.Render("What should it do instead? Enter to send · esc to go back") + "\n")
+		return b.String()
 	}
 	hint := "Enter to confirm · ↑↓ or a number to choose"
 	if a.sel < 0 {
