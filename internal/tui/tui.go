@@ -563,34 +563,47 @@ func (m *model) flowView(w int) string {
 	if m.height == 0 {
 		room = 40
 	}
+	// The chart, as the review draws it; taller than the screen, the part
+	// of it around what runs or waits now. Only a chart too wide to draw
+	// is a tree.
 	out := ChartOf(m.flow, w)
 	lines := strings.Split(out, "\n")
 	if len(lines) <= room {
 		return out
 	}
-	v := m.flow
-	tree := strings.Split(flowchart.Tree(v.Chart, func(n flowchart.Node) string {
-		return treeMark(v, n)
-	}), "\n")
-	if len(tree) <= room {
-		return strings.Join(tree, "\n")
-	}
-	at := 0 // the first line of what runs, or waits
-	for i, l := range tree {
+	return strings.Join(around(lines, room), "\n")
+}
+
+// around is room of lines, those around the first that runs or waits
+// (⏺, ⏸), else around the last done (✓): the first line (the flow's
+// name) kept, and ⋮ where lines are left out.
+func around(lines []string, room int) []string {
+	at := -1
+	for i, l := range lines {
 		if strings.Contains(l, "⏺") || strings.Contains(l, "⏸") {
 			at = i
 			break
 		}
 	}
-	from := max(min(at-room/2, len(tree)-room), 0)
-	part := tree[from : from+room]
+	if at < 0 {
+		for i, l := range lines {
+			if strings.Contains(l, "✓") {
+				at = i
+			}
+		}
+	}
+	at = max(at, 0)
+	body := lines[1:]
+	n := room - 1
+	from := max(min(at-1-n/2, len(body)-n), 0)
+	part := append([]string(nil), body[from:from+n]...)
 	if from > 0 {
 		part[0] = faint.Render("  ⋮")
 	}
-	if from+room < len(tree) {
+	if from+n < len(body) {
 		part[len(part)-1] = faint.Render("  ⋮")
 	}
-	return strings.Join(part, "\n")
+	return append([]string{lines[0]}, part...)
 }
 
 // endCall writes a tool call that ended: green, or red when it failed,

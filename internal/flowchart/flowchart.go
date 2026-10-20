@@ -65,7 +65,7 @@ type Node struct {
 	Uses []string `json:"-"`
 	// Args: for a tool, each named argument and what it is, in words (a
 	// step's result, the user's words) or as written.
-	Args []Arg `json:"-"`
+	Args []Arg `json:"args,omitempty"`
 	// Options: an ask's options, when the script gives them as a list.
 	Options []string `json:"options,omitempty"`
 
@@ -78,8 +78,8 @@ type Node struct {
 
 // Arg is a tool's argument: its name, and what it is.
 type Arg struct {
-	Name string
-	Text string
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 // Chart is a flow's shape.

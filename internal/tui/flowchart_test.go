@@ -43,12 +43,43 @@ func TestChartLooks(t *testing.T) {
 			t.Errorf("line %d is %d wide", i, w)
 		}
 	}
+	// An if that only stops the flow, or leaves its loop, is one box; a
+	// return says its message.
 	for _, want := range []string{"▶ start", "── review ──", "╭─ ⫴ at once for f in input[\"args\"].split(\" \")", "○ agent reviewer",
-		"○ ask", "◇ if answer.value != \"Fix\"", "│yes", "│no", "■ return", "╭─ ⟳ for round in range(5)", "↩ break",
-		"○ agent docs", "○ agent changelog", "┴", "┬"} {
+		"○ ask", "◇ if answer.value != \"Fix\" → stop", "│ stopped", "╭─ ⟳ for round in range(5)", "→ leave the loop",
+		"■ end", "○ agent docs", "○ agent changelog", "┴", "┬"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in\n%s", want, out)
 		}
+	}
+	// An if with two ways forks; a long prompt takes two lines, cut.
+	c, err = flowchart.Build("fork", []byte(`def main(input):
+    if input["args"] == "x":
+        agent(agent = "plan", prompt = "`+strings.Repeat("look closely at it ", 10)+`")
+    else:
+        agent(agent = "build", prompt = "fix")
+    return {"ok": False, "message": "never"}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out = plain(Chart(c, 100, nil))
+	for _, want := range []string{"│yes", "│no", "■ stop", "│ never"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	// A tool given a name says what the name is made of.
+	c, err = flowchart.Build("named", []byte("def main(input):\n    cmd = \"notify \" + input[\"args\"]\n    tool(\"bash\", command = cmd)\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := plain(Chart(c, 100, nil))
+	if want := `"notify " + input["args"] (with your words)`; !strings.Contains(named, want) {
+		t.Errorf("no %q in\n%s", want, named)
+	}
+	if strings.Count(out, "look closely") < 2 || strings.Count(out, "look closely") > 8 || !strings.Contains(out, "…") {
+		t.Errorf("the long prompt:\n%s", out)
 	}
 }
 
@@ -123,7 +154,8 @@ func TestFlowLive(t *testing.T) {
 		}
 	}
 	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if v := d.view(); !strings.Contains(v, "├─ ⏺ agent build") || strings.Contains(v, "╭─ ⟳") {
+	// On a short screen, the chart still: the part around what runs.
+	if v := d.view(); !strings.Contains(v, "⏺ agent build ×2") || !strings.Contains(v, "⋮") || strings.Contains(v, "├─ ") {
 		t.Fatalf("on a short screen:\n%s", v)
 	}
 	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateDone}, Done: true}})

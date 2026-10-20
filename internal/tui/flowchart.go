@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -114,8 +115,27 @@ func fit(s string, w int) string {
 	return string(r) + "…"
 }
 
+// boxMax is the widest a box's text runs, in columns: a longer text
+// takes a second line, and is cut there.
+const boxMax = 60
+
+// returnMessage is what a return says: the message of its dict, or the
+// string it returns; and whether it ends the flow as failed.
+var messageOf = regexp.MustCompile(`"message":\s*"((?:[^"\\]|\\.)*)"`)
+
+func returnMessage(n flowchart.Node) (text string, failed bool) {
+	failed = strings.Contains(n.Text, `"ok": False`)
+	if m := messageOf.FindStringSubmatch(n.Text); m != nil {
+		return strings.ReplaceAll(m[1], `\n`, " "), failed
+	}
+	if t := n.Text; len(t) > 1 && t[0] == '"' && t[len(t)-1] == '"' && !strings.Contains(t[1:len(t)-1], `"`) {
+		return t[1 : len(t)-1], failed // a string returned: its words
+	}
+	return n.Text, failed
+}
+
 // box is a step: a rounded box in its state's colour, with its mark, its
-// label and its text.
+// label and its text (two lines at most).
 func (d *drawer) box(n flowchart.Node, maxw int) block {
 	mark, style := stateMark(d.state(n))
 	label := flowchart.Label(n)
@@ -126,13 +146,47 @@ func (d *drawer) box(n flowchart.Node, maxw int) block {
 		label += fmt.Sprintf(" ×%d", r)
 	}
 	text := n.Text
+	isCode := n.Code
+	if n.Kind == flowchart.Tool && n.Code && len(n.Args) > 0 { // a name: what it is made of
+		text, isCode = n.Args[0].Text, false
+	}
 	if n.Kind == flowchart.Return {
+		mark, label = "■", "end"
+		var failed bool
+		if text, failed = returnMessage(n); failed {
+			label = "stop"
+		}
 		if text == "" {
 			text = "None"
 		}
-		mark = "■"
+		isCode = false
 	}
-	inner := max(lipgloss.Width(label)+2, lipgloss.Width(text))
+	return d.drawBox(mark, style, label, text, isCode, maxw)
+}
+
+// guard is an if that only ends the flow, or leaves or goes round its
+// loop: one box, not a fork.
+func (d *drawer) guard(n flowchart.Node, then flowchart.Node, maxw int) block {
+	to, text := "→ next round", ""
+	switch {
+	case then.Kind == flowchart.Return:
+		var failed bool
+		text, failed = returnMessage(then)
+		to = "→ end"
+		if failed {
+			to = "→ stop"
+		}
+	case then.Text == "break":
+		to = "→ leave the loop"
+	}
+	_, style := stateMark(StatePending)
+	return d.drawBox("◇", style, "if "+n.Cond+" "+to, text, false, maxw)
+}
+
+// drawBox draws a box: its mark and label on its first line, its text
+// under it in at most two lines.
+func (d *drawer) drawBox(mark string, style lipgloss.Style, label, text string, isCode bool, maxw int) block {
+	inner := max(lipgloss.Width(label)+2, min(lipgloss.Width(text), boxMax))
 	inner = min(max(inner, 12), max(maxw-4, 12))
 	if inner+4 > maxw {
 		d.tooWide = true
@@ -140,9 +194,8 @@ func (d *drawer) box(n flowchart.Node, maxw int) block {
 	edge := style
 	lines := []string{edge.Render("╭" + strings.Repeat("─", inner+2) + "╮")}
 	lines = append(lines, edge.Render("│ ")+style.Render(mark)+" "+bold.Render(pad(fit(label, inner-2), inner-2))+edge.Render(" │"))
-	if text != "" {
-		t := fit(text, inner)
-		if n.Code {
+	for _, t := range twoLines(text, inner) {
+		if isCode {
 			t = code.Render(pad(t, inner))
 		} else {
 			t = pad(t, inner)
@@ -152,6 +205,22 @@ func (d *drawer) box(n flowchart.Node, maxw int) block {
 	lines = append(lines, edge.Render("╰"+strings.Repeat("─", inner+2)+"╯"))
 	w := inner + 4
 	return block{lines: lines, width: w, mid: w / 2}
+}
+
+// twoLines is s in lines of w columns, two at most, the second cut.
+func twoLines(s string, w int) []string {
+	if s == "" {
+		return nil
+	}
+	if lipgloss.Width(s) <= w {
+		return []string{s}
+	}
+	r := []rune(s)
+	i := 0
+	for i < len(r) && lipgloss.Width(string(r[:i+1])) <= w {
+		i++
+	}
+	return []string{string(r[:i]), fit(strings.TrimLeft(string(r[i:]), " "), w)}
 }
 
 // node is the block of one node.
@@ -167,6 +236,9 @@ func (d *drawer) node(n flowchart.Node, maxw int) block {
 		label := "↩ " + n.Text
 		return block{lines: []string{faint.Render(label)}, width: lipgloss.Width(label), mid: 0}
 	case flowchart.If:
+		if len(n.Else) == 0 && len(n.Then) == 1 && (n.Then[0].Kind == flowchart.Return || n.Then[0].Kind == flowchart.Break) {
+			return d.guard(n, n.Then[0], maxw)
+		}
 		head := d.box(flowchart.Node{Kind: flowchart.If, Cond: n.Cond}, maxw)
 		head.lines[1] = strings.Replace(head.lines[1], "○", "◇", 1)
 		cols := d.columns([][]flowchart.Node{n.Then, n.Else}, []string{"yes", "no"}, maxw)

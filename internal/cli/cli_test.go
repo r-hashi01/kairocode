@@ -502,7 +502,7 @@ func TestFlowGraph(t *testing.T) {
 	if code := Main(context.Background(), []string{"flow", "graph", "-dir", ws, "fix"}, &out, &errs); code != 0 {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	for _, want := range []string{"fix  Fix it", "▶ start", "agent build", "fix it", "return"} {
+	for _, want := range []string{"fix  Fix it", "▶ start", "agent build", "fix it", "■ end", "│ done "} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("no %q in\n%s", want, out.String())
 		}
