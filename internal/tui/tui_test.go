@@ -1016,3 +1016,40 @@ func TestFlowReview(t *testing.T) {
 		t.Fatalf("a: %q", got)
 	}
 }
+
+// The review keeps its height: moving between sections, opening a step,
+// typing a comment and having comments, the screen does not move.
+func TestFlowReviewKeepsItsHeight(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.height = 30
+	var script []string
+	for i := range 40 {
+		script = append(script, fmt.Sprintf("    x%d = 1", i))
+	}
+	req := acp.PermissionRequest{Title: "flow_write f", ToolKind: "edit",
+		Sections: []acp.Section{
+			{Name: "Summary", Text: "What it does:\n  agent plan", Refs: [][2]int{{0, 0}, {2, 2}}},
+			{Name: "Tree", Text: "f\n└─ agent plan", Refs: [][2]int{{0, 0}, {2, 2}}},
+			{Name: "Script", Text: strings.Join(script, "\n")}},
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}
+	d.send(askMsg{req: req, reply: make(chan string, 1)})
+	height := func() int { return strings.Count(d.m.View().Content, "\n") }
+	want := height()
+	if want > 30 {
+		t.Fatalf("%d lines on a screen of 30", want)
+	}
+	for i, k := range []string{"right", "right", "left", "left", "down", "enter", "c", "esc", "c"} {
+		d.send(key(k))
+		if k == "c" && i == 8 {
+			d.m.input.SetValue("note")
+			d.send(key("enter"))
+		}
+		if got := height(); got != want {
+			t.Fatalf("after %d keys (%s): %d lines, want %d\n%s", i+1, k, got, want, d.view())
+		}
+	}
+	d.send(key("esc"))
+	if got := height(); got != want || !strings.Contains(d.view(), "Comments (1)") {
+		t.Fatalf("with a comment: %d lines, want %d\n%s", got, want, d.view())
+	}
+}

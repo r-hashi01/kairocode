@@ -273,98 +273,135 @@ func allowID(options []acp.PermissionOption) string {
 	return id
 }
 
-// reviewRoom is how many lines of a section are shown at once.
+// reviewRoom is about how many lines of a section are shown at once (to
+// page by).
 func (m *model) reviewRoom() int {
 	if m.height == 0 {
 		return 30
 	}
-	return max(m.height-14, 3)
+	return max(m.height-16, 3)
 }
 
+// The review keeps one height whatever is shown (a section, a step,
+// comments, a comment being typed): a screen that changes its height
+// moves on the terminal. Its body takes what the rest leaves.
 func (m *model) reviewView(w int) string {
 	a := m.asks[0]
 	r := a.review
-	var b strings.Builder
-	b.WriteString(warn.Render(strings.Repeat("─", w)) + "\n")
-	b.WriteString(warn.Bold(true).Render("Review the flow") + "  " + bold.Render(cut(a.req.Title, w-18)) + "\n\n")
-	if r.detail != nil {
-		return b.String() + m.detailView(a, w)
+	head := warn.Render(strings.Repeat("─", w)) + "\n" +
+		warn.Bold(true).Render("Review the flow") + "  " + bold.Render(cut(a.req.Title, w-18)) + "\n\n"
+	var body []string // all of it; cur: the line chosen
+	cur := 0
+	if d := r.detail; d != nil {
+		where := fmt.Sprintf("line %d", d.first)
+		if d.last > d.first {
+			where = fmt.Sprintf("lines %d–%d", d.first, d.last)
+		}
+		head += " " + bold.Render(cut(d.from, w-2)) + "\n" + faint.Render(cut(" the script, "+where, w)) + "\n"
+		body, cur = m.detailLines(a, w)
+	} else {
+		var tabs []string
+		for i, s := range a.req.Sections {
+			if i == r.tab {
+				tabs = append(tabs, accent.Bold(true).Render("["+s.Name+"]"))
+			} else {
+				tabs = append(tabs, faint.Render(" "+s.Name+" "))
+			}
+		}
+		head += " " + strings.Join(tabs, " ") + "\n\n"
+		body, cur = m.sectionLines(a, w)
 	}
-	var tabs []string
-	for i, s := range a.req.Sections {
-		if i == r.tab {
-			tabs = append(tabs, accent.Bold(true).Render("["+s.Name+"]"))
-		} else {
-			tabs = append(tabs, faint.Render(" "+s.Name+" "))
+
+	var foot strings.Builder
+	if len(r.comments) > 0 {
+		foot.WriteString("\n" + warn.Render(fmt.Sprintf("Comments (%d)", len(r.comments))) + "\n")
+		shown := r.comments[max(len(r.comments)-3, 0):]
+		if more := len(r.comments) - len(shown); more > 0 {
+			foot.WriteString(faint.Render(fmt.Sprintf("  … %d before", more)) + "\n")
+		}
+		for _, c := range shown {
+			line := cut("  • "+c.text, w)
+			if room := w - lipgloss.Width(line); room > 8 { // where it is, as there is room
+				line += faint.Render(cut("  ← "+c.section+" "+c.line, room))
+			}
+			foot.WriteString(line + "\n")
 		}
 	}
-	b.WriteString(" " + strings.Join(tabs, " ") + "\n\n")
+	switch {
+	case r.commenting:
+		line := accent.Render(strings.Repeat("─", w))
+		foot.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
+			faint.Render(cut("Your comment on this line · Enter to keep it · esc to drop it", w)) + "\n")
+	case r.detail != nil:
+		foot.WriteString("\n" + faint.Render(cut("↑↓ choose a line · c comment on it · esc or Enter back · a allow · d reject · r send back", w)) + "\n")
+	case len(r.comments) > 0:
+		foot.WriteString("\n" + faint.Render(cut(fmt.Sprintf("r send back with %d comments · a allow anyway · d reject · Enter open · c comment · x take back · tab section", len(r.comments)), w)) + "\n")
+	default:
+		foot.WriteString("\n" + faint.Render(cut("Enter open the step · c comment · tab next section · a allow · d reject · r send back with what to change", w)) + "\n")
+	}
 
-	lines := m.reviewLines(a, w)
-	room := m.reviewRoom()
-	cur := min(r.cursor[r.tab], max(len(lines)-1, 0))
-	top := min(max(cur-room/2, 0), max(len(lines)-room, 0))
-	end := min(top+room, len(lines))
+	// The body's room: the screen less the status line (2), the rest, and
+	// a line above and below it for what is out of sight.
+	total := 40
+	if m.height > 0 {
+		total = m.height - 3
+	}
+	room := max(total-lines(head)-lines(foot.String())-2, 3)
+	top := min(max(cur-room/2, 0), max(len(body)-room, 0))
+	end := min(top+room, len(body))
+	var b strings.Builder
+	b.WriteString(head)
+	if top > 0 {
+		b.WriteString(faint.Render(fmt.Sprintf("    ↑ %d lines above", top)))
+	}
+	b.WriteString("\n")
+	for _, l := range body[top:end] {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString(strings.Repeat("\n", room-(end-top)))
+	if end < len(body) {
+		b.WriteString(faint.Render(fmt.Sprintf("    ↓ %d more lines", len(body)-end)))
+	}
+	b.WriteString("\n")
+	b.WriteString(foot.String())
+	return b.String()
+}
+
+// lines is how many lines s takes (s ends with a newline).
+func lines(s string) int { return strings.Count(s, "\n") }
+
+// sectionLines are the section's lines as shown, and the chosen one's
+// place.
+func (m *model) sectionLines(a *ask, w int) ([]string, int) {
+	r := a.review
+	ls := m.reviewLines(a, w)
+	cur := min(r.cursor[r.tab], max(len(ls)-1, 0))
 	commented := map[int]bool{}
 	for _, c := range r.comments {
 		if c.tab == r.tab {
 			commented[c.src] = true
 		}
 	}
-	if top > 0 {
-		b.WriteString(faint.Render(fmt.Sprintf("    ↑ %d lines above", top)) + "\n")
-	}
-	for i := top; i < end; i++ {
-		l := lines[i]
+	out := make([]string, len(ls))
+	for i, l := range ls {
 		mark := "  "
 		if commented[l.src] {
 			mark = warn.Render("● ")
 		}
 		if i == cur {
-			b.WriteString(accent.Render("❯ ") + mark + accent.Render(l.text) + "\n")
+			out[i] = accent.Render("❯ ") + mark + accent.Render(l.text)
 		} else {
-			b.WriteString("  " + mark + l.text + "\n")
+			out[i] = "  " + mark + l.text
 		}
 	}
-	if end < len(lines) {
-		b.WriteString(faint.Render(fmt.Sprintf("    ↓ %d more lines", len(lines)-end)) + "\n")
-	}
-	if len(r.comments) > 0 {
-		b.WriteString("\n" + warn.Render(fmt.Sprintf("Comments (%d)", len(r.comments))) + "\n")
-		for _, c := range r.comments {
-			line := cut("  • "+c.text, w)
-			if room := w - lipgloss.Width(line); room > 8 { // where it is, as there is room
-				line += faint.Render(cut("  ← "+c.section+" "+c.line, room))
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-	if r.commenting {
-		line := accent.Render(strings.Repeat("─", w))
-		b.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
-			faint.Render("Your comment on this line · Enter to keep it · esc to drop it") + "\n")
-		return b.String()
-	}
-	hint := "Enter open the step · c comment on the line · tab next section · a allow · d reject · r send back with what to change"
-	if len(r.comments) > 0 {
-		hint = fmt.Sprintf("r send back with %d comments · a allow anyway · d reject · Enter open the step · c comment · x take back the last · tab next section", len(r.comments))
-	}
-	b.WriteString("\n" + faint.Render(hint) + "\n")
-	return b.String()
+	return out, cur
 }
 
-// detailView is a step's lines of the script, in full, with two lines
-// around them.
-func (m *model) detailView(a *ask, w int) string {
+// detailLines are a step's lines of the script, in full, with two lines
+// around them, as shown; and the chosen line's place.
+func (m *model) detailLines(a *ask, w int) ([]string, int) {
 	r := a.review
 	d := r.detail
-	var b strings.Builder
-	b.WriteString(" " + bold.Render(cut(d.from, w-2)) + "\n")
-	where := fmt.Sprintf("line %d", d.first)
-	if d.last > d.first {
-		where = fmt.Sprintf("lines %d–%d", d.first, d.last)
-	}
-	b.WriteString(faint.Render(" the script, "+where) + "\n\n")
 	script := strings.Split(a.req.Sections[scriptTab(a)].Text, "\n")
 	commented := map[int]bool{}
 	for _, c := range r.comments {
@@ -372,36 +409,34 @@ func (m *model) detailView(a *ask, w int) string {
 			commented[c.src] = true
 		}
 	}
+	var out []string
+	cur := 0
 	for n := max(d.first-2, 1); n <= min(d.last+2, len(script)); n++ {
 		mark := "  "
 		if commented[n] {
 			mark = warn.Render("● ")
 		}
+		if n == d.chose {
+			cur = len(out)
+		}
 		// Wrapped, its lines after the first under the first's text.
-		parts := strings.Split(wrap(script[n-1], w-12, ""), "\n")
-		for i := range parts {
+		for i, p := range strings.Split(wrap(script[n-1], w-12, ""), "\n") {
+			text := "     │ " + p
 			if i == 0 {
-				parts[i] = fmt.Sprintf("%4d │ ", n) + parts[i]
-			} else {
-				parts[i] = "     │ " + parts[i]
+				text = fmt.Sprintf("%4d │ ", n) + p
 			}
-		}
-		num, text := "", strings.Join(parts, "\n    ")
-		switch {
-		case n == d.chose:
-			b.WriteString(accent.Render("❯ ") + mark + accent.Render(num+text) + "\n")
-		case n < d.first || n > d.last:
-			b.WriteString("  " + mark + faint.Render(num+text) + "\n")
-		default:
-			b.WriteString("  " + mark + num + text + "\n")
+			switch {
+			case n == d.chose && i == 0:
+				out = append(out, accent.Render("❯ ")+mark+accent.Render(text))
+			case n == d.chose:
+				out = append(out, "    "+accent.Render(text))
+			case n < d.first || n > d.last:
+				out = append(out, "  "+mark+faint.Render(text))
+			default:
+				out = append(out, "  "+mark+text)
+			}
+			mark = "  " // the mark on its first line only
 		}
 	}
-	if r.commenting {
-		line := accent.Render(strings.Repeat("─", w))
-		b.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
-			faint.Render("Your comment on this line · Enter to keep it · esc to drop it") + "\n")
-		return b.String()
-	}
-	b.WriteString("\n" + faint.Render("↑↓ choose a line · c comment on it · esc or Enter back · a allow · d reject · r send back") + "\n")
-	return b.String()
+	return out, cur
 }
