@@ -354,6 +354,16 @@ func (c *Client) Approve(ctx context.Context, key string, ok bool, reason string
 	return err
 }
 
+// TryFlow tries the flow an approval would write first (ADR 0017).
+func (c *Client) TryFlow(ctx context.Context, key, args string) error {
+	err := c.do(ctx, "POST", "/approvals/try", map[string]any{"key": key, "args": args}, nil)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusConflict {
+		return runtime.ErrAnswered
+	}
+	return err
+}
+
 // Answer answers a flow's question with one of its options. Only the
 // first answer goes through: a later one returns runtime.ErrAnswered.
 func (c *Client) Answer(ctx context.Context, key, option string) error {

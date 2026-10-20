@@ -20,8 +20,9 @@ type review struct {
 	tab      int
 	cursor   []int // a section's line chosen
 	comments []comment
-	// commenting: a comment on the chosen line is being typed.
-	commenting bool
+	// commenting: a comment on the chosen line is being typed; trying:
+	// the words to try the flow with (ADR 0017).
+	commenting, trying bool
 	// detail: a step's lines of the script, opened from a section's line.
 	detail *detail
 }
@@ -102,6 +103,23 @@ func (m *model) reviewKey(k tea.KeyPressMsg) tea.Cmd {
 	a := m.asks[0]
 	r := a.review
 	key := k.String()
+	if r.trying {
+		switch key {
+		case "enter": // tried: the review comes back with what it did
+			words := strings.TrimSpace(m.input.Value())
+			r.trying = false
+			m.input.Reset()
+			m.tried[a.req.ToolCallID] = r
+			return m.reviewAnswer(acp.TryOption, words)
+		case "esc":
+			r.trying = false
+			m.input.Reset()
+			return nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(k)
+		return cmd
+	}
 	if r.commenting {
 		switch key {
 		case "enter":
@@ -147,6 +165,12 @@ func (m *model) reviewKey(k tea.KeyPressMsg) tea.Cmd {
 		return m.input.Focus()
 	case "enter":
 		m.open(a)
+	case "t": // try it first, with words to run it with (ADR 0017)
+		if canTry(a.req.Options) {
+			r.trying = true
+			m.input.Reset()
+			return m.input.Focus()
+		}
 	case "x": // the last comment taken back
 		if len(r.comments) > 0 {
 			r.comments = r.comments[:len(r.comments)-1]
@@ -243,6 +267,11 @@ func (m *model) reviewAnswer(id, reason string) tea.Cmd {
 	}
 	a := m.asks[0]
 	m.asks = m.asks[1:]
+	if id == acp.TryOption { // the review comes back when the try ends
+		a.reply <- id + reasonSep + reason
+		m.noteCall(a.req.ToolCallID, a.req.Title+": trying it (nothing is sent or changed)…")
+		return nil
+	}
 	if reason != "" {
 		a.reply <- id + reasonSep + reason
 		m.noteCall(a.req.ToolCallID, fmt.Sprintf("%s: sent back with %d comments", a.req.Title, len(a.review.comments)))
@@ -327,7 +356,15 @@ func (m *model) reviewView(w int) string {
 			foot.WriteString(line + "\n")
 		}
 	}
+	try := ""
+	if canTry(a.req.Options) {
+		try = " · t try it"
+	}
 	switch {
+	case r.trying:
+		line := accent.Render(strings.Repeat("─", w))
+		foot.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
+			faint.Render(cut("The words to try it with (as after /flow <name>) · Enter to try: nothing is sent or changed · esc", w)) + "\n")
 	case r.commenting:
 		line := accent.Render(strings.Repeat("─", w))
 		foot.WriteString("\n" + line + "\n" + m.input.View() + "\n" + line + "\n" +
@@ -335,9 +372,9 @@ func (m *model) reviewView(w int) string {
 	case r.detail != nil:
 		foot.WriteString("\n" + faint.Render(cut("↑↓ choose a line · c comment on it · esc or Enter back · a allow · d reject · r send back", w)) + "\n")
 	case len(r.comments) > 0:
-		foot.WriteString("\n" + faint.Render(cut(fmt.Sprintf("r send back with %d comments · a allow anyway · d reject · Enter open · c comment · x take back · tab section", len(r.comments)), w)) + "\n")
+		foot.WriteString("\n" + faint.Render(cut(fmt.Sprintf("r send back with %d comments%s · a allow anyway · d reject · Enter open · c comment · x take back · tab section", len(r.comments), try), w)) + "\n")
 	default:
-		foot.WriteString("\n" + faint.Render(cut("Enter open the step · c comment · tab next section · a allow · d reject · r send back with what to change", w)) + "\n")
+		foot.WriteString("\n" + faint.Render(cut("a allow · d reject"+try+" · r send back · Enter open the step · c comment · tab next section", w)) + "\n")
 	}
 
 	// The body's room: the screen less the status line (2), the rest, and
@@ -448,4 +485,27 @@ func (m *model) detailLines(a *ask, w int) ([]string, int) {
 		}
 	}
 	return out, cur
+}
+
+// canTry reports whether the approval offers a try of its flow first.
+func canTry(options []acp.PermissionOption) bool {
+	for _, o := range options {
+		if o.ID == acp.TryOption {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeReview is the review of a flow tried, back with what the try did:
+// its comments kept, on the Try section.
+func resumeReview(r *review, sections []acp.Section) *review {
+	n := newReview(sections)
+	n.comments = r.comments
+	for i, s := range sections {
+		if s.Name == "Try" {
+			n.tab = i
+		}
+	}
+	return n
 }

@@ -81,7 +81,7 @@ func RunFlowV1(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
 }
 
 func runFlow(ctx *kairo.Context, in FlowInput, marks, steps bool) (FlowOutput, error) {
-	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name, Expect: in.Expect})
+	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name, Expect: in.Expect, Script: in.Script})
 	if err != nil {
 		return FlowOutput{}, err
 	}
@@ -440,6 +440,7 @@ func (r *flowRun) runAgent(ctx *kairo.Context, s agentSpec) (agentDone, error) {
 	}
 	out, err := kairo.Child[TurnOutput](ctx, Turn, TurnInput{
 		Session: r.in.Session, N: r.in.N, Dir: r.in.Dir, Agent: s.agent, Engine: r.in.Engine, Model: model, Message: prompt, Sub: true, At: s.at,
+		Dry: r.in.Dry,
 	})
 	var failed *kairo.WorkflowError
 	if errors.As(err, &failed) {
@@ -678,7 +679,7 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	for _, n := range r.policy.Planned {
 		planned = planned || n == name
 	}
-	g, err := gateTool(r.ctx, Policy{Rules: r.policy.Permissions, ReadOnly: r.policy.ReadOnly}, name, planned, in, nil)
+	g, err := gateTool(r.ctx, Policy{Rules: r.policy.Permissions, ReadOnly: r.policy.ReadOnly, Dry: r.in.Dry}, name, planned, in, nil, nil)
 	if err != nil {
 		return nil, r.fail(err)
 	}

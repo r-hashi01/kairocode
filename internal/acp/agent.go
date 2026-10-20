@@ -30,6 +30,8 @@ type Backend interface {
 	Send(ctx context.Context, session, text string) (int, error)
 	WaitTurn(ctx context.Context, session string, n int) (daemon.Turn, error)
 	Approve(ctx context.Context, key string, ok bool, reason string) error
+	// TryFlow tries the flow an approval would write first (ADR 0017).
+	TryFlow(ctx context.Context, key, args string) error
 	Events(ctx context.Context, session string) (<-chan runtime.Event, error)
 	History(ctx context.Context, session string) ([]msg.Message, error)
 	Undo(ctx context.Context, session string) (int, error)
@@ -72,6 +74,9 @@ const (
 	// section's heading): a client may show them apart (the TUI's review
 	// of a flow).
 	SectionMeta = "kairocode/section"
+	// TryOption is the option of a flow's approval that tries it first
+	// (ADR 0017); the reason (ReasonMeta) is the words to run it with.
+	TryOption = "try"
 	// RefsMeta, with SectionMeta: for each line of the section, the
 	// script's lines it is ([first, last], [0, 0] for none).
 	RefsMeta      = "kairocode/refs"
@@ -919,6 +924,9 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		answers = map[string]bool{"took_effect": true, "did_not_take_effect": false}
 		title = "Cut off while it ran — did it take effect? " + title
 	} else if p.Rule != "" {
+		if p.Try != nil { // a flow: it can be tried first (ADR 0017)
+			options = append(options, map[string]any{"optionId": TryOption, "name": "Try it first", "kind": "reject_once"})
+		}
 		rule, _, _ := strings.Cut(p.Rule, "\n") // one line: the title is not a page
 		if len([]rune(rule)) > 120 {
 			rule = string([]rune(rule)[:120]) + "…"
@@ -989,6 +997,14 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			}
 			if err := a.b.Answer(a.ctx, p.Key, p.Options[i]); err != nil && !errors.Is(err, runtime.ErrAnswered) {
 				a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
+			}
+			return
+		}
+		if resp.Outcome.OptionID == TryOption && p.Try != nil {
+			// The words to try it with come as the reason; the approval
+			// is asked again when the try ends.
+			if err := a.b.TryFlow(a.ctx, p.Key, resp.Meta.Reason); err != nil && !errors.Is(err, runtime.ErrAnswered) {
+				a.o.Logger.Warn("acp: trying the flow", "key", p.Key, "err", err)
 			}
 			return
 		}

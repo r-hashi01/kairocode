@@ -1053,3 +1053,46 @@ func TestFlowReviewKeepsItsHeight(t *testing.T) {
 		t.Fatalf("with a comment: %d lines, want %d\n%s", got, want, d.view())
 	}
 }
+
+// t tries the flow first (ADR 0017): with the words typed, the review is
+// answered "try"; when it comes back with what the try did, the comments
+// are still there, and it opens on the try.
+func TestFlowReviewTry(t *testing.T) {
+	d, _ := start(t, Options{})
+	req := acp.PermissionRequest{ToolCallID: "call-1", Title: "flow_write reply", ToolKind: "edit",
+		Sections: []acp.Section{{Name: "Overview", Text: "reply"}, {Name: "Script", Text: "def main(input):\n    return 1"}},
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"},
+			{ID: acp.TryOption, Name: "Try it first", Kind: "reject_once"}}}
+	reply := make(chan string, 1)
+	d.send(askMsg{req: req, reply: reply})
+	if v := d.view(); !strings.Contains(v, "t try it") {
+		t.Fatalf("no try offered\n%s", v)
+	}
+	d.send(key("c"))
+	d.m.input.SetValue("keep it short")
+	d.send(key("enter"))
+	d.send(key("t"))
+	d.m.input.SetValue("a late parcel")
+	d.send(key("enter"))
+	if got := <-reply; got != acp.TryOption+reasonSep+"a late parcel" {
+		t.Fatalf("answer %q", got)
+	}
+	if len(d.m.asks) != 0 || !strings.Contains(d.out(), "trying it") {
+		t.Fatalf("the review stays, or nothing is said\n%s", d.out())
+	}
+	req.Sections = append(req.Sections, acp.Section{Name: "Try", Text: "Tried with: a late parcel\nIt ended: 1"})
+	d.send(askMsg{req: req, reply: reply})
+	v := d.view()
+	if !strings.Contains(v, "[Try]") || !strings.Contains(v, "Tried with: a late parcel") || !strings.Contains(v, "Comments (1)") {
+		t.Fatalf("back from the try\n%s", v)
+	}
+	// Without a try offered, t does nothing.
+	d.send(key("a"))
+	<-reply
+	req.Options = req.Options[:2]
+	d.send(askMsg{req: req, reply: reply})
+	d.send(key("t"))
+	if d.m.asks[0].review.trying {
+		t.Fatal("t tries a flow that cannot be tried")
+	}
+}

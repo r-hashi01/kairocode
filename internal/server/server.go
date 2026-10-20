@@ -38,6 +38,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/close", s.closeSession)
 	s.mux.HandleFunc("GET /sessions/{id}/approvals", s.listApprovals)
 	s.mux.HandleFunc("POST /approvals", s.approve)
+	s.mux.HandleFunc("POST /approvals/try", s.tryFlow)
 	s.mux.HandleFunc("POST /questions", s.answer)
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
@@ -384,6 +385,28 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		code := http.StatusBadRequest
 		if errors.Is(err, runtime.ErrAnswered) {
 			code = http.StatusConflict // another client answered first
+		}
+		fail(w, code, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// tryFlow tries the flow an approval would write (ADR 0017): {"key":
+// "...", "args": "<the words to run it with>"}. The approval waits on.
+func (s *Server) tryFlow(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Key  string `json:"key"`
+		Args string `json:"args"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Key == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"key": "...", "args": "..."}`))
+		return
+	}
+	if err := s.rt.TryFlow(r.Context(), in.Key, in.Args); err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, runtime.ErrAnswered) {
+			code = http.StatusConflict
 		}
 		fail(w, code, err)
 		return

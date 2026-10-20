@@ -73,6 +73,10 @@ const (
 	// before it is made, and says whether a run before made another k-th
 	// call: the script went another way (ADR 0003, a safety net).
 	ActFlowStep = "flow.step"
+	// ActFlowWould, in a try of a flow (ADR 0017), stands for a tool call:
+	// one that only reads runs; any other is not made, and what it would
+	// have been is its result.
+	ActFlowWould = "flow.would"
 	// ActTaskArgs reads a task call's arguments (the subagent and its
 	// prompt); ActTaskResult answers the call with the subagent's reply.
 	// Its name is a tool's, so its end is told as the call's.
@@ -258,6 +262,9 @@ type TurnInput struct {
 	// At: for a flow's agent, where in the script it is called
 	// ("line:col"), for the flow's chart (flow version 2 on).
 	At string `json:"at,omitempty"`
+	// Dry: an agent of a try of a flow (ADR 0017): its tools that do more
+	// than read are not called.
+	Dry bool `json:"dry,omitempty"`
 }
 
 // FlowCall is what /flow asks for: a flow by name, and the words after it.
@@ -280,6 +287,34 @@ type FlowInput struct {
 	// allowed, which alone may run.
 	Hook   string `json:"hook,omitempty"`
 	Expect string `json:"expect,omitempty"`
+	// Dry: a try of a flow not written yet (ADR 0017): Script is its
+	// script's hash in the store; a tool that does more than read is not
+	// called, nor is an agent's.
+	Dry    bool   `json:"dry,omitempty"`
+	Script string `json:"script,omitempty"`
+	// For: the call whose approval waits for the try (its signal's name
+	// after SignalApprovePrefix).
+	For string `json:"for,omitempty"`
+}
+
+// FlowTry asks for a try of the flow a call would write (ADR 0017): its
+// name, its script's hash in the store, and the words to run it with.
+type FlowTry struct {
+	Name   string `json:"name"`
+	Script string `json:"script"`
+	Args   string `json:"args,omitempty"`
+}
+
+// WouldInput is a tool call in a try of a flow; WouldOutput says whether
+// it runs (it only reads), or else what the flow is told instead.
+type WouldInput struct {
+	Tool string    `json:"tool"`
+	In   ToolInput `json:"in"`
+}
+
+type WouldOutput struct {
+	Run    bool       `json:"run,omitempty"`
+	Result ToolOutput `json:"result"`
 }
 
 // FlowOutput is how a flow ended: main's result, or why it stopped.
@@ -298,6 +333,9 @@ type FlowLoadInput struct {
 	Name string `json:"name"`
 	// Expect, if set, is the script's hash: another script is not loaded.
 	Expect string `json:"expect,omitempty"`
+	// Script, if set, is the hash in the store of the script to run in
+	// place of the file's (a try, ADR 0017).
+	Script string `json:"script,omitempty"`
 }
 
 // FlowSource is a flow's script as it was when the flow started (recorded:
@@ -456,6 +494,9 @@ type Policy struct {
 	// against.
 	Auto    bool   `json:"auto,omitempty"`
 	Request string `json:"request,omitempty"`
+	// Dry: in a try of a flow (ADR 0017), a call that does more than read
+	// is not made.
+	Dry bool `json:"dry,omitempty"`
 }
 
 type PermissionInput struct {
@@ -553,6 +594,9 @@ type Hook struct {
 type Approval struct {
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
+	// Try is not an answer: the flow the call would write is tried first,
+	// and the call waits again (ADR 0017).
+	Try *FlowTry `json:"try,omitempty"`
 }
 
 // FlowAskInput is a question a flow puts to the user: one of Options is

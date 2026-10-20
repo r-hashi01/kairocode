@@ -87,6 +87,9 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			return workflows.ClaudeTurnOutput{}, err
 		}
 		defer closeMCP()
+		if in.Policy.Dry && !dryEngine(engine) { // it may act without asking: not in a try (ADR 0017)
+			return r.finishCLITurn(t, mt, fmt.Sprintf("[%s is not run in a try of a flow: it may change things without asking]", registryAgent(engine)), 0, msg.Usage{})
+		}
 		argv, agentEnv, bare, err := r.acpArgv(engine, in.Tools, in.Effort)
 		if err != nil { // not there to run: the user is told
 			return r.finishCLITurn(t, mt, fmt.Sprintf("[%s cannot run: %v]", registryAgent(engine), err), 0, msg.Usage{})
@@ -636,6 +639,9 @@ func (c *acpClient) handle(ctx context.Context, method string, params json.RawMe
 // for now, the question recorded, and the turn's round ends to wait for
 // the answer (as an MCP call's, ADR 0007).
 func (c *acpClient) agentTool(ctx context.Context, callID, title string, input json.RawMessage) (bool, error) {
+	if c.mt.policy.Dry { // a try of a flow: the agent's own tools are not run (ADR 0017)
+		return false, nil
+	}
 	key, err := callKey("agent:"+title, input)
 	if err != nil {
 		return false, nil

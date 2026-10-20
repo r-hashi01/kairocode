@@ -485,7 +485,8 @@ func (e *events) refresh(session string) bool {
 		return true // the first look: the joining watcher is told all of it
 	}
 	for _, p := range now {
-		if _, ok := before[p.Key]; !ok {
+		// New, or back from a try with what it did (ADR 0017): asked.
+		if b, ok := before[p.Key]; !ok || b.Trying && !p.Trying {
 			e.emit(session, Event{Type: requested(p), Turn: p.Turn, Tool: p.Tool, Pending: &p})
 		}
 	}

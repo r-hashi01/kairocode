@@ -23,4 +23,4 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0014](0014-providers-and-models.md) | プロバイダーとモデルを、会話の途中で切り替える（/provider、/model）。codex と copilot は CLI のエンジンから | 承認（2026-10-19） |
 | [0015](0015-install-acp-agents-from-the-registry.md) | ACP のエージェントを、登録簿からチャット欄で入れて使う（/provider）。エージェント自身のツールは人に聞く | 承認（2026-10-19） |
 | [0016](0016-auto-mode.md) | auto モード: 人に聞く呼び出しを、判定のモデルが決める（manual・auto・plan を shift+Tab で） | 承認（2026-10-20） |
-| [0017](0017-try-a-flow-before-it-is-written.md) | 書く前のフローを試す（試運転）: 外への作用は止め、「するはずだったこと」を見せる | 提案 |
+| [0017](0017-try-a-flow-before-it-is-written.md) | 書く前のフローを試す（試運転）: 外への作用は止め、「するはずだったこと」を見せる | 承認（2026-10-20） |

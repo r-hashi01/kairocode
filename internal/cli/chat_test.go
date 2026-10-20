@@ -175,6 +175,7 @@ func TestChatAsks(t *testing.T) {
 	go tm.read(ctx, inR)
 	allow := []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}
 	review := []acp.PermissionOption{{ID: "did_not_take_effect", Name: "No", Kind: "reject_once"}, {ID: "took_effect", Name: "Yes", Kind: "reject_once"}}
+	flow := append(append([]acp.PermissionOption(nil), allow...), acp.PermissionOption{ID: acp.TryOption, Name: "Try it first", Kind: "reject_once"})
 	for _, c := range []struct {
 		options []acp.PermissionOption
 		typed   []string
@@ -186,6 +187,8 @@ func TestChatAsks(t *testing.T) {
 		{review, []string{"y", "2"}, "took_effect"},
 		{review, []string{"1"}, "did_not_take_effect"},
 		{allow, []string{"n write it to b.txt instead"}, "reject_once: write it to b.txt instead"},
+		{allow, []string{"t a late parcel", "n"}, "reject_once"}, // no flow to try: t is not an answer
+		{flow, []string{"t a late parcel"}, "try: a late parcel"},
 	} {
 		got := make(chan string, 1)
 		go func() {

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,7 +311,9 @@ func (t *term) update(u acp.Update) {
 
 // permission asks the user, and waits for an answer: an option's number, or
 // y or n where one option allows and another rejects.
-// "n <words>" refuses, and tells the model what to do instead.
+// "n <words>" refuses, and tells the model what to do instead; "t
+// <words>", where a flow can be tried first, tries it with those words
+// (ADR 0017).
 func (t *term) permission(ctx context.Context, p acp.PermissionRequest) acp.PermissionAnswer {
 	t.ask.Lock()
 	defer t.ask.Unlock()
@@ -332,6 +335,10 @@ func (t *term) permission(ctx context.Context, p acp.PermissionRequest) acp.Perm
 	if yes != "" {
 		ask += " (y/n, or n and what to do instead)"
 	}
+	try := slices.ContainsFunc(p.Options, func(o acp.PermissionOption) bool { return o.ID == acp.TryOption })
+	if try {
+		ask += " (or t and the words to try it with)"
+	}
 	for {
 		t.mu.Lock()
 		io.WriteString(t.out, ask+": ")
@@ -352,6 +359,8 @@ func (t *term) permission(ctx context.Context, p acp.PermissionRequest) acp.Perm
 				return acp.PermissionAnswer{ID: no}
 			case strings.HasPrefix(l, "n ") && no != "":
 				return acp.PermissionAnswer{ID: no, Reason: strings.TrimSpace(typed[2:])}
+			case try && (l == "t" || strings.HasPrefix(l, "t ")):
+				return acp.PermissionAnswer{ID: acp.TryOption, Reason: strings.TrimSpace(typed[1:])}
 			}
 			if n, err := strconv.Atoi(l); err == nil && n >= 1 && n <= len(p.Options) {
 				return acp.PermissionAnswer{ID: p.Options[n-1].ID}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -238,7 +239,7 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 		p += sectionSep + "Changes\nIt replaces the flow " + a.Name + " there now (which could not be read as a flow)."
 	}
 	if h, err := r.Store.Put(ctx, store.KindContent, []byte(a.Source)); err == nil {
-		p += scriptRef + h
+		p += scriptRef + h + nameRef + a.Name // the name too, to try it (ADR 0017)
 	}
 	return p
 }
@@ -325,6 +326,15 @@ type Pending struct {
 	// its sections, for a client that shows them apart.
 	Preview  string           `json:"preview,omitempty"`
 	Sections []PreviewSection `json:"sections,omitempty"`
+	// Try, for a flow's write: the flow, to try it first (ADR 0017).
+	// Trying: a try of it is under way; an answer given now is taken when
+	// it ends.
+	Try    *TryTarget `json:"try,omitempty"`
+	Trying bool       `json:"trying,omitempty"`
+	// tried: the last try of it, as a section; noTry: it cannot be tried
+	// (a flow's own call).
+	tried []PreviewSection
+	noTry bool
 }
 
 // KindQuestion is a Pending that is a flow's question.
@@ -340,6 +350,8 @@ const (
 	// refsSep ends a section's text: then for each of its lines, the
 	// script's lines it is ("first-last", 0-0 for none), by commas.
 	refsSep = "\n\x00refs:"
+	// nameRef, after scriptRef's hash, gives the flow's name.
+	nameRef = "\x00name:"
 )
 
 // PreviewSection is a named part of what a call would do: Overview,
@@ -377,13 +389,33 @@ func section(name, s string) PreviewSection {
 	return sec
 }
 
+// TryTarget is the flow an approval would write, to try it first (ADR
+// 0017): its name and its script's hash in the store.
+type TryTarget struct {
+	Name   string `json:"name"`
+	Script string `json:"script"`
+}
+
+// previewScript is the flow a recorded preview names: its script's hash
+// and its name (empty for a preview of none, or one recorded before the
+// name was).
+func previewScript(p string) (hash, name string) {
+	_, ref, ok := strings.Cut(p, scriptRef)
+	if !ok {
+		return "", ""
+	}
+	hash, name, _ = strings.Cut(ref, nameRef)
+	return hash, name
+}
+
 // fullPreview is a recorded preview with the script it names put in: as
 // one text, and in its sections.
 func (r *Runtime) fullPreview(ctx context.Context, p string) (string, []PreviewSection) {
 	if p == "" {
 		return "", nil
 	}
-	p, h, hasScript := strings.Cut(p, scriptRef)
+	h, _ := previewScript(p)
+	p, _, hasScript := strings.Cut(p, scriptRef)
 	parts := strings.Split(p, sectionSep)
 	sections := []PreviewSection{section("Overview", parts[0])}
 	for _, s := range parts[1:] {
@@ -489,7 +521,14 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		out = append(out, p...)
 	}
 	for i := range out {
+		if h, name := previewScript(out[i].Preview); h != "" && name != "" && !out[i].noTry && !out[i].Trying {
+			out[i].Try = &TryTarget{Name: name, Script: h}
+		}
 		out[i].Preview, out[i].Sections = r.fullPreview(ctx, out[i].Preview)
+		out[i].Sections = append(out[i].Sections, out[i].tried...)
+		if len(out[i].tried) > 0 {
+			out[i].Preview += "\n\n── Try ──\n" + out[i].tried[0].Text
+		}
 	}
 	return out, nil
 }
@@ -512,6 +551,8 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 	checks := map[string]workflows.PermissionOutput{}
 	tool := map[string]string{}
 	questions := map[string]workflows.FlowAskInput{}
+	trying := map[string]bool{}
+	listed := map[string]bool{}
 	for _, c := range calls {
 		if c.Plan == "kairo.call/"+workflows.ActFlowAsk && c.Finished() {
 			var in struct {
@@ -521,6 +562,14 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 				questions[in.In.ID] = in.In
 			}
 			continue
+		}
+		if c.Workflow == workflows.Flow && !c.Finished() {
+			// A try under way (ADR 0017): the approval it is for still
+			// waits, though no wait is made until the try ends.
+			var fi workflows.FlowInput
+			if runInput(c.Input, &fi) == nil && fi.Dry && fi.For != "" {
+				trying[fi.For] = true
+			}
 		}
 		if (c.Workflow == workflows.Flow || c.Workflow == workflows.Turn) && !c.Finished() {
 			p, err := r.pendingIn(ctx, c, top)
@@ -594,11 +643,30 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 		if !ok || c.Finished() {
 			continue
 		}
-		o := checks[call]
-		out = append(out, Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool[call], Subject: o.Subject, Rule: o.Rule,
-			Preview: o.Preview})
+		listed[call] = true
+		out = append(out, r.approvalIn(ctx, run, top, call, checks[call], tool[call], calls, false))
+	}
+	for _, call := range slices.Sorted(maps.Keys(trying)) {
+		if _, known := checks[call]; known && !listed[call] {
+			out = append(out, r.approvalIn(ctx, run, top, call, checks[call], tool[call], calls, true))
+		}
 	}
 	return out, nil
+}
+
+// approvalIn is the approval of call, which run waits for (or will, once
+// its try ends: trying).
+func (r *Runtime) approvalIn(ctx context.Context, run kairo.RunInfo, top, call string, o workflows.PermissionOutput, tool string,
+	calls []kairo.RunInfo, trying bool) Pending {
+	p := Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool, Subject: o.Subject, Rule: o.Rule,
+		Preview: o.Preview, Trying: trying,
+		noTry: run.Workflow == workflows.Flow} // a flow's own call takes no try
+	if h, _ := previewScript(o.Preview); h != "" && !trying {
+		if s, ok := r.lastTry(ctx, calls, h, call); ok {
+			p.tried = []PreviewSection{s}
+		}
+	}
+	return p
 }
 
 const reviewPrefix = "review:"
@@ -713,4 +781,242 @@ func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string
 	}
 	// The run that waits: the turn, or a flow or an agent below it.
 	return r.K.Signal(ctx, run, workflows.SignalApprovePrefix+call, workflows.Approval{OK: ok, Reason: reason})
+}
+
+// ErrNotAFlow: a request to try what is not a flow's write; ErrTrying:
+// one while a try of it is under way.
+var (
+	ErrNotAFlow = errors.New("this call writes no flow to try")
+	ErrTrying   = errors.New("it is being tried: answer it, or wait for the try to end")
+)
+
+// canTry says why the flow of turn's approval cannot be tried, if it
+// cannot: its agents would run on an engine that may act without asking
+// (an ACP agent with tools of its own, as codex): only the API, Claude
+// Code (run with KairoCode's tools alone) and copilot (given them alone)
+// run a try (ADR 0017).
+func (r *Runtime) canTry(ctx context.Context, turn string) error {
+	info, err := r.K.Get(ctx, turn)
+	if err != nil {
+		return err
+	}
+	var in workflows.TurnInput
+	if err := runInput(info.Input, &in); err != nil {
+		return err
+	}
+	engine := in.Engine
+	if engine == "" {
+		engine = r.cfg.Engine
+	}
+	if !dryEngine(engine) {
+		return fmt.Errorf("a try runs the flow's agents with %s, which may change things without asking: switch to the Claude API or Claude Code (/provider) to try it", registryAgent(engine))
+	}
+	return nil
+}
+
+// dryEngine reports whether a try of a flow may run its agents on engine:
+// one whose every tool goes through KairoCode's.
+func dryEngine(engine string) bool {
+	return engine == "" || engine == workflows.EngineAPI || engine == workflows.EngineClaudeCode || registryAgent(engine) == copilotAgent
+}
+
+// TryFlow tries the flow an approval would write (ADR 0017), with args as
+// the words after /flow <name>: the call keeps waiting, and the try runs
+// below it; tools that do more than read are not called. The approval is
+// asked again when the try ends, with what it did.
+func (r *Runtime) TryFlow(ctx context.Context, key, args string) error {
+	session := sessionOf(key)
+	if session == "" {
+		return fmt.Errorf("not an approval key: %q", key)
+	}
+	r.approveMu.Lock()
+	defer r.approveMu.Unlock()
+	pending, err := r.Pending(ctx, session)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(pending, func(p Pending) bool { return p.Key == key })
+	if i < 0 {
+		return ErrAnswered
+	}
+	switch {
+	case pending[i].Trying:
+		return ErrTrying
+	case pending[i].Try == nil:
+		return ErrNotAFlow
+	}
+	if err := r.canTry(ctx, pending[i].Turn); err != nil {
+		return err
+	}
+	run, call, _ := strings.Cut(key, "#")
+	t := pending[i].Try
+	return r.K.Signal(ctx, run, workflows.SignalApprovePrefix+call,
+		workflows.Approval{Try: &workflows.FlowTry{Name: t.Name, Script: t.Script, Args: strings.TrimSpace(args)}})
+}
+
+// lastTry is the last try, among calls, of the flow whose script is
+// script, as a section: what it was given, how it ended, and in order what
+// its agents said and what it would have done (the calls it did not make,
+// with all they would have been given).
+func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, call string) (PreviewSection, bool) {
+	var last *kairo.RunInfo
+	var in workflows.FlowInput
+	for i, c := range calls {
+		if c.Workflow != workflows.Flow || !c.Finished() {
+			continue
+		}
+		var fi workflows.FlowInput
+		if runInput(c.Input, &fi) != nil || !fi.Dry || fi.Script != script || fi.For != call {
+			continue
+		}
+		if last == nil || c.Created.After(last.Created) {
+			last, in = &calls[i], fi
+		}
+	}
+	if last == nil {
+		return PreviewSection{}, false
+	}
+	var b strings.Builder
+	words := in.Call.Args
+	if words == "" {
+		words = "(no words)"
+	}
+	fmt.Fprintf(&b, "Tried with: %s\n", words)
+	var fo workflows.FlowOutput
+	switch {
+	case last.Status != "completed" || runOutput(last.Output, &fo) != nil:
+		fmt.Fprintf(&b, "It stopped: %s\n", firstLineOf(last.Error))
+	case fo.OK:
+		fmt.Fprintf(&b, "It ended: %s\n", strings.TrimSpace(fo.Message))
+	default:
+		fmt.Fprintf(&b, "It did not succeed: %s\n", strings.TrimSpace(fo.Message))
+	}
+	b.WriteString("\nWhat happened, in order (nothing was sent or changed):\n")
+	n := 0
+	var walk func(id string, depth int)
+	walk = func(id string, depth int) {
+		if depth > 8 {
+			return
+		}
+		kids, err := r.K.Children(ctx, id)
+		if err != nil {
+			return
+		}
+		// A CLI engine's tool calls are runs of their own (kairo-gap #17).
+		if mcp, err := r.Store.MCPRuns(ctx, id); err == nil {
+			for _, m := range mcp {
+				if info, err := r.K.Get(ctx, m); err == nil {
+					kids = append(kids, info)
+				}
+			}
+		}
+		slices.SortStableFunc(kids, func(a, b kairo.RunInfo) int { return a.Created.Compare(b.Created) })
+		for _, k := range kids {
+			switch {
+			case k.Plan == "kairo.call/"+workflows.ActFlowWould && k.Status == "completed":
+				var w workflows.WouldOutput
+				var wi struct {
+					In workflows.WouldInput `json:"in"`
+				}
+				if json.Unmarshal(k.Output, &w) != nil || w.Run || json.Unmarshal(k.Input, &wi) != nil {
+					continue
+				}
+				args, _ := r.toolArgs(ctx, wi.In.In)
+				n++
+				fmt.Fprintf(&b, "  %d. would call %s with:\n%s\n", n, wi.In.Tool, indent(prettyJSON(args), "       "))
+			case k.Workflow == workflows.Turn && k.Status == "completed":
+				var ti workflows.TurnInput
+				var to workflows.TurnOutput
+				if runInput(k.Input, &ti) != nil || runOutput(k.Output, &to) != nil {
+					continue
+				}
+				walk(k.RunID, depth+1) // what the agent would have done, before its reply
+				reply := ""
+				if m, err := r.Store.Message(ctx, to.Reply); err == nil {
+					reply = m.Text()
+				}
+				n++
+				fmt.Fprintf(&b, "  %d. agent %s replied:\n%s\n", n, ti.Agent, indent(clipLines(reply, 30), "       "))
+			case k.Workflow != "":
+				walk(k.RunID, depth+1)
+			}
+		}
+	}
+	walk(last.RunID, 0)
+	if n == 0 {
+		b.WriteString("  (no agent ran, and it would have called nothing)\n")
+	}
+	return PreviewSection{Name: "Try", Text: strings.TrimRight(b.String(), "\n")}, true
+}
+
+// runInput reads a run's input: a workflow's is kept as {"input": ...},
+// a call's as {"in": ...}.
+func runInput(raw json.RawMessage, v any) error {
+	var wrapped struct {
+		In    json.RawMessage `json:"in"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return err
+	}
+	switch {
+	case len(wrapped.Input) > 0:
+		return json.Unmarshal(wrapped.Input, v)
+	case len(wrapped.In) > 0:
+		return json.Unmarshal(wrapped.In, v)
+	}
+	return json.Unmarshal(raw, v)
+}
+
+// runOutput reads a workflow run's output, kept as {"payload": {"ok",
+// "value"}}.
+func runOutput(raw json.RawMessage, v any) error {
+	var wrapped struct {
+		Payload *struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return err
+	}
+	if wrapped.Payload != nil && len(wrapped.Payload.Value) > 0 {
+		return json.Unmarshal(wrapped.Payload.Value, v)
+	}
+	return json.Unmarshal(raw, v)
+}
+
+func firstLineOf(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
+}
+
+// indent is s with each line after prefix.
+func indent(s, prefix string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = prefix + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// prettyJSON is raw indented, or raw as it is.
+func prettyJSON(raw json.RawMessage) string {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return string(raw)
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return string(raw)
+	}
+	return string(b)
+}
+
+// clipLines is s in at most n lines.
+func clipLines(s string, n int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) > n {
+		lines = append(lines[:n], fmt.Sprintf("… %d more lines", len(lines)-n))
+	}
+	return strings.Join(lines, "\n")
 }

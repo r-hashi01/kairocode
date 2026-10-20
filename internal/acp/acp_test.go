@@ -65,6 +65,10 @@ func (l *local) Approve(ctx context.Context, key string, ok bool, reason string)
 	return l.r.Approve(ctx, key, ok, reason)
 }
 
+func (l *local) TryFlow(ctx context.Context, key, args string) error {
+	return l.r.TryFlow(ctx, key, args)
+}
+
 func (l *local) Events(ctx context.Context, s string) (<-chan runtime.Event, error) {
 	return l.r.Events(ctx, s)
 }
@@ -1154,5 +1158,49 @@ func TestPermissionSections(t *testing.T) {
 	}
 	if text := contentText(raw); text != "sumotherf\n└─ ask\n\n── Script ──\ndef main(input):" {
 		t.Fatalf("as text: %q", text)
+	}
+}
+
+// A flow's approval offers to try it first (ADR 0017): chosen with the
+// words to run it with, the try runs, and the approval is asked again with
+// what the try did; allowed then, the flow is written.
+func TestACPTryFlow(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, runtime.ConfigFile), []byte(`{"permission": {"flow_write": "ask"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := "def main(input):\n    phase(\"draft\")\n    d = agent(\"plan\", \"draft a reply to \" + input[\"args\"])\n    return d.output\n"
+	in, _ := json.Marshal(map[string]any{"name": "reply", "source": src})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := runtime.Open(ctx, runtime.Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "acp",
+		Provider: &provider.Fake{HoldAt: -1,
+			Script:  []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "written"}},
+			Replies: map[string]provider.FakeReply{"draft a reply to": {Text: "Dear customer"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	b := &local{r: r}
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	id := prompt(c, s, "make a flow")
+	req, _ := c.until(isMethod("session/request_permission"))
+	if !strings.Contains(string(req.Params), `"optionId":"try"`) {
+		t.Fatalf("no try offered: %s", req.Params)
+	}
+	c.answer(req, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": TryOption},
+		"_meta": map[string]any{ReasonMeta: "a late parcel"}})
+	again, _ := c.until(isMethod("session/request_permission"))
+	for _, want := range []string{"── Try ──", "Tried with: a late parcel", "Dear customer"} {
+		if !strings.Contains(string(again.Params), want) {
+			t.Fatalf("no %q in the approval asked again: %s", want, again.Params)
+		}
+	}
+	allow(c, again, "allow_once")
+	c.until(isResponse(id))
+	if _, err := os.Stat(filepath.Join(ws, ".kairocode", "workflows", "reply.star")); err != nil {
+		t.Fatalf("the flow is not written: %v", err)
 	}
 }

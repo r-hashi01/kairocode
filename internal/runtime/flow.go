@@ -18,6 +18,8 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/store"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -51,6 +53,40 @@ func flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (workflows.FlowS
 		return workflows.FlowSource{Error: fmt.Sprintf("the flow %q changed since it was allowed: it is asked about again next time", in.Name)}, nil
 	}
 	return workflows.FlowSource{Source: string(b), Hash: hash}, nil
+}
+
+// flowLoad reads a flow's script: the file's, or for a try (ADR 0017),
+// the one in the store by its hash.
+func (r *Runtime) flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (workflows.FlowSource, error) {
+	if in.Script == "" {
+		return flowLoad(t, in)
+	}
+	kind, b, err := r.Store.Get(t, in.Script)
+	if err != nil || kind != store.KindContent {
+		return workflows.FlowSource{Error: "the flow to try is not there"}, nil
+	}
+	sum := sha256.Sum256(b)
+	return workflows.FlowSource{Source: string(b), Hash: hex.EncodeToString(sum[:])}, nil
+}
+
+// flowWould stands for a tool call in a try of a flow (ADR 0017): a tool
+// that only reads runs; any other (an outside service's, one that writes
+// or cannot be undone) is not called, and the flow is told what it would
+// have been called with.
+func (r *Runtime) flowWould(t *kairo.TaskContext, in workflows.WouldInput) (workflows.WouldOutput, error) {
+	if d, ok := r.tool(in.Tool); ok && d.Effect == tools.Read && !strings.HasPrefix(in.Tool, "mcp__") {
+		return workflows.WouldOutput{Run: true}, nil
+	}
+	args, err := r.toolArgs(t, in.In)
+	if err != nil {
+		return workflows.WouldOutput{}, err
+	}
+	text := fmt.Sprintf("This is a try of the flow: %s was not called, as it does more than read. It would have been called with:\n%s", in.Tool, args)
+	out, err := r.toolResult(t, in.In.Call, tools.Result{Output: text})
+	if err != nil {
+		return workflows.WouldOutput{}, err
+	}
+	return workflows.WouldOutput{Result: out}, nil
 }
 
 // flowPut stores a message a flow makes.

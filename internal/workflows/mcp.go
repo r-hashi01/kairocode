@@ -8,7 +8,7 @@ import kairo "github.com/r-hashi01/kairo/sdk/go"
 func RunMCPCall(ctx *kairo.Context, in MCPCallInput) (ToolOutput, error) {
 	ti := ToolInput{Dir: in.Dir, Args: in.Args}
 	mcp := in.MCP
-	g, err := gateTool(ctx, in.Policy, in.Tool, in.Planned, ti, &mcp)
+	g, err := gateTool(ctx, in.Policy, in.Tool, in.Planned, ti, &mcp, nil)
 	if err != nil {
 		return ToolOutput{}, err
 	}

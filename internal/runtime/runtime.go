@@ -347,7 +347,8 @@ func (r *Runtime) declare() {
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1), kairo.Draining())
 	}
 	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
-	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, flowLoad)
+	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, r.flowLoad)
+	kairo.Action(r.K, workflows.ActFlowWould, kairo.Unprotected, r.flowWould)
 	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
 	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,

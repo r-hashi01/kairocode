@@ -167,6 +167,10 @@ func rejectID(options []acp.PermissionOption) string {
 }
 
 type model struct {
+	// tried: reviews of flows being tried (ADR 0017), by their call, to
+	// go on with when the review comes back.
+	tried map[string]*review
+
 	ctx context.Context
 	a   Agent
 	o   Options
@@ -244,7 +248,8 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetWidth(76)
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
-	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true}
+	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
+		tried: map[string]*review{}}
 	m.restyle()
 	return m
 }
@@ -398,6 +403,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			a.sel = 0
 			if len(msg.req.Sections) > 0 && rejectID(msg.req.Options) != "" { // a flow: reviewed
 				a.review = newReview(msg.req.Sections)
+				if r := m.tried[msg.req.ToolCallID]; r != nil { // back from its try
+					a.review = resumeReview(r, msg.req.Sections)
+					delete(m.tried, msg.req.ToolCallID)
+				}
 			}
 		}
 		m.asks = append(m.asks, a)
