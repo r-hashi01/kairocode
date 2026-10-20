@@ -46,7 +46,7 @@ func TestChartLooks(t *testing.T) {
 	// An if that only stops the flow, or leaves its loop, is one box; a
 	// return says its message.
 	for _, want := range []string{"▶ start", "── review ──", "╭─ ⫴ at once for f in input[\"args\"].split(\" \")", "○ agent reviewer",
-		"○ ask", "◇ if answer.value ≠ \"Fix\" → stop", "│ stopped", "╭─ ⟳ for round ∈ range(5)", "→ leave the loop",
+		"○ ask", "◇ if answer.value != \"Fix\" → stop", "│ stopped", "╭─ ⟳ for round in range(5)", "→ leave the loop",
 		"■ end", "○ agent docs", "○ agent changelog", "┴", "┬"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in\n%s", want, out)
