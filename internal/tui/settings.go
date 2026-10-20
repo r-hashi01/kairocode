@@ -29,6 +29,8 @@ type pick struct {
 	// provider: the provider whose models these are, when it is not the
 	// session's: choosing one switches both.
 	provider string
+	// login: the ways to sign in being chosen from (/login).
+	login *loginMsg
 }
 
 // setMsg: a setting was set, or could not be.
@@ -78,6 +80,9 @@ func (m *model) settings() string {
 		}
 	}
 	out := provider
+	if v, ok := m.currentProvider(); ok && v.Meta.Auth == "needed" {
+		out += " (sign in: /login)"
+	}
 	if model != "" {
 		out += " · " + model
 	}
@@ -90,6 +95,20 @@ func (m *model) settings() string {
 		}
 	}
 	return out + " · effort " + effort
+}
+
+// currentProvider is the session's provider's value, if known.
+func (m *model) currentProvider() (acp.ConfigValue, bool) {
+	o, ok := m.option("provider")
+	if !ok {
+		return acp.ConfigValue{}, false
+	}
+	for _, v := range o.Options {
+		if v.Value == o.CurrentValue {
+			return v, true
+		}
+	}
+	return acp.ConfigValue{}, false
 }
 
 // modeLabel is the mode as the status line shows it, each in its colour:
@@ -320,6 +339,13 @@ func (m *model) pickKey(key string) tea.Cmd {
 		}
 		m.pick = nil
 		switch {
+		case p.login != nil: // a way to sign in
+			for _, w := range p.login.methods {
+				if w.ID == v.Value {
+					return m.signIn(p.login.provider, w)
+				}
+			}
+			return nil
 		case p.thenModels: // the provider's models next
 			return m.models(v)
 		case p.provider != "": // another provider's model: both switch
@@ -458,6 +484,10 @@ func (m *model) pickView(w int) string {
 		switch {
 		case v.Install != nil:
 			line += "  " + warn.Render("not installed") + faint.Render("  "+cut(v.Install.Source, 50))
+		case v.Meta.Auth == "needed":
+			line += "  " + warn.Render("sign-in needed") + faint.Render("  /login "+v.Value)
+		case v.Meta.Auth == "signed-in":
+			line += "  " + good.Render("signed in")
 		case v.Description != "":
 			line += faint.Render("  " + cut(v.Description, 60))
 		}

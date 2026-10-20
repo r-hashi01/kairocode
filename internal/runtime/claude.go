@@ -257,6 +257,12 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
 	text := result.Result
+	switch {
+	case result.IsError && (strings.Contains(text, "/login") || strings.Contains(text, "Invalid API key")):
+		r.authSeen(workflows.EngineClaudeCode, AuthNeeded, nil)
+	case !result.IsError:
+		r.authSeen(workflows.EngineClaudeCode, AuthSignedIn, nil)
+	}
 	if result.IsError {
 		text = "[Claude Code ended the turn with an error: " + result.Subtype + "]\n" + text
 	}

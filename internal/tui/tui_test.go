@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -118,6 +119,16 @@ func (a *fakeAgent) SetConfigOption(ctx context.Context, session, id, value stri
 func (a *fakeAgent) Models(ctx context.Context, provider string) ([]string, error) {
 	a.set = append(a.set, "models "+provider)
 	return []string{provider + "-m1", provider + "-m2"}, nil
+}
+
+func (a *fakeAgent) LoginMethods(ctx context.Context, provider string) ([]acp.LoginMethod, error) {
+	a.set = append(a.set, "login methods "+provider)
+	return []acp.LoginMethod{{ID: "chat-gpt", Name: "ChatGPT", Agent: true}, {ID: "api-key", Name: "API Key", Agent: true}}, nil
+}
+
+func (a *fakeAgent) Login(ctx context.Context, provider, method string, done bool) error {
+	a.set = append(a.set, fmt.Sprintf("login %s %s %v", provider, method, done))
+	return nil
 }
 
 func (a *fakeAgent) SetMode(ctx context.Context, session, mode string) error {
@@ -854,5 +865,54 @@ func TestRefuseWithWhatToDoInstead(t *testing.T) {
 	}
 	if len(d.m.asks) != 0 {
 		t.Fatal("still asking")
+	}
+}
+
+// Whether each provider is signed in shows in the list, and on the status
+// line when the session's needs it; /login lists the ways and takes the
+// one chosen (ADR 0015).
+func TestSignIn(t *testing.T) {
+	d, a := start(t, Options{})
+	codex := acp.ConfigValue{Value: "codex", Name: "Codex"}
+	codex.Meta.Auth = "needed"
+	api := acp.ConfigValue{Value: "anthropic", Name: "Claude API"}
+	api.Meta.Auth = "signed-in"
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "provider", Name: "Provider", CurrentValue: "codex", Options: []acp.ConfigValue{api, codex}}}})
+	if v := d.view(); !strings.Contains(v, "codex (sign in: /login)") {
+		t.Fatalf("status\n%s", v)
+	}
+	d.m.input.SetValue("/provider")
+	d.send(key("enter"))
+	v := d.view()
+	if !strings.Contains(v, "anthropic  signed in") || !strings.Contains(v, "codex ✓  sign-in needed  /login codex") {
+		t.Fatalf("the list\n%s", v)
+	}
+	d.send(key("esc"))
+	d.m.input.SetValue("/login")
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Sign in to codex") || !strings.Contains(v, "ChatGPT") || !strings.Contains(v, "API Key") {
+		t.Fatalf("the ways\n%s", v)
+	}
+	d.send(key("enter"))
+	if got := strings.Join(a.set, ","); got != "login methods codex,login codex chat-gpt false" {
+		t.Fatalf("calls %q", got)
+	}
+	if !strings.Contains(d.out(), "codex: signed in") {
+		t.Fatalf("printed\n%s", d.out())
+	}
+}
+
+// A command to sign in is shown before it runs, even when it is the only
+// way.
+func TestSignInCommandIsShownFirst(t *testing.T) {
+	d, a := start(t, Options{})
+	d.send(loginMsg{provider: "copilot", methods: []acp.LoginMethod{{ID: "copilot-login", Name: "Log in", Command: []string{"copilot", "login"}}}})
+	if v := d.view(); d.m.pick == nil || !strings.Contains(v, "runs: copilot login") {
+		t.Fatalf("not shown\n%s", v)
+	}
+	d.send(key("esc"))
+	if d.m.pick != nil || len(a.set) != 0 {
+		t.Fatalf("esc: %q", a.set)
 	}
 }

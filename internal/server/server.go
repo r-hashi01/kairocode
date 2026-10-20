@@ -56,6 +56,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /providers/{id}/models", s.models)
 	s.mux.HandleFunc("GET /providers/{id}/efforts", s.efforts)
 	s.mux.HandleFunc("POST /providers/{id}/install", s.installProvider)
+	s.mux.HandleFunc("GET /providers/{id}/login", s.loginMethods)
+	s.mux.HandleFunc("POST /providers/{id}/login", s.login)
 	s.mux.HandleFunc("GET /sessions/{id}/settings", s.settings)
 	s.mux.HandleFunc("POST /sessions/{id}/settings", s.switchSettings)
 	return s
@@ -170,6 +172,46 @@ func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 // providers are the providers a session can switch to (ADR 0014).
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.rt.Providers(r.Context()))
+}
+
+// loginMethods are the ways to sign in to a provider.
+func (s *Server) loginMethods(w http.ResponseWriter, r *http.Request) {
+	ms, err := s.rt.LoginMethods(r.Context(), r.PathValue("id"))
+	if errors.Is(err, runtime.ErrNoProvider) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	if ms == nil {
+		ms = []runtime.AuthMethod{}
+	}
+	writeJSON(w, http.StatusOK, ms)
+}
+
+// login signs in to a provider: {"method": id} with the agent's own
+// method; {"done": true} after the user ran a terminal method.
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Method string `json:"method"`
+		Done   bool   `json:"done"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		fail(w, http.StatusBadRequest, errors.New(`want {"method": "..."} or {"done": true}`))
+		return
+	}
+	if in.Done {
+		s.rt.LoggedIn(r.PathValue("id"))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := s.rt.Login(r.Context(), r.PathValue("id"), in.Method); err != nil {
+		fail(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // installProvider installs an agent of ACP's registry (ADR 0015): the

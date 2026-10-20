@@ -78,7 +78,33 @@ type ConfigValue struct {
 	Install *InstallInfo `json:"-"`
 	Meta    struct {
 		Install *InstallInfo `json:"kairocode/install,omitempty"`
+		Auth    string       `json:"kairocode/auth,omitempty"`
 	} `json:"_meta"`
+}
+
+// LoginMethod is a way to sign in to a provider: a command to run in the
+// terminal, or one the agent carries out (Agent).
+type LoginMethod struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Command     []string `json:"command,omitempty"`
+	Agent       bool     `json:"agent,omitempty"`
+}
+
+// LoginMethods are the ways to sign in to provider (KairoCode's agent).
+func (cl *Client) LoginMethods(ctx context.Context, provider string) ([]LoginMethod, error) {
+	var out struct {
+		Methods []LoginMethod `json:"methods"`
+	}
+	err := cl.c.Call(ctx, LoginMethodsRPC, map[string]any{"provider": provider}, &out)
+	return out.Methods, err
+}
+
+// Login signs in to provider with the agent's own method, or, done,
+// tells the agent the user ran a terminal method.
+func (cl *Client) Login(ctx context.Context, provider, method string, done bool) error {
+	return cl.c.Call(ctx, LoginRPC, map[string]any{"provider": provider, "method": method, "done": done}, nil)
 }
 
 // InstallInfo is what installing a provider fetches.

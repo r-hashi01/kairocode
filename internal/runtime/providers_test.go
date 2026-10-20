@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -34,7 +35,9 @@ import (
 // prompts on session/load, logs each prompt (KC_FAKE_CLI_LOG), and in a
 // session's first prompt, if KC_FAKE_CLI_WRITE names a file, asks
 // permission and has its client write it. It answers "<engine> <model>:
-// <what the write said>".
+// <what the write said>". With KC_FAKE_CLI_AUTH (a file), it offers ways
+// to sign in, and refuses a session (auth_required) until authenticate
+// has made the file.
 type fakeCLIStart struct {
 	Engine string `json:"engine"`
 	Model  string `json:"model"`
@@ -85,9 +88,30 @@ func fakeCLI() {
 		json.Unmarshal(params, &p)
 		switch method {
 		case "initialize":
-			return map[string]any{"protocolVersion": 1,
-				"agentCapabilities": map[string]any{"loadSession": true, "mcpCapabilities": map[string]any{"http": true}}}, nil
+			init := map[string]any{"protocolVersion": 1,
+				"agentCapabilities": map[string]any{"loadSession": true, "mcpCapabilities": map[string]any{"http": true}}}
+			if os.Getenv("KC_FAKE_CLI_AUTH") != "" {
+				init["authMethods"] = []any{
+					map[string]any{"id": "chat-gpt", "name": "ChatGPT", "description": "Sign in with ChatGPT"},
+					map[string]any{"id": "cli-login", "name": "Log in", "_meta": map[string]any{"terminal-auth": map[string]any{"command": engine, "args": []string{"login"}}}},
+					map[string]any{"id": "self", "name": "In the agent", "type": "terminal"}}
+			}
+			return init, nil
+		case "authenticate":
+			var a struct {
+				MethodID string `json:"methodId"`
+			}
+			json.Unmarshal(params, &a)
+			if a.MethodID != "chat-gpt" {
+				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "no such method " + a.MethodID}
+			}
+			return map[string]any{}, os.WriteFile(os.Getenv("KC_FAKE_CLI_AUTH"), []byte("ok"), 0o600)
 		case "session/new":
+			if f := os.Getenv("KC_FAKE_CLI_AUTH"); f != "" {
+				if _, err := os.Stat(f); err != nil {
+					return nil, &jsonrpc.Error{Code: -32000, Message: "Authentication required"}
+				}
+			}
 			id := fmt.Sprintf("%s-%d", engine, time.Now().UnixNano())
 			save(id, fakeACPSession{Cwd: p.Cwd})
 			return map[string]any{"sessionId": id, "configOptions": []any{
@@ -862,4 +886,79 @@ func (n noJudge) Complete(ctx context.Context, r provider.Request) (provider.Res
 		return provider.Response{}, errors.New("no credentials\nhow to set them, at length")
 	}
 	return n.Fake.Complete(ctx, r)
+}
+
+// An agent that wants the user to sign in (ACP's auth_required) ends the
+// turn saying so, and its provider shows sign-in needed; the ways it
+// offers are listed (a terminal command, or its own); signed in through
+// its own, the provider shows signed in and the next turn runs (ADR 0015).
+func TestSignInToAnAgent(t *testing.T) {
+	setupFakeCLI(t, "")
+	signed := filepath.Join(t.TempDir(), "signed-in")
+	t.Setenv("KC_FAKE_CLI_AUTH", signed)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if a := r.Auth(ctx, "codex"); a.State != AuthUnknown {
+		t.Fatalf("before it ran: %+v", a)
+	}
+	s, _ := r.CreateSession(ctx, "auth", workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+	out := turn(t, r, s, "hello")
+	if got, _ := r.Reply(ctx, out.Reply); !strings.Contains(got, "needs you to sign in first") {
+		t.Fatalf("reply %q", got)
+	}
+	if a := r.Auth(ctx, "codex"); a.State != AuthNeeded {
+		t.Fatalf("after auth_required: %+v", a)
+	}
+	ms, err := r.LoginMethods(ctx, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []AuthMethod{{ID: "chat-gpt", Name: "ChatGPT", Description: "Sign in with ChatGPT", Agent: true},
+		{ID: "cli-login", Name: "Log in", Command: []string{"codex", "login"}}}
+	if !reflect.DeepEqual(ms, want) {
+		t.Fatalf("ways %+v", ms)
+	}
+	if err := r.Login(ctx, "codex", "no-such"); err == nil {
+		t.Error("signed in with a way the agent does not have")
+	}
+	if err := r.Login(ctx, "codex", "chat-gpt"); err != nil {
+		t.Fatal(err)
+	}
+	if a := r.Auth(ctx, "codex"); a.State != AuthSignedIn {
+		t.Fatalf("after sign-in: %+v", a)
+	}
+	out = turn(t, r, s, "again")
+	if got, _ := r.Reply(ctx, out.Reply); got != "codex : no call" {
+		t.Fatalf("reply after sign-in %q", got)
+	}
+	for _, p := range r.Providers(ctx) {
+		if p.ID == "codex-acp" && (p.Auth == nil || p.Auth.State != AuthSignedIn) {
+			t.Errorf("listed %+v", p)
+		}
+	}
+}
+
+// Only an error that says so is a sign-in needed: agents use -32000 for
+// other failures too.
+func TestAuthRequired(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{&jsonrpc.Error{Code: -32000, Message: "Authentication required"}, true},
+		{&jsonrpc.Error{Code: -32000, Message: "Internal error: rate limited"}, false},
+		{errors.New("codex: not logged in"), true},
+		{errors.New("connection reset"), false},
+		{nil, false},
+	} {
+		if got := authRequired(c.err); got != c.want {
+			t.Errorf("%v: %v", c.err, got)
+		}
+	}
 }

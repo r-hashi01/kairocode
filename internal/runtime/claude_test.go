@@ -52,6 +52,10 @@ type fakeClaudeStart struct {
 
 func fakeClaude() {
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "auth" { // claude auth status: signed in, not a run
+		fmt.Println(`{"loggedIn": true}`)
+		return
+	}
 	var start fakeClaudeStart
 	var mcpConfig, jsonSchema string
 	for i := 0; i+1 < len(args); i++ {

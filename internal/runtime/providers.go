@@ -30,6 +30,8 @@ type ProviderInfo struct {
 	Version     string `json:"version,omitempty"`
 	Source      string `json:"source,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+	// Auth is its sign-in, for one that runs here.
+	Auth *AuthInfo `json:"auth,omitempty"`
 }
 
 // The registry's ids of the agents ADR 0014 named codex and copilot.
@@ -128,8 +130,21 @@ func (r *Runtime) knownAgent(ctx context.Context, id string) bool {
 
 // Providers are the providers: the API, Claude Code, and the agents of
 // ACP's registry, with whether each runs here or can be installed. If the
-// registry cannot be read, the agents installed are still there.
+// registry cannot be read, the agents installed are still there. Each
+// that runs here has its sign-in.
 func (r *Runtime) Providers(ctx context.Context) []ProviderInfo {
+	out := r.providers(ctx)
+	for i := range out {
+		if out[i].Available {
+			a := r.Auth(ctx, out[i].ID)
+			out[i].Auth = &a
+		}
+	}
+	return out
+}
+
+// providers are the providers without their sign-in (which may ask a CLI).
+func (r *Runtime) providers(ctx context.Context) []ProviderInfo {
 	_, claudeErr := exec.LookPath(r.cfg.ClaudePath)
 	out := []ProviderInfo{
 		{ID: ProviderAnthropic, Name: "Claude API", Kind: "api", Available: r.cfg.Provider != nil},
@@ -165,7 +180,7 @@ func (r *Runtime) Providers(ctx context.Context) []ProviderInfo {
 
 // available reports whether provider id runs here now.
 func (r *Runtime) available(ctx context.Context, id string) bool {
-	for _, p := range r.Providers(ctx) {
+	for _, p := range r.providers(ctx) {
 		if p.ID == id {
 			return p.Available
 		}
@@ -186,7 +201,7 @@ func (r *Runtime) InstallProvider(ctx context.Context, id, version string) (Prov
 		}
 		return ProviderInfo{}, err
 	}
-	for _, p := range r.Providers(ctx) {
+	for _, p := range r.providers(ctx) {
 		if p.ID == id {
 			return p, nil
 		}
@@ -342,7 +357,7 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 	sw := workflows.Switch{Model: model, Effort: effort}
 	if id != "" {
 		engine, _ := engineOf(id)
-		ps := r.Providers(ctx)
+		ps := r.providers(ctx)
 		i := slices.IndexFunc(ps, func(p ProviderInfo) bool { return p.ID == providerOf(engine) })
 		switch {
 		case i < 0:

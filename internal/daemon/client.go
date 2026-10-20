@@ -273,6 +273,19 @@ func (c *Client) Efforts(ctx context.Context, id string) ([]string, error) {
 	return out, err
 }
 
+// LoginMethods are the ways to sign in to provider id.
+func (c *Client) LoginMethods(ctx context.Context, id string) ([]runtime.AuthMethod, error) {
+	var out []runtime.AuthMethod
+	err := c.do(ctx, "GET", "/providers/"+url.PathEscape(id)+"/login", nil, &out)
+	return out, err
+}
+
+// Login signs in to provider id with its agent's method; done instead
+// tells the daemon the user ran a terminal method.
+func (c *Client) Login(ctx context.Context, id, method string, done bool) error {
+	return c.do(ctx, "POST", "/providers/"+url.PathEscape(id)+"/login", map[string]any{"method": method, "done": done}, nil)
+}
+
 // Models are provider id's models to choose from.
 func (c *Client) Models(ctx context.Context, id string) ([]string, error) {
 	var out []string

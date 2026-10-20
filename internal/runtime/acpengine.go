@@ -164,6 +164,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		}
 
 		var init struct {
+			AuthMethods       json.RawMessage `json:"authMethods"`
 			AgentCapabilities struct {
 				LoadSession     bool `json:"loadSession"`
 				MCPCapabilities struct {
@@ -180,6 +181,9 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			"clientInfo": map[string]any{"name": "kairocode", "version": "0"},
 		}, &init); err != nil {
 			return fail("initialize", err)
+		}
+		if ms := acpAuthMethods(init.AuthMethods); len(ms) > 0 {
+			r.authSeen(providerOf(engine), "", ms)
 		}
 		mcpServers := []any{}
 		if init.AgentCapabilities.MCPCapabilities.HTTP {
@@ -206,6 +210,10 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 				ConfigOptions []acpOption `json:"configOptions"`
 			}
 			if err := conn.Call(t, "session/new", map[string]any{"cwd": in.Dir, "mcpServers": mcpServers}, &out); err != nil {
+				if authRequired(err) { // the user is to sign in: said, not tried again
+					r.authSeen(providerOf(engine), AuthNeeded, nil)
+					return r.finishCLITurn(t, mt, fmt.Sprintf("[%s needs you to sign in first: /login shows how]", registryAgent(engine)), 0, msg.Usage{})
+				}
 				return fail("session/new", err)
 			}
 			id, opts = out.SessionID, out.ConfigOptions
@@ -214,6 +222,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			}
 		}
 		c.session = id
+		r.authSeen(providerOf(engine), AuthSignedIn, nil)
 		r.keepACPOptions(t, engine, opts)
 		// A model the agent's session does not have (its list changes
 		// with the account) does not stop the turn: the agent's own runs
@@ -268,6 +277,69 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		}
 		return r.finishCLITurn(t, mt, reply, 1, usage)
 	}
+}
+
+// withAgent starts engine's agent in a directory of its own, initializes
+// it, gives fn the connection and what initialize said, and stops it.
+func (r *Runtime) withAgent(ctx context.Context, engine string, fn func(context.Context, *jsonrpc.Conn, json.RawMessage) error) error {
+	argv, agentEnv, _, err := r.acpArgv(engine, nil, "")
+	if err != nil {
+		return err
+	}
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = os.TempDir()
+	cmd.Env = cliEnv()
+	for k, v := range agentEnv {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.SysProcAttr = claudeProcAttr()
+	cmd.Cancel = func() error {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = 5 * time.Second
+	toAgent, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	fromAgent, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting %s: %w", argv[0], err)
+	}
+	conn := jsonrpc.NewConn(toAgent)
+	served := make(chan error, 1)
+	go func() {
+		served <- conn.Serve(ctx, fromAgent, func(context.Context, string, json.RawMessage) (any, error) { return nil, nil })
+	}()
+	defer func() {
+		toAgent.Close()
+		stop()
+		select {
+		case <-served:
+		case <-time.After(5 * time.Second):
+			// Something outside the group (a browser it opened) holds the
+			// output open: it is not read further.
+			fromAgent.Close()
+			<-served
+		}
+		_ = cmd.Wait()
+	}()
+	var init struct {
+		AuthMethods json.RawMessage `json:"authMethods"`
+	}
+	ictx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	err = conn.Call(ictx, "initialize", map[string]any{"protocolVersion": 1,
+		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": true, "writeTextFile": true}, "terminal": true}}, &init)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("initialize: %w", err)
+	}
+	return fn(ctx, conn, init.AuthMethods)
 }
 
 // finishCLITurn stores a CLI turn's reply and hands back what the turn

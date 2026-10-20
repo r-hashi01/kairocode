@@ -133,4 +133,40 @@ ACP には、エージェントの登録簿があります（`https://cdn.agentc
     - セッションを作るときに、エージェントがあるかを確かめます。そのとき登録簿は、置いてある写しを読みます。写しが無いときだけ取りに行き、待つのは 5 秒までです。
     - `-provider claude` は `claude-acp` として扱います。
   - テスト: `TestProviderByNameAndFilter`（TUI）、`TestEngineAndModelPerSession`。
-- **まだ:** 版を上げる（新しい版があると出す）こと。認証が要るエージェントへの案内（ACP の `authenticate`）。古い版の置き場の片付け。
+- **まだ:** 版を上げる（新しい版があると出す）こと。古い版の置き場の片付け。（認証は下の追記で入れました。）
+
+## 追記: サインインの状態と `/login`（2026-10-20）
+
+利用者の指摘「ACP って認証あるでしょ？ 認証してるかしてないかも出てないからわからんよ」を受けて足しました。
+
+- **状態**（`internal/runtime/auth.go`）
+  - プロバイダーごとに `signed-in`・`needed`・`unknown` を持ちます。デーモンのメモリだけに置き、記録には入れません。ワークフローの分岐には使わないので、不変条件 2 に関わりません。
+  - 状態の決まり方は、プロバイダーごとに次のとおりです。
+    - API: 環境の資格情報（`ANTHROPIC_API_KEY` など。値は読まず、あるかだけを見る）と、モデルの呼び出しの成否で決めます。
+    - Claude Code: `claude auth status --json` で決めます。
+    - codex: `codex login status` で決めます。CLI の答えは 1 分だけ覚えます。
+    - ACP のエージェント: 実際に動かしたときの結果で決めます。`session/new` が `auth_required`（-32000）なら `needed`、セッションが作れたら `signed-in` です。
+  - `auth_required` のときは、ターンを「<エージェント> needs you to sign in first: /login shows how」で終えます。やり直しはしません。
+- **サインインの方法:** ACP の `initialize` の `authMethods` から作ります。
+  - `_meta.terminal-auth` のあるもの（copilot の `copilot login` など）は、端末で動かすコマンドです。
+  - `type: "terminal"` のもの（エージェント自身を端末で動かすもの）は出しません。
+  - それ以外（codex の ChatGPT、API キー）は、デーモンが ACP の `authenticate` を呼びます。エージェントがブラウザーを開くことがあるので、待つのは 10 分までです。
+  - まだ動かしていないエージェントは、方法を聞くために、一時のディレクトリで 1 度起動します。
+- **API**
+  - デーモン: `GET`・`POST /providers/{id}/login`。
+  - ACP: プロバイダーの値の `_meta`（`kairocode/auth`）に状態を入れます。拡張メソッドは `_kairocode/login_methods` と `_kairocode/login` です。
+  - テキストで打つ `/login [provider] [方法]` も受けます（Zed など、自分の `/login` を持たないクライアント向け）。端末のコマンドは、打つように案内します。
+- **TUI**
+  - `/provider` と `/model` の一覧に、`signed in`（緑）と `sign-in needed  /login <id>`（黄）を出します。
+  - 状態の行は、今のプロバイダーが `needed` なら `(sign in: /login)` を付けます。
+  - `/login [provider]` で方法を出します。1 つならそのまま進め、いくつもあれば選ばせます。
+  - 端末のコマンドは `tea.ExecProcess` で画面を渡して動かし、終わったらデーモンに知らせます（状態を `unknown` に戻し、次に動かしたときに決まります）。
+  - TUI がコマンドを起動するのは、利用者が選んだサインインのコマンドだけです。`internal/tui/login.go` を、不変条件の検査の「コマンドを起動してよいファイル」（`commandStarters`）に足しました。
+- **テスト**
+  - `TestSignInToAnAgent`（runtime）: 偽の ACP エージェントが `auth_required` を返し、方法の読み取り、`authenticate` で `signed-in`、次のターンが動くことを確かめます。
+  - `TestSignIn`（TUI）、`TestACPLogin`（ACP）。
+- **durability-reviewer の指摘で直したこと**
+  - **端末のコマンドは、動かす前に見せる:** コマンドはエージェントが `initialize` で渡すもので、sandbox の外で動きます。方法が 1 つでも、`runs: <コマンド>` を一覧に出し、利用者が Enter で選んでから動かします（`TestSignInCommandIsShownFirst`）。`terminal-auth` の `env` は、まだ渡していません。
+  - **-32000 を、すべてサインインとしない:** エージェントは -32000 をほかの失敗にも使います。文面がサインインを言うときだけ、サインインが要るとします。それ以外は今までどおりやり直します（`TestAuthRequired`）。
+  - **`withAgent` の止め方:** エージェントが開いたもの（ブラウザーなど）が出力を開いたままにしても、5 秒で読むのをやめます（ACP のターンと同じ）。
+  - **セッションを作るときの遅さ:** サインインの確かめ（`claude auth status` など）は一覧（`Providers`）を出すときだけ行います。セッションを作るときと切り替えのときは行いません。

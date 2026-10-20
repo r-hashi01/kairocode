@@ -43,6 +43,8 @@ type Backend interface {
 	NewFlow(ctx context.Context, session, request string) (int, error)
 	Providers(ctx context.Context) ([]runtime.ProviderInfo, error)
 	InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error)
+	LoginMethods(ctx context.Context, id string) ([]runtime.AuthMethod, error)
+	Login(ctx context.Context, id, method string, done bool) error
 	Models(ctx context.Context, provider string) ([]string, error)
 	Settings(ctx context.Context, session string) (runtime.Settings, error)
 	Switch(ctx context.Context, session, provider, model, effort string) (runtime.Settings, error)
@@ -58,6 +60,7 @@ var builtinCommands = []map[string]any{
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
 	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
+	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -69,6 +72,14 @@ const (
 	// ModelsMethod gives a provider's models: {"provider": id} →
 	// {"models": [...]} (the client's /model, ADR 0014).
 	ModelsMethod = "_kairocode/models"
+	// AuthMeta, in a provider's value's _meta, is its sign-in state
+	// (signed-in, needed, unknown). LoginMethodsRPC gives the ways to
+	// sign in ({"provider"} → {"methods"}); LoginRPC signs in with the
+	// agent's own ({"provider", "method"}), or notes that the user ran a
+	// terminal one ({"provider", "done": true}).
+	AuthMeta        = "kairocode/auth"
+	LoginMethodsRPC = "_kairocode/login_methods"
+	LoginRPC        = "_kairocode/login"
 )
 
 // defaultModel is the value of the model option that leaves the choice to
@@ -110,8 +121,20 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 			o["description"] = "cannot run here: " + p.Reason
 		case !p.Available:
 			o["description"] = "not available here"
+		case p.Auth != nil && p.Auth.State == runtime.AuthNeeded:
+			o["description"] = "sign-in needed: /login " + p.ID
+		case p.Auth != nil && p.Auth.State == runtime.AuthSignedIn:
+			o["description"] = "signed in"
 		case p.Description != "":
 			o["description"] = p.Description
+		}
+		if p.Auth != nil {
+			meta, _ := o["_meta"].(map[string]any)
+			if meta == nil {
+				meta = map[string]any{}
+			}
+			meta[AuthMeta] = p.Auth.State
+			o["_meta"] = meta
 		}
 		providers = append(providers, o)
 	}
@@ -350,6 +373,29 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": p.ModeID})
 		return map[string]any{}, nil
+	case LoginMethodsRPC, LoginRPC:
+		var p struct {
+			Provider string `json:"provider"`
+			Method   string `json:"method"`
+			Done     bool   `json:"done"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Provider == "" {
+			return nil, invalid(errors.New(`want {"provider": "<id>"}`))
+		}
+		if method == LoginMethodsRPC {
+			ms, err := a.b.LoginMethods(ctx, p.Provider)
+			if err != nil {
+				return nil, invalid(err)
+			}
+			if ms == nil {
+				ms = []runtime.AuthMethod{}
+			}
+			return map[string]any{"methods": ms}, nil
+		}
+		if err := a.b.Login(ctx, p.Provider, p.Method, p.Done); err != nil {
+			return nil, invalid(err)
+		}
+		return map[string]any{}, nil
 	case ModelsMethod:
 		var p struct {
 			Provider string `json:"provider"`
@@ -466,6 +512,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
 		return map[string]any{"stopReason": "end_turn"}, nil
+	case name == "/login":
+		// Without a turn: the ways to sign in, or one taken (ADR 0015).
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.loginCommand(ctx, p.SessionID, strings.Fields(args)))})
+		return map[string]any{"stopReason": "end_turn"}, nil
 	case name == "/provider" || name == "/model" || name == "/effort":
 		// Without a turn: the settings change, or are listed (ADR 0014).
 		return a.settingsCommand(ctx, p.SessionID, name[1:], strings.TrimSpace(args))
@@ -509,6 +559,56 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(turn.Reply)})
 	}
 	return map[string]any{"stopReason": stopReason(turn.Stopped)}, nil
+}
+
+// loginCommand answers /login [provider] [way] in text, for a client
+// without its own /login: the ways, or the agent's own way taken; a
+// command is the user's to run in a terminal.
+func (a *agent) loginCommand(ctx context.Context, session string, args []string) string {
+	var provider, way string
+	switch len(args) {
+	case 0:
+		st, err := a.b.Settings(ctx, session)
+		if err != nil {
+			return err.Error()
+		}
+		provider = st.Provider
+	case 1:
+		provider = args[0]
+	default:
+		provider, way = args[0], args[1]
+	}
+	ms, err := a.b.LoginMethods(ctx, provider)
+	if err != nil {
+		return "Could not sign in to " + provider + ": " + err.Error()
+	}
+	for _, m := range ms {
+		if way == "" && len(ms) > 1 || way != "" && m.ID != way {
+			continue
+		}
+		switch {
+		case len(m.Command) > 0:
+			return "Run this in a terminal to sign in to " + provider + ": " + strings.Join(m.Command, " ")
+		case m.Agent:
+			if err := a.b.Login(ctx, provider, m.ID, false); err != nil {
+				return "Could not sign in to " + provider + ": " + err.Error()
+			}
+			return "Signed in to " + provider + "."
+		}
+		return m.Name + ": " + m.Description
+	}
+	if len(ms) == 0 {
+		return provider + " has no way to sign in here."
+	}
+	lines := []string{"Ways to sign in to " + provider + " (/login " + provider + " <way>):"}
+	for _, m := range ms {
+		line := "- " + m.ID + ": " + m.Name
+		if m.Description != "" {
+			line += " — " + m.Description
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // settingsCommand answers /provider and /model: with a value, it switches

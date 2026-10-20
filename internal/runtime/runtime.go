@@ -88,8 +88,10 @@ type Runtime struct {
 	// lsp keeps the language servers whose errors are added to a write's
 	// result (ADR 0009).
 	lsp *lsp.Manager
-	// agents are the ACP agents of the registry (ADR 0015).
+	// agents are the ACP agents of the registry (ADR 0015); auth, what is
+	// known of each provider's sign-in.
 	agents *agents.Manager
+	auth   auths
 
 	sendMu sync.Mutex
 
@@ -106,6 +108,11 @@ type Runtime struct {
 	mu      sync.Mutex
 	changed chan struct{} // closed and replaced whenever a run starts or settles here
 }
+
+// NoCLIs is the environment variable that, set to "1", keeps the runtime
+// from finding the user's claude, codex and copilot by name (tests: they
+// never run the real ones, invariant 9).
+const NoCLIs = "KAIROCODE_NO_CLIS"
 
 // DefaultDataDir is where a user's sessions live, and where their daemon
 // runs (ADR 0008).
@@ -147,7 +154,16 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 			return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
 		}
 	}
-	// A session may ask for any engine whatever the default.
+	// A session may ask for any engine whatever the default. With NoCLIs
+	// (tests), the user's own CLIs are not found unless named.
+	if os.Getenv(NoCLIs) == "1" {
+		none := filepath.Join(os.TempDir(), "kairocode-no-cli")
+		for _, p := range []*string{&cfg.ClaudePath, &cfg.CodexPath, &cfg.CopilotPath} {
+			if *p == "" {
+				*p = none
+			}
+		}
+	}
 	if cfg.ClaudePath == "" {
 		cfg.ClaudePath = "claude"
 	}
@@ -577,6 +593,11 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	// record: the message is recorded once it is whole).
 	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: system, Tools: specs, Messages: ms,
 		OnText: func(text string) { t.Emit([]byte(text)) }})
+	if errors.Is(err, provider.ErrNoCredentials) {
+		r.authSeen(ProviderAnthropic, AuthNeeded, nil)
+	} else if err == nil {
+		r.authSeen(ProviderAnthropic, AuthSignedIn, nil)
+	}
 	if err != nil {
 		var permanent *provider.PermanentError
 		if t.Err() != nil || errors.As(err, &permanent) {

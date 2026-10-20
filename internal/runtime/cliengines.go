@@ -140,6 +140,9 @@ func (r *Runtime) cliModels(ctx context.Context, engine string) []string {
 	case workflows.EngineClaudeCode:
 		return []string{"opus", "sonnet", "haiku"}
 	case workflows.EngineCodex:
+		if os.Getenv(NoCLIs) == "1" {
+			return nil
+		}
 		b, err := exec.CommandContext(ctx, "codex", "debug", "models").Output()
 		if err != nil {
 			return nil
@@ -190,4 +193,35 @@ func (r *Runtime) cliAvailable(engine string) bool {
 		workflows.EngineCopilot: r.cfg.CopilotPath}[engine]
 	_, err := exec.LookPath(path)
 	return path != "" && err == nil
+}
+
+// cliSignedIn is a CLI's own word on whether the user is signed in:
+// claude auth status, codex login status ("" if it cannot say).
+func (r *Runtime) cliSignedIn(ctx context.Context, engine string) string {
+	switch engine {
+	case workflows.EngineClaudeCode:
+		out, _ := exec.CommandContext(ctx, r.cfg.ClaudePath, "auth", "status", "--json").Output()
+		var st struct {
+			LoggedIn *bool `json:"loggedIn"`
+		}
+		if json.Unmarshal(out, &st) != nil || st.LoggedIn == nil {
+			return ""
+		}
+		if *st.LoggedIn {
+			return AuthSignedIn
+		}
+		return AuthNeeded
+	case workflows.EngineCodex:
+		if _, err := exec.LookPath("codex"); err != nil || os.Getenv(NoCLIs) == "1" {
+			return ""
+		}
+		out, err := exec.CommandContext(ctx, "codex", "login", "status").CombinedOutput()
+		switch {
+		case err == nil && strings.Contains(string(out), "Logged in"):
+			return AuthSignedIn
+		case err != nil && ctx.Err() == nil:
+			return AuthNeeded
+		}
+	}
+	return ""
 }

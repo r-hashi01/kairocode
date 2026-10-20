@@ -38,6 +38,9 @@ type Agent interface {
 	InstallProvider(ctx context.Context, id, version string) error
 	// Models are a provider's models (ADR 0014).
 	Models(ctx context.Context, provider string) ([]string, error)
+	// LoginMethods and Login sign in to a provider (ADR 0015).
+	LoginMethods(ctx context.Context, provider string) ([]acp.LoginMethod, error)
+	Login(ctx context.Context, provider, method string, done bool) error
 	// SetMode sets the session's mode (ADR 0016).
 	SetMode(ctx context.Context, session, mode string) error
 }
@@ -366,6 +369,15 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(m.input.Focus(), m.usage())
 	case updateMsg:
 		m.take(acp.Update(msg))
+		return nil
+	case loginMsg:
+		return m.loginWays(msg)
+	case loggedInMsg:
+		if msg.err != nil {
+			m.print(bad.Render("  ⎿  " + msg.provider + ": " + shortError(msg.err.Error())))
+		} else {
+			m.print(good.Render("  ⎿  " + msg.provider + ": signed in"))
+		}
 		return nil
 	case modelsMsg:
 		m.modelPick(msg)
@@ -849,6 +861,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			m.print(m.help())
 			return nil
 		}
+		if name, ok := strings.CutPrefix(text+" ", "/login "); ok { // sign in (ADR 0015)
+			return m.login(strings.TrimSpace(name))
+		}
 		if id, value, ok := settingCommand(text); ok { // the provider or the model (ADR 0014)
 			return m.setting(id, value)
 		}
@@ -885,7 +900,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 
 // commands are the slash commands: the UI's own, then the agent's.
 func (m *model) commands() []acp.Command {
-	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session stays in the daemon)"}}, m.cmds...)
+	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session stays in the daemon)"},
+		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"}}, m.cmds...)
 }
 
 // completions are the commands that begin with what is typed, while a

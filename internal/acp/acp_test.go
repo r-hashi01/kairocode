@@ -102,6 +102,18 @@ func (l *local) Providers(ctx context.Context) ([]runtime.ProviderInfo, error) {
 	return l.r.Providers(ctx), nil
 }
 
+func (l *local) LoginMethods(ctx context.Context, id string) ([]runtime.AuthMethod, error) {
+	return l.r.LoginMethods(ctx, id)
+}
+
+func (l *local) Login(ctx context.Context, id, method string, done bool) error {
+	if done {
+		l.r.LoggedIn(id)
+		return nil
+	}
+	return l.r.Login(ctx, id, method)
+}
+
 func (l *local) InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error) {
 	return l.r.InstallProvider(ctx, id, version)
 }
@@ -553,6 +565,8 @@ func TestACPPermissionAnsweredElsewhere(t *testing.T) {
 func TestMain(m *testing.M) {
 	// No language server of this machine is started (ADR 0009).
 	os.Setenv(lsp.Off, "off")
+	// Nor the user's claude, codex and copilot (invariant 9).
+	os.Setenv("KAIROCODE_NO_CLIS", "1")
 	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
 	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	if os.Getenv("KC_ACP_CHILD") == "1" {
@@ -1079,5 +1093,42 @@ func TestACPRefuseWithWhatToDoInstead(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the model was not told what to do instead")
+	}
+}
+
+// /login typed in a client without its own: the provider's way to sign
+// in, said in text, without a turn (ADR 0015).
+func TestACPLogin(t *testing.T) {
+	b, ws := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
+	resp, _ := c.until(isResponse(id))
+	var r struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []struct{ command, say string }{
+		{"/login", "Set ANTHROPIC_API_KEY"},
+		{"/login nothing-here", "Could not sign in to nothing-here"},
+	} {
+		id = prompt(c, r.SessionID, st.command)
+		resp, before := c.until(isResponse(id))
+		if resp.Error != nil {
+			t.Fatalf("%s: %v", st.command, resp.Error)
+		}
+		said := ""
+		for _, m := range before {
+			if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "agent_message_chunk" {
+				said += updateOf(t, m).text()
+			}
+		}
+		if !strings.Contains(said, st.say) {
+			t.Fatalf("%s said %q", st.command, said)
+		}
 	}
 }
