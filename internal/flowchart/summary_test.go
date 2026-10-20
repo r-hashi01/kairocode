@@ -27,7 +27,22 @@ func TestSummary(t *testing.T) {
   confirm  asks you
   notify   tool mcp__slack__post
 Tools it may call: mcp__slack__post`
-	if got := Summary(c); got != want {
+	if got := Summary(c, nil); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+// What a new version takes away is named; what it changes is not.
+func TestRemoved(t *testing.T) {
+	before, err := Build("f", []byte("def main(input):\n    ask(\"post it?\")\n    agent(\"plan\", \"old\")\n    tool(\"mcp__slack__post\", text = input)\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := Build("f", []byte("def main(input):\n    agent(\"plan\", \"new\")\n    tool(\"mcp__slack__post\", text = input)\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Removed(before, after); len(got) != 1 || got[0] != `ask  "post it?"` {
+		t.Fatalf("%q", got)
 	}
 }

@@ -173,8 +173,10 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	return workflows.PermissionOutput{Action: string(permission.Deny), Rule: rule, Reason: rule, Subject: out.Subject}, nil
 }
 
-// preview is what a call would do, for the user asked about it: a flow's
-// shape, as a tree ("" for other calls, or a script that does not parse).
+// preview is what a call would do, for the user asked about it: for a
+// flow, what it does, its shape, how it changes the flow there was, and its
+// script, in named sections ("" for other calls, or a script that does not
+// parse).
 func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) string {
 	if in.Tool != tools.FlowWriteTool.Name {
 		return ""
@@ -196,7 +198,26 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	}
 	// What it does and its shape; the script itself is stored by hash and
 	// put in when the question is listed (the record stays small, NFR-5).
-	p := flowchart.Summary(c) + "\n\n" + flowchart.Tree(c, nil)
+	p := flowchart.Summary(c, r.stepNote) + sectionSep + "Tree\n" + flowchart.Tree(c, nil)
+	// A flow of the name there already: it is replaced, and how is shown.
+	switch before, there := r.flowBefore(in.Call.Dir, a.Name); {
+	case before != nil:
+		flowchart.Diff(before, c)
+		removed := flowchart.Removed(before, c)
+		changes := "It replaces the flow " + a.Name + " there now."
+		if !changed(c.Nodes) && len(removed) == 0 {
+			changes += " Its steps stay as they were.\n\n"
+		} else {
+			changes += " + added, ~ changed, - taken away:\n\n"
+		}
+		changes += flowchart.Tree(c, nil)
+		for _, l := range removed {
+			changes += "\n- " + l
+		}
+		p += sectionSep + "Changes\n" + changes
+	case there:
+		p += sectionSep + "Changes\nIt replaces the flow " + a.Name + " there now (which could not be read as a flow)."
+	}
 	if h, err := r.Store.Put(ctx, store.KindContent, []byte(a.Source)); err == nil {
 		p += scriptRef + h
 	}
@@ -281,8 +302,10 @@ type Pending struct {
 	Subject string   `json:"subject"`
 	Rule    string   `json:"rule"`
 	Options []string `json:"options,omitempty"`
-	// Preview is what the call would do (a flow's shape), to show.
-	Preview string `json:"preview,omitempty"`
+	// Preview is what the call would do (a flow's shape), to show; and in
+	// its sections, for a client that shows them apart.
+	Preview  string           `json:"preview,omitempty"`
+	Sections []PreviewSection `json:"sections,omitempty"`
 }
 
 // KindQuestion is a Pending that is a flow's question.
@@ -290,19 +313,110 @@ const KindQuestion = "question"
 
 // Pending lists the calls of a session that wait for approval.
 // scriptRef, at the end of a recorded preview, names a flow's script by
-// its hash in the store.
-const scriptRef = "\n\x00script:"
+// its hash in the store; sectionSep starts a named section of it (the
+// first is the summary).
+const (
+	scriptRef  = "\n\x00script:"
+	sectionSep = "\n\x00section:"
+)
 
-// fullPreview is a recorded preview with the script it names put in.
-func (r *Runtime) fullPreview(ctx context.Context, p string) string {
-	p, h, ok := strings.Cut(p, scriptRef)
-	if !ok {
-		return p
+// PreviewSection is a named part of what a call would do: Summary, Tree,
+// Changes, Script.
+type PreviewSection struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
+}
+
+// fullPreview is a recorded preview with the script it names put in: as
+// one text, and in its sections.
+func (r *Runtime) fullPreview(ctx context.Context, p string) (string, []PreviewSection) {
+	if p == "" {
+		return "", nil
 	}
-	if _, src, err := r.Store.Get(ctx, h); err == nil {
-		p += "\n\n── the script ──\n" + strings.TrimRight(string(src), "\n")
+	p, h, hasScript := strings.Cut(p, scriptRef)
+	parts := strings.Split(p, sectionSep)
+	sections := []PreviewSection{{Name: "Summary", Text: parts[0]}}
+	for _, s := range parts[1:] {
+		name, text, _ := strings.Cut(s, "\n")
+		sections = append(sections, PreviewSection{Name: name, Text: text})
 	}
-	return p
+	if hasScript {
+		if _, src, err := r.Store.Get(ctx, h); err == nil {
+			sections = append(sections, PreviewSection{Name: "Script", Text: strings.TrimRight(string(src), "\n")})
+		}
+	}
+	text := sections[0].Text
+	for _, s := range sections[1:] {
+		text += "\n\n── " + s.Name + " ──\n" + s.Text
+	}
+	return text, sections
+}
+
+// flowBefore is the flow name as it is in dir now, and whether there is
+// one (nil but there: it cannot be read as a flow). Only a plain file of
+// at most flowMax bytes is read.
+func (r *Runtime) flowBefore(dir, name string) (*flowchart.Chart, bool) {
+	if !flowchart.ValidName(name) {
+		return nil, false
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, false
+	}
+	defer root.Close()
+	path := filepath.Join(flowchart.Dir, name+".star")
+	fi, err := root.Lstat(path)
+	if err != nil {
+		return nil, false
+	}
+	if !fi.Mode().IsRegular() || fi.Size() > flowMax {
+		return nil, true
+	}
+	src, err := root.ReadFile(path)
+	if err != nil {
+		return nil, true
+	}
+	c, err := flowchart.Build(name, src)
+	if err != nil {
+		return nil, true
+	}
+	return c, true
+}
+
+// flowMax is the most of a flow there now read to show what replaces it.
+const flowMax = 1 << 20
+
+// changed reports whether Diff marked any of nodes.
+func changed(nodes []flowchart.Node) bool {
+	for _, n := range nodes {
+		if n.Mark != "" || changed(n.Then) || changed(n.Else) || changed(n.Body) {
+			return true
+		}
+		for _, b := range n.Branches {
+			if changed(b) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stepNote says what a flow's step reaches, for the user deciding on it:
+// a tool that acts outside KairoCode, or cannot be undone.
+func (r *Runtime) stepNote(n flowchart.Node) string {
+	if n.Kind != flowchart.Tool {
+		return ""
+	}
+	d, ok := r.tool(n.Title)
+	switch {
+	case strings.HasPrefix(n.Title, "mcp__") || !ok:
+		return "⚠ an outside service"
+	case d.Effect == tools.Real:
+		return "⚠ cannot be undone"
+	case d.Effect == tools.Idempotent:
+		return "changes files"
+	}
+	return ""
 }
 
 func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error) {
@@ -322,7 +436,7 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		out = append(out, p...)
 	}
 	for i := range out {
-		out[i].Preview = r.fullPreview(ctx, out[i].Preview)
+		out[i].Preview, out[i].Sections = r.fullPreview(ctx, out[i].Preview)
 	}
 	return out, nil
 }

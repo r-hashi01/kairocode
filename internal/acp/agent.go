@@ -67,6 +67,11 @@ var builtinCommands = []map[string]any{
 // chosen (ADR 0015): {"source", "version"}. InstallMethod installs it:
 // {"provider": id, "version": the version shown}.
 const (
+	// SectionMeta, on a text block of an approval's content, names the
+	// section of what the call would do it is (its text after the
+	// section's heading): a client may show them apart (the TUI's review
+	// of a flow).
+	SectionMeta   = "kairocode/section"
 	InstallMeta   = "kairocode/install"
 	InstallMethod = "_kairocode/install_provider"
 	// ModelsMethod gives a provider's models: {"provider": id} →
@@ -929,7 +934,20 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			"kind": kind, "status": "pending"})
 	}
 	toolCall := map[string]any{"toolCallId": call, "title": title, "kind": kind, "status": "pending"}
-	if p.Preview != "" { // what it would do: a flow's shape
+	switch {
+	case len(p.Sections) > 0: // what it would do, a block a section (SectionMeta names it)
+		var content []any
+		for i, s := range p.Sections {
+			text := s.Text
+			if i > 0 {
+				text = "\n\n── " + s.Name + " ──\n" + text
+			}
+			block := textBlock(text)
+			block["_meta"] = map[string]any{SectionMeta: s.Name}
+			content = append(content, map[string]any{"type": "content", "content": block})
+		}
+		toolCall["content"] = content
+	case p.Preview != "": // what it would do: a flow's shape
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
 	}
 	params := map[string]any{

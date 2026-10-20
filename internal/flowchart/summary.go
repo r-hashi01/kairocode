@@ -8,8 +8,9 @@ import (
 // Summary is what a flow does, step by step, for the user deciding
 // whether to allow it: each phase's agents, tools and questions, in
 // order (each once), and the tools it may call. Conditions and returns
-// are left to the tree.
-func Summary(c *Chart) string {
+// are left to the tree. note, if given, says what a step reaches (an
+// outside service, say), shown after it.
+func Summary(c *Chart, note func(Node) string) string {
 	type part struct {
 		name  string
 		steps []string
@@ -27,8 +28,15 @@ func Summary(c *Chart) string {
 				step = "agent " + n.Title
 			case Tool:
 				step = "tool " + n.Title
-				if !contains(toolNames, n.Title) {
-					toolNames = append(toolNames, n.Title)
+				name := n.Title
+				if note != nil {
+					if s := note(n); s != "" {
+						step += " (" + s + ")"
+						name += " (" + s + ")"
+					}
+				}
+				if !contains(toolNames, name) {
+					toolNames = append(toolNames, name)
 				}
 			case Ask:
 				step = "asks you"

@@ -863,6 +863,14 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "done"}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// A flow of the name is there: what the new one changes is shown.
+	if err := os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "inquiry-alert.star"),
+		[]byte("def main(input):\n    ask(\"post it?\")\n    return agent(agent = \"build\", prompt = \"old\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	s, _ := r.CreateSession(ctx, "flowask", workflows.SessionInput{Dir: ws})
 	if _, err := r.Send(ctx, s, "make the flow"); err != nil {
 		t.Fatal(err)
@@ -873,10 +881,18 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 		return len(p) == 1
 	})
 	// What it does, its shape, and the whole script.
-	for _, want := range []string{"What it does:", "agent build", "inquiry-alert", "draft an answer", "── the script ──", src[:len(src)-1]} {
+	for _, want := range []string{"What it does:", "agent build", "inquiry-alert", "draft an answer", "── Script ──", src[:len(src)-1]} {
 		if !strings.Contains(p[0].Preview, want) {
 			t.Fatalf("no %q in preview %q", want, p[0].Preview)
 		}
+	}
+	var names []string
+	for _, sec := range p[0].Sections {
+		names = append(names, sec.Name)
+	}
+	if strings.Join(names, ",") != "Summary,Tree,Changes,Script" || !strings.Contains(p[0].Sections[2].Text, "~ agent build") ||
+		!strings.Contains(p[0].Sections[2].Text, "- ask  \"post it?\"") || !strings.Contains(p[0].Sections[2].Text, "It replaces the flow inquiry-alert") {
+		t.Fatalf("sections %+v", p[0].Sections)
 	}
 	// The script is in the store once, not in the permission check's record.
 	turns, err := r.K.Children(ctx, s)

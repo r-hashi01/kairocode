@@ -139,6 +139,8 @@ type ask struct {
 	instead bool
 	// scroll: the first line of what it would do shown (PgUp, PgDn).
 	scroll int
+	// review: what it would do is reviewed section by section (a flow).
+	review *review
 }
 
 // insteadOption is the choice, after an approval's options, of refusing
@@ -394,12 +396,18 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		a := &ask{req: msg.req, reply: msg.reply, sel: -1}
 		if hasAllow(msg.req.Options) {
 			a.sel = 0
+			if len(msg.req.Sections) > 0 && rejectID(msg.req.Options) != "" { // a flow: reviewed
+				a.review = newReview(msg.req.Sections)
+			}
 		}
 		m.asks = append(m.asks, a)
 		return nil
 	case withdrawnMsg:
 		for i, a := range m.asks {
 			if a.reply == msg.reply {
+				if i == 0 && (a.instead || a.review != nil && a.review.commenting) {
+					m.input.Reset() // what was being typed for it goes too
+				}
 				m.asks = append(m.asks[:i], m.asks[i+1:]...)
 				m.noteCall(a.req.ToolCallID, a.req.Title+": answered elsewhere")
 				break
@@ -944,6 +952,14 @@ func (m *model) help() string {
 }
 
 func (m *model) askKey(k tea.KeyPressMsg) tea.Cmd {
+	if a := m.asks[0]; a.review != nil && !a.instead {
+		return m.reviewKey(k)
+	}
+	return m.askKeyPlain(k)
+}
+
+// askKeyPlain answers a question by its options.
+func (m *model) askKeyPlain(k tea.KeyPressMsg) tea.Cmd {
 	key := k.String()
 	a := m.asks[0]
 	if a.instead {
@@ -1149,6 +1165,9 @@ func (m *model) askRoom() int {
 
 func (m *model) askView(w int) string {
 	a := m.asks[0]
+	if a.review != nil && !a.instead {
+		return m.reviewView(w)
+	}
 	rule := warn.Render(strings.Repeat("─", w))
 	var b strings.Builder
 	q := "Allow this?"

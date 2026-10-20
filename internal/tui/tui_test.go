@@ -945,3 +945,49 @@ func TestAskScrollsWhatItWouldDo(t *testing.T) {
 		t.Fatalf("back up\n%s", v)
 	}
 }
+
+// A flow is reviewed: its sections one at a time; a comment on a line of
+// its script; Enter sends it back with the comment for the model. Another,
+// allowed with a.
+func TestFlowReview(t *testing.T) {
+	d, _ := start(t, Options{})
+	req := acp.PermissionRequest{Title: "flow_write inquiry", ToolKind: "edit",
+		Sections: []acp.Section{
+			{Name: "Summary", Text: "What it does:\n  notify  tool mcp__slack__post (⚠ an outside service)"},
+			{Name: "Tree", Text: "inquiry\n└─ tool mcp__slack__post"},
+			{Name: "Script", Text: "def main(input):\n    a = ask(\"send?\")\n    tool(\"mcp__slack__post\", text = input)"}},
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}
+	reply := make(chan string, 1)
+	d.send(askMsg{req: req, reply: reply})
+	if v := d.view(); !strings.Contains(v, "Review the flow") || !strings.Contains(v, "[Summary]") || !strings.Contains(v, "an outside service") {
+		t.Fatalf("the review\n%s", v)
+	}
+	d.send(key("tab"))
+	d.send(key("tab"))
+	if v := d.view(); !strings.Contains(v, "[Script]") || !strings.Contains(v, "def main") {
+		t.Fatalf("the script\n%s", v)
+	}
+	d.send(key("down"))
+	d.send(key("down"))
+	d.send(key("c"))
+	d.m.input.SetValue("ask before posting, and stop if no")
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Comments (1)") || !strings.Contains(v, "send back with 1 comments") {
+		t.Fatalf("the comment\n%s", v)
+	}
+	d.send(key("enter"))
+	got := <-reply
+	id, why, _ := strings.Cut(got, reasonSep)
+	if id != "reject_once" || !strings.Contains(why, `Script, at "line 3: tool(\"mcp__slack__post\", text = input)": ask before posting, and stop if no`) {
+		t.Fatalf("answer %q", got)
+	}
+	if len(d.m.asks) != 0 {
+		t.Fatal("the review stays")
+	}
+
+	d.send(askMsg{req: req, reply: reply})
+	d.send(key("a"))
+	if got := <-reply; got != "allow_once" {
+		t.Fatalf("a: %q", got)
+	}
+}

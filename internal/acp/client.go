@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
@@ -144,8 +145,38 @@ type PermissionRequest struct {
 	ToolKind string
 	Options  []PermissionOption
 	// Content is what the call would do, as text, if the agent says (a
-	// flow's shape).
-	Content string
+	// flow's shape); Sections, the same in its named parts, if the agent
+	// gives them (SectionMeta).
+	Content  string
+	Sections []Section
+}
+
+// Section is a named part of what a call would do (Summary, Tree,
+// Changes, Script).
+type Section struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
+}
+
+// contentSections are the sections of a tool call's content.
+func contentSections(raw json.RawMessage) []Section {
+	var list []struct {
+		Content struct {
+			Text string            `json:"text"`
+			Meta map[string]string `json:"_meta"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &list) != nil {
+		return nil
+	}
+	var out []Section
+	for _, c := range list {
+		if name := c.Content.Meta[SectionMeta]; name != "" {
+			text := strings.TrimPrefix(c.Content.Text, "\n\n── "+name+" ──\n")
+			out = append(out, Section{Name: name, Text: text})
+		}
+	}
+	return out
 }
 
 // PermissionAnswer is the user's answer: the option chosen ("" to
@@ -248,7 +279,8 @@ func (cl *Client) handler(h ClientHandler) handler {
 			var ans PermissionAnswer
 			if h.Permission != nil {
 				ans = h.Permission(ctx, PermissionRequest{Session: p.SessionID, ToolCallID: p.ToolCall.ToolCallID, Title: p.ToolCall.Title,
-					ToolKind: p.ToolCall.Kind, Options: p.Options, Content: contentText(p.ToolCall.Content)})
+					ToolKind: p.ToolCall.Kind, Options: p.Options, Content: contentText(p.ToolCall.Content),
+					Sections: contentSections(p.ToolCall.Content)})
 			}
 			if ans.ID == "" {
 				return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil

@@ -1132,3 +1132,23 @@ func TestACPLogin(t *testing.T) {
 		}
 	}
 }
+
+// An approval's sections, as the agent sends them, are read back by the
+// client.
+func TestPermissionSections(t *testing.T) {
+	block := func(text, name string) map[string]any {
+		b := textBlock(text)
+		if name != "" {
+			b["_meta"] = map[string]any{SectionMeta: name}
+		}
+		return map[string]any{"type": "content", "content": b}
+	}
+	raw, _ := json.Marshal([]any{block("sum", "Summary"), block("other", ""), block("\n\n── Script ──\ndef main(input):", "Script")})
+	got := contentSections(raw)
+	if len(got) != 2 || got[0] != (Section{Name: "Summary", Text: "sum"}) || got[1] != (Section{Name: "Script", Text: "def main(input):"}) {
+		t.Fatalf("%+v", got)
+	}
+	if text := contentText(raw); text != "sumother\n\n── Script ──\ndef main(input):" {
+		t.Fatalf("as text: %q", text)
+	}
+}

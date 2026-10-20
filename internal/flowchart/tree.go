@@ -135,6 +135,38 @@ func Diff(before, after *Chart) {
 	})
 }
 
+// Removed are the nodes of before that after does not have as they are,
+// and whose kind and title it has no more of (taken away, not changed):
+// as the tree labels them.
+func Removed(before, after *Chart) []string {
+	if before == nil {
+		return nil
+	}
+	same := map[string]int{}
+	kinds := map[string]int{}
+	walk(after.Nodes, func(n *Node) {
+		same[signature(*n)]++
+		kinds[n.Kind+"|"+n.Title]++
+	})
+	var out []string
+	walk(before.Nodes, func(n *Node) {
+		sig := signature(*n)
+		switch {
+		case same[sig] > 0:
+			same[sig]--
+		case kinds[n.Kind+"|"+n.Title] > 0:
+			kinds[n.Kind+"|"+n.Title]--
+		default:
+			line := Label(*n)
+			if n.Text != "" && n.Kind != Phase && n.Kind != Break {
+				line += "  " + quote(*n)
+			}
+			out = append(out, line)
+		}
+	})
+	return out
+}
+
 func signature(n Node) string {
 	return strings.Join([]string{n.Kind, n.Title, n.Text, n.Cond}, "|")
 }
