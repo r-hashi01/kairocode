@@ -69,10 +69,50 @@ func (m *model) settings() string {
 	if model != "" {
 		out += " · " + model
 	}
-	if o, ok := m.option("effort"); ok && o.CurrentValue != "" && o.CurrentValue != "default" {
-		out += " · " + o.CurrentValue
+	// The effort, always: the provider's default, or none to set.
+	effort := "none"
+	if o, ok := m.option("effort"); ok {
+		effort = o.CurrentValue
+		if effort == "" {
+			effort = "default"
+		}
 	}
-	return out
+	return out + " · effort " + effort + " (shift+tab)"
+}
+
+// nextEffort moves the effort to the next of the provider's (after the
+// last, the first again), at once on the screen, and sets it.
+func (m *model) nextEffort() tea.Cmd {
+	i := -1
+	for j, o := range m.config {
+		if o.ID == "effort" {
+			i = j
+		}
+	}
+	if i < 0 || len(m.config[i].Options) == 0 {
+		m.note = "This provider has no effort to set"
+		return nil
+	}
+	o := &m.config[i]
+	k := 0
+	for j, v := range o.Options {
+		if v.Value == o.CurrentValue {
+			k = (j + 1) % len(o.Options)
+		}
+	}
+	next := o.Options[k].Value
+	if next == "default" { // not one to set: the one after it
+		k = (k + 1) % len(o.Options)
+		next = o.Options[k].Value
+	}
+	o.CurrentValue = next
+	ctx, a, s := m.ctx, m.a, m.session
+	return func() tea.Msg {
+		if err := a.SetConfigOption(ctx, s, "effort", next); err != nil {
+			return setMsg{err: err}
+		}
+		return nil
+	}
 }
 
 // usable reports whether v can be chosen as it is (no install, nothing

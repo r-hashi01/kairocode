@@ -334,7 +334,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			m.print(bad.Render("  ⎿  " + msg.err.Error()))
 		} else {
-			m.print(faint.Render("  ⎿  " + m.settings() + " from the next turn"))
+			m.print(faint.Render("  ⎿  " + strings.TrimSuffix(m.settings(), " (shift+tab)") + " from the next turn"))
 		}
 		return nil
 	case askMsg:
@@ -711,6 +711,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			}
 		}
 		return nil
+	case "shift+tab": // the next effort, as in Claude Code
+		return m.nextEffort()
 	case "tab":
 		if c := m.completions(); len(c) > 0 {
 			m.input.SetValue("/" + c[min(m.compSel, len(c)-1)].Name + " ")
@@ -815,6 +817,7 @@ func (m *model) help() string {
 		"  /flow edit <name>   change a flow on its chart; /flow graph <name> draws it",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
 		"  tab            complete a command",
+		"  shift+tab      the next effort (how hard the model thinks), where the provider has one",
 		"  ctrl+c         clear the input; twice to leave",
 		"  ctrl+d         leave, when the input is empty")
 	return strings.Join(lines, "\n")

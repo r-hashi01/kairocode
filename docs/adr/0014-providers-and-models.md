@@ -224,3 +224,4 @@ KairoCode が ACP（ADR 0002）のクライアントになり、各エージェ�
   - claude には `--effort=<値>` の形で渡します。
   - `task` のサブエージェントにも effort を渡します。フローのエージェントには渡しません（フローの入力に effort は無い）。
 - **残した点:** 設定を知らせない ACP のセッションには、`reasoning_effort` を送ってみて、失敗しても知らせません。
+- **TUI（2026-10-20、利用者の要望）:** shift+Tab で、effort を次の値に切り替えます（最後の次は最初。Claude Code と同じ）。状態の行には effort を常に出します（`effort high`。既定なら `effort default`、effort が無いプロバイダーなら `effort none`）。テスト: `TestProviderAndModel`。

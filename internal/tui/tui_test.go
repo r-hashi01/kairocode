@@ -548,15 +548,21 @@ func TestProviderAndModel(t *testing.T) {
 			{Value: "anthropic", Name: "Claude API"}, {Value: "codex", Name: "Codex (your plan)"}, {Value: "copilot", Name: "GitHub Copilot CLI (your plan)", Description: "not available here"}}},
 		{ID: "model", Name: "Model", CurrentValue: "claude-opus-5-5", Options: []acp.ConfigValue{{Value: "claude-opus-5-5", Name: "claude-opus-5-5"}}},
 	}})
-	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5") {
-		t.Fatalf("status\n%s", v)
+	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5 · effort none") {
+		t.Fatalf("status: the effort is always there\n%s", v)
 	}
 	// An effort, where the provider has one: shown, and set by /effort.
 	d.send(updateMsg{Kind: "config_option_update", Config: append(d.m.config, acp.ConfigOption{ID: "effort", Name: "Effort",
 		CurrentValue: "max", Options: []acp.ConfigValue{{Value: "low", Name: "low"}, {Value: "max", Name: "max"}}})})
-	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5 · max") {
+	if v := d.view(); !strings.Contains(v, "anthropic · claude-opus-5-5 · effort max") {
 		t.Fatalf("status with the effort\n%s", v)
 	}
+	// shift+tab: the next effort, after the last the first, at once.
+	d.send(key("shift+tab"))
+	if v := d.view(); !strings.Contains(v, "effort low") || strings.Join(a.set, ",") != "effort=low" {
+		t.Fatalf("shift+tab (%q)\n%s", a.set, d.view())
+	}
+	a.set = nil
 	d.m.input.SetValue("/effort low")
 	d.send(key("enter"))
 	if strings.Join(a.set, ",") != "effort=low" {
