@@ -24,10 +24,22 @@ type pick struct {
 	// install: the chosen provider is not installed; the user is asked
 	// first (ADR 0015).
 	install *acp.ConfigValue
+	// thenModels: a provider chosen for /model; its models are listed next.
+	thenModels bool
+	// provider: the provider whose models these are, when it is not the
+	// session's: choosing one switches both.
+	provider string
 }
 
 // setMsg: a setting was set, or could not be.
 type setMsg struct{ err error }
+
+// modelsMsg: a provider's models, read for /model.
+type modelsMsg struct {
+	provider acp.ConfigValue
+	models   []string
+	err      error
+}
 
 // settingCommand reads /provider and /model: the setting's id, and the
 // value typed ("" to choose from a list).
@@ -219,6 +231,21 @@ func (m *model) setting(id, value string) tea.Cmd {
 		m.print(bad.Render("  ⎿  this agent has no " + id + " to set"))
 		return nil
 	}
+	if value == "" && id == "model" {
+		// The provider first, then its models: a list of every model of
+		// every provider would be too long to read.
+		if po, ok := m.option("provider"); ok && len(po.Options) > 0 {
+			po.Name = "Model — choose the provider first"
+			p := &pick{opt: po, thenModels: true}
+			for i, v := range p.visible() {
+				if v.Value == po.CurrentValue {
+					p.sel = i
+				}
+			}
+			m.pick = p
+			return nil
+		}
+	}
 	if value == "" {
 		if len(o.Options) == 0 {
 			m.print(faint.Render(fmt.Sprintf("  ⎿  no list of %ss here: type /%s <%s>", id, id, id)))
@@ -258,7 +285,7 @@ func (m *model) pickKey(key string) tea.Cmd {
 		switch key {
 		case "enter":
 			m.pick = nil
-			return m.installThen(*p.install)
+			return m.installThen(*p.install, p.thenModels)
 		case "esc", "ctrl+c":
 			p.install = nil
 			if len(p.opt.Options) == 0 {
@@ -287,7 +314,17 @@ func (m *model) pickKey(key string) tea.Cmd {
 			p.install = &v // asked before anything is fetched
 			return nil
 		}
+		if !usable(v) {
+			m.note = v.Name + " cannot run here"
+			return nil
+		}
 		m.pick = nil
+		switch {
+		case p.thenModels: // the provider's models next
+			return m.models(v)
+		case p.provider != "": // another provider's model: both switch
+			return m.switchTo(p.provider, v.Value)
+		}
 		return m.setting(p.opt.ID, v.Value)
 	case key == "backspace":
 		if p.filter != "" {
@@ -309,15 +346,73 @@ func (m *model) pickKey(key string) tea.Cmd {
 	return nil
 }
 
-// installThen installs provider v, then switches to it.
-func (m *model) installThen(v acp.ConfigValue) tea.Cmd {
+// installThen installs provider v, then switches to it, or, for /model,
+// lists its models.
+func (m *model) installThen(v acp.ConfigValue, thenModels bool) tea.Cmd {
 	m.print(faint.Render(fmt.Sprintf("  ⎿  installing %s (%s)…", v.Name, v.Install.Source)))
 	ctx, a, s := m.ctx, m.a, m.session
 	return func() tea.Msg {
 		if err := a.InstallProvider(ctx, v.Value, v.Install.Version); err != nil {
 			return setMsg{err: fmt.Errorf("could not install %s: %w", v.Name, err)}
 		}
+		if thenModels {
+			v.Install = nil
+			ms, err := a.Models(ctx, v.Value)
+			return modelsMsg{provider: v, models: ms, err: err}
+		}
 		return setMsg{err: a.SetConfigOption(ctx, s, "provider", v.Value)}
+	}
+}
+
+// models reads provider v's models, to choose one next.
+func (m *model) models(v acp.ConfigValue) tea.Cmd {
+	ctx, a := m.ctx, m.a
+	return func() tea.Msg {
+		ms, err := a.Models(ctx, v.Value)
+		return modelsMsg{provider: v, models: ms, err: err}
+	}
+}
+
+// modelPick lists a provider's models: its default first, then those it
+// has. Of the session's provider, the current one is marked.
+func (m *model) modelPick(msg modelsMsg) {
+	if msg.err != nil {
+		m.print(bad.Render("  ⎿  " + msg.err.Error()))
+		return
+	}
+	o := acp.ConfigOption{ID: "model", Name: "Model · " + msg.provider.Name}
+	cur, _ := m.option("provider")
+	p := &pick{provider: msg.provider.Value}
+	if msg.provider.Value == cur.CurrentValue {
+		if mo, ok := m.option("model"); ok {
+			o.CurrentValue = mo.CurrentValue
+		}
+		p.provider = ""
+	}
+	o.Options = append(o.Options, acp.ConfigValue{Value: "default", Name: "Default (" + msg.provider.Name + "'s)"})
+	for _, name := range msg.models {
+		o.Options = append(o.Options, acp.ConfigValue{Value: name, Name: name})
+	}
+	p.opt = o
+	for i, v := range p.visible() {
+		if v.Value == o.CurrentValue {
+			p.sel = i
+		}
+	}
+	m.pick = p
+}
+
+// switchTo switches to provider with model ("default": the provider's).
+func (m *model) switchTo(provider, model string) tea.Cmd {
+	ctx, a, s := m.ctx, m.a, m.session
+	return func() tea.Msg {
+		if err := a.SetConfigOption(ctx, s, "provider", provider); err != nil {
+			return setMsg{err: err}
+		}
+		if model == "default" {
+			return setMsg{}
+		}
+		return setMsg{err: a.SetConfigOption(ctx, s, "model", model)}
 	}
 }
 
@@ -351,13 +446,19 @@ func (m *model) pickView(w int) string {
 	for i := from; i < to; i++ {
 		v := vis[i]
 		line := v.Name
+		if !usable(v) { // not to be chosen as it is: in grey, and why
+			line = faint.Render(v.Name)
+		}
 		if v.Value != v.Name {
 			line += faint.Render("  " + v.Value)
 		}
 		if v.Value == p.opt.CurrentValue {
 			line += " ✓"
 		}
-		if v.Description != "" {
+		switch {
+		case v.Install != nil:
+			line += "  " + warn.Render("not installed") + faint.Render("  "+cut(v.Install.Source, 50))
+		case v.Description != "":
 			line += faint.Render("  " + cut(v.Description, 60))
 		}
 		if i == sel {

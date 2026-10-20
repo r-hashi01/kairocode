@@ -66,6 +66,9 @@ var builtinCommands = []map[string]any{
 const (
 	InstallMeta   = "kairocode/install"
 	InstallMethod = "_kairocode/install_provider"
+	// ModelsMethod gives a provider's models: {"provider": id} →
+	// {"models": [...]} (the client's /model, ADR 0014).
+	ModelsMethod = "_kairocode/models"
 )
 
 // defaultModel is the value of the model option that leaves the choice to
@@ -347,6 +350,21 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": p.ModeID})
 		return map[string]any{}, nil
+	case ModelsMethod:
+		var p struct {
+			Provider string `json:"provider"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Provider == "" {
+			return nil, invalid(errors.New(`want {"provider": "<id>"}`))
+		}
+		ms, err := a.b.Models(ctx, p.Provider)
+		if err != nil {
+			return nil, invalid(err)
+		}
+		if ms == nil {
+			ms = []string{}
+		}
+		return map[string]any{"models": ms}, nil
 	case InstallMethod:
 		var p struct {
 			Provider string `json:"provider"`

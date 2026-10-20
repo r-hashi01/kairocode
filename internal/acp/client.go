@@ -87,6 +87,15 @@ type InstallInfo struct {
 	Version string `json:"version"`
 }
 
+// Models are a provider's models (only KairoCode's agent has this).
+func (cl *Client) Models(ctx context.Context, provider string) ([]string, error) {
+	var out struct {
+		Models []string `json:"models"`
+	}
+	err := cl.c.Call(ctx, ModelsMethod, map[string]any{"provider": provider}, &out)
+	return out.Models, err
+}
+
 // InstallProvider installs a provider of ACP's registry, the user having
 // chosen to (ADR 0015). Only KairoCode's agent has it.
 func (cl *Client) InstallProvider(ctx context.Context, id, version string) error {

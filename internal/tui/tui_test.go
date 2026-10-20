@@ -115,6 +115,11 @@ func (a *fakeAgent) SetConfigOption(ctx context.Context, session, id, value stri
 	return nil
 }
 
+func (a *fakeAgent) Models(ctx context.Context, provider string) ([]string, error) {
+	a.set = append(a.set, "models "+provider)
+	return []string{provider + "-m1", provider + "-m2"}, nil
+}
+
 func (a *fakeAgent) SetMode(ctx context.Context, session, mode string) error {
 	a.set = append(a.set, "mode="+mode)
 	return nil
@@ -733,4 +738,54 @@ func colourOf(s string) string {
 	}
 	j := strings.IndexByte(s[i:], 'm')
 	return s[i : i+j+1]
+}
+
+// /model: the provider first (those that run here before those not
+// installed, which are in grey and say so), then its models; another
+// provider's model switches both; one not installed is asked about and
+// installed, then its models are listed (ADR 0014, 0015).
+func TestModelProviderFirst(t *testing.T) {
+	d, a := start(t, Options{})
+	d.send(updateMsg{Kind: "config_option_update", Config: []acp.ConfigOption{
+		{ID: "provider", Name: "Provider", CurrentValue: "anthropic", Options: []acp.ConfigValue{
+			{Value: "anthropic", Name: "Claude API"},
+			{Value: "gemini", Name: "Gemini CLI", Install: &acp.InstallInfo{Source: "@google/gemini-cli@0.64.0", Version: "0.64.0"}},
+			{Value: "codex-acp", Name: "Codex"}}},
+		{ID: "model", Name: "Model", CurrentValue: "claude-opus-5-5", Options: []acp.ConfigValue{{Value: "claude-opus-5-5", Name: "claude-opus-5-5"}}}}})
+	d.m.input.SetValue("/model")
+	d.send(key("enter"))
+	v := d.view()
+	if !strings.Contains(v, "choose the provider first") || !strings.Contains(v, "not installed") ||
+		strings.Index(v, "Codex") > strings.Index(v, "Gemini CLI") {
+		t.Fatalf("the providers\n%s", v)
+	}
+	// Codex (installed, not the session's): its models, then both switch.
+	for d.m.pick.visible()[d.m.pick.sel].Value != "codex-acp" {
+		d.send(key("down"))
+	}
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Model · Codex") || !strings.Contains(v, "codex-acp-m2") {
+		t.Fatalf("codex's models (%q)\n%s", a.set, v)
+	}
+	d.send(key("down"))
+	d.send(key("down"))
+	d.send(key("enter"))
+	if got := strings.Join(a.set, ","); got != "models codex-acp,provider=codex-acp,model=codex-acp-m2" {
+		t.Fatalf("set %q", got)
+	}
+	// Gemini, not installed: asked, installed, then its models.
+	a.set = nil
+	d.m.input.SetValue("/model")
+	d.send(key("enter"))
+	for d.m.pick.visible()[d.m.pick.sel].Value != "gemini" {
+		d.send(key("down"))
+	}
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Install Gemini CLI?") {
+		t.Fatalf("no question\n%s", v)
+	}
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "Model · Gemini CLI") || strings.Join(a.set, ",") != "install gemini@0.64.0,models gemini" {
+		t.Fatalf("after installing (%q)\n%s", a.set, v)
+	}
 }

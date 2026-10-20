@@ -35,6 +35,8 @@ type Agent interface {
 	SetConfigOption(ctx context.Context, session, id, value string) error
 	// InstallProvider installs an agent of ACP's registry (ADR 0015).
 	InstallProvider(ctx context.Context, id, version string) error
+	// Models are a provider's models (ADR 0014).
+	Models(ctx context.Context, provider string) ([]string, error)
 	// SetMode sets the session's mode (ADR 0016).
 	SetMode(ctx context.Context, session, mode string) error
 }
@@ -327,6 +329,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(m.input.Focus(), m.usage())
 	case updateMsg:
 		m.take(acp.Update(msg))
+		return nil
+	case modelsMsg:
+		m.modelPick(msg)
 		return nil
 	case setMsg:
 		// Set: the status line shows it; only what failed is written.
