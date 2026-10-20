@@ -427,6 +427,12 @@ func (m *model) reviewView(w int) string {
 	}
 	room := max(total-lines(head)-lines(foot.String())-2, 3)
 	top := min(max(cur-room/2, 0), max(len(body)-room, 0))
+	if r.detail == nil && m.charted(a) {
+		// A chart has no lines to choose: the keys scroll it, its top
+		// where the cursor is.
+		top = min(cur, max(len(body)-room, 0))
+		r.cursor[r.tab] = top
+	}
 	end := min(top+room, len(body))
 	var b strings.Builder
 	b.WriteString(head)
@@ -486,8 +492,8 @@ func (m *model) sectionLines(a *ask, w int) ([]string, int) {
 			text = good.Render(text)
 		}
 		switch {
-		case i == cur && l.drawn:
-			out[i] = accent.Render("❯ ") + mark + text
+		case l.drawn: // a chart is scrolled, not chosen in
+			out[i] = "  " + mark + text
 		case i == cur:
 			out[i] = accent.Render("❯ ") + mark + accent.Render(l.text)
 		default:
@@ -590,4 +596,10 @@ func (m *model) changeLines(a *ask, w int) ([]string, int) {
 		}
 	}
 	return out, cur
+}
+
+// charted reports whether the section shown is drawn as a chart.
+func (m *model) charted(a *ask) bool {
+	ls := m.reviewLines(a, max(m.width-1, 20))
+	return len(ls) > 0 && ls[0].drawn
 }

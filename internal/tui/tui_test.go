@@ -1143,3 +1143,36 @@ func TestFlowReviewChartAndChanges(t *testing.T) {
 		t.Fatalf("comment %+v", c)
 	}
 }
+
+// The flow's chart scrolls with the keys at once: no line is chosen in it.
+func TestFlowReviewChartScrolls(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.height = 24
+	var nodes []flowchart.Node
+	for i := range 12 {
+		nodes = append(nodes, flowchart.Node{Kind: flowchart.Agent, Title: fmt.Sprintf("step%02d", i)})
+	}
+	chart, _ := json.Marshal(flowchart.Chart{Name: "f", Nodes: nodes})
+	req := acp.PermissionRequest{Title: "flow_write f", ToolKind: "edit",
+		Sections: []acp.Section{{Name: "Flow", Text: "f", Chart: chart}},
+		Options:  []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}
+	d.send(askMsg{req: req, reply: make(chan string, 1)})
+	before := d.view()
+	if !strings.Contains(before, "step00") || strings.Contains(before, "step11") || strings.Contains(before, "❯") {
+		t.Fatalf("first\n%s", before)
+	}
+	d.send(key("down"))
+	if v := d.view(); v == before || !strings.Contains(v, "↑ 1 lines above") {
+		t.Fatalf("one down did not scroll\n%s", v)
+	}
+	for range 100 {
+		d.send(key("down"))
+	}
+	if v := d.view(); !strings.Contains(v, "step11") || strings.Contains(v, "more lines") {
+		t.Fatalf("the end\n%s", v)
+	}
+	d.send(key("up"))
+	if v := d.view(); !strings.Contains(v, "↓ 1 more lines") {
+		t.Fatalf("one up from the end\n%s", v)
+	}
+}
