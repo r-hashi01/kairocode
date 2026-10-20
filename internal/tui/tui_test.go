@@ -946,39 +946,53 @@ func TestAskScrollsWhatItWouldDo(t *testing.T) {
 	}
 }
 
-// A flow is reviewed: its sections one at a time; a comment on a line of
-// its script; Enter sends it back with the comment for the model. Another,
-// allowed with a.
+// A flow is reviewed: its sections one at a time; Enter on a step opens
+// its lines of the script, in full, and a comment there is on the script's
+// line; r sends it back with the comments for the model. Another, allowed
+// with a.
 func TestFlowReview(t *testing.T) {
 	d, _ := start(t, Options{})
+	long := strings.Repeat("draft a reply ", 20)
 	req := acp.PermissionRequest{Title: "flow_write inquiry", ToolKind: "edit",
 		Sections: []acp.Section{
-			{Name: "Summary", Text: "What it does:\n  notify  tool mcp__slack__post (⚠ an outside service)"},
-			{Name: "Tree", Text: "inquiry\n└─ tool mcp__slack__post"},
-			{Name: "Script", Text: "def main(input):\n    a = ask(\"send?\")\n    tool(\"mcp__slack__post\", text = input)"}},
+			{Name: "Summary", Text: "What it does:\n  agent plan → tool mcp__slack__post (⚠ an outside service)", Refs: [][2]int{{0, 0}, {2, 3}}},
+			{Name: "Tree", Text: "inquiry\n├─ agent plan  \"draft a reply…\"\n└─ tool mcp__slack__post", Refs: [][2]int{{0, 0}, {2, 3}, {4, 4}}},
+			{Name: "Script", Text: "def main(input):\n    d = agent(\"plan\",\n        \"" + long + "\")\n    tool(\"mcp__slack__post\", text = d.text)"}},
 		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}
 	reply := make(chan string, 1)
 	d.send(askMsg{req: req, reply: reply})
 	if v := d.view(); !strings.Contains(v, "Review the flow") || !strings.Contains(v, "[Summary]") || !strings.Contains(v, "an outside service") {
 		t.Fatalf("the review\n%s", v)
 	}
+	// The tree's tool step, opened: its line of the script.
 	d.send(key("tab"))
-	d.send(key("tab"))
-	if v := d.view(); !strings.Contains(v, "[Script]") || !strings.Contains(v, "def main") {
-		t.Fatalf("the script\n%s", v)
-	}
 	d.send(key("down"))
+	d.send(key("down"))
+	d.send(key("enter"))
+	if v := d.view(); !strings.Contains(v, "the script, line 4") || !strings.Contains(v, "4 │") || !strings.Contains(v, "text = d.text") {
+		t.Fatalf("the tool's line\n%s", v)
+	}
+	d.send(key("esc"))
+	// The agent step: its two lines, the prompt in full; a comment on the
+	// second.
+	d.send(key("up"))
+	d.send(key("enter"))
+	v := d.view()
+	if !strings.Contains(v, "lines 2–3") || strings.Count(plain(v), "draft a") < 20 {
+		t.Fatalf("the agent's lines\n%s", v)
+	}
 	d.send(key("down"))
 	d.send(key("c"))
-	d.m.input.SetValue("ask before posting, and stop if no")
+	d.m.input.SetValue("make it shorter")
 	d.send(key("enter"))
-	if v := d.view(); !strings.Contains(v, "Comments (1)") || !strings.Contains(v, "send back with 1 comments") {
+	d.send(key("esc"))
+	if v := d.view(); !strings.Contains(v, "Comments (1)") || !strings.Contains(v, "r send back with 1 comments") {
 		t.Fatalf("the comment\n%s", v)
 	}
-	d.send(key("enter"))
+	d.send(key("r"))
 	got := <-reply
 	id, why, _ := strings.Cut(got, reasonSep)
-	if id != "reject_once" || !strings.Contains(why, `Script, at "line 3: tool(\"mcp__slack__post\", text = input)": ask before posting, and stop if no`) {
+	if id != "reject_once" || !strings.Contains(why, `Script, at "line 3: \"draft a reply`) || !strings.HasSuffix(why, ": make it shorter") {
 		t.Fatalf("answer %q", got)
 	}
 	if len(d.m.asks) != 0 {
@@ -986,6 +1000,17 @@ func TestFlowReview(t *testing.T) {
 	}
 
 	d.send(askMsg{req: req, reply: reply})
+	d.send(key("enter")) // a line with no step: nothing opens, nothing is answered
+	if d.m.asks[0].review.detail != nil || len(reply) != 0 {
+		t.Fatal("enter on the heading")
+	}
+	// A ref that is not a line of the script opens nothing.
+	d.m.asks[0].req.Sections[0].Refs[1] = [2]int{-1, 2}
+	d.send(key("down"))
+	d.send(key("enter"))
+	if d.m.asks[0].review.detail != nil {
+		t.Fatal("opened a line that is none")
+	}
 	d.send(key("a"))
 	if got := <-reply; got != "allow_once" {
 		t.Fatalf("a: %q", got)

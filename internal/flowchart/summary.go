@@ -11,9 +11,17 @@ import (
 // are left to the tree. note, if given, says what a step reaches (an
 // outside service, say), shown after it.
 func Summary(c *Chart, note func(Node) string) string {
+	s, _ := SummaryLines(c, note)
+	return s
+}
+
+// SummaryLines is Summary, and for each of its lines the script's lines
+// of the first step it names (zero for a line that names none).
+func SummaryLines(c *Chart, note func(Node) string) (string, []Lines) {
 	type part struct {
 		name  string
 		steps []string
+		src   Lines
 	}
 	parts := []part{{}}
 	var toolNames []string
@@ -49,6 +57,9 @@ func Summary(c *Chart, note func(Node) string) string {
 				step = "agents at once"
 			}
 			if p := &parts[len(parts)-1]; step != "" && !contains(p.steps, step) {
+				if len(p.steps) == 0 {
+					p.src = n.Src
+				}
 				p.steps = append(p.steps, step)
 			}
 			walk(n.Then)
@@ -62,6 +73,7 @@ func Summary(c *Chart, note func(Node) string) string {
 	walk(c.Nodes)
 	var b strings.Builder
 	b.WriteString("What it does:\n")
+	refs := []Lines{{}}
 	width := 0
 	for _, p := range parts {
 		width = max(width, len([]rune(p.name)))
@@ -79,13 +91,15 @@ func Summary(c *Chart, note func(Node) string) string {
 		} else {
 			fmt.Fprintf(&b, "  %s\n", strings.Join(p.steps, " → "))
 		}
+		refs = append(refs, p.src)
 	}
+	refs = append(refs, Lines{})
 	if len(toolNames) == 0 {
 		b.WriteString("Tools it may call: none\n")
 	} else {
 		b.WriteString("Tools it may call: " + strings.Join(toolNames, ", ") + "\n")
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), refs
 }
 
 func contains(s []string, v string) bool {

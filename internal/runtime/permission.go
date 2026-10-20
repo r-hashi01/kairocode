@@ -198,7 +198,9 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	}
 	// What it does and its shape; the script itself is stored by hash and
 	// put in when the question is listed (the record stays small, NFR-5).
-	p := flowchart.Summary(c, r.stepNote) + sectionSep + "Tree\n" + flowchart.Tree(c, nil)
+	summary, srefs := flowchart.SummaryLines(c, r.stepNote)
+	tree, trefs := flowchart.TreeLines(c, nil)
+	p := summary + withRefs(srefs) + sectionSep + "Tree\n" + tree + withRefs(trefs)
 	// A flow of the name there already: it is replaced, and how is shown.
 	switch before, there := r.flowBefore(in.Call.Dir, a.Name); {
 	case before != nil:
@@ -210,11 +212,14 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 		} else {
 			changes += " + added, ~ changed, - taken away:\n\n"
 		}
-		changes += flowchart.Tree(c, nil)
+		tree, trefs := flowchart.TreeLines(c, nil)
+		changes += tree
+		refs := append([]flowchart.Lines{{}, {}}, trefs...)
 		for _, l := range removed {
 			changes += "\n- " + l
+			refs = append(refs, flowchart.Lines{})
 		}
-		p += sectionSep + "Changes\n" + changes
+		p += sectionSep + "Changes\n" + changes + withRefs(refs)
 	case there:
 		p += sectionSep + "Changes\nIt replaces the flow " + a.Name + " there now (which could not be read as a flow)."
 	}
@@ -318,13 +323,44 @@ const KindQuestion = "question"
 const (
 	scriptRef  = "\n\x00script:"
 	sectionSep = "\n\x00section:"
+	// refsSep ends a section's text: then for each of its lines, the
+	// script's lines it is ("first-last", 0-0 for none), by commas.
+	refsSep = "\n\x00refs:"
 )
 
 // PreviewSection is a named part of what a call would do: Summary, Tree,
-// Changes, Script.
+// Changes, Script. Refs: for each line of Text, the script's lines it is
+// ({0, 0} for none), to show them.
 type PreviewSection struct {
-	Name string `json:"name"`
-	Text string `json:"text"`
+	Name string   `json:"name"`
+	Text string   `json:"text"`
+	Refs [][2]int `json:"refs,omitempty"`
+}
+
+// withRefs is a section's refs as recorded after its text.
+func withRefs(refs []flowchart.Lines) string {
+	parts := make([]string, len(refs))
+	for i, l := range refs {
+		parts[i] = fmt.Sprintf("%d-%d", l.First, l.Last)
+	}
+	return refsSep + strings.Join(parts, ",")
+}
+
+// section is a recorded section's text and refs.
+func section(name, s string) PreviewSection {
+	text, rs, ok := strings.Cut(s, refsSep)
+	sec := PreviewSection{Name: name, Text: text}
+	if !ok {
+		return sec
+	}
+	for _, r := range strings.Split(rs, ",") {
+		var f, l int
+		if _, err := fmt.Sscanf(r, "%d-%d", &f, &l); err != nil || f < 0 || l < 0 {
+			return PreviewSection{Name: name, Text: text}
+		}
+		sec.Refs = append(sec.Refs, [2]int{f, l})
+	}
+	return sec
 }
 
 // fullPreview is a recorded preview with the script it names put in: as
@@ -335,10 +371,10 @@ func (r *Runtime) fullPreview(ctx context.Context, p string) (string, []PreviewS
 	}
 	p, h, hasScript := strings.Cut(p, scriptRef)
 	parts := strings.Split(p, sectionSep)
-	sections := []PreviewSection{{Name: "Summary", Text: parts[0]}}
+	sections := []PreviewSection{section("Summary", parts[0])}
 	for _, s := range parts[1:] {
 		name, text, _ := strings.Cut(s, "\n")
-		sections = append(sections, PreviewSection{Name: name, Text: text})
+		sections = append(sections, section(name, text))
 	}
 	if hasScript {
 		if _, src, err := r.Store.Get(ctx, h); err == nil {

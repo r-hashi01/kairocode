@@ -894,6 +894,11 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 		!strings.Contains(p[0].Sections[2].Text, "- ask  \"post it?\"") || !strings.Contains(p[0].Sections[2].Text, "It replaces the flow inquiry-alert") {
 		t.Fatalf("sections %+v", p[0].Sections)
 	}
+	// Each line of the tree knows its step's lines of the script.
+	tree := p[0].Sections[1]
+	if lines := strings.Split(tree.Text, "\n"); len(lines) != len(tree.Refs) || !strings.Contains(lines[1], "agent build") || tree.Refs[1] != [2]int{2, 2} {
+		t.Fatalf("tree refs %+v", tree)
+	}
 	// The script is in the store once, not in the permission check's record.
 	turns, err := r.K.Children(ctx, s)
 	if err != nil {

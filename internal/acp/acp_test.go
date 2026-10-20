@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1143,12 +1144,15 @@ func TestPermissionSections(t *testing.T) {
 		}
 		return map[string]any{"type": "content", "content": b}
 	}
-	raw, _ := json.Marshal([]any{block("sum", "Summary"), block("other", ""), block("\n\n── Script ──\ndef main(input):", "Script")})
+	tree := block("f\n└─ ask", "Tree")
+	tree["content"].(map[string]any)["_meta"].(map[string]any)[RefsMeta] = [][2]int{{0, 0}, {2, 3}}
+	raw, _ := json.Marshal([]any{block("sum", "Summary"), block("other", ""), tree, block("\n\n── Script ──\ndef main(input):", "Script")})
 	got := contentSections(raw)
-	if len(got) != 2 || got[0] != (Section{Name: "Summary", Text: "sum"}) || got[1] != (Section{Name: "Script", Text: "def main(input):"}) {
+	if len(got) != 3 || got[0].Name != "Summary" || got[0].Text != "sum" || !reflect.DeepEqual(got[1].Refs, [][2]int{{0, 0}, {2, 3}}) ||
+		got[2].Name != "Script" || got[2].Text != "def main(input):" {
 		t.Fatalf("%+v", got)
 	}
-	if text := contentText(raw); text != "sumother\n\n── Script ──\ndef main(input):" {
+	if text := contentText(raw); text != "sumotherf\n└─ ask\n\n── Script ──\ndef main(input):" {
 		t.Fatalf("as text: %q", text)
 	}
 }

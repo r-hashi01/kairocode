@@ -156,14 +156,17 @@ type PermissionRequest struct {
 type Section struct {
 	Name string `json:"name"`
 	Text string `json:"text"`
+	// Refs: for each line of Text, the script's lines it is ({0, 0} for
+	// none).
+	Refs [][2]int `json:"refs,omitempty"`
 }
 
 // contentSections are the sections of a tool call's content.
 func contentSections(raw json.RawMessage) []Section {
 	var list []struct {
 		Content struct {
-			Text string            `json:"text"`
-			Meta map[string]string `json:"_meta"`
+			Text string                     `json:"text"`
+			Meta map[string]json.RawMessage `json:"_meta"`
 		} `json:"content"`
 	}
 	if json.Unmarshal(raw, &list) != nil {
@@ -171,10 +174,13 @@ func contentSections(raw json.RawMessage) []Section {
 	}
 	var out []Section
 	for _, c := range list {
-		if name := c.Content.Meta[SectionMeta]; name != "" {
-			text := strings.TrimPrefix(c.Content.Text, "\n\n── "+name+" ──\n")
-			out = append(out, Section{Name: name, Text: text})
+		var name string
+		if json.Unmarshal(c.Content.Meta[SectionMeta], &name) != nil || name == "" {
+			continue
 		}
+		s := Section{Name: name, Text: strings.TrimPrefix(c.Content.Text, "\n\n── "+name+" ──\n")}
+		_ = json.Unmarshal(c.Content.Meta[RefsMeta], &s.Refs) // none: no line is shown more of
+		out = append(out, s)
 	}
 	return out
 }

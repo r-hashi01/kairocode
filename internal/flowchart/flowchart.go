@@ -57,6 +57,9 @@ type Node struct {
 	Mark string `json:"mark,omitempty"`
 	// Edit: where in the script the node is, to change it there (a call's).
 	Edit *Edit `json:"-"`
+	// Src: the script's lines the node is (its statement; an if's or a
+	// loop's head line), to show them.
+	Src Lines `json:"-"`
 
 	Cond     string   `json:"cond,omitempty"`
 	Then     []Node   `json:"then,omitempty"`
@@ -195,7 +198,16 @@ func (b *builder) stmts(list []syntax.Stmt) []Node {
 		case *syntax.AssignStmt:
 			b.whole = callOf(s.RHS)
 		}
-		out = append(out, b.stmt(stmt)...)
+		nodes := b.stmt(stmt)
+		for j := range nodes {
+			if nodes[j].Src == (Lines{}) {
+				nodes[j].Src = block[i]
+				if k := nodes[j].Kind; k == If || k == Loop {
+					nodes[j].Src.Last = nodes[j].Src.First
+				}
+			}
+		}
+		out = append(out, nodes...)
 	}
 	return out
 }

@@ -71,7 +71,10 @@ const (
 	// section of what the call would do it is (its text after the
 	// section's heading): a client may show them apart (the TUI's review
 	// of a flow).
-	SectionMeta   = "kairocode/section"
+	SectionMeta = "kairocode/section"
+	// RefsMeta, with SectionMeta: for each line of the section, the
+	// script's lines it is ([first, last], [0, 0] for none).
+	RefsMeta      = "kairocode/refs"
 	InstallMeta   = "kairocode/install"
 	InstallMethod = "_kairocode/install_provider"
 	// ModelsMethod gives a provider's models: {"provider": id} →
@@ -943,7 +946,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 				text = "\n\n── " + s.Name + " ──\n" + text
 			}
 			block := textBlock(text)
-			block["_meta"] = map[string]any{SectionMeta: s.Name}
+			block["_meta"] = map[string]any{SectionMeta: s.Name, RefsMeta: s.Refs}
 			content = append(content, map[string]any{"type": "content", "content": block})
 		}
 		toolCall["content"] = content

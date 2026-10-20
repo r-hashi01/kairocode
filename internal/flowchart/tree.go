@@ -41,17 +41,25 @@ func Label(n Node) string {
 // Tree is the chart as a tree of lines: what a terminal too narrow for the
 // boxes shows. mark gives each box its state's mark (nil: none).
 func Tree(c *Chart, mark func(Node) string) string {
-	var b strings.Builder
-	b.WriteString(c.Name)
-	if c.Description != "" {
-		b.WriteString("  " + c.Description)
-	}
-	b.WriteString("\n")
-	tree(&b, c.Nodes, "", mark)
-	return strings.TrimRight(b.String(), "\n")
+	s, _ := TreeLines(c, mark)
+	return s
 }
 
-func tree(b *strings.Builder, nodes []Node, indent string, mark func(Node) string) {
+// TreeLines is Tree, and for each of its lines the script's lines the box
+// is (zero for a line that is no box).
+func TreeLines(c *Chart, mark func(Node) string) (string, []Lines) {
+	var b strings.Builder
+	b.WriteString(c.Name)
+	if d := oneLine(c.Description); d != "" {
+		b.WriteString("  " + d)
+	}
+	b.WriteString("\n")
+	refs := []Lines{{}}
+	tree(&b, c.Nodes, "", mark, &refs)
+	return strings.TrimRight(b.String(), "\n"), refs
+}
+
+func tree(b *strings.Builder, nodes []Node, indent string, mark func(Node) string, refs *[]Lines) {
 	for i, n := range nodes {
 		last := i == len(nodes)-1
 		branch, next := "├─ ", "│  "
@@ -71,6 +79,7 @@ func tree(b *strings.Builder, nodes []Node, indent string, mark func(Node) strin
 			line += "  " + quote(n)
 		}
 		b.WriteString(indent + branch + line + "\n")
+		*refs = append(*refs, n.Src)
 		switch n.Kind {
 		case If:
 			sub := []Node{{Kind: "then", Body: n.Then}}
@@ -83,19 +92,20 @@ func tree(b *strings.Builder, nodes []Node, indent string, mark func(Node) strin
 					br, nx = "└─ ", "   "
 				}
 				b.WriteString(indent + next + br + s.Kind + "\n")
-				tree(b, s.Body, indent+next+nx, mark)
+				*refs = append(*refs, Lines{})
+				tree(b, s.Body, indent+next+nx, mark, refs)
 			}
 		case Loop:
-			tree(b, n.Body, indent+next, mark)
+			tree(b, n.Body, indent+next, mark, refs)
 		case Parallel:
 			if len(n.Branches) > 0 {
 				var flat []Node
 				for _, br := range n.Branches {
 					flat = append(flat, br...)
 				}
-				tree(b, flat, indent+next, mark)
+				tree(b, flat, indent+next, mark, refs)
 			} else {
-				tree(b, n.Body, indent+next, mark)
+				tree(b, n.Body, indent+next, mark, refs)
 			}
 		}
 	}
@@ -165,6 +175,17 @@ func Removed(before, after *Chart) []string {
 		}
 	})
 	return out
+}
+
+// oneLine is s on one line: control characters and runs of space made one
+// space (a description may be any string).
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)), " ")
 }
 
 func signature(n Node) string {
