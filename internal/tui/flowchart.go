@@ -180,7 +180,7 @@ func (d *drawer) guard(n flowchart.Node, then flowchart.Node, maxw int) block {
 		to = "→ leave the loop"
 	}
 	_, style := stateMark(StatePending)
-	return d.drawBox("◇", style, "if "+n.Cond+" "+to, text, false, maxw)
+	return d.drawBox("◇", style, "if "+flowchart.Math(n.Cond)+" "+to, text, false, maxw)
 }
 
 // drawBox draws a box: its mark and label on its first line, its text
@@ -239,7 +239,7 @@ func (d *drawer) node(n flowchart.Node, maxw int) block {
 		if len(n.Else) == 0 && len(n.Then) == 1 && (n.Then[0].Kind == flowchart.Return || n.Then[0].Kind == flowchart.Break) {
 			return d.guard(n, n.Then[0], maxw)
 		}
-		head := d.box(flowchart.Node{Kind: flowchart.If, Cond: n.Cond}, maxw)
+		head := d.box(flowchart.Node{Kind: flowchart.If, Cond: flowchart.Math(n.Cond)}, maxw)
 		head.lines[1] = strings.Replace(head.lines[1], "○", "◇", 1)
 		cols := d.columns([][]flowchart.Node{n.Then, n.Else}, []string{"yes", "no"}, maxw)
 		return stack([]block{head, cols})
@@ -250,7 +250,7 @@ func (d *drawer) node(n flowchart.Node, maxw int) block {
 		}
 		return d.frame("⫴ at once "+n.Cond, d.seq(n.Body, maxw-4), n, maxw)
 	case flowchart.Loop:
-		return d.frame("⟳ "+n.Cond, d.seq(n.Body, maxw-4), n, maxw)
+		return d.frame("⟳ "+flowchart.Math(n.Cond), d.seq(n.Body, maxw-4), n, maxw)
 	}
 	return d.box(n, maxw)
 }
