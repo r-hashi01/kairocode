@@ -88,6 +88,55 @@ func agentDef(dir, name string, sub bool) (opencode.Agent, error) {
 	return def, nil
 }
 
+// nativeReads are what an engine's agent reads by itself (ADR 0018): its
+// instruction files (as instructionFiles names them, "~/" for the user's)
+// and its skills' directories (skillDirs, of a working directory).
+// KairoCode gives it the rest, so that every engine has the same, once.
+// Checked by hand with each CLI (scripts/agent-probe.sh).
+type nativeReads struct {
+	instructions []string
+	skillDirs    func(dir string) []string
+}
+
+// nativeReadsOf is what engine's agent reads by itself. Claude Code reads
+// nothing: it would only with its own settings, whose hooks would run
+// outside KairoCode's sandbox. Codex reads AGENTS.md and .agents/skills;
+// copilot AGENTS.md and CLAUDE.md (its skills, whose tool it is not given,
+// are KairoCode's to give).
+func nativeReadsOf(engine string) nativeReads {
+	switch registryAgent(engine) {
+	case codexAgent:
+		return nativeReads{instructions: []string{"AGENTS.md"}, skillDirs: func(dir string) []string {
+			var out []string
+			if home, err := os.UserHomeDir(); err == nil {
+				out = append(out, filepath.Join(home, ".agents", "skills"))
+			}
+			for _, d := range opencode.ProjectDirs(dir) {
+				out = append(out, filepath.Join(d, ".agents", "skills"))
+			}
+			return out
+		}}
+	case copilotAgent:
+		return nativeReads{instructions: []string{"AGENTS.md", "CLAUDE.md"}}
+	}
+	return nativeReads{}
+}
+
+// supplied are the skills of skills the agent does not read by itself.
+func (n nativeReads) supplied(dir string, skills map[string]opencode.Skill) map[string]opencode.Skill {
+	if n.skillDirs == nil {
+		return skills
+	}
+	own := n.skillDirs(dir)
+	out := map[string]opencode.Skill{}
+	for name, s := range skills {
+		if !slices.ContainsFunc(own, func(d string) bool { return strings.HasPrefix(s.Path, d+string(filepath.Separator)) }) {
+			out[name] = s
+		}
+	}
+	return out
+}
+
 // subagentList is the agents the task tool can run, for the system
 // prompt: those not only primary, nor hidden or disabled, by name.
 func subagentList(dir string) (string, error) {
@@ -170,14 +219,23 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		b.WriteString(basePrompt)
 	}
 	fmt.Fprintf(&b, "\n\nWorking directory: %s\n", in.Dir)
+	// What the engine's agent reads by itself it is not given again; the
+	// rest KairoCode gives it (ADR 0018).
+	reads := nativeReadsOf(engine)
 	if home, err := os.UserHomeDir(); err == nil {
 		for _, name := range userInstructions {
+			if slices.Contains(reads.instructions, "~/"+name) {
+				continue
+			}
 			if data, err := os.ReadFile(filepath.Join(home, name)); err == nil {
 				fmt.Fprintf(&b, "\n<instructions file=%q>\n%s\n</instructions>\n", "~/"+name, strings.TrimSpace(string(data)))
 			}
 		}
 	}
 	for _, name := range instructionFiles {
+		if slices.Contains(reads.instructions, name) {
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(in.Dir, name))
 		if err != nil {
 			continue
@@ -188,8 +246,8 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if err != nil {
 		return workflows.Agent{}, err
 	}
-	if len(skills) > 0 {
-		b.WriteString("\n" + opencode.SkillList(skills))
+	if given := reads.supplied(in.Dir, skills); len(given) > 0 {
+		b.WriteString("\n" + opencode.SkillList(given))
 	}
 	// The subagents the task tool can hand work to (theirs too: Claude
 	// Code's .claude/agents), where it is offered.

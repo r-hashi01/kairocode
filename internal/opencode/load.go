@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+// ProjectDirs are the directories from the repository's root down to dir
+// (dir alone outside a repository).
+func ProjectDirs(dir string) []string { return project(dir) }
+
 // project are the directories from the repository's root (the nearest
 // directory above dir holding .git) down to dir. Outside a repository it
 // is dir alone: nothing above it is the project's.

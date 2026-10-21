@@ -39,10 +39,10 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 		return nil, nil, false, err
 	}
 	if registryAgent(engine) == codexAgent {
-		// Codex's own skills are not listed to its model, nor the
-		// project's AGENTS.md read by it: it has KairoCode's skills and
-		// instructions, once, as Claude Code has (ADR 0002). Over the
-		// user's CODEX_CONFIG, if there is one.
+		// Codex reads its AGENTS.md and .agents/skills by itself, and
+		// KairoCode gives it the rest (ADR 0018); its own hooks are off,
+		// KairoCode running hooks. Over the user's CODEX_CONFIG, if there
+		// is one.
 		cfg := map[string]any{}
 		user := env["CODEX_CONFIG"]
 		if user == "" {
@@ -54,13 +54,12 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 			r.logf("CODEX_CONFIG is not a JSON object: codex's own skills are not hidden")
 			return argv, env, false, nil
 		}
-		skills, _ := cfg["skills"].(map[string]any)
-		if skills == nil {
-			skills = map[string]any{}
+		features, _ := cfg["features"].(map[string]any)
+		if features == nil {
+			features = map[string]any{}
 		}
-		skills["include_instructions"] = false
-		cfg["skills"] = skills
-		cfg["project_doc_max_bytes"] = 0
+		features["hooks"] = false
+		cfg["features"] = features
 		b, err := json.Marshal(cfg)
 		if err != nil {
 			return nil, nil, false, err
@@ -80,9 +79,8 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 	for i, n := range tools {
 		names[i] = MCPServerName + "-" + n
 	}
-	// Its own reading of AGENTS.md, CLAUDE.md and the like off: they are
-	// in KairoCode's instructions (ADR 0002).
-	argv = append(argv, "--available-tools="+strings.Join(names, ","), "--no-custom-instructions")
+	// It reads AGENTS.md and CLAUDE.md by itself (ADR 0018).
+	argv = append(argv, "--available-tools="+strings.Join(names, ","))
 	if effort != "" { // Copilot's session has no setting for it: a flag
 		argv = append(argv, "--reasoning-effort="+effort)
 	}

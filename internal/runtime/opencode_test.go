@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
@@ -241,11 +243,11 @@ func TestSkillCommands(t *testing.T) {
 	}
 }
 
-// Codex is given neither its own skills nor its own reading of the
-// project's AGENTS.md: CODEX_CONFIG says so, over the user's. Copilot is
-// started with no custom instructions of its own.
-func TestCodexOwnSkillsOff(t *testing.T) {
-	t.Setenv("CODEX_CONFIG", `{"model": "m", "skills": {"max_context_tokens": 5}}`)
+// Codex runs with its own hooks off (KairoCode runs hooks), over the
+// user's CODEX_CONFIG; copilot reads its own AGENTS.md and CLAUDE.md
+// (ADR 0018).
+func TestCLIAgentsConfig(t *testing.T) {
+	t.Setenv("CODEX_CONFIG", `{"model": "m", "features": {"x": true}}`)
 	ctx := context.Background()
 	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0], CopilotPath: os.Args[0],
 		Provider: &provider.Fake{HoldAt: -1}})
@@ -258,32 +260,104 @@ func TestCodexOwnSkillsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg struct {
-		Model    string `json:"model"`
-		DocBytes *int   `json:"project_doc_max_bytes"`
-		Skills   struct {
-			IncludeInstructions *bool `json:"include_instructions"`
-			MaxContextTokens    int   `json:"max_context_tokens"`
-		} `json:"skills"`
+		Model    string          `json:"model"`
+		Features map[string]bool `json:"features"`
+		Skills   any             `json:"skills"`
+		DocBytes any             `json:"project_doc_max_bytes"`
 	}
 	if err := json.Unmarshal([]byte(env["CODEX_CONFIG"]), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model != "m" || cfg.Skills.MaxContextTokens != 5 || cfg.Skills.IncludeInstructions == nil || *cfg.Skills.IncludeInstructions ||
-		cfg.DocBytes == nil || *cfg.DocBytes != 0 {
+	if cfg.Model != "m" || !cfg.Features["x"] || cfg.Features["hooks"] || cfg.Skills != nil || cfg.DocBytes != nil {
 		t.Fatalf("CODEX_CONFIG %s", env["CODEX_CONFIG"])
 	}
-	// Copilot reads no AGENTS.md or CLAUDE.md of its own.
 	argv, env, _, err := r.acpArgv(workflows.EngineCopilot, []string{"read"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env["CODEX_CONFIG"] != "" || !slices.Contains(argv, "--no-custom-instructions") {
+	if env["CODEX_CONFIG"] != "" || slices.Contains(argv, "--no-custom-instructions") {
 		t.Errorf("copilot: %q %v", env["CODEX_CONFIG"], argv)
 	}
-	// A CODEX_CONFIG that is not JSON is left as it is: codex still runs.
-	t.Setenv("CODEX_CONFIG", "model=m")
+	t.Setenv("CODEX_CONFIG", "model=m") // not JSON: left as it is, codex still runs
 	if _, env, _, err := r.acpArgv(workflows.EngineCodex, nil, ""); err != nil || env["CODEX_CONFIG"] != "" {
 		t.Fatalf("not JSON: %v %q", err, env["CODEX_CONFIG"])
+	}
+}
+
+// Each engine is given what its agent does not read by itself, so all of
+// them have the same, once: the API and Claude Code everything; codex all
+// but AGENTS.md and .agents/skills; copilot all but AGENTS.md and
+// CLAUDE.md (ADR 0018).
+func TestEnginesGetWhatTheyDoNotRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ws := repo(t)
+	for path, body := range map[string]string{
+		filepath.Join(home, ".claude", "CLAUDE.md"):                      "USER_MD",
+		filepath.Join(ws, "AGENTS.md"):                                   "AGENTS_MD",
+		filepath.Join(ws, "CLAUDE.md"):                                   "CLAUDE_MD",
+		filepath.Join(ws, ".agents", "skills", "a-skill", "SKILL.md"):    "---\nname: a-skill\ndescription: AGENTS_SKILL\n---\n",
+		filepath.Join(ws, ".kairocode", "skills", "k-skill", "SKILL.md"): "---\nname: k-skill\ndescription: KAIRO_SKILL\n---\n",
+		filepath.Join(home, ".agents", "skills", "h-skill", "SKILL.md"):  "---\nname: h-skill\ndescription: HOME_AGENTS_SKILL\n---\n",
+	} {
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skills, err := opencode.Skills(opencode.SkillDirs(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for engine, want := range map[string][]string{
+		workflows.EngineAPI:        {"a-skill", "h-skill", "k-skill"},
+		workflows.EngineClaudeCode: {"a-skill", "h-skill", "k-skill"},
+		workflows.EngineCodex:      {"k-skill"},
+		workflows.EngineCopilot:    {"a-skill", "h-skill", "k-skill"},
+	} {
+		got := slices.Sorted(maps.Keys(nativeReadsOf(engine).supplied(ws, skills)))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s is given skills %v, want %v", engine, got, want)
+		}
+	}
+	for engine, want := range map[string][]string{
+		workflows.EngineAPI:     {"USER_MD", "AGENTS_MD", "CLAUDE_MD"},
+		workflows.EngineCodex:   {"USER_MD", "CLAUDE_MD"},
+		workflows.EngineCopilot: {"USER_MD"},
+	} {
+		reads := nativeReadsOf(engine)
+		var got []string
+		for _, f := range []string{"~/.claude/CLAUDE.md", "AGENTS.md", "CLAUDE.md"} {
+			if !slices.Contains(reads.instructions, f) {
+				got = append(got, map[string]string{"~/.claude/CLAUDE.md": "USER_MD", "AGENTS.md": "AGENTS_MD", "CLAUDE.md": "CLAUDE_MD"}[f])
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s is given instructions %v, want %v", engine, got, want)
+		}
+	}
+	// A turn on codex: what its agent is given.
+	setupFakeCLI(t, "")
+	r, err := Open(context.Background(), Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "codex-given", workflows.SessionInput{Dir: ws, Engine: "codex"})
+	turn(t, r, s, "hello")
+	system := systemOf(t, r, agentOf(t, ctx, r, s, 0))
+	for _, want := range []string{"USER_MD", "CLAUDE_MD", "KAIRO_SKILL"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("codex is not given %s:\n%s", want, system)
+		}
+	}
+	for _, not := range []string{"AGENTS_MD", "AGENTS_SKILL"} {
+		if strings.Contains(system, not) {
+			t.Errorf("codex is given %s, which it reads by itself", not)
+		}
 	}
 }
 
