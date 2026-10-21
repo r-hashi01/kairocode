@@ -148,14 +148,26 @@ func TestFlowLive(t *testing.T) {
 	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateRunning},
 		Rounds: map[string]int{build: 2}}})
 	v := d.view()
-	for _, want := range []string{"✓ ask", "⏺ agent build ×2", "○ agent docs"} {
+	for _, want := range []string{"✓ ask", "agent build ×2 · 0s", "○ agent docs"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("no %q on the screen\n%s", want, v)
 		}
 	}
+	// What the running box's agent does now is in its box: the call it
+	// makes, the last of what it writes; not above the chart.
+	d.send(updateMsg{Kind: "tool_call", ToolCallID: "t1", Title: "go test ./..."})
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "Looking at the failures.\nFixing the parser"})
+	v = d.view()
+	if !strings.Contains(v, "▸ go test ./...") || !strings.Contains(v, "… Fixing the parser") || strings.Contains(v, "Looking at the failures") {
+		t.Fatalf("what it does now:\n%s", v)
+	}
+	d.send(updateMsg{Kind: "tool_call_update", ToolCallID: "t1", Status: "completed"})
+	if v := d.view(); strings.Contains(v, "▸ go test") {
+		t.Fatalf("a call that ended stays:\n%s", v)
+	}
 	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
 	// On a short screen, the chart still: the part around what runs.
-	if v := d.view(); !strings.Contains(v, "⏺ agent build ×2") || !strings.Contains(v, "⋮") || strings.Contains(v, "├─ ") ||
+	if v := d.view(); !strings.Contains(v, "agent build ×2") || !strings.Contains(v, "⋮") || strings.Contains(v, "├─ ") ||
 		!strings.Contains(v, "shift+↑↓") {
 		t.Fatalf("on a short screen:\n%s", v)
 	}
@@ -163,7 +175,7 @@ func TestFlowLive(t *testing.T) {
 	for range 60 {
 		d.send(key("shift+up"))
 	}
-	if v := d.view(); !strings.Contains(v, "▶ start") || strings.Contains(v, "⏺ agent build") {
+	if v := d.view(); !strings.Contains(v, "▶ start") || strings.Contains(v, "agent build ×") {
 		t.Fatalf("at the top:\n%s", v)
 	}
 	d.send(updateMsg{Kind: "plan", Flow: &flowchart.View{Chart: c, States: map[string]string{ask: StateDone, build: StateRunning},

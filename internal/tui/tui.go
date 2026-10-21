@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
@@ -170,6 +171,10 @@ type model struct {
 	// tried: reviews of flows being tried (ADR 0017), by their call, to
 	// go on with when the review comes back.
 	tried map[string]*review
+	// flowSince: when each box of the running flow that runs began;
+	// flowText and flowTool: what its agents write and run last.
+	flowSince          map[string]time.Time
+	flowText, flowTool string
 	// flowTop: where the running flow's chart was moved to with shift+↑↓
 	// (-1: it follows what runs); shownTop: where it was drawn from last.
 	flowTop, shownTop, shownMax int
@@ -489,6 +494,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 func (m *model) take(u acp.Update) {
 	switch u.Kind {
 	case "agent_message_chunk":
+		if m.flow != nil { // what a flow's agent writes: shown in its box too
+			m.flowText = tail(m.flowText+u.Text, 400)
+		}
 		m.live += u.Text
 		// Whole paragraphs go into the scrollback as they end (not inside
 		// a fenced block: it is rendered whole).
@@ -509,9 +517,15 @@ func (m *model) take(u acp.Update) {
 			m.calls = append(m.calls, u.ToolCallID)
 		}
 		m.tools[u.ToolCallID] = u.Title
+		if m.flow != nil {
+			m.flowTool = u.Title
+		}
 	case "tool_call_update":
 		if u.Status != "completed" && u.Status != "failed" {
 			return
+		}
+		if m.flow != nil && m.tools[u.ToolCallID] == m.flowTool {
+			m.flowTool = ""
 		}
 		m.flushLive()
 		m.endCall(u.ToolCallID, u.Status == "failed", u.Text)
@@ -530,6 +544,18 @@ func (m *model) take(u acp.Update) {
 		}
 		if m.flow == nil {
 			m.flowTop = -1 // a new flow: its chart follows what runs
+			m.flowSince, m.flowText, m.flowTool = map[string]time.Time{}, "", ""
+		}
+		// When each box that runs began: how long it has run.
+		for k, st := range u.Flow.States {
+			if _, ok := m.flowSince[k]; st == StateRunning && !ok {
+				m.flowSince[k] = time.Now()
+			}
+		}
+		for k := range m.flowSince {
+			if u.Flow.States[k] != StateRunning {
+				delete(m.flowSince, k)
+			}
 		}
 		m.flow = u.Flow
 		if u.Flow.Done {
@@ -572,10 +598,22 @@ func (m *model) flowView(w int) string {
 	// The chart, as the review draws it; taller than the screen, the part
 	// of it around what runs or waits now, or where shift+↑↓ moved it to.
 	// Only a chart too wide to draw is a tree.
-	out := ChartOf(m.flow, w)
+	out := ChartLive(m.flow, w, &Live{Since: m.flowSince, Now: time.Now(), Text: m.flowText, Tool: m.flowTool})
+	var under []string // what the agents do, when more than one box runs
+	running := 0
+	for _, st := range m.flow.States {
+		if st == StateRunning {
+			running++
+		}
+	}
+	if running > 1 {
+		for _, l := range (&Live{Text: m.flowText, Tool: m.flowTool}).lines() {
+			under = append(under, faint.Render("  "+cut(l, w-2)))
+		}
+	}
 	lines := strings.Split(out, "\n")
 	if len(lines) <= room {
-		return out
+		return strings.Join(append(lines, under...), "\n")
 	}
 	from := m.flowTop
 	if from < 0 {
@@ -583,7 +621,19 @@ func (m *model) flowView(w int) string {
 	}
 	from = min(max(from, 0), len(lines)-room)
 	m.shownTop, m.shownMax = from, len(lines)-room
-	return strings.Join(window(lines, room, from), "\n") + "\n" + faint.Render("  shift+↑↓ to look over the flow")
+	return strings.Join(append(window(lines, room, from), under...), "\n") + "\n" + faint.Render("  shift+↑↓ to look over the flow")
+}
+
+// tail is the last n bytes of s, cut at a rune.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[len(s)-n:]
+	for len(s) > 0 && !utf8.RuneStart(s[0]) {
+		s = s[1:]
+	}
+	return s
 }
 
 // around is where a window of room of lines starts for the first that
@@ -591,7 +641,7 @@ func (m *model) flowView(w int) string {
 func around(lines []string, room int) int {
 	at := -1
 	for i, l := range lines {
-		if strings.Contains(l, "⏺") || strings.Contains(l, "⏸") {
+		if strings.Contains(l, "⏺") || strings.Contains(l, "⏸") || slices.ContainsFunc(spinFrames, func(f string) bool { return strings.Contains(l, f) }) {
 			at = i
 			break
 		}
@@ -1092,7 +1142,8 @@ func (m *model) View() tea.View {
 	}
 	var b strings.Builder
 	w := max(m.width-1, 20) // a line as wide as the terminal throws its count of lines off
-	if live := strings.Trim(m.live, "\n"); live != "" {
+	// While a flow runs, what its agents write is shown in their boxes.
+	if live := strings.Trim(m.live, "\n"); live != "" && m.flow == nil {
 		if !m.inReply {
 			b.WriteString("\n")
 		}

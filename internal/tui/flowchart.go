@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
@@ -57,8 +58,37 @@ func Chart(c *flowchart.Chart, width int, state func(flowchart.Node) string) str
 // ChartOf draws a run of a flow: its chart with its calls' states, and how
 // often each was made when more than once (×N).
 func ChartOf(v *flowchart.View, width int) string {
-	return chart(v.Chart, width, func(n flowchart.Node) string { return v.States[n.Key()] },
-		func(n flowchart.Node) int { return v.Rounds[n.Key()] })
+	return ChartLive(v, width, nil)
+}
+
+// Live is what a running flow is doing now: when each box that runs began
+// (by its key), the time, and what its agent says and runs last.
+type Live struct {
+	Since map[string]time.Time
+	Now   time.Time
+	Text  string // the last of what the agent writes
+	Tool  string // the call it makes now
+}
+
+// spinFrames turn while a box runs.
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// ChartLive draws a run of a flow as it goes: a box that runs turns, says
+// how long it has run, and, the one box that runs, what its agent writes
+// and runs now. With live nil, it is ChartOf.
+func ChartLive(v *flowchart.View, width int, live *Live) string {
+	d := drawer{state: func(n flowchart.Node) string { return v.States[n.Key()] },
+		rounds: func(n flowchart.Node) int { return v.Rounds[n.Key()] }, live: live}
+	if live != nil {
+		running := 0
+		for _, st := range v.States {
+			if st == StateRunning {
+				running++
+			}
+		}
+		d.alone = running == 1
+	}
+	return d.draw(v.Chart, width)
 }
 
 func chart(c *flowchart.Chart, width int, state func(flowchart.Node) string, rounds func(flowchart.Node) int) string {
@@ -69,6 +99,11 @@ func chart(c *flowchart.Chart, width int, state func(flowchart.Node) string, rou
 		rounds = func(flowchart.Node) int { return 0 }
 	}
 	d := drawer{state: state, rounds: rounds}
+	return d.draw(c, width)
+}
+
+func (d *drawer) draw(c *flowchart.Chart, width int) string {
+	state := d.state
 	title := bold.Render(c.Name)
 	if c.Description != "" {
 		title += faint.Render("  " + c.Description)
@@ -88,6 +123,10 @@ type drawer struct {
 	state   func(flowchart.Node) string
 	rounds  func(flowchart.Node) int
 	tooWide bool
+	// live: what a running flow does now; alone: one box runs, and what
+	// its agent does is drawn in it.
+	live  *Live
+	alone bool
 }
 
 // pad is s padded with spaces to w columns.
@@ -145,6 +184,17 @@ func (d *drawer) box(n flowchart.Node, maxw int) block {
 	if r := d.rounds(n); r > 1 {
 		label += fmt.Sprintf(" ×%d", r)
 	}
+	var more []string
+	if d.live != nil && d.state(n) == StateRunning {
+		now := d.live.Now
+		mark = spinFrames[int(now.UnixMilli()/100)%len(spinFrames)]
+		if since, ok := d.live.Since[n.Key()]; ok {
+			label += fmt.Sprintf(" · %ds", int(now.Sub(since).Seconds()))
+		}
+		if d.alone {
+			more = d.live.lines()
+		}
+	}
 	text := n.Text
 	isCode := n.Code
 	if n.Kind == flowchart.Tool && n.Code && len(n.Args) > 0 { // a name: what it is made of
@@ -161,7 +211,26 @@ func (d *drawer) box(n flowchart.Node, maxw int) block {
 		}
 		isCode = false
 	}
-	return d.drawBox(mark, style, label, text, isCode, maxw)
+	return d.drawBox(mark, style, label, text, isCode, maxw, more...)
+}
+
+// lines are what the agent of the box that runs does now: the call it
+// makes, the last of what it writes.
+func (l *Live) lines() []string {
+	var out []string
+	if l.Tool != "" {
+		out = append(out, "▸ "+l.Tool)
+	}
+	if t := lastLine(l.Text); t != "" {
+		out = append(out, "… "+t)
+	}
+	return out
+}
+
+// lastLine is the last line of s with words on it.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n "), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // guard is an if that only ends the flow, or leaves or goes round its
@@ -185,8 +254,11 @@ func (d *drawer) guard(n flowchart.Node, then flowchart.Node, maxw int) block {
 
 // drawBox draws a box: its mark and label on its first line, its text
 // under it in at most two lines.
-func (d *drawer) drawBox(mark string, style lipgloss.Style, label, text string, isCode bool, maxw int) block {
+func (d *drawer) drawBox(mark string, style lipgloss.Style, label, text string, isCode bool, maxw int, more ...string) block {
 	inner := max(lipgloss.Width(label)+2, min(lipgloss.Width(text), boxMax))
+	if len(more) > 0 { // what it does now changes: the box keeps its width
+		inner = boxMax
+	}
 	inner = min(max(inner, 12), max(maxw-4, 12))
 	if inner+4 > maxw {
 		d.tooWide = true
@@ -201,6 +273,9 @@ func (d *drawer) drawBox(mark string, style lipgloss.Style, label, text string, 
 			t = pad(t, inner)
 		}
 		lines = append(lines, edge.Render("│ ")+t+edge.Render(" │"))
+	}
+	for _, m := range more { // what it does now
+		lines = append(lines, edge.Render("│ ")+faint.Render(pad(fit(m, inner), inner))+edge.Render(" │"))
 	}
 	lines = append(lines, edge.Render("╰"+strings.Repeat("─", inner+2)+"╯"))
 	w := inner + 4
