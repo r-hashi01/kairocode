@@ -77,6 +77,13 @@ const (
 	// one that only reads runs; any other is not made, and what it would
 	// have been is its result.
 	ActFlowWould = "flow.would"
+	// Command hooks (ADR 0018): how each runs (hook.check, hook.decide),
+	// a run of one (hook.command, real), and a call's result with what a
+	// hook said after it (hook.note).
+	ActHookCheck   = "hook.check"
+	ActHookDecide  = "hook.decide"
+	ActHookCommand = "hook.command"
+	ActHookNote    = "hook.note"
 	// ActTaskArgs reads a task call's arguments (the subagent and its
 	// prompt); ActTaskResult answers the call with the subagent's reply.
 	// Its name is a tool's, so its end is told as the call's.
@@ -573,6 +580,11 @@ const (
 	// HookSessionStart runs when the session's first turn starts; its
 	// message goes with the first request.
 	HookSessionStart = "session.start"
+	// HookTurnStart runs when a turn starts, before the model (Claude
+	// Code's UserPromptSubmit); HookToolBefore before a tool call (its
+	// PreToolUse): one that blocks stops the call (ADR 0018).
+	HookTurnStart  = "turn.start"
+	HookToolBefore = "tool.before"
 	// HookTool is the name a hook goes by in the permission rules: a
 	// project's hook is asked about before it first runs.
 	HookTool = "hook"
@@ -588,6 +600,67 @@ type Hook struct {
 	// Tool: of a tool.after hook, the tool it follows ("" every tool).
 	Tool    string `json:"tool,omitempty"`
 	Project bool   `json:"project,omitempty"`
+	// A command hook (Claude Code's, ADR 0018) in place of a flow: the
+	// command, Claude Code's event and matcher (a regexp of its tools'
+	// names), its timeout in seconds, and the file it is in. Mode is how
+	// the user said it runs: in KairoCode's sandbox, or outside it.
+	Command string `json:"command,omitempty"`
+	Claude  string `json:"claude,omitempty"`
+	Matcher string `json:"matcher,omitempty"`
+	Timeout int    `json:"timeout,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+}
+
+// How a command hook runs (ADR 0018): in KairoCode's sandbox, outside it
+// (only as the user said), not at all; ask: the user has not said yet.
+const (
+	HookSandbox = "sandbox"
+	HookOutside = "outside"
+	HookNever   = "never"
+	HookAsk     = "ask"
+)
+
+// HookCheckInput asks how each of a turn's command hooks runs; the
+// output, the mode of each, in order.
+type HookCheckInput struct {
+	Dir   string `json:"dir"`
+	Hooks []Hook `json:"hooks"`
+}
+
+// HookDecideInput keeps how the user said a command hook runs.
+type HookDecideInput struct {
+	Dir  string `json:"dir"`
+	Hook Hook   `json:"hook"`
+	Mode string `json:"mode"`
+}
+
+// HookRunInput runs a command hook: what it is given on stdin, as Claude
+// Code gives it (the session, the event, and the tool call or the prompt).
+type HookRunInput struct {
+	Hook    Hook       `json:"hook"`
+	Dir     string     `json:"dir"`
+	Session string     `json:"session"`
+	Tool    string     `json:"tool,omitempty"`
+	Call    *ToolInput `json:"call,omitempty"`
+	// Result: of a tool.after hook, the call's stored result; Prompt: of
+	// a turn.start hook, the user's message (hashes).
+	Result string `json:"result,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// HookRunOutput is how a command hook ended: its exit status, and what it
+// wrote (cut short).
+type HookRunOutput struct {
+	Exit   int    `json:"exit"`
+	Stdout string `json:"stdout,omitempty"`
+	Stderr string `json:"stderr,omitempty"`
+}
+
+// HookNoteInput is a tool call's result with what a hook said after it.
+type HookNoteInput struct {
+	Result ToolOutput `json:"result"`
+	Note   string     `json:"note"`
 }
 
 // Approval answers a request for approval, from any client, any time later.
@@ -741,6 +814,9 @@ type ClaudeTurnInput struct {
 	System  string   `json:"system"`
 	Tools   []string `json:"tools"`
 	Message string   `json:"message"`
+	// Hooks: the turn's command hooks of its tool calls (tool.before,
+	// tool.after), as decided, for its calls over MCP (ADR 0018).
+	Hooks []Hook `json:"hooks,omitempty"`
 }
 
 type ClaudeTurnOutput struct {
@@ -760,6 +836,10 @@ type MCPCallInput struct {
 	Planned bool            `json:"planned,omitempty"`
 	Policy  Policy          `json:"policy"`
 	MCP     MCPRef          `json:"mcp"`
+	// Hooks and Session: the turn's tool hooks, to run around the call
+	// (ADR 0018).
+	Hooks   []Hook `json:"hooks,omitempty"`
+	Session string `json:"session,omitempty"`
 }
 
 // PlanOutput is a planned write, or (Done) the result to give the model at

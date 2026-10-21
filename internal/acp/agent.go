@@ -591,7 +591,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if err := w.wait(ctx, n); err != nil {
 		return nil, err
 	}
-	if quiet {
+	if quiet || turn.Stopped == "hook" { // a hook stopped it before the model: why
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(turn.Reply)})
 	}
 	return map[string]any{"stopReason": stopReason(turn.Stopped)}, nil

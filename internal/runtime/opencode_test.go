@@ -278,8 +278,10 @@ func TestCLIAgentsConfig(t *testing.T) {
 	if env["CODEX_CONFIG"] != "" || slices.Contains(argv, "--no-custom-instructions") {
 		t.Errorf("copilot: %q %v", env["CODEX_CONFIG"], argv)
 	}
-	t.Setenv("CODEX_CONFIG", "model=m") // not JSON: left as it is, codex still runs
-	if _, env, _, err := r.acpArgv(workflows.EngineCodex, nil, ""); err != nil || env["CODEX_CONFIG"] != "" {
+	// Not JSON (codex-acp could not read it): KairoCode's alone, codex's
+	// own hooks still off.
+	t.Setenv("CODEX_CONFIG", "model=m")
+	if _, env, _, err := r.acpArgv(workflows.EngineCodex, nil, ""); err != nil || env["CODEX_CONFIG"] != `{"features":{"hooks":false}}` {
 		t.Fatalf("not JSON: %v %q", err, env["CODEX_CONFIG"])
 	}
 }

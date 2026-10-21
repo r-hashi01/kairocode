@@ -52,6 +52,10 @@ type mcpTurn struct {
 	policy workflows.Policy
 	tools  map[string]tools.Def
 	srv    *mcp.Server
+	// hooks and session: the turn's tool hooks, run around each call
+	// (ADR 0018).
+	hooks   []workflows.Hook
+	session string
 
 	mu sync.Mutex
 	// live: calls a handler of this run is waiting on. A call never meets
@@ -94,13 +98,14 @@ func (s *mcpServer) close() error { return s.http.Close() }
 // open makes an endpoint for one claude run of turn, serving the named
 // tools. It returns its URL, the run's state, and a function that closes
 // the endpoint.
-func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy) (string, *mcpTurn, func(), error) {
+func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy, hooks []workflows.Hook, session string) (string, *mcpTurn, func(), error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", nil, nil, err
 	}
 	token := hex.EncodeToString(b)
-	t := &mcpTurn{turn: turn, proc: token, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{}}
+	t := &mcpTurn{turn: turn, proc: token, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{},
+		hooks: hooks, session: session}
 	t.srv = mcp.NewServer(&mcp.Implementation{Name: MCPServerName, Version: "0"}, nil)
 	for _, name := range names {
 		d, ok := s.rt.tool(name)
@@ -310,8 +315,11 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 		return "", false, err
 	}
 	in := workflows.MCPCallInput{
-		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy,
+		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy, Hooks: t.hooks,
 		MCP: workflows.MCPRef{Turn: t.turn, Run: id, Key: key, Ask: fmt.Sprintf("%s.%d", key, n), Repeat: repeat},
+	}
+	if len(t.hooks) > 0 {
+		in.Session = t.session
 	}
 	// kairo-gap #17: the run is a root of its own, not a child of the turn.
 	if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
@@ -324,7 +332,7 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 // reviewResult answers a call whose run stopped for review: whether it took
 // effect is unknown, and a person has to say (invariant 4).
 func reviewResult(tool string) *mcp.CallToolResult {
-	return errorResult(fmt.Sprintf("Not run again: a run of this %s call was cut off and may have taken effect. "+
+	return errorResult(fmt.Sprintf("Not run again: a run of this %s call (or of a hook around it) was cut off and may have taken effect. "+
 		"It waits for a person to say whether it did. Stop here and tell the user.", tool))
 }
 

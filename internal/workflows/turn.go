@@ -69,12 +69,26 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	if err != nil {
 		return TurnOutput{}, err
 	}
+	if !in.Sub {
+		// How each command hook runs is settled first, asking the user
+		// about one not settled (ADR 0018). With none, nothing is called.
+		if agent.Hooks, err = decideHooks(ctx, in, agent); err != nil {
+			return TurnOutput{}, err
+		}
+	}
 	if in.N == 0 && !in.Sub && hasHook(agent, HookSessionStart) {
 		// The session's start (ADR 0003): what its hooks say goes with the
 		// first request.
 		said, err := runHooks(ctx, in, agent, HookSessionStart, "start", "", nil)
 		if err != nil {
 			return TurnOutput{}, err
+		}
+		if hasCommandHook(agent.Hooks, HookSessionStart) {
+			more, _, err := commandHooks(ctx, agent.Hooks, HookRunInput{Dir: in.Dir, Session: in.Session}, HookSessionStart)
+			if err != nil {
+				return TurnOutput{}, err
+			}
+			said = strings.TrimSpace(said + "\n" + more)
 		}
 		if said != "" {
 			text, err := kairo.Call[string](ctx, ActFlowText, in.Message)
@@ -83,6 +97,28 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			}
 			if in.Message, err = kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user",
 				Text: text + "\n\n[What the session's start says: " + said + "]"}); err != nil {
+				return TurnOutput{}, err
+			}
+		}
+	}
+	if !in.Sub && hasCommandHook(agent.Hooks, HookTurnStart) {
+		// The turn's start (Claude Code's UserPromptSubmit, ADR 0018):
+		// what its hooks say goes with the request; one that blocks it
+		// ends the turn, the model not asked.
+		said, blocked, err := commandHooks(ctx, agent.Hooks, HookRunInput{Dir: in.Dir, Session: in.Session, Prompt: in.Message}, HookTurnStart)
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		if blocked != "" {
+			return hookBlockedTurn(ctx, in, blocked)
+		}
+		if said != "" {
+			text, err := kairo.Call[string](ctx, ActFlowText, in.Message)
+			if err != nil {
+				return TurnOutput{}, err
+			}
+			if in.Message, err = kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user",
+				Text: text + "\n\n[What a hook says at the turn's start: " + said + "]"}); err != nil {
 				return TurnOutput{}, err
 			}
 		}
@@ -115,6 +151,11 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		blocked, err := runHooks(ctx, in, agent, HookTurnEnd, fmt.Sprint(hookRounds), "", nil)
 		if err != nil {
 			return TurnOutput{}, err
+		}
+		if blocked == "" && hasCommandHook(agent.Hooks, HookTurnEnd) {
+			if _, blocked, err = commandHooks(ctx, agent.Hooks, HookRunInput{Dir: in.Dir, Session: in.Session}, HookTurnEnd); err != nil {
+				return TurnOutput{}, err
+			}
 		}
 		if blocked == "" {
 			break
@@ -182,6 +223,18 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 				// calls keep their ids.
 				// In auto mode the judge decides, until it has refused
 				// MaxAutoRefusals calls; then the user is asked.
+				if !in.Sub && hasCommandHook(agent.Hooks, HookToolBefore) {
+					// Claude Code's PreToolUse (ADR 0018): a hook that
+					// blocks the call stops it, and says why.
+					_, blocked, err := commandHooks(ctx, agent.Hooks, HookRunInput{Dir: in.Dir, Session: in.Session, Tool: c.Name, Call: &inputs[i]}, HookToolBefore)
+					if err != nil {
+						return err
+					}
+					if blocked != "" {
+						gates[i] = Gate{Action: ActToolDenied, Denied: &DeniedInput{Call: c.ID, Reason: "a hook stopped this call: " + blocked}}
+						continue
+					}
+				}
 				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry}
 				if in.Mode == ModeAuto && refused < MaxAutoRefusals {
 					policy.Auto, policy.Request = true, in.Message
@@ -227,6 +280,14 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 					strings.TrimSpace(c.Name+" "+gates[i].Subject), func(h Hook) bool { return h.Tool == "" || h.Tool == c.Name })
 				if err != nil {
 					return err
+				}
+				if hasCommandHook(agent.Hooks, HookToolAfter) {
+					_, blocked, err := commandHooks(ctx, agent.Hooks, HookRunInput{Dir: in.Dir, Session: in.Session, Tool: c.Name, Call: &inputs[i],
+						Result: results[i].Message}, HookToolAfter)
+					if err != nil {
+						return err
+					}
+					msg = strings.TrimSpace(msg + "\n" + blocked)
 				}
 				if msg != "" {
 					said = append(said, c.Name+": "+msg)
@@ -294,8 +355,8 @@ func runTask(ctx *kairo.Context, in TurnInput, call ToolInput) (ToolOutput, erro
 // not run.
 func runHooks(ctx *kairo.Context, in TurnInput, agent Agent, event, tag, args string, match func(Hook) bool) (string, error) {
 	for i, h := range agent.Hooks {
-		if h.Event != event || match != nil && !match(h) {
-			continue
+		if h.Command != "" || h.Event != event || match != nil && !match(h) {
+			continue // a command hook runs in commandHooks
 		}
 		expect := ""
 		if h.Project {
@@ -349,6 +410,20 @@ func runHooks(ctx *kairo.Context, in TurnInput, agent Agent, event, tag, args st
 	return "", nil
 }
 
+// hookBlockedTurn ends a turn a turn.start hook blocked: the user's message
+// and why, the model not asked.
+func hookBlockedTurn(ctx *kairo.Context, in TurnInput, why string) (TurnOutput, error) {
+	reply, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "assistant", Text: "[A hook stopped this request: " + why + "]"})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: []string{in.Message, reply}})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	return TurnOutput{Head: head, Reply: reply, Stopped: "hook"}, nil
+}
+
 // runClaudeTurn hands the turn to the user's Claude Code (ADR 0007). Its
 // model loop runs there; the tool calls it makes come back over MCP and are
 // recorded as MCPCall runs. The conversation is Claude Code's; the history
@@ -387,12 +462,18 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	if (in.Epoch > 0 || agent.Engine != EngineClaudeCode) && !in.Sub {
 		history = in.History
 	}
+	// The tool calls' hooks run around each call over MCP (ADR 0018).
+	var hooks []Hook
+	if !in.Sub {
+		hooks = toolHooks(agent.Hooks)
+	}
+	hookRounds := 0
 	for round := 0; ; round++ {
 		r, err := kairo.Call[ClaudeTurnOutput](ctx, act, ClaudeTurnInput{
 			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine, Effort: agent.Effort,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message,
-			Policy: autoPolicy(agent, in),
+			Policy: autoPolicy(agent, in), Hooks: hooks,
 		})
 		if err != nil {
 			return TurnOutput{}, err
@@ -401,7 +482,21 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 		out.Steps += r.Turns
 		out.Reply = r.Message
 		if len(r.Asks) == 0 {
-			break
+			// The turn.end command hooks (Claude Code's Stop): one that
+			// does not pass sends the agent back (at most maxHookRounds).
+			if in.Sub || hookRounds == maxHookRounds || !hasCommandHook(agent.Hooks, HookTurnEnd) {
+				break
+			}
+			_, blocked, err := commandHooks(ctx, agent.Hooks, HookRunInput{Dir: in.Dir, Session: in.Session}, HookTurnEnd)
+			if err != nil {
+				return TurnOutput{}, err
+			}
+			if blocked == "" {
+				break
+			}
+			hookRounds++
+			note = "A check that runs when you finish did not pass:\n" + blocked + "\nPut it right, then finish."
+			continue
 		}
 		var answers []string
 		for _, a := range r.Asks {

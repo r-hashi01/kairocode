@@ -621,6 +621,16 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 		}
 	}
 	for _, c := range calls {
+		if c.Status == "blocked" && c.Plan == "kairo.call/"+workflows.ActHookCommand {
+			// A command hook cut off while it ran (ADR 0018).
+			var in struct {
+				In workflows.HookRunInput `json:"in"`
+			}
+			_ = json.Unmarshal(c.Input, &in)
+			out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: "hook", Subject: in.In.Hook.Command,
+				Rule: "cut off while it ran: did it take effect?"})
+			continue
+		}
 		if c.Status == "blocked" {
 			name := strings.TrimPrefix(c.Plan, "kairo.call/"+workflows.ActToolPrefix)
 			var in struct {
@@ -767,7 +777,17 @@ func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string
 		var in struct {
 			In workflows.ToolInput `json:"in"`
 		}
-		if info, err := r.K.Get(ctx, run); err == nil {
+		info, err := r.K.Get(ctx, run)
+		if err == nil && info.Plan == "kairo.call/"+workflows.ActHookCommand {
+			// A hook cut off: it is not run again; how it ended is as the
+			// user says, and it holds nothing up.
+			why := "cut off while it ran; the user says it did not take effect"
+			if ok {
+				why = "cut off while it ran; the user says it took effect"
+			}
+			return r.K.Resolve(ctx, run, workflows.HookRunOutput{Exit: 1, Stderr: why})
+		}
+		if err == nil {
 			_ = json.Unmarshal(info.Input, &in)
 		}
 		out, err := r.toolResult(ctx, in.In.Call, tools.Result{Output: text, IsError: !ok})

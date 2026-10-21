@@ -355,6 +355,10 @@ func (r *Runtime) declare() {
 		func(*kairo.TaskContext, workflows.FlowAskInput) (bool, error) { return true, nil }) // recorded: Pending reads it
 	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, kairo.Timeout(10*time.Minute))
 	kairo.Action(r.K, workflows.ActHookTrust, kairo.Unprotected, r.hookTrustAction) // a record, written once
+	kairo.Action(r.K, workflows.ActHookCheck, kairo.Unprotected, r.hookCheckAction)
+	kairo.Action(r.K, workflows.ActHookDecide, kairo.Unprotected, r.hookDecideAction) // a record, written once
+	kairo.Action(r.K, workflows.ActHookCommand, kairo.Real, r.hookCommandAction)      // a command: not run again unasked
+	kairo.Action(r.K, workflows.ActHookNote, kairo.Unprotected, r.hookNoteAction)
 	kairo.Action(r.K, workflows.ActTaskArgs, kairo.Unprotected, r.taskArgs)
 	kairo.Action(r.K, workflows.ActTaskResult, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.TaskResultInput) (workflows.ToolOutput, error) {

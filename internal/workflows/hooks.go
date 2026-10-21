@@ -1,0 +1,159 @@
+package workflows
+
+import (
+	"fmt"
+	"strings"
+
+	kairo "github.com/r-hashi01/kairo/sdk/go"
+)
+
+// hookOptions are how the user may say a command hook runs (ADR 0018).
+var hookOptions = []string{"Run it in KairoCode's sandbox", "Run it outside the sandbox", "Do not run it"}
+
+// decideHooks settles, before any of them runs, how each of the turn's
+// command hooks runs (ADR 0018): as the user said before, else asked now.
+// The process may stop while it waits (invariant 7). It returns the
+// agent's hooks with each command hook's mode; one the user said not to
+// run is left out. With no command hooks, nothing is called.
+func decideHooks(ctx *kairo.Context, in TurnInput, agent Agent) ([]Hook, error) {
+	var cmds []Hook
+	for _, h := range agent.Hooks {
+		if h.Command != "" {
+			cmds = append(cmds, h)
+		}
+	}
+	if len(cmds) == 0 {
+		return agent.Hooks, nil
+	}
+	modes, err := kairo.Call[[]string](ctx, ActHookCheck, HookCheckInput{Dir: in.Dir, Hooks: cmds})
+	if err != nil {
+		return nil, err
+	}
+	if len(modes) != len(cmds) {
+		return nil, fmt.Errorf("hook.check: %d modes for %d hooks", len(modes), len(cmds))
+	}
+	var out []Hook
+	j := 0
+	for _, h := range agent.Hooks {
+		if h.Command == "" {
+			out = append(out, h)
+			continue
+		}
+		mode := modes[j]
+		j++
+		if mode == HookAsk {
+			id := fmt.Sprintf("hook_%d_%d", in.N, j)
+			q := FlowAskInput{ID: id, Options: hookOptions, Question: fmt.Sprintf(
+				"A hook of %s runs on %s:\n\n    %s\n\nIn KairoCode's sandbox it may write in the project only, offline; outside it, as you can.", h.Source, h.Claude, h.Command)}
+			if _, err := kairo.Call[bool](ctx, ActFlowAsk, q); err != nil {
+				return nil, err
+			}
+			a, err := kairo.WaitFor[FlowAnswer](ctx, SignalAnswerPrefix+id)
+			if err != nil {
+				return nil, err
+			}
+			switch a.Option {
+			case hookOptions[0]:
+				mode = HookSandbox
+			case hookOptions[1]:
+				mode = HookOutside
+			default:
+				mode = HookNever
+			}
+			if _, err := kairo.Call[bool](ctx, ActHookDecide, HookDecideInput{Dir: in.Dir, Hook: h, Mode: mode}); err != nil {
+				return nil, err
+			}
+		}
+		if mode == HookNever {
+			continue
+		}
+		h.Mode = mode
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+// claudeNames are KairoCode's tools by the names Claude Code's hooks match.
+var claudeNames = map[string]string{
+	"bash": "Bash", "edit": "Edit", "write": "Write", "read": "Read", "grep": "Grep",
+	"glob": "Glob", "list": "LS", "task": "Task", "skill": "Skill",
+}
+
+// hookMatches reports whether a command hook's matcher takes tool: "" or
+// "*" every tool; else names joined by |, each Claude Code's name of the
+// tool, KairoCode's, or a prefix ending in .* (Claude Code's are
+// regexps: these are the forms they take).
+func hookMatches(h Hook, tool string) bool {
+	if h.Matcher == "" || h.Matcher == "*" {
+		return true
+	}
+	name, ok := claudeNames[tool]
+	if !ok {
+		name = tool
+	}
+	for _, m := range strings.Split(h.Matcher, "|") {
+		m = strings.TrimSpace(m)
+		if prefix, ok := strings.CutSuffix(m, ".*"); ok {
+			if strings.HasPrefix(name, prefix) || strings.HasPrefix(tool, prefix) {
+				return true
+			}
+			continue
+		}
+		if m == name || m == tool || m == "MultiEdit" && tool == "edit" {
+			return true
+		}
+	}
+	return false
+}
+
+// commandHooks runs the turn's command hooks of event (on tool, for a
+// tool's event), in order, and says what they said: said, what the model
+// is told (a start hook's output); blocked, the stderr of one that ended
+// with 2, which blocks what it is on (Claude Code's exit codes). It stops
+// at the first that blocks.
+func commandHooks(ctx *kairo.Context, hooks []Hook, run HookRunInput, event string) (said, blocked string, err error) {
+	var says []string
+	for _, h := range hooks {
+		if h.Command == "" || h.Event != event || (run.Tool != "" && !hookMatches(h, run.Tool)) {
+			continue
+		}
+		in := run
+		in.Hook = h
+		out, err := kairo.Call[HookRunOutput](ctx, ActHookCommand, in)
+		if err != nil {
+			return "", "", err
+		}
+		switch {
+		case out.Exit == 2:
+			why := strings.TrimSpace(out.Stderr)
+			if why == "" {
+				why = "a hook stopped it: " + h.Command
+			}
+			return strings.Join(says, "\n"), why, nil
+		case out.Exit == 0 && (event == HookSessionStart || event == HookTurnStart) && strings.TrimSpace(out.Stdout) != "":
+			says = append(says, strings.TrimSpace(out.Stdout))
+		}
+	}
+	return strings.Join(says, "\n"), "", nil
+}
+
+// hasCommandHook reports whether hooks has a command hook of event.
+func hasCommandHook(hooks []Hook, event string) bool {
+	for _, h := range hooks {
+		if h.Command != "" && h.Event == event {
+			return true
+		}
+	}
+	return false
+}
+
+// toolHooks are the command hooks of tool calls, for calls made over MCP.
+func toolHooks(hooks []Hook) []Hook {
+	var out []Hook
+	for _, h := range hooks {
+		if h.Command != "" && (h.Event == HookToolBefore || h.Event == HookToolAfter) {
+			out = append(out, h)
+		}
+	}
+	return out
+}

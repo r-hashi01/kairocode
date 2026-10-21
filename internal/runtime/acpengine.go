@@ -49,10 +49,10 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 			user = os.Getenv("CODEX_CONFIG")
 		}
 		if user != "" && json.Unmarshal([]byte(user), &cfg) != nil {
-			// Not JSON: the user's, as it is; codex runs, its skills not
-			// hidden.
-			r.logf("CODEX_CONFIG is not a JSON object: codex's own skills are not hidden")
-			return argv, env, false, nil
+			// Not JSON (codex-acp could not read it either): KairoCode's
+			// alone, so that codex's own hooks are still off.
+			r.logf("CODEX_CONFIG is not a JSON object: it is not given to codex")
+			cfg = map[string]any{}
 		}
 		features, _ := cfg["features"].(map[string]any)
 		if features == nil {
@@ -117,7 +117,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 		}
-		url, mt, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy)
+		url, mt, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy, in.Hooks, in.Session)
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, err
 		}
