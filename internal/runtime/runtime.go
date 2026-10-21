@@ -98,6 +98,8 @@ type Runtime struct {
 	// agents are the ACP agents of the registry (ADR 0015); auth, what is
 	// known of each provider's sign-in.
 	agents *agents.Manager
+	// ext keeps the MCP servers' sessions (ADR 0022).
+	ext extServers
 	// copilotHooks: one change of copilot's settings at a time.
 	copilotHooksMu sync.Mutex
 	auth           auths
@@ -270,6 +272,7 @@ func (r *Runtime) Close() error {
 		err := r.mcp.close()
 		err = errors.Join(err, r.K.Close())
 		r.lsp.Close()
+		r.ext.close()
 		r.closeErr = errors.Join(err, r.db.Close())
 	})
 	return r.closeErr
@@ -409,6 +412,12 @@ func (r *Runtime) declare() {
 		})
 	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
 	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, kairo.Timeout(10*time.Minute))
+	// External tools (ADR 0022): listed as the turn starts (a server that
+	// lists its tools again lists the same, as far as KairoCode can tell);
+	// run by their declared effect: read, or real (invariant 3).
+	kairo.Action(r.K, workflows.ActExtLoad, kairo.Unprotected, r.extLoad, kairo.Timeout(2*time.Minute))
+	kairo.Action(r.K, workflows.ActToolExtRead, kairo.Unprotected, r.extTool)
+	kairo.Action(r.K, workflows.ActToolExtReal, kairo.Real, r.extTool)
 	kairo.Action(r.K, workflows.ActTurnSettled, kairo.Unprotected, r.turnSettled) // it reads kairo's record
 	kairo.Action(r.K, workflows.ActToolMissing, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {

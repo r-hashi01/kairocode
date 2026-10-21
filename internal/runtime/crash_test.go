@@ -54,6 +54,14 @@ func TestMain(m *testing.M) {
 		crashHookChild()
 		return
 	}
+	if os.Getenv("KC_FAKE_MCP") == "1" {
+		fakeMCPServer()
+		return
+	}
+	if os.Getenv("KC_CRASH_MCP_CHILD") == "1" {
+		crashMCPChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_COMPACT_CHILD") == "1" {
 		crashCompactChild()
 		return

@@ -259,7 +259,17 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 		return workflows.PermissionOutput{}, false, err
 	}
 	subj := subject(in.Tool, args)
-	d, ok := r.tool(in.Tool)
+	d, ok := tools.Def{}, false
+	if in.Call.Ext != "" { // an external tool (ADR 0022): as the turn recorded it
+		if def, err := r.extDefOf(t, in.Call.Ext); err == nil && def.Name == in.Tool {
+			d, ok = tools.Def{Name: def.Name, Effect: tools.Real}, true
+			if def.Effect == "read" {
+				d.Effect = tools.Read
+			}
+		}
+	} else {
+		d, ok = r.tool(in.Tool)
+	}
 	if !ok && in.Tool != workflows.HookTool { // a hook is a flow, not a tool: the rules still apply
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "no such tool", Subject: subj}, false, nil
 	}

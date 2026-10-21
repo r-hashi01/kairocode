@@ -267,7 +267,8 @@ var commandStarters = []string{"internal/sandbox/", "internal/agents/", "interna
 // fullAccessUsers may name sandbox.FullAccess: the tools that run outside
 // the sandbox only once the user approved (escalated bash, git_push).
 var fullAccessUsers = []string{"internal/sandbox/", "internal/tools/bash.go", "internal/tools/git.go",
-	"internal/runtime/commandhooks.go"} // a hook the user said runs outside the sandbox (ADR 0018)
+	"internal/runtime/commandhooks.go", // a hook the user said runs outside the sandbox (ADR 0018)
+	"internal/runtime/external.go"}     // the user's MCP servers and custom tools, or a project's they let out (ADR 0022)
 
 // Commands reports, in the non-test Go files under root, every way to start
 // a command outside the sandbox: exec.Command, exec.CommandContext or an

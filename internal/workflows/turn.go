@@ -81,6 +81,14 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			return TurnOutput{}, err
 		}
 	}
+	var ext map[string]ExtRef
+	if len(agent.External) > 0 && !in.Sub {
+		// The MCP servers' tools and the custom tools (ADR 0022): a
+		// project's run as the user says, asked now if not said.
+		if agent, ext, err = loadExternal(ctx, in, agent); err != nil {
+			return TurnOutput{}, err
+		}
+	}
 	if in.N == 0 && !in.Sub && hasHook(agent, HookSessionStart) {
 		// The session's start (ADR 0003): what its hooks say goes with the
 		// first request.
@@ -151,7 +159,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	for {
 		// The model loop, then the turn.end hooks: one that does not pass
 		// sends the model back to it (at most maxHookRounds times).
-		if err := modelLoop(ctx, &in, agent, &out, &turn, &cs); err != nil {
+		if err := modelLoop(ctx, &in, agent, ext, &out, &turn, &cs); err != nil {
 			return TurnOutput{}, err
 		}
 		if out.Stopped == StopContext && out.Reply == "" {
@@ -203,7 +211,7 @@ type compacting struct {
 // model asks for no tools, or the turn stops. Near the model's context, the
 // conversation is compacted first (ADR 0020): in.History then starts from
 // the summary, and the turn so far is in it.
-func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, out *TurnOutput, turnp *[]string, cs *compacting) error {
+func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]ExtRef, out *TurnOutput, turnp *[]string, cs *compacting) error {
 	turn := *turnp
 	defer func() { *turnp = turn }()
 	refused := 0 // calls auto mode's judge refused (ADR 0016)
@@ -265,7 +273,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, out *TurnOutput, 
 		inputs := make([]ToolInput, len(reply.Calls))
 		gates := make([]Gate, len(reply.Calls))
 		for i, c := range reply.Calls {
-			inputs[i] = ToolInput{Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i}
+			inputs[i] = ToolInput{Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i, Ext: ext[c.Name].Def}
 			switch {
 			case cut:
 				gates[i] = Gate{Action: ActToolSkipped}
@@ -300,6 +308,13 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, out *TurnOutput, 
 				}
 				if g.Judged {
 					refused++
+				}
+				if r, ok := ext[c.Name]; ok && g.Action == ActToolPrefix+c.Name {
+					// An external tool runs by its effect (ADR 0022).
+					g.Action = ActToolExtReal
+					if r.Read {
+						g.Action = ActToolExtRead
+					}
 				}
 				gates[i] = g
 			}

@@ -157,3 +157,83 @@ func toolHooks(hooks []Hook) []Hook {
 	}
 	return out
 }
+
+// extOptions are how the user may say a project's remote MCP server is
+// used: KairoCode connects to it, or not (ADR 0022).
+var extOptions = []string{"Connect to it", "Do not connect to it"}
+
+// loadExternal settles how each of the turn's MCP servers and custom tools
+// runs (ADR 0022): the user's own as configured, a project's as the user
+// said, asked now if not said, as a command hook is (ADR 0018). It then
+// has their tools listed, and returns the agent with them and their
+// definitions by name.
+func loadExternal(ctx *kairo.Context, in TurnInput, agent Agent) (Agent, map[string]ExtRef, error) {
+	modes := make([]string, len(agent.External))
+	var asked []Hook
+	var at []int
+	for i, e := range agent.External {
+		modes[i] = HookOutside // the user's own: as they configured it
+		if e.Project {
+			// The answer is for this one exactly: its fingerprint is part
+			// of what is asked about.
+			asked = append(asked, Hook{Event: HookExternal, Claude: e.Kind + ":" + e.Name, Command: e.Command + "\x00" + e.Spec, Source: e.Source})
+			at = append(at, i)
+		}
+	}
+	if len(asked) > 0 {
+		said, err := kairo.Call[[]string](ctx, ActHookCheck, HookCheckInput{Dir: in.Dir, Hooks: asked})
+		if err != nil {
+			return agent, nil, err
+		}
+		if len(said) != len(asked) {
+			return agent, nil, fmt.Errorf("hook.check: %d modes for %d", len(said), len(asked))
+		}
+		for j, i := range at {
+			mode := said[j]
+			if mode == HookAsk {
+				e := agent.External[i]
+				id := fmt.Sprintf("ext_%d_%d", in.N, j)
+				options := hookOptions
+				what := "An MCP server"
+				if e.Kind == "tool" {
+					what = "A custom tool"
+				}
+				question := fmt.Sprintf("%s of %s, %q, runs:\n\n    %s\n\nIn KairoCode's sandbox it may write in the project only, offline; outside it, as you can.",
+					what, e.Source, e.Name, e.Command)
+				if e.Remote {
+					options = extOptions
+					question = fmt.Sprintf("An MCP server of %s, %q, is reached at:\n\n    %s\n\nKairoCode would send it what the model calls it with.", e.Source, e.Name, e.Command)
+				}
+				if len(e.Given) > 0 {
+					question += "\nIt is given: " + strings.Join(e.Given, ", ") + " (as written there; your own environment's values are not put in)."
+				}
+				if _, err := kairo.Call[bool](ctx, ActFlowAsk, FlowAskInput{ID: id, Options: options, Question: question}); err != nil {
+					return agent, nil, err
+				}
+				a, err := kairo.WaitFor[FlowAnswer](ctx, SignalAnswerPrefix+id)
+				if err != nil {
+					return agent, nil, err
+				}
+				switch a.Option {
+				case hookOptions[0]:
+					mode = HookSandbox
+				case hookOptions[1], extOptions[0]:
+					mode = HookOutside
+				default:
+					mode = HookNever
+				}
+				if _, err := kairo.Call[bool](ctx, ActHookDecide, HookDecideInput{Dir: in.Dir, Hook: asked[j], Mode: mode}); err != nil {
+					return agent, nil, err
+				}
+			}
+			modes[i] = mode
+		}
+	}
+	out, err := kairo.Call[ExtLoadOutput](ctx, ActExtLoad, ExtLoadInput{Dir: in.Dir, Tools: agent.Tools, Names: agent.Names,
+		External: agent.External, Modes: modes})
+	if err != nil {
+		return agent, nil, err
+	}
+	agent.Tools, agent.Names = out.Tools, out.Names
+	return agent, out.Ext, nil
+}

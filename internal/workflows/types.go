@@ -88,7 +88,13 @@ const (
 	// Command hooks (ADR 0018): how each runs (hook.check, hook.decide),
 	// a run of one (hook.command, real), and a call's result with what a
 	// hook said after it (hook.note).
-	ActHookCheck   = "hook.check"
+	ActHookCheck = "hook.check"
+	// ActExtLoad lists the tools of the MCP servers and the custom tools
+	// the turn may use, as the user said they run (ADR 0022);
+	// ActToolExtRead and ActToolExtReal run one, by its effect.
+	ActExtLoad     = "ext.load"
+	ActToolExtRead = "tool.ext.read"
+	ActToolExtReal = "tool.ext.real"
 	ActHookDecide  = "hook.decide"
 	ActHookCommand = "hook.command"
 	ActHookNote    = "hook.note"
@@ -523,6 +529,9 @@ type Agent struct {
 	Model    string `json:"model"`
 	Effort   string `json:"effort,omitempty"`
 	MaxSteps int    `json:"max_steps"`
+	// External are the MCP servers and custom tools the turn may use (ADR
+	// 0022), as configured when it started; with none, nothing is called.
+	External []ExtSource `json:"external,omitempty"`
 	// Context is the model's context in tokens: near it, the conversation
 	// is compacted (ADR 0020). 0 (a turn before it, or a CLI engine): it
 	// is not.
@@ -833,6 +842,9 @@ type ToolCall struct {
 // A call that came over MCP (ADR 0007) has no stored message: its
 // arguments are in Args instead.
 type ToolInput struct {
+	// Ext, for a call of an MCP server's tool or a custom tool (ADR 0022):
+	// its definition, as the turn recorded it.
+	Ext string `json:"ext,omitempty"`
 	// At: for a call a flow makes, where in the script ("line:col").
 	At      string          `json:"at,omitempty"`
 	Dir     string          `json:"dir"`
@@ -954,4 +966,54 @@ type ApplyInput struct {
 	After   string `json:"after"`
 	Content string `json:"content"`
 	Summary string `json:"summary"`
+}
+
+// HookExternal is the event of an MCP server or a custom tool as a command
+// whose running the user decides (ADR 0022), as a hook's (ADR 0018).
+const HookExternal = "external"
+
+// ExtSource is an MCP server or a custom tool of the configuration: what
+// it is (Kind "mcp" or "tool"), how it runs (Command: the command, or a
+// remote server's URL), and where it is configured. A project's (Project)
+// runs as the user says; the user's own runs as configured.
+//
+// Spec is a fingerprint of all of it, the values of its environment and
+// headers included (not recorded themselves): what the user answers is
+// for that, and only that is started. Given names the environment
+// variables and headers it is given.
+type ExtSource struct {
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Source  string   `json:"source"`
+	Project bool     `json:"project,omitempty"`
+	Remote  bool     `json:"remote,omitempty"`
+	Spec    string   `json:"spec,omitempty"`
+	Given   []string `json:"given,omitempty"`
+}
+
+// ExtLoadInput is the turn's tools so far (their specs by hash, and
+// names), and how each external source runs (Modes, by position in
+// Agent.External: HookSandbox, HookOutside or HookNever).
+type ExtLoadInput struct {
+	Dir      string      `json:"dir"`
+	Tools    string      `json:"tools"`
+	Names    []string    `json:"names"`
+	External []ExtSource `json:"external"`
+	Modes    []string    `json:"modes"`
+}
+
+// ExtLoadOutput is the turn's tools with the external ones: specs by
+// hash, names, and each external tool's definition (Ext, by name).
+type ExtLoadOutput struct {
+	Tools string            `json:"tools"`
+	Names []string          `json:"names"`
+	Ext   map[string]ExtRef `json:"ext,omitempty"`
+}
+
+// ExtRef is an external tool's recorded definition, and whether it only
+// reads (declared so: else it is real, invariant 3).
+type ExtRef struct {
+	Def  string `json:"def"`
+	Read bool   `json:"read,omitempty"`
 }
