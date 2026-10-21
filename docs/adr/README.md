@@ -19,7 +19,7 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0010](0010-terminal-ui.md) | 端末の対話を、claude と同じ形の TUI にする（Bubble Tea）。初めてのフォルダは信頼を聞く | 承認（2026-10-19） |
 | [0011](0011-cancel-a-turn.md) | ターンの取り消し: kairo の取り消しで止め、止めたことを会話に残す | 承認（2026-10-19） |
 | [0012](0012-github-and-serverless.md) | GitHub から起動し、待つ間はプロセスを持たない（サーバーレス）。作業ディレクトリはブランチで持ち越す | 提案 |
-| [0013](0013-http-tools.md) | HTTP(S) のツール: 読む `fetch` と、作用のある `http` | 提案 |
+| [0013](0013-http-tools.md) | HTTP(S) のツール: GET の `fetch` と、POST の `http` | 承認（2026-10-21） |
 | [0014](0014-providers-and-models.md) | プロバイダーとモデルを、会話の途中で切り替える（/provider、/model）。codex と copilot は CLI のエンジンから | 承認（2026-10-19） |
 | [0015](0015-install-acp-agents-from-the-registry.md) | ACP のエージェントを、登録簿からチャット欄で入れて使う（/provider）。エージェント自身のツールは人に聞く | 承認（2026-10-19） |
 | [0016](0016-auto-mode.md) | auto モード: 人に聞く呼び出しを、判定のモデルが決める（manual・auto・plan を shift+Tab で） | 承認（2026-10-20） |

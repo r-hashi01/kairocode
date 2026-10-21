@@ -116,13 +116,14 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 
 ## M4 非対話とサーバーレス
 
-状態: 作業中（ADR 0012・0013 の承認待ち）
+状態: 作業中（ADR 0012 は利用者の判断で保留（2026-10-21）。HTTP(S) のツールは済み（ADR 0013））
 
 中身: フローの `wait(event, timeout=)`（ADR 0003）、PostgreSQL、サスペンドモード（`kairo.Suspend`、`k.Handler()` の `/tick`）、HTTP(S) のツール、GitHub からの起動。
 
 受け入れ条件:
 
 - [ ] Issue のコメントから起動し、承認と CI の結果を待つ間、プロセスが残らない。
+- [x] HTTP(S) のツール（ADR 0013）: `fetch`（GET、読むだけ）と `http`（POST、実）。POST の途中で落ちても送り直さず、人に聞く。利用者の設定の認証は記録に残らない。（`TestFetch`、`TestHTTPPost`、`TestHTTPUnknown`、`TestNetAuth`、`TestNetPrivateRefused`、`TestNetRedirects`、`TestNetSettingsAreTheUsers`、`TestCrashHTTPPost`）
 - [x] `kairocode run` が承認で中断し、`kairocode resume` で続く。（`kairocode run -detach` が人を待つところで止まり（終了コード 3）、`kairocode resume <session>` が最新のターンを最後まで追う。Ctrl-C で止めたときも続け方を示す。`TestRunDetachAndResume`）
 
 ## 段階に割り当てていない今後の作業

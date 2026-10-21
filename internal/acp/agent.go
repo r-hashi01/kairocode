@@ -1099,7 +1099,7 @@ func toolKind(tool string) string {
 		return "search"
 	case "bash":
 		return "execute"
-	case "webfetch":
+	case "webfetch", "fetch", "http":
 		return "fetch"
 	}
 	return "other"
@@ -1109,7 +1109,11 @@ func toolKind(tool string) string {
 func title(tool string, input json.RawMessage) string {
 	var args map[string]any
 	_ = json.Unmarshal(input, &args)
-	for _, k := range []string{"path", "command", "pattern", "url"} {
+	keys := []string{"path", "command", "pattern", "url"}
+	if tool == "fetch" || tool == "http" { // judged by their URL alone (ADR 0013)
+		keys = []string{"url"}
+	}
+	for _, k := range keys {
 		if v, ok := args[k].(string); ok && v != "" {
 			return tool + " " + v
 		}

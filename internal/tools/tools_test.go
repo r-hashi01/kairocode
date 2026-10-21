@@ -135,11 +135,15 @@ func TestBuiltinToolsAreWellFormed(t *testing.T) {
 		if d.Plan != nil && d.Effect != Idempotent {
 			t.Errorf("%s: a planned write is idempotent, got %v", d.Name, d.Effect)
 		}
-		if d.Run != nil && d.Effect != Read && d.Name != "bash" {
-			t.Errorf("%s: of the tools that run directly, only bash acts, got %v", d.Name, d.Effect)
+		// bash, and http's POST (ADR 0013).
+		if d.Run != nil && d.Effect != Read && d.Name != "bash" && d.Name != "http" {
+			t.Errorf("%s: of the tools that run directly, only bash and http act, got %v", d.Name, d.Effect)
 		}
-		if d.Name == "bash" && d.Effect != Real {
-			t.Errorf("bash is real, got %v", d.Effect)
+		if (d.Name == "bash" || d.Name == "http") && d.Effect != Real {
+			t.Errorf("%s is real, got %v", d.Name, d.Effect)
+		}
+		if d.Name == "fetch" && d.Effect != Read {
+			t.Errorf("fetch only reads, got %v", d.Effect)
 		}
 		var s struct{ Properties map[string]any }
 		if err := json.Unmarshal(d.Schema, &s); err != nil || s.Properties == nil {

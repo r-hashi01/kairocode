@@ -1,6 +1,6 @@
 # 0013 HTTP(S) のツール: GET の `fetch` と、POST の `http`
 
-- 状態: 提案
+- 状態: 承認（2026-10-21）
 - 日付: 2026-10-19
 - 関連: 設計 10 節（M4 の HTTP(S) のツール）、AGENTS.md の不変条件 3・4・6、ADR 0002（opencode の webfetch）、0005（sandbox）
 
@@ -18,7 +18,7 @@ M4 の中身に「HTTP(S) のツール」があります。モデルが文書を
      - 結果が不明（応答の前に切れた）なら `kairo.Unknown` で、要確認（blocked）にします（不変条件 4）。
      - 冪等キーのヘッダー（`Idempotency-Key`）を付けるかは、呼ぶ側が決めます。KairoCode は自動ではやり直しません。
 2. **権限の規則は、ホストで書きます**（`permission`）。
-   - 例: `{"fetch": {"*": "allow"}, "http": {"api.github.com": "ask", "*": "deny"}}`。
+   - 例: `{"fetch": {"*": "allow"}, "http": {"api.github.com/*": "ask", "*": "deny"}}`。
    - 既定は `fetch` が `ask`、`http` が `ask` です。判定の対象（`Subject`）は `<ホスト><パス>` です（メソッドはツールで決まる）。
 3. **秘密は、設定のホストごとの認証で、アクションの中で足します。**
    - 書く場所は `kairocode.json` の `http.auth`。例: `{"api.github.com": {"header": "Authorization", "env": "GITHUB_TOKEN", "prefix": "Bearer "}}`。
@@ -50,3 +50,29 @@ M4 の中身に「HTTP(S) のツール」があります。モデルが文書を
 - **ツールを 1 つにして、メソッドで作用を変える:** 作用の型はツールごとに 1 つで、宣言で決まります（不変条件 3）。メソッドで変えると、実のものを読むだけとして扱う誤りが起き得ます。
 - **bash の `curl` に任せる:** sandbox はネットワークを切るので、許すには昇格が要ります。作用の型も、秘密の扱いも、ツールとして書けません。
 - **kairo の HTTP(S) のアクション（ADR 0052）を使う:** あれは、アクションの処理そのものを別の場所で動かす仕組みです。外の API を呼ぶツールとは別のものです。
+
+## 実装（2026-10-21）
+
+- **ツール:** `internal/tools/fetch.go`（`Read`）、`http.go`（`Real`）、共通の部分は `net.go` です。`tools.Env.Net` に利用者の設定（`allowPrivate`、`auth`）が入ります。
+- **設定:** `internal/runtime/netconfig.go` の `userNet` が、ツールを動かすときに、利用者の `kairocode.json` の `http` だけを読みます。プロジェクトの `http` は読みません。
+  - 例: `{"http": {"auth": {"api.github.com": {"header": "Authorization", "env": "GITHUB_TOKEN", "prefix": "Bearer "}}}}`。
+  - 認証は https でだけ送ります。環境変数が空なら、送らずに失敗を返します（変数の名前だけを書く）。
+  - 応答の中の同じ値は `[redacted]` にします。
+- **判定の対象:** `<ホスト（小文字。ポートを含む）><パス>` です（`subject`）。問い合わせの部分（`?` から後）は含めません。規則は `api.github.com/*` のように書きます。
+- **私的なアドレス:** 名前を解決した後、つなぐ直前にアドレスを見ます（DNS で私的なアドレスへ向ける抜け道を塞ぐ）。プロキシは使いません。
+- **転送:** `fetch` は、同じホストの中で 5 回まで追います。ほかのホストへの転送と、https から http への転送は追わず、転送先をモデルに返します。モデルがそれを取りに行けば、ふつうの判定を通ります。`http` は転送を追わず、状態と `Location` を返します。
+- **結果が不明:** `http` は、接続ができた後に答えが来なかったら「結果が不明」（`Unknown`）にし、要確認で止めます。接続の前の失敗は「送っていない」失敗です。接続を使い回さないので、Go が POST を自分で送り直すこともありません。
+- **表示:** 応答は 5 MB まで読み、モデルには 100,000 文字まで見せます（切ったら書く）。テキストでないもの（画像など）は、種類と大きさだけを書きます。HTML は、小さな自前の変換で Markdown か文字にします（依存を足さない）。状態が 400 以上なら、結果を失敗として返します。
+- **ACP:** `fetch` と `http` の種類は `fetch` です。
+- **テスト:** `TestFetch`、`TestHTTPPost`、`TestHTTPUnknown`、`TestNetAuth`、`TestNetPrivateRefused`、`TestNetRedirects`（`internal/tools`）、`TestNetSubject`、`TestNetSettingsAreTheUsers`、`TestCrashHTTPPost`（`internal/runtime`。`http` の作用を `Read` にすると落ちることを確かめた）。
+- **記録に秘密が残らないこと:** 値はアクションの中で環境変数から読み、ツールの入力にも結果にも入りません（結果は伏せ字）。実行時の記録（DB）を走査するテストは、テストの TLS の証明書をランタイムから渡す口がないので、まだありません。ツールの単体テスト（`TestNetAuth`）で、結果に値が出ないことを確かめています。
+- **durability-reviewer の指摘で直したこと**
+  - **判定の対象をモデルが選べた（直した）:** `subject` は `path` や `command` を先に見ていたので、`fetch` と `http` の呼び出しに `path` を足せば、URL と違うものが判定の対象になり、規則をすり抜けられました。`fetch` と `http` は、URL のホストとパスだけを対象にします（`subject` がツールの名前を受ける）。ACP の題名も URL だけにしました。ほかのツールの対象は変わりません。
+  - **`..` で規則のパスを抜けられた（直した）:** パスに `.` か `..` の区切りがある URL（`%2e%2e` も）は、送らずに失敗を返します。
+  - **承認する人に、送る中身が見えなかった（直した）:** `http` を聞くときは、URL（問い合わせの部分も）、モデルが付けたヘッダー、本文（2,000 文字まで）を見せます（`preview`）。
+  - **私的なアドレスの範囲を足した:** `0.0.0.0/8`、`100.64.0.0/10`（CGNAT、Tailscale、クラウドのメタデータ）、`192.0.0.0/24`、`198.18.0.0/15`、`240.0.0.0/4`、IPv4 を運ぶ IPv6（`::/96`、NAT64、6to4）。
+  - テスト: `TestNetSubject`（モデルの足した引数で対象が変わらない）、`TestHTTPPreview`、`TestNetDotSegments`、`TestNetPrivateRefused`（範囲）、`TestHTTPUnknown`（つないだ後の時間切れ）。
+- **受け入れた弱さ**
+  - `fetch` は、同じホストの中の転送を、規則を見直さずに追います。パスで書いた `fetch` の規則（`example.com/public/*`）は、同じホストの転送で外へ出られます。`fetch` は読むだけなので、受け入れます。
+  - 伏せ字は、値そのものだけです。形を変えて（エスケープ、base64 など）返された値は、伏せられません。
+  - 規則の `*` は `/` にも合います。ホストを `*.github.com/*` のように書くと、`evil.example/.github.com/x` にも合います。ホストは `*` を使わずに書いてください。

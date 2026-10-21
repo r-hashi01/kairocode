@@ -561,7 +561,13 @@ func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolIn
 		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
 	}
 	defer root.Close()
-	res := d.Run(t, tools.Env{Root: root, Dir: in.Dir}, args)
+	env := tools.Env{Root: root, Dir: in.Dir}
+	if d.Name == tools.FetchTool.Name || d.Name == tools.HTTPTool.Name {
+		if env.Net, err = userNet(); err != nil {
+			return r.toolResult(t, in.Call, tools.Result{Output: err.Error(), IsError: true})
+		}
+	}
+	res := d.Run(t, env, args)
 	if res.Unknown && d.Effect != tools.Read {
 		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
 	}

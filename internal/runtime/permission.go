@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -107,14 +108,20 @@ func loadRules(dir string, agent []json.RawMessage) ([]permission.Rule, error) {
 
 // subject is what a call's patterns are matched against and what the user
 // is shown: its command, or else its path, or else its arguments as compact
-// JSON with sorted keys (a push's remote and branch, say).
-func subject(args json.RawMessage) string {
+// JSON with sorted keys (a push's remote and branch, say). fetch's and
+// http's is the host and path of their URL alone (ADR 0013): no other
+// argument the model adds stands for it.
+func subject(tool string, args json.RawMessage) string {
 	var in struct {
 		Command string `json:"command"`
 		Path    string `json:"path"`
 		Name    string `json:"name"` // a skill's
+		URL     string `json:"url"`
 	}
 	_ = json.Unmarshal(args, &in)
+	if tool == tools.FetchTool.Name || tool == tools.HTTPTool.Name {
+		return urlSubject(in.URL)
+	}
 	if in.Command != "" {
 		return in.Command
 	}
@@ -179,6 +186,9 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 // script, in named sections ("" for other calls, or a script that does not
 // parse).
 func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) string {
+	if in.Tool == tools.HTTPTool.Name {
+		return r.httpPreview(ctx, in)
+	}
 	if in.Tool != tools.FlowWriteTool.Name {
 		return ""
 	}
@@ -246,7 +256,7 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 	if err != nil {
 		return workflows.PermissionOutput{}, false, err
 	}
-	subj := subject(args)
+	subj := subject(in.Tool, args)
 	d, ok := r.tool(in.Tool)
 	if !ok && in.Tool != workflows.HookTool { // a hook is a flow, not a tool: the rules still apply
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "no such tool", Subject: subj}, false, nil
@@ -639,7 +649,7 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			_ = json.Unmarshal(c.Input, &in)
 			subj := ""
 			if args, err := r.toolArgs(ctx, in.In); err == nil {
-				subj = subject(args)
+				subj = subject(name, args)
 			}
 			out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: name, Subject: subj,
 				Rule: "cut off while it ran: did it take effect?"})
@@ -1152,4 +1162,42 @@ func (r *Runtime) reviewSections(ctx context.Context, name, src, old string) []P
 	}
 	sec.Text = strings.Join(lines, "\n")
 	return append(out, sec)
+}
+
+// urlSubject is a URL's host (lower case, with its port) and path: what
+// fetch and http are judged by (ADR 0013). A URL that cannot be read is
+// itself: no rule written for a host matches it.
+func urlSubject(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	return strings.ToLower(u.Host) + u.EscapedPath()
+}
+
+// httpPreview is what an http call sends, for the person who is asked:
+// its URL, the headers the model set, and its body (cut), which the
+// subject (host and path) leaves out.
+func (r *Runtime) httpPreview(ctx context.Context, in workflows.PermissionInput) string {
+	args, err := r.toolArgs(ctx, in.Call)
+	if err != nil {
+		return ""
+	}
+	var a struct {
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "POST %s\n", a.URL)
+	for _, k := range slices.Sorted(maps.Keys(a.Headers)) {
+		fmt.Fprintf(&b, "%s: %s\n", k, clip(a.Headers[k], 200))
+	}
+	if a.Body != "" {
+		b.WriteString("\n" + clip(a.Body, 2000))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
