@@ -131,7 +131,7 @@
     - copilot には、自分のフックがあります（`copilot help config`）。利用者の設定（`~/.copilot/settings.json` の `hooks`）と、copilot が信頼したフォルダーの `.github/hooks/*.json` です。
     - 止める設定は `disableAllHooks` ですが、1 回の起動だけに効かせる旗も環境変数もありません。copilot の利用者の設定ファイルに書くしかありません。
     - KairoCode は利用者の copilot の設定を勝手に書き換えないので、copilot のエンジンでは、copilot 自身のフックが KairoCode の sandbox の外で、承認なしに動き得ます。
-    - 利用者に、`disableAllHooks` を書くかを聞きました（2026-10-21）。
+    - 利用者に、`disableAllHooks` を書くかを聞きました（2026-10-21）。答えと、その後の形は 4 節です。
 - **durability-reviewer の指摘で直したこと**
   - **取り消しで止まったフックを、終わったことにしない:** プロセスを止めるときなどの取り消しで止まったフックは、終了コードではなく「結果が不明」（`kairo.Unknown`）として返し、要確認にします。前は、殺されたことを終了コード -1 として返していたので、PreToolUse のフックが止まっても呼び出しが進み得ました。
   - **やり直してよいのは、始まらなかったときだけ:** 始まった後の失敗は「結果が不明」とします。
@@ -153,3 +153,30 @@
 - 手元の Claude Code、codex、copilot が自分で読むものと、動かすフックを、モデルを呼ばずに確かめます。KairoCode が当てにしていること（`nativeReadsOf`）と食い違えば、失敗で終わります。
 - 2026-10-21 の結果は、Claude Code 2.1.305、codex 0.163.0、copilot 1.0.101 で、22 項目すべて一致でした。
 - CLI が要るので、`check.sh` には入れません。CLI を上げたときに流します。
+
+### 4. エージェント自身のフックを止める・許す（2026-10-21 追記）
+
+- 利用者の答え: copilot は `disableAllHooks` で止めてよい。ただし、KairoCode の設定で解除できるようにする。
+- **既定（止める）**
+  - copilot を起動するたびに（`acpArgv`）、copilot の設定（`$COPILOT_HOME`、なければ `~/.copilot` の `settings.json`）に `"disableAllHooks": true` を書きます。ほかの項目は残し、ファイルの権限も保ちます。一時ファイルに書いて置き換えるので、途中の形は残りません。
+  - 書いたことを、同じディレクトリーの `kairocode-disabled-hooks` に印として残します。印を先に書くので、間で落ちても、解除のときに取りすぎることはありません。
+  - 利用者が自分で `disableAllHooks` を書いていたら、何もせず、印も残しません。
+  - 設定が JSON として読めないときは、止められないので copilot を起動せず、直すか下の設定を使うよう伝えます。
+  - テスト（`KAIROCODE_NO_CLIS`）では、`Config.CopilotHome` を渡さなければ何も書きません。
+- **解除（`agents.ownHooks`）**
+  - 利用者の `kairocode.json`（`~/.config/kairocode/`）に `{"agents": {"ownHooks": true}}` と書くと、エージェント自身のフックを許します。
+    - codex: `features.hooks = false` を足しません（利用者の `CODEX_CONFIG` のまま）。
+    - copilot: 印があれば、KairoCode が書いた `disableAllHooks` を消し、印も消します。印がなければ（利用者が書いたもの）触りません。
+    - Claude Code: 変わりません。Claude Code の書式のフックは、どのエンジンでも KairoCode が sandbox で動かしているからです。
+  - 許したフックは、KairoCode の sandbox の外で、承認なしに動きます。利用者が自分で選ぶ設定です。
+  - **プロジェクトの `kairocode.json` では効きません。** clone したリポジトリが、sandbox の外で動くフックを有効にできないようにするためです。
+- **durability-reviewer の指摘で直したこと**
+  - `settings.json` がシンボリックリンク（dotfiles の管理）なら、リンクを残して、その先に書きます。書いた後に fsync します。
+  - 解除のときに設定が読めなければ、copilot を止めず、印だけを消します。
+  - ホームディレクトリーがわからなければ、相対パスに書かず、書けないことをログに残します。
+  - ACP のレジストリーの copilot が自分の `COPILOT_HOME` を持つなら、そこに書きます。
+- **残る弱さ（受け入れたもの）**
+  - copilot の設定にはロックがないので、KairoCode が読んで書く間に、ほかのプロセス（copilot、利用者）が書いた変更は失われ得ます。
+  - 印は「KairoCode が書いた」としか言えません。印を書いた後、`disableAllHooks` を書く前に落ち、その後で利用者が自分で書いた場合などは、解除のときに利用者の値も消します。
+- **まだ確かめていないこと:** copilot のリポジトリの設定（`.github/copilot/settings.json`）が、利用者の `disableAllHooks` を上書きできるか。上書きできるなら、信頼したリポジトリでは copilot のフックが動き得ます。
+- **テスト:** `TestAgentsOwnHooks`（ほかの項目と権限が残る、プロジェクトの設定では効かない、解除で KairoCode の書いたものだけを消す、利用者の書いたものは残す、読めない設定では起動しない、解除のときは読めなくても起動する、シンボリックリンクを残す、codex の `features.hooks`）

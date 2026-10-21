@@ -248,6 +248,7 @@ func TestSkillCommands(t *testing.T) {
 // (ADR 0018).
 func TestCLIAgentsConfig(t *testing.T) {
 	t.Setenv("CODEX_CONFIG", `{"model": "m", "features": {"x": true}}`)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	ctx := context.Background()
 	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0], CopilotPath: os.Args[0],
 		Provider: &provider.Fake{HoldAt: -1}})

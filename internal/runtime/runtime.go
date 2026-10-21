@@ -44,6 +44,10 @@ type Config struct {
 	ClaudePath  string
 	CodexPath   string // the ACP agent: codex-acp
 	CopilotPath string // copilot, run with --acp
+	// CopilotHome is copilot's settings directory, where KairoCode turns
+	// copilot's own hooks off (ADR 0018; default: $COPILOT_HOME, else
+	// ~/.copilot; with NoCLIs, none: nothing is written).
+	CopilotHome string
 	// AgentsDir keeps the ACP agents installed from the registry (ADR
 	// 0015; default: agents beside DB); AgentRegistry is the registry's
 	// URL (agents.RegistryURL for ACP's; "" reads none).
@@ -91,7 +95,9 @@ type Runtime struct {
 	// agents are the ACP agents of the registry (ADR 0015); auth, what is
 	// known of each provider's sign-in.
 	agents *agents.Manager
-	auth   auths
+	// copilotHooks: one change of copilot's settings at a time.
+	copilotHooksMu sync.Mutex
+	auth           auths
 
 	sendMu sync.Mutex
 
@@ -178,6 +184,16 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.CopilotHome == "" && os.Getenv(NoCLIs) != "1" {
+		cfg.CopilotHome = os.Getenv("COPILOT_HOME")
+		if cfg.CopilotHome == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				cfg.CopilotHome = filepath.Join(home, ".copilot")
+			} else {
+				cfg.Logger.Warn("copilot's settings cannot be found, so its own hooks are not turned off (ADR 0018)", "err", err)
+			}
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.DB), 0o700); err != nil {
 		return nil, err

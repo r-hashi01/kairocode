@@ -38,7 +38,11 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if registryAgent(engine) == codexAgent {
+	own, err := ownHooks()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if registryAgent(engine) == codexAgent && !own {
 		// Codex reads its AGENTS.md and .agents/skills by itself, and
 		// KairoCode gives it the rest (ADR 0018); its own hooks are off,
 		// KairoCode running hooks. Over the user's CODEX_CONFIG, if there
@@ -74,6 +78,10 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 	}
 	if registryAgent(engine) != copilotAgent {
 		return argv, env, false, nil
+	}
+	// Its own hooks: off, unless the user lets it run them (ADR 0018).
+	if err := r.copilotHooks(own, env); err != nil {
+		return nil, nil, false, err
 	}
 	names := make([]string, len(tools))
 	for i, n := range tools {
