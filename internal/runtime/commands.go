@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os/exec"
 	"slices"
 	"strings"
@@ -32,7 +33,8 @@ func (r *Runtime) sessionDir(ctx context.Context, session string) (string, error
 }
 
 // Commands are the commands a session can run: opencode's commands/*.md for
-// its working directory (ADR 0002), by name.
+// its working directory (ADR 0002), and its skills as /name where no
+// command has the name, by name.
 func (r *Runtime) Commands(ctx context.Context, session string) ([]opencode.Command, error) {
 	dir, err := r.sessionDir(ctx, session)
 	if err != nil {
@@ -41,6 +43,15 @@ func (r *Runtime) Commands(ctx context.Context, session string) ([]opencode.Comm
 	cs, err := opencode.Commands(opencode.Dirs(dir))
 	if err != nil {
 		return nil, err
+	}
+	skills, err := opencode.Skills(opencode.SkillDirs(dir))
+	if err != nil {
+		return nil, err
+	}
+	for name, s := range skills {
+		if _, taken := cs[name]; !taken {
+			cs[name] = opencode.Command{Name: name, Description: s.Description, Skill: true}
+		}
 	}
 	out := make([]opencode.Command, 0, len(cs))
 	for _, name := range slices.Sorted(func(yield func(string) bool) {
@@ -75,7 +86,7 @@ func (r *Runtime) RunCommand(ctx context.Context, session, name, args string) (i
 	}
 	c, ok := cs[name]
 	if !ok {
-		return 0, fmt.Errorf("%w: /%s", ErrNoCommand, name)
+		return r.runSkill(ctx, session, dir, name, args)
 	}
 	rules, err := loadRules(dir, nil)
 	if err != nil {
@@ -93,6 +104,59 @@ func (r *Runtime) RunCommand(ctx context.Context, session, name, args string) (i
 		return 0, err
 	}
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h, Agent: c.Agent, Model: c.Model})
+}
+
+// runSkill runs skill name as /name: a turn whose message is the skill's
+// instructions (as the skill tool gives them) and what the user asked of
+// it. What is sent is recorded as the message: a resumed turn does not
+// read the skill again.
+func (r *Runtime) runSkill(ctx context.Context, session, dir, name, args string) (int, error) {
+	skills, err := opencode.Skills(opencode.SkillDirs(dir))
+	if err != nil {
+		return 0, err
+	}
+	s, ok := skills[name]
+	if !ok {
+		return 0, fmt.Errorf("%w: /%s", ErrNoCommand, name)
+	}
+	content, err := s.Content()
+	if err != nil {
+		return 0, fmt.Errorf("/%s: %w", name, err)
+	}
+	text := "The user runs the skill " + name + ". Follow it.\n\n" + content
+	if args = strings.TrimSpace(args); args != "" {
+		text += "\n\nWhat the user asks of it: " + args
+	}
+	h, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: text}}})
+	if err != nil {
+		return 0, err
+	}
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h})
+}
+
+// SkillsInfo are a session's skills, by name, and the SKILL.md files not
+// taken, and why (/skills).
+type SkillsInfo struct {
+	Skills   []opencode.Skill        `json:"skills"`
+	Problems []opencode.SkillProblem `json:"problems,omitempty"`
+}
+
+// Skills are the skills of the session's working directory, and what of
+// them is not taken.
+func (r *Runtime) Skills(ctx context.Context, session string) (SkillsInfo, error) {
+	dir, err := r.sessionDir(ctx, session)
+	if err != nil {
+		return SkillsInfo{}, err
+	}
+	skills, problems, err := opencode.CheckedSkills(opencode.SkillDirs(dir))
+	if err != nil {
+		return SkillsInfo{}, err
+	}
+	out := SkillsInfo{Skills: []opencode.Skill{}, Problems: problems}
+	for _, name := range slices.Sorted(maps.Keys(skills)) {
+		out.Skills = append(out.Skills, skills[name])
+	}
+	return out, nil
 }
 
 // shellLimit is how long a command's !`command` may run.

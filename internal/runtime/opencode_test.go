@@ -183,3 +183,95 @@ func TestOpencodeCommand(t *testing.T) {
 		t.Fatal("the denied command ran")
 	}
 }
+
+// A skill runs as /name: the turn's message is its instructions and what
+// the user asked of it; a command of the name comes before it. The skills
+// list says what is not taken, and why.
+func TestSkillCommands(t *testing.T) {
+	ws := repo(t)
+	for path, body := range map[string]string{
+		".kairocode/skills/hello/SKILL.md":  "---\nname: hello\ndescription: Say hello well\n---\nGreet in three words.\n",
+		".kairocode/skills/review/SKILL.md": "---\nname: review\ndescription: A skill\n---\nskill body\n",
+		".opencode/commands/review.md":      "---\ndescription: A command\n---\ncommand body $ARGUMENTS\n",
+		".kairocode/skills/Wrong/SKILL.md":  "---\nname: Wrong\n---\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(ws, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "hi there friend"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "skills", workflows.SessionInput{Dir: ws})
+	cs, err := r.Commands(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]bool{}
+	for _, c := range cs {
+		kinds[c.Name] = c.Skill
+	}
+	if skill, ok := kinds["hello"]; !ok || !skill || kinds["review"] {
+		t.Fatalf("commands %+v", cs)
+	}
+	n, err := r.RunCommand(ctx, s, "hello", "the team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	conv := strings.Join(conversation(t, r, s), "\n")
+	for _, want := range []string{"The user runs the skill hello", "Greet in three words.", "What the user asks of it: the team"} {
+		if !strings.Contains(conv, want) {
+			t.Errorf("no %q in\n%s", want, conv)
+		}
+	}
+	info, err := r.Skills(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Skills) != 2 || len(info.Problems) != 1 || !strings.Contains(info.Problems[0].Why, `"Wrong"`) {
+		t.Fatalf("skills %+v", info)
+	}
+}
+
+// Codex is not given its own skills: CODEX_CONFIG says so, over the
+// user's.
+func TestCodexOwnSkillsOff(t *testing.T) {
+	t.Setenv("CODEX_CONFIG", `{"model": "m", "skills": {"max_context_tokens": 5}}`)
+	ctx := context.Background()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0], Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	_, env, _, err := r.acpArgv(workflows.EngineCodex, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Model  string `json:"model"`
+		Skills struct {
+			IncludeInstructions *bool `json:"include_instructions"`
+			MaxContextTokens    int   `json:"max_context_tokens"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(env["CODEX_CONFIG"]), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "m" || cfg.Skills.MaxContextTokens != 5 || cfg.Skills.IncludeInstructions == nil || *cfg.Skills.IncludeInstructions {
+		t.Fatalf("CODEX_CONFIG %s", env["CODEX_CONFIG"])
+	}
+	if _, env, _, _ := r.acpArgv(workflows.EngineCopilot, nil, ""); env["CODEX_CONFIG"] != "" {
+		t.Error("copilot given codex's config")
+	}
+	// A CODEX_CONFIG that is not JSON is left as it is: codex still runs.
+	t.Setenv("CODEX_CONFIG", "model=m")
+	if _, env, _, err := r.acpArgv(workflows.EngineCodex, nil, ""); err != nil || env["CODEX_CONFIG"] != "" {
+		t.Fatalf("not JSON: %v %q", err, env["CODEX_CONFIG"])
+	}
+}

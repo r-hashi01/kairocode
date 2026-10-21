@@ -189,7 +189,7 @@ func TestSkills(t *testing.T) {
 	put(t, root, map[string]string{
 		".claude/skills/pdf/SKILL.md":       "---\nname: pdf\ndescription: Read PDFs\n---\nUse pdftotext.\n",
 		".claude/skills/pdf/scripts/run.sh": "#!/bin/sh\n",
-		".opencode/skills/x/y/SKILL.md":     "---\nname: deep\ndescription: Deep one\n---\nDeep.\n",
+		".opencode/skills/x/deep/SKILL.md":  "---\nname: deep\ndescription: Deep one\n---\nDeep.\n",
 		".agents/skills/nameless/SKILL.md":  "---\ndescription: no name\n---\n",
 		".opencode/skills/quiet/SKILL.md":   "---\nname: quiet\n---\nNo description.\n",
 	})
@@ -217,5 +217,42 @@ func TestSkills(t *testing.T) {
 	}
 	if strings.Contains(content, "<file>"+filepath.Join(root, ".claude/skills/pdf/SKILL.md")) {
 		t.Error("SKILL.md is listed among the skill's files")
+	}
+}
+
+// Skills are KairoCode's too (.kairocode/skills, the last to apply); a
+// SKILL.md whose name is not as opencode has it, or not its directory's,
+// is not taken, and says why; one a later one replaces says by which.
+func TestSkillRules(t *testing.T) {
+	root, sub := newProject(t)
+	put(t, root, map[string]string{
+		".claude/skills/review/SKILL.md":      "---\nname: review\ndescription: Claude's\n---\n",
+		".kairocode/skills/review/SKILL.md":   "---\nname: review\ndescription: KairoCode's\n---\n",
+		".kairocode/skills/Bad_Name/SKILL.md": "---\nname: Bad_Name\ndescription: x\n---\n",
+		".kairocode/skills/other/SKILL.md":    "---\nname: mismatch\ndescription: x\n---\n",
+		".kairocode/skills/broken/SKILL.md":   "---\nname: [\n---\n",
+	})
+	skills, problems, err := CheckedSkills(SkillDirs(sub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 || skills["review"].Description != "KairoCode's" {
+		t.Fatalf("skills %+v", skills)
+	}
+	why := map[string]string{}
+	for _, p := range problems {
+		rel, _ := filepath.Rel(root, p.Path)
+		why[rel] = p.Why
+	}
+	for path, want := range map[string]string{
+		".claude/skills/review/SKILL.md":      "replaced by",
+		".kairocode/skills/Bad_Name/SKILL.md": "not lowercase words",
+		".kairocode/skills/other/SKILL.md":    `its name "mismatch" is not its directory's (other)`,
+		".kairocode/skills/broken/SKILL.md":   "",
+	} {
+		got, ok := why[path]
+		if !ok || !strings.Contains(got, want) {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
 	}
 }

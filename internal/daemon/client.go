@@ -483,6 +483,13 @@ func (c *Client) Commands(ctx context.Context, session string) ([]opencode.Comma
 	return out, err
 }
 
+// Skills are the session's skills, and the SKILL.md files not taken.
+func (c *Client) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
+	var out runtime.SkillsInfo
+	err := c.do(ctx, "GET", sessionPath(session)+"/skills", nil, &out)
+	return out, err
+}
+
 // Flows lists the flows of the session's project (ADR 0003).
 func (c *Client) Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error) {
 	var out []runtime.FlowInfo

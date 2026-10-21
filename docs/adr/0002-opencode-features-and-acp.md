@@ -147,3 +147,33 @@ opencode v1.19.3 のソースを読んで、同じ意味で読むようにしま
 - **読めない定義:** frontmatter を開いて閉じていない定義は、エラーにします（opencode は読み飛ばしますが、権限の規則が黙って消えないようにする）。リポジトリの外では、作業ディレクトリの上の階層の `.opencode` は読みません。
 - **YAML:** frontmatter は、opencode の定義が実際に使う範囲だけを、小さな自前のパーサーで読みます。範囲は、入れ子の map（順序を保つ）、引用符、ブロックスカラー、コメント、コロンを含む説明です。リスト、フロー、アンカーは読み違えずに断ります。依存は足していません。
 
+
+## 追記: スキルの置き場所・名前の規則・/<skill>・codex（2026-10-21、利用者の要望「skills 対応させましょう」）
+
+利用者が選んだのは、次の 3 つです。`allowed-tools` は選ばれなかったので入れていません。
+
+- `/<skill>` で呼べるようにする
+- 置き場所と名前の規則
+- codex の自前のスキルを止める
+
+- **置き場所**（`opencode.SkillDirs`）: 決定 48 行の `.kairocode/skills/` を入れました。利用者のもの（`~/.config/kairocode/skills`）と、リポジトリの根から作業ディレクトリまでの `.kairocode/skills` です。順番は最後なので、同じ名前なら KairoCode のものが勝ちます。
+- **名前の規則**（`opencode.CheckedSkills`）
+  - 名前は opencode と同じく、英小文字と数字の語を `-` でつないだ、64 文字までのものです。SKILL.md のあるディレクトリの名前とも一致させます。
+  - 規則に合わないもの、frontmatter が読めないもの、名前の無いものは取らず、理由を残します。
+  - 同じ名前の後のものに置き換えられたものも、どれに置き換えられたかを残します。
+- **`/<skill>`**
+  - スキルは、同じ名前のコマンド（`commands/*.md`）が無ければ、`/名前` のコマンドとして出します（`opencode.Command.Skill`、ACP では説明の頭に `(skill)`）。
+  - 打つと、スキルの本文（skill ツールが返すものと同じ）と「What the user asks of it: <引数>」を、利用者の発言としてターンを始めます（`Runtime.runSkill`）。
+  - 送った文はメッセージとして記録するので、再開してもスキルを読み直しません（不変条件 2）。
+- **`/skills`:** ターンを始めずに、スキルの一覧（`/名前 — 説明` と場所）と、取らなかった SKILL.md とその理由を出します。デーモンの API は `GET /sessions/{id}/skills` です。
+- **codex の自前のスキル**
+  - codex は、`.agents/skills`、`~/.agents/skills`、`/etc/codex/skills`、同梱のスキル、プラグインのスキルを、自分のモデルに並べます。
+  - KairoCode は自分のスキルの一覧を渡しているので、二重になり、KairoCode の外のスキルも混ざります。
+  - そのため、codex-acp を起動するときに `CODEX_CONFIG` で `skills.include_instructions = false` を渡し、codex がスキルの一覧をモデルに出さないようにします。利用者自身の `CODEX_CONFIG` があれば、それに足します。
+  - 確かめ方: 手元の codex 0.163 で `codex debug prompt-input -c skills.include_instructions=false` を実行すると、「Available skills」の節が消えることを確かめました。
+    - ただし、確かめたのは codex 本体の設定（`-c`）としてです。codex-acp が `CODEX_CONFIG` を session の設定に足して codex に渡すことは、README（「JSON object merged into the Codex session config」）とコードでしか確かめていません。本物の codex でターンを動かして確かめるのは、まだです。
+    - 利用者の `CODEX_CONFIG` が JSON でなければ、手を付けずにそのまま渡します。codex は動きますが、自前のスキルは隠れません（ログに残す）。
+  - Claude Code は、すでに自前のスキルを止めています（`--setting-sources ""`）。
+- **名前の規則の出どころ:** Agent Skills の仕様では、name は SKILL.md の親ディレクトリの名前と一致しなければなりません。その仕様に合わせました。これまで名前の違うディレクトリで読めていたスキルは、読まれなくなります。読まれなかったものは、`/skills` に理由が出ます。
+- **組み込みのコマンドと同じ名前のスキル**（`skills`、`model`、`undo` など）は、組み込みのほうが先です。`/` では呼べませんが、モデルは skill ツールで使えます。
+- **テスト:** `TestSkillRules`、`TestSkills`、`TestSkillCommands`、`TestCodexOwnSkillsOff`（JSON でない設定はそのまま）、`TestACPSkills`。

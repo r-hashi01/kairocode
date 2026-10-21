@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -21,11 +22,14 @@ type Skill struct {
 // SkillDirs are where skills are looked for, in the order they apply (a
 // later skill of a name wins), as opencode looks: the user's
 // ~/.claude/skills and ~/.agents/skills; .claude/skills and .agents/skills
-// from the repository's root down to dir; then skills/ and skill/ in each
-// configuration directory (Dirs).
+// from the repository's root down to dir; skills/ and skill/ in each
+// configuration directory (Dirs); then KairoCode's own, the user's
+// (~/.config/kairocode/skills) and .kairocode/skills from the root down
+// (ADR 0002).
 func SkillDirs(dir string) []string {
 	var out []string
-	if home, err := os.UserHomeDir(); err == nil {
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
 		out = append(out, filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".agents", "skills"))
 	}
 	for _, d := range project(dir) {
@@ -34,13 +38,42 @@ func SkillDirs(dir string) []string {
 	for _, c := range Dirs(dir) {
 		out = append(out, filepath.Join(c, "skill"), filepath.Join(c, "skills"))
 	}
+	if cfg := os.Getenv("XDG_CONFIG_HOME"); cfg != "" {
+		out = append(out, filepath.Join(cfg, "kairocode", "skills"))
+	} else if homeErr == nil {
+		out = append(out, filepath.Join(home, ".config", "kairocode", "skills"))
+	}
+	for _, d := range project(dir) {
+		out = append(out, filepath.Join(d, ".kairocode", "skills"))
+	}
 	return out
 }
+
+// SkillProblem is a SKILL.md that is not taken, or a skill another of its
+// name takes the place of, and why.
+type SkillProblem struct {
+	Path string `json:"path"`
+	Why  string `json:"why"`
+}
+
+// skillName is a skill's name as opencode has it: lowercase letters and
+// digits, in words joined by -, at most 64 characters.
+var skillName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Skills reads every SKILL.md under dirs (at any depth). One whose
 // frontmatter has no name is not a skill, as in opencode, and is skipped.
 func Skills(dirs []string) (map[string]Skill, error) {
+	out, _, err := CheckedSkills(dirs)
+	return out, err
+}
+
+// CheckedSkills is Skills, and what of them is not taken, and why: a
+// SKILL.md that cannot be read, has no name, or a name not as opencode
+// has it (lowercase words joined by -, at most 64 characters, the name of
+// its directory); and a skill a later one of its name takes the place of.
+func CheckedSkills(dirs []string) (map[string]Skill, []SkillProblem, error) {
 	out := map[string]Skill{}
+	var problems []SkillProblem
 	for _, root := range dirs {
 		err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
 			if err != nil {
@@ -54,20 +87,33 @@ func Skills(dirs []string) (map[string]Skill, error) {
 			}
 			v, _, err := file{path: path}.read()
 			if err != nil {
-				return nil // not a skill opencode would read either
+				problems = append(problems, SkillProblem{Path: path, Why: "its frontmatter cannot be read: " + err.Error()})
+				return nil
 			}
 			name := v.Get("name").String()
-			if name == "" {
+			dirName := filepath.Base(filepath.Dir(path))
+			switch {
+			case name == "":
+				problems = append(problems, SkillProblem{Path: path, Why: "it has no name"})
 				return nil
+			case len(name) > 64 || !skillName.MatchString(name):
+				problems = append(problems, SkillProblem{Path: path, Why: fmt.Sprintf("its name %q is not lowercase words joined by - (64 characters at most)", name)})
+				return nil
+			case name != dirName:
+				problems = append(problems, SkillProblem{Path: path, Why: fmt.Sprintf("its name %q is not its directory's (%s)", name, dirName)})
+				return nil
+			}
+			if before, ok := out[name]; ok {
+				problems = append(problems, SkillProblem{Path: before.Path, Why: "replaced by " + path})
 			}
 			out[name] = Skill{Name: name, Description: v.Get("description").String(), Path: path}
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return out, nil
+	return out, problems, nil
 }
 
 // SkillList is the list of skills for the system prompt, as opencode

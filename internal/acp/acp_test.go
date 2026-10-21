@@ -71,6 +71,10 @@ func (l *local) TryFlow(ctx context.Context, key, args string) error {
 	return l.r.TryFlow(ctx, key, args)
 }
 
+func (l *local) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
+	return l.r.Skills(ctx, session)
+}
+
 func (l *local) Events(ctx context.Context, s string) (<-chan runtime.Event, error) {
 	return l.r.Events(ctx, s)
 }
@@ -1227,5 +1231,56 @@ func TestLocalizedReview(t *testing.T) {
 	script := runtime.PreviewSection{Name: "Script", Text: "    tool(\"x\")  # outside service"}
 	if got := localized(locale.Japanese, script); got.Text != script.Text {
 		t.Fatalf("the script changed: %q", got.Text)
+	}
+}
+
+// Skills are offered as slash commands, marked as skills; /skills lists
+// them, and the SKILL.md files not taken, without a turn.
+func TestACPSkills(t *testing.T) {
+	b, ws := setup(t)
+	for path, body := range map[string]string{
+		".kairocode/skills/hello/SKILL.md": "---\nname: hello\ndescription: Say hello well\n---\nGreet.\n",
+		".kairocode/skills/bad/SKILL.md":   "---\nname: other\n---\n",
+	} {
+		os.MkdirAll(filepath.Dir(filepath.Join(ws, path)), 0o755)
+		if err := os.WriteFile(filepath.Join(ws, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
+	resp, before := c.until(isResponse(id))
+	var r struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	offered := false
+	for _, m := range before {
+		if m.Method == "session/update" && strings.Contains(string(m.Params), `"name":"hello"`) &&
+			strings.Contains(string(m.Params), "(skill) Say hello well") {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Fatal("the skill is not offered as a command")
+	}
+	id = prompt(c, r.SessionID, "/skills")
+	resp, before = c.until(isResponse(id))
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	said := ""
+	for _, m := range before {
+		if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "agent_message_chunk" {
+			said += updateOf(t, m).text()
+		}
+	}
+	if !strings.Contains(said, "/hello — Say hello well") || !strings.Contains(said, `its name "other" is not its directory's (bad)`) {
+		t.Fatalf("/skills said %q", said)
 	}
 }

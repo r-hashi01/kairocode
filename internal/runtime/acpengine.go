@@ -38,6 +38,39 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 	if err != nil {
 		return nil, nil, false, err
 	}
+	if registryAgent(engine) == codexAgent {
+		// Codex's own skills are not listed to its model: it has
+		// KairoCode's, as Claude Code has (ADR 0002). Over the user's
+		// CODEX_CONFIG, if there is one.
+		cfg := map[string]any{}
+		user := env["CODEX_CONFIG"]
+		if user == "" {
+			user = os.Getenv("CODEX_CONFIG")
+		}
+		if user != "" && json.Unmarshal([]byte(user), &cfg) != nil {
+			// Not JSON: the user's, as it is; codex runs, its skills not
+			// hidden.
+			r.logf("CODEX_CONFIG is not a JSON object: codex's own skills are not hidden")
+			return argv, env, false, nil
+		}
+		skills, _ := cfg["skills"].(map[string]any)
+		if skills == nil {
+			skills = map[string]any{}
+		}
+		skills["include_instructions"] = false
+		cfg["skills"] = skills
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		withConfig := map[string]string{"CODEX_CONFIG": string(b)}
+		for k, v := range env {
+			if k != "CODEX_CONFIG" {
+				withConfig[k] = v
+			}
+		}
+		return argv, withConfig, false, nil
+	}
 	if registryAgent(engine) != copilotAgent {
 		return argv, env, false, nil
 	}

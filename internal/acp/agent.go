@@ -38,6 +38,8 @@ type Backend interface {
 	Undo(ctx context.Context, session string) (int, error)
 	Redo(ctx context.Context, session string) (int, error)
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
+	// Skills are the session's skills, and the SKILL.md files not taken.
+	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
@@ -64,6 +66,7 @@ var builtinCommands = []map[string]any{
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
 	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
 	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},
+	{"name": "skills", "description": "The skills here (/<skill> runs one), and SKILL.md files not taken, and why"},
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -261,12 +264,15 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		a.o.Logger.Warn("acp: the project's commands", "err", err)
 	}
 	for _, c := range cs {
-		if c.Name == "undo" || c.Name == "redo" || c.Name == "flow" || c.Name == "provider" || c.Name == "model" || c.Name == "effort" {
+		if slices.ContainsFunc(builtinCommands, func(b map[string]any) bool { return b["name"] == c.Name }) {
 			continue // KairoCode's own
 		}
 		desc := c.Description
 		if desc == "" {
 			desc = "/" + c.Name
+		}
+		if c.Skill {
+			desc = "(skill) " + desc
 		}
 		all = append(all, map[string]any{"name": c.Name, "description": desc, "input": map[string]any{"hint": "arguments"}})
 	}
@@ -533,6 +539,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			text = "Could not install " + id + ": " + err.Error()
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+		return map[string]any{"stopReason": "end_turn"}, nil
+	case name == "/skills":
+		// Without a turn: the skills, and what of them is not taken.
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.skillsText(ctx, p.SessionID))})
 		return map[string]any{"stopReason": "end_turn"}, nil
 	case name == "/login":
 		// Without a turn: the ways to sign in, or one taken (ADR 0015).
@@ -1160,4 +1170,33 @@ func localized(lang string, s runtime.PreviewSection) runtime.PreviewSection {
 		}
 	}
 	return s
+}
+
+// skillsText is /skills: each skill (/name to run it) and where it is, and
+// the SKILL.md files not taken, and why.
+func (a *agent) skillsText(ctx context.Context, session string) string {
+	sk, err := a.b.Skills(ctx, session)
+	if err != nil {
+		return "Could not read the skills: " + err.Error()
+	}
+	var b strings.Builder
+	if len(sk.Skills) == 0 {
+		b.WriteString("No skills here. A skill is a SKILL.md in .kairocode/skills/<name>/ (or .claude/skills, .agents/skills, .opencode/skills).\n")
+	} else {
+		b.WriteString("Skills (/<name> runs one):\n")
+		for _, s := range sk.Skills {
+			line := "- /" + s.Name
+			if s.Description != "" {
+				line += " — " + s.Description
+			}
+			fmt.Fprintf(&b, "%s\n    %s\n", line, s.Path)
+		}
+	}
+	if len(sk.Problems) > 0 {
+		b.WriteString("\nNot taken:\n")
+		for _, p := range sk.Problems {
+			fmt.Fprintf(&b, "- %s: %s\n", p.Path, p.Why)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

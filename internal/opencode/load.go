@@ -300,6 +300,9 @@ type Command struct {
 	// runs as a turn of the session).
 	Subtask  bool   `json:"subtask,omitempty"`
 	Template string `json:"template"`
+	// Skill: not a command but a skill, run as /name (its SKILL.md is
+	// the turn's instructions).
+	Skill bool `json:"skill,omitempty"`
 }
 
 // Commands reads the command definitions of dirs; a later file of a name

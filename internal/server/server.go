@@ -44,6 +44,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
 	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
 	s.mux.HandleFunc("GET /sessions/{id}/commands", s.commands)
+	s.mux.HandleFunc("GET /sessions/{id}/skills", s.skills)
 	s.mux.HandleFunc("POST /sessions/{id}/commands", s.runCommand)
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
@@ -518,6 +519,20 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cs)
+}
+
+// skills lists the session's skills, and the SKILL.md files not taken.
+func (s *Server) skills(w http.ResponseWriter, r *http.Request) {
+	sk, err := s.rt.Skills(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sk)
 }
 
 // flows lists the flows the session's project has (ADR 0003).
