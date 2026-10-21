@@ -47,6 +47,14 @@ const (
 // notification (the result is dropped).
 type Handler func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
+// Then is a result to answer with, and what to do once the answer is
+// written: what the handler starts that may write to the peer (a request
+// of its own) comes after its answer.
+type Then struct {
+	Result any
+	After  func()
+}
+
 // Conn is a JSON-RPC connection over newline-delimited JSON (ACP's stdio
 // transport). Requests from the other side are handled each in its own
 // goroutine; ours wait for their responses.
@@ -220,6 +228,12 @@ func (c *Conn) take(ctx context.Context, line []byte, h Handler, wg *sync.WaitGr
 			c.mu.Lock()
 			delete(c.running, id)
 			c.mu.Unlock()
+			if t, ok := result.(Then); ok {
+				result = t.Result
+				if t.After != nil {
+					defer t.After() // after the write below
+				}
+			}
 			resp := Message{ID: m.ID}
 			switch {
 			case err != nil:

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -631,6 +632,20 @@ func TestCrashACPReview(t *testing.T) {
 	}
 }
 
+// loadAsked loads session s and reads until the agent asks the client
+// something, failing if that comes before the answer to the load: a client
+// learns of the session from the answer (issue #13). It returns the request
+// and the messages before it.
+func loadAsked(t *testing.T, c *client, s, ws string) (message, []message) {
+	t.Helper()
+	id := c.request("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
+	req, before := c.until(isMethod("session/request_permission"))
+	if !slices.ContainsFunc(before, isResponse(id)) {
+		t.Fatalf("asked before the answer to the load: %s", req.Params)
+	}
+	return req, before
+}
+
 func crashReview(t *testing.T, option, recorded string) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "k.db")
@@ -670,8 +685,8 @@ func crashReview(t *testing.T, option, recorded string) {
 	c := start(t, ctx, &local{r: r})
 	initialize(c)
 	s := runtime.SessionID("crash")
-	c.call("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
-	req, before := c.until(isMethod("session/request_permission"))
+	// The answer to the load comes before what it asks (issue #13).
+	req, before := loadAsked(t, c, s, ws)
 	var p struct {
 		ToolCall struct {
 			ToolCallID string `json:"toolCallId"`
@@ -707,8 +722,7 @@ func crashReview(t *testing.T, option, recorded string) {
 	c.answer(req, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "allow_once"}})
 	d := start(t, ctx, &local{r: r})
 	initialize(d)
-	d.call("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
-	req, _ = d.until(isMethod("session/request_permission"))
+	req, _ = loadAsked(t, d, s, ws)
 	allow(d, req, option)
 	for {
 		m := d.next()

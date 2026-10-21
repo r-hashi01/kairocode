@@ -1,9 +1,11 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -385,5 +387,89 @@ func TestCancelStopsTheTurnUnderWay(t *testing.T) {
 	}
 	if out, err := r.WaitTurn(ctx, s, queued); err != nil || out.Stopped != "" {
 		t.Fatalf("the queued turn: %+v %v", out, err)
+	}
+}
+
+// endStoppedTurn stands in for the turn: turn 0 is stopped just as it
+// ends (its run cancelled, then its function returns a value, or fails if
+// fail), the others end as they are. *r is the runtime it runs in.
+func endStoppedTurn(r **Runtime, fail bool) func(*kairo.Context, workflows.TurnInput) (workflows.TurnOutput, error) {
+	return func(ctx *kairo.Context, in workflows.TurnInput) (workflows.TurnOutput, error) {
+		if in.N == 0 {
+			if err := (*r).K.Cancel(context.Background(), ctx.ID()); err != nil {
+				return workflows.TurnOutput{}, err
+			}
+			if fail {
+				return workflows.TurnOutput{}, errors.New("the model failed")
+			}
+		}
+		return workflows.TurnOutput{Head: fmt.Sprintf("head-%d", in.N)}, nil
+	}
+}
+
+// A turn stopped just as it ends, with a value or a failure (kairo-gap
+// #22), is taken as its run was recorded, cancelled, live and read back
+// alike: the session read back
+// gives the next turn the same input, so it is not run again under another
+// id. Version 6 took the value live and the cancellation read back.
+func TestTurnStoppedAsItEnds(t *testing.T) {
+	for _, c := range []struct {
+		version string
+		fail    bool
+		turns   int
+	}{{"", false, 3}, {"", true, 3}, {workflows.SessionVersion6, false, 4}} {
+		t.Run(fmt.Sprintf("version %s fail %v", cmp.Or(c.version, workflows.SessionVersion), c.fail), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			db := filepath.Join(t.TempDir(), "k.db")
+			var r *Runtime
+			open := func() {
+				var err error
+				r, err = Open(ctx, Config{DB: db, Owner: "race", Provider: &provider.Fake{HoldAt: -1},
+					ClaudePath: filepath.Join(t.TempDir(), "no-claude"), turn: endStoppedTurn(&r, c.fail), onlyVersion: c.version})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			open()
+			s, err := r.CreateSession(ctx, "race", workflows.SessionInput{Dir: repo(t)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range 2 {
+				n, err := r.Send(ctx, s, fmt.Sprintf("m%d", i))
+				if err != nil {
+					t.Fatal(err)
+				}
+				waitUntil(t, ctx, "the turn's end", func() bool {
+					k, ok, _ := r.TurnRun(ctx, s, n)
+					return ok && k.Finished()
+				})
+			}
+			// Read back: the session is driven from the start again.
+			r.Close()
+			open()
+			defer r.Close()
+			n, err := r.Send(ctx, s, "m2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.WaitTurn(ctx, s, n); err != nil {
+				t.Fatal(err)
+			}
+			kids, err := r.K.Children(ctx, s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			turns := 0
+			for _, k := range kids {
+				if k.Workflow == workflows.Turn {
+					turns++
+				}
+			}
+			if turns != c.turns {
+				t.Fatalf("%d turn runs, want %d", turns, c.turns)
+			}
+		})
 	}
 }

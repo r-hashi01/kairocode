@@ -226,7 +226,10 @@ func Serve(ctx context.Context, o Options) error {
 		// from an earlier status; a step that starts after the check is
 		// drained.
 		if r.URL.Query().Has("idle") {
-			if steps, clients := idle.counts(); steps > 0 || clients > 1 {
+			// This client's own connection is one. Another that has just
+			// closed (the client of the old build, quit a moment ago) may
+			// not have been seen to yet: it is waited for, briefly.
+			if steps, _ := idle.counts(); steps > 0 || !idle.settle(r.Context(), 1, time.Second) {
 				http.Error(w, "busy", http.StatusConflict)
 				return
 			}
@@ -395,10 +398,36 @@ type idleTimer struct {
 	conns int
 	t     *time.Timer
 	gen   int // which timer is t: one stopped too late still fires
+	// changed is closed and replaced whenever a count changes.
+	changed chan struct{}
 }
 
 func newIdleTimer(d time.Duration, stop func()) *idleTimer {
-	return &idleTimer{d: d, stop: stop}
+	return &idleTimer{d: d, stop: stop, changed: make(chan struct{})}
+}
+
+// settle waits, up to d, for no step to run and at most conns clients to
+// be connected, and says whether they are: a client that has just closed
+// its connection may not have been seen to yet. It waits on the counts'
+// changes, not on a clock.
+func (i *idleTimer) settle(ctx context.Context, conns int, d time.Duration) bool {
+	timeout := time.NewTimer(d)
+	defer timeout.Stop()
+	for {
+		i.mu.Lock()
+		ok, changed := i.steps == 0 && i.conns <= conns, i.changed
+		i.mu.Unlock()
+		if ok {
+			return true
+		}
+		select {
+		case <-changed:
+		case <-timeout.C:
+			return false
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 func (i *idleTimer) observe(o kairo.Observation) {
@@ -430,6 +459,8 @@ func (i *idleTimer) add(n *int, d int) {
 	// Never below zero: a finish without a start (kairo's callback of an
 	// asynchronous action) must not hide a step that runs.
 	*n = max(*n+d, 0)
+	close(i.changed)
+	i.changed = make(chan struct{})
 	i.mu.Unlock()
 	i.check()
 }

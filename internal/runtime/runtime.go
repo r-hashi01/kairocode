@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,8 @@ type Config struct {
 	// Now is kairo's clock (tests; the real clock when nil).
 	Now func() time.Time
 
+	// turn, in tests, stands in for the turn's function.
+	turn func(*kairo.Context, workflows.TurnInput) (workflows.TurnOutput, error)
 	// onlyVersion, in tests, declares the session and the turn at that old
 	// version only ("2", "3" or "4"), as a build of that version did.
 	onlyVersion string
@@ -324,6 +327,9 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 
 func (r *Runtime) declare() {
 	switch v := r.cfg.onlyVersion; v {
+	case workflows.SessionVersion6:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
 	case workflows.SessionVersion5:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(v))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
@@ -335,7 +341,10 @@ func (r *Runtime) declare() {
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV3, kairo.WorkflowVersion(v))
 	default:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
-		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
+		// Version 6 finishes as it started: a turn is taken as its result
+		// said (kairo-gap #22).
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(workflows.SessionVersion6), kairo.Draining())
 		// Version 5 finishes as it started: no switch of engine or model.
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(workflows.SessionVersion5), kairo.Draining())
 		// Version 4 finishes as it started: a stopped turn is not kept.
@@ -399,6 +408,7 @@ func (r *Runtime) declare() {
 			return r.Store.Extend(t, in.Prev, in.Messages)
 		})
 	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
+	kairo.Action(r.K, workflows.ActTurnSettled, kairo.Unprotected, r.turnSettled) // it reads kairo's record
 	kairo.Action(r.K, workflows.ActToolMissing, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {
 			call, err := r.toolCall(t, in)
@@ -732,7 +742,7 @@ func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if info.Version != workflows.SessionVersion && info.Version != workflows.SessionVersion5 && info.Version != workflows.SessionVersion4 {
+	if !slices.Contains([]string{workflows.SessionVersion, workflows.SessionVersion6, workflows.SessionVersion5, workflows.SessionVersion4}, info.Version) {
 		return 0, ErrNoUndo
 	}
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: kind})
@@ -803,7 +813,9 @@ func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
 				_ = json.Unmarshal(k.Input, &w)
 				// kairo-gap #22: were the turn's function to return between
 				// the look above and this cancel, kairo would record the run
-				// cancelled while the session had its value.
+				// cancelled while the session had its value. The session
+				// (version 7) reads back how the run was recorded and takes
+				// it as cancelled (turn.settled).
 				return w.Input.N, r.K.Cancel(ctx, k.RunID)
 			}
 		}
@@ -984,4 +996,27 @@ func (r *Runtime) History(ctx context.Context, session string) ([]msg.Message, e
 		return nil, err
 	}
 	return r.Store.Messages(ctx, hashes)
+}
+
+// turnSettled says whether turn n of a session was recorded cancelled
+// (kairo-gap #22). The session has its result, so its run has settled: the
+// embedded runtime records a run's end before its parent is given it, and
+// a turn is kept as long as its session runs.
+func (r *Runtime) turnSettled(t *kairo.TaskContext, in workflows.TurnSettledInput) (workflows.TurnSettledOutput, error) {
+	info, ok, err := r.TurnRun(t, in.Session, in.N)
+	if err != nil {
+		return workflows.TurnSettledOutput{}, kairo.Retryable(err)
+	}
+	if !ok || !info.Finished() {
+		return workflows.TurnSettledOutput{}, fmt.Errorf("turn %d of %s: no settled run", in.N, in.Session)
+	}
+	return workflows.TurnSettledOutput{Cancelled: info.Status == "cancelled"}, nil
+}
+
+// turnWorkflow is the turn's function: RunTurn, or a test's stand-in.
+func (r *Runtime) turnWorkflow() func(*kairo.Context, workflows.TurnInput) (workflows.TurnOutput, error) {
+	if r.cfg.turn != nil {
+		return r.cfg.turn
+	}
+	return workflows.RunTurn
 }

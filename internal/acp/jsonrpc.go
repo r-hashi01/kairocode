@@ -17,6 +17,8 @@ type (
 	rpcError = jsonrpc.Error
 	handler  = jsonrpc.Handler
 	conn     = jsonrpc.Conn
+	// then: an answer, and what follows once it is written.
+	then = jsonrpc.Then
 )
 
 const (

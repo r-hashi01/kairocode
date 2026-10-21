@@ -52,7 +52,7 @@ type done struct {
 // recorded outputs alone (their snapshots), so a resumed session undoes the
 // same turns.
 func RunSessionV4(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
-	return runSession(ctx, in, false, false)
+	return runSession(ctx, in, false, false, false)
 }
 
 // RunSessionV5 is a session of version 5: RunSessionV4, and a turn the
@@ -60,20 +60,28 @@ func RunSessionV4(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 // (ADR 0011): the model knows what was asked, and that tool calls may have
 // changed the files.
 func RunSessionV5(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
-	return runSession(ctx, in, true, false)
+	return runSession(ctx, in, true, false, false)
 }
 
-// RunSession is a session of version 6: RunSessionV5, and an event may
+// RunSessionV6 is a session of version 6: RunSessionV5, and an event may
 // switch the session's engine or model for its turn and those after it
 // (ADR 0014). A switch of engine starts a new epoch, in which a CLI engine
 // starts a session of its own.
+func RunSessionV6(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, true, false)
+}
+
+// RunSession is a session of version 7: RunSessionV6, and a turn is taken
+// as its run was recorded, cancelled or not, whatever its result said when
+// it came (kairo-gap #22: a turn stopped just as it ended returns its value
+// live and is read back cancelled).
 func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
-	return runSession(ctx, in, true, true)
+	return runSession(ctx, in, true, true, true)
 }
 
 // runSession is RunSessionV4; with keepStopped RunSessionV5; with switches
-// too RunSession.
-func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool) (SessionOutput, error) {
+// too RunSessionV6; with settle too RunSession.
+func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, settle bool) (SessionOutput, error) {
 	head := ""
 	engine, model, effort, mode, epoch := in.Engine, in.Model, in.Effort, "", 0
 	// applied: turns in effect, the last undone first; undone: turns undone,
@@ -134,6 +142,22 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool)
 			}
 		}
 		out, err := kairo.Child[TurnOutput](ctx, Turn, tin)
+		var failed *kairo.WorkflowError
+		isFailure := err != nil && errors.As(err, &failed)
+		if settle && (err == nil || isFailure || errors.Is(err, kairo.ErrCancelled)) {
+			// kairo-gap #22: a turn's value or failure, live, may be of a
+			// run kairo recorded cancelled, which read back is
+			// ErrCancelled. The record decides, live and read back alike:
+			// the call is made for any outcome of the turn, so both make
+			// the same calls.
+			s, serr := kairo.Call[TurnSettledOutput](ctx, ActTurnSettled, TurnSettledInput{Session: ctx.ID(), N: n})
+			if serr != nil {
+				return SessionOutput{Turns: n, Head: head}, serr
+			}
+			if s.Cancelled {
+				err, isFailure = kairo.ErrCancelled, false
+			}
+		}
 		if err != nil {
 			// As in RunSessionV3: a recorded failure or cancellation leaves
 			// things as they were; anything else is not an outcome. From
@@ -142,8 +166,6 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches bool)
 			// turn that failed with a cancelled call inside is a failure,
 			// and is told apart by its type alone (live, its error wraps
 			// the call's; read back, it does not).
-			var failed *kairo.WorkflowError
-			isFailure := errors.As(err, &failed)
 			switch {
 			case keepStopped && !isFailure && errors.Is(err, kairo.ErrCancelled) && ev.Kind == EventMessage:
 				h, err := kairo.Call[string](ctx, ActHistoryCancelled, HistoryCancelledInput{Prev: head, Message: ev.Message})

@@ -72,3 +72,14 @@ kairo には `k.Cancel(ctx, id)` があります。実行と、その実行が�
 - undo と redo のターンを止めると、作業ファイルは途中まで戻った状態で残ります。書き添えはありません（メッセージのターンではないため）。次の undo の対象も変わりません。
 - 版 4 のセッションの undo も、引き続き受け付けます（undo の版の検査を「4 か 5」にした）。
 - テスト: `TestCancelTurn`（SSE の `turn.end` も）、`TestCancelledCallIsAFailure`、`TestCancelStopsTheTurnUnderWay`、`TestCancelWhileAwaitingApproval`、`TestCancelStopsARunningCommand`（bash のプロセスが消える。グループで止めないと落ちることを確かめた）、`TestCancelInAVersion4Session`、`TestCrashCancel`、`TestCancelOverHTTP`、`TestACPCancel`、`TestEscStopsTheTurn`。
+
+## 追記: 終わる瞬間に止めたターン（2026-10-21、kairo-gap #22 の回避）
+
+- **起きていたこと:** ターンのワークフローが成功で返ってから完了が記録されるまでの、ごく短い間に取り消しが記録されると、kairo は実行を「取り消し」で記録し、完了の知らせを捨てます。失敗で返ったときも、SDK が取り消しにまだ気づいていなければ同じです（live では失敗、再開では取り消し）。セッションは live では値を受け取り、再開すると `ErrCancelled` を受け取ります。live と再開で別の道に入り、次のターンの入力（履歴）が変わって、次のターンが別の ID でもう一度動き得ました。
+- **回避:** セッションの版 7（`RunSession`）は、ターンの子の結果（値、失敗、`ErrCancelled`）を受け取ったら、`turn.settled` のアクションで、そのターンの実行が取り消しで記録されたかを読みます。分岐は、その記録された答えで決めます。記録が取り消しなら、値や失敗が来ていても止めたターンとして扱います（書き添えを足す）。
+  - live と再開のどちらでも同じ呼び出しをするので、呼び出しの列がずれません。
+  - ターンの結果でないもの（駆動が止まった、版がない、記録が失われた）のときは、どちらでも呼びません。
+  - 最初は失敗のときを外していましたが、durability-reviewer の指摘で、失敗の側にも同じ隙間があると分かり、含めました。
+- **版:** セッションを 7 に上げ、版 6 を `Draining` で残しました。ターンの版は変えていません。
+- **テスト:** `TestTurnStoppedAsItEnds`。偽のターンが自分の実行を取り消してから成功か失敗で返り、この隙間を作ります。版 7 では、どちらでも再開してターンの実行が増えません。版 6 では、成功のときにターンがもう一度動くことも確かめています。失敗のときを外すと、版 7 のテストが落ちることを確かめました。
+- kairo の側で完了と取り消しが排他になれば（`docs/proposals/kairo-done-and-cancel.md`）、`turn.settled` は要らなくなります。

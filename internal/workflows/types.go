@@ -15,9 +15,13 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "6"
+	SessionVersion = "7"
 	Turn           = "turn"
 	TurnVersion    = "4"
+	// SessionVersion6 is the version before a session read back how each
+	// turn's run was recorded (kairo-gap #22). Its runs finish with
+	// RunSessionV6.
+	SessionVersion6 = "6"
 	// SessionVersion5 is the version before a message could switch the
 	// session's provider and model for the turns after it (ADR 0014). Its
 	// runs finish with RunSessionV5: they have no switch to read.
@@ -98,6 +102,9 @@ const (
 	// conversation: what they asked, and a note that it was stopped (ADR
 	// 0011).
 	ActHistoryCancelled = "history.cancelled"
+	// ActTurnSettled says how a turn's run was recorded once the session
+	// has its result: cancelled or not (kairo-gap #22).
+	ActTurnSettled = "turn.settled"
 	// ActSnapshot records the working files as a tree, and ActRestore puts
 	// them back as a tree has them (design 7).
 	ActSnapshot = "snapshot"
@@ -781,6 +788,17 @@ type ToolOutput struct {
 type HistoryExtendInput struct {
 	Prev     string   `json:"prev,omitempty"`
 	Messages []string `json:"messages"`
+}
+
+// TurnSettledInput names a turn of a session; TurnSettledOutput says
+// whether its run was recorded cancelled (kairo-gap #22).
+type TurnSettledInput struct {
+	Session string `json:"session"`
+	N       int    `json:"n"`
+}
+
+type TurnSettledOutput struct {
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 // HistoryCancelledInput: the conversation before the stopped turn, and the

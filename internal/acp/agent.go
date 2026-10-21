@@ -361,11 +361,12 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
-		if _, err := a.watch(s); err != nil {
+		w, err := a.watch(s)
+		if err != nil {
 			return nil, err
 		}
 		a.offerCommands(ctx, s)
-		return map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, nil
+		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: w.release}, nil
 	case "session/load":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -386,12 +387,14 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
-		// What waits for a person is asked again: the watch is told it first.
-		if _, err := a.watch(p.SessionID); err != nil {
+		// What waits for a person is asked again: the watch is told it
+		// first, and asks once the answer to the load is written.
+		w, err := a.watch(p.SessionID)
+		if err != nil {
 			return nil, err
 		}
 		a.offerCommands(ctx, p.SessionID)
-		return map[string]any{"configOptions": opts, "modes": modes}, nil
+		return then{Result: map[string]any{"configOptions": opts, "modes": modes}, After: w.release}, nil
 	case "session/set_mode":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -524,6 +527,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
+	w.release() // the turn's updates come before the answer, at its end
 	prompt := strings.Join(text, "\n")
 	start := a.b.Send
 	// quiet: no model speaks the turn's reply (an undo, a flow): it is sent
@@ -774,6 +778,11 @@ type sessionWatch struct {
 	mu      sync.Mutex
 	ended   map[int]bool // turns whose end was sent, not yet waited for
 	waiters map[int][]chan struct{}
+	// open: its events are mapped to ACP once it is closed (release). A
+	// watch started by session/new or session/load is held until the
+	// answer is written: what it asks the client comes after it.
+	open    chan struct{}
+	release func()
 }
 
 // end: the end of turn n has been sent.
@@ -849,13 +858,19 @@ func (a *agent) watch(session string) (*sessionWatch, error) {
 		cancel()
 		return w, nil
 	}
-	w = &sessionWatch{ended: map[int]bool{}, waiters: map[int][]chan struct{}{}}
+	w = &sessionWatch{ended: map[int]bool{}, waiters: map[int][]chan struct{}{}, open: make(chan struct{})}
+	w.release = sync.OnceFunc(func() { close(w.open) })
 	a.watching[session] = w
 	a.wg.Add(1)
 	a.mu.Unlock()
 	go func() {
 		defer a.wg.Done()
 		defer cancel()
+		select {
+		case <-w.open:
+		case <-a.ctx.Done():
+			return
+		}
 		for {
 			for ev := range events {
 				a.event(session, ev)
