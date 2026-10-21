@@ -48,6 +48,9 @@ type fakeClaudeStart struct {
 	Mode    string `json:"mode"` // --session-id or --resume
 	Session string `json:"session"`
 	Allowed string `json:"allowed"`
+	// Sources is --setting-sources (nil: not given); System, --system-prompt.
+	Sources *string `json:"sources,omitempty"`
+	System  string  `json:"system,omitempty"`
 }
 
 func fakeClaude() {
@@ -68,6 +71,10 @@ func fakeClaude() {
 			mcpConfig = args[i+1]
 		case "--allowedTools":
 			start.Allowed = args[i+1]
+		case "--setting-sources":
+			start.Sources = &args[i+1]
+		case "--system-prompt":
+			start.System = args[i+1]
 		case "--json-schema":
 			jsonSchema = args[i+1]
 		}
@@ -584,5 +591,38 @@ def main(input):
 	}
 	if n := len(e.starts(t)); n != 1 {
 		t.Fatalf("claude started %d times, want 1", n)
+	}
+}
+
+// Claude Code reads none of its own settings, CLAUDE.md files among them:
+// KairoCode gives it its instructions, the user's CLAUDE.md once, in the
+// system prompt. (Checked by hand with Claude Code 2.1.305 against a local
+// server that kept the request: with --setting-sources "", none of
+// ~/.claude/CLAUDE.md, CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md is
+// in it; without it, each is, once.)
+func TestClaudeEngineReadsNoSettingsOfItsOwn(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Reply: "ok"})
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "CLAUDE.md"), []byte("USER_MEMORY_MARK"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "sources", workflows.SessionInput{Dir: repo(t)})
+	n, _ := r.Send(ctx, s, "hello")
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	st := e.starts(t)
+	if len(st) != 1 || st[0].Sources == nil || *st[0].Sources != "" {
+		t.Fatalf("claude was not told to read no settings: %+v", st)
+	}
+	if strings.Count(st[0].System, "USER_MEMORY_MARK") != 1 {
+		t.Fatalf("the user's CLAUDE.md is not in the system prompt once:\n%s", st[0].System)
 	}
 }

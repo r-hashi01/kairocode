@@ -215,3 +215,27 @@ opencode v1.19.3 のソースを読んで、同じ意味で読むようにしま
     - モデルの名前
     - リストの中のコメントと括弧の中のカンマ
 - **テスト:** `TestClaudeDefinitions`、`TestToolList`、`TestDefinitionsInAClaudeWorktree`、`TestParseLists`、`TestClaudeCodeDefinitions`、`TestClaudeAgentToolsList`（リストが利用者の「聞く」を上書きしない。許す層の形に戻すと落ちる）、`TestAgentsRefuseBadDefinitions`。
+
+## 追記: CLI のエージェントに、指示を二重に渡さない（2026-10-21、確かめた結果）
+
+KairoCode は、`AGENTS.md`・`CLAUDE.md` などの指示とスキルの一覧を、自分のシステムの指示に入れてエージェントに渡します。CLI のエージェントが自分でも同じものを読むと、モデルに二重に入ります。それぞれ、モデルを呼ばずに確かめました。
+
+| エージェント | KairoCode が渡す形 | 自分で読むもの | 止め方 |
+|---|---|---|---|
+| Claude Code 2.1.305 | `--setting-sources ""` | 読まない | もとから止まっている |
+| codex 0.163 | `CODEX_CONFIG` | project の `AGENTS.md` | `project_doc_max_bytes = 0` を足した |
+| copilot 1.0.98 | 起動の引数 | project の `AGENTS.md`・`CLAUDE.md`（`copilot instruction list`） | `--no-custom-instructions` を足した |
+
+- **Claude Code**
+  - 確かめ方: 手元の 127.0.0.1 に、要求を記録して 400 を返すだけのサーバーを立て、`ANTHROPIC_BASE_URL` をそこに向けて動かしました。Anthropic には何も送っていません。
+  - KairoCode と同じ引数（`--setting-sources ""`）では、`~/.claude/CLAUDE.md`、`CLAUDE.md`、`.claude/CLAUDE.md`、`CLAUDE.local.md` のどれも要求に入りませんでした。モデルへの指示は、KairoCode のシステムの指示だけです。
+  - 比べるために `--setting-sources` を外すと、4 つとも 1 度ずつ入りました。
+  - 守らせるテスト: `TestClaudeEngineReadsNoSettingsOfItsOwn`（`--setting-sources ""` を渡すこと、利用者の CLAUDE.md がシステムの指示にちょうど 1 度入ること）。
+- **codex**
+  - 確かめ方: `codex debug prompt-input` で、project の `AGENTS.md` が codex 自身の指示に入ることを見ました。
+  - `-c project_doc_max_bytes=0` で入らなくなることも確かめたので、`CODEX_CONFIG` に足しました。codex 自身の `~/.codex/AGENTS.md` は、KairoCode が読まないので、codex に任せます。
+- **copilot**
+  - 確かめ方: `copilot instruction list` で、project の `AGENTS.md` と `CLAUDE.md` を読むことを見ました。
+  - `--no-custom-instructions`（「AGENTS.md などから custom instructions を読まない」）を ACP の起動に足しました。ACP で起動してこの旗を受けることは確かめました。
+  - ただし、旗を付けた session がそれらを本当に読まないかは、モデルを呼ばずには確かめられません。そのため、copilot の説明の文言に拠っています。
+- **テスト:** `TestCodexOwnSkillsOff`（codex の `project_doc_max_bytes`、copilot の旗）。

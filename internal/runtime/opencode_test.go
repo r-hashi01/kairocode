@@ -241,12 +241,14 @@ func TestSkillCommands(t *testing.T) {
 	}
 }
 
-// Codex is not given its own skills: CODEX_CONFIG says so, over the
-// user's.
+// Codex is given neither its own skills nor its own reading of the
+// project's AGENTS.md: CODEX_CONFIG says so, over the user's. Copilot is
+// started with no custom instructions of its own.
 func TestCodexOwnSkillsOff(t *testing.T) {
 	t.Setenv("CODEX_CONFIG", `{"model": "m", "skills": {"max_context_tokens": 5}}`)
 	ctx := context.Background()
-	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0], Provider: &provider.Fake{HoldAt: -1}})
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0], CopilotPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,8 +258,9 @@ func TestCodexOwnSkillsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg struct {
-		Model  string `json:"model"`
-		Skills struct {
+		Model    string `json:"model"`
+		DocBytes *int   `json:"project_doc_max_bytes"`
+		Skills   struct {
 			IncludeInstructions *bool `json:"include_instructions"`
 			MaxContextTokens    int   `json:"max_context_tokens"`
 		} `json:"skills"`
@@ -265,11 +268,17 @@ func TestCodexOwnSkillsOff(t *testing.T) {
 	if err := json.Unmarshal([]byte(env["CODEX_CONFIG"]), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model != "m" || cfg.Skills.MaxContextTokens != 5 || cfg.Skills.IncludeInstructions == nil || *cfg.Skills.IncludeInstructions {
+	if cfg.Model != "m" || cfg.Skills.MaxContextTokens != 5 || cfg.Skills.IncludeInstructions == nil || *cfg.Skills.IncludeInstructions ||
+		cfg.DocBytes == nil || *cfg.DocBytes != 0 {
 		t.Fatalf("CODEX_CONFIG %s", env["CODEX_CONFIG"])
 	}
-	if _, env, _, _ := r.acpArgv(workflows.EngineCopilot, nil, ""); env["CODEX_CONFIG"] != "" {
-		t.Error("copilot given codex's config")
+	// Copilot reads no AGENTS.md or CLAUDE.md of its own.
+	argv, env, _, err := r.acpArgv(workflows.EngineCopilot, []string{"read"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["CODEX_CONFIG"] != "" || !slices.Contains(argv, "--no-custom-instructions") {
+		t.Errorf("copilot: %q %v", env["CODEX_CONFIG"], argv)
 	}
 	// A CODEX_CONFIG that is not JSON is left as it is: codex still runs.
 	t.Setenv("CODEX_CONFIG", "model=m")
