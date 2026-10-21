@@ -113,9 +113,11 @@ func Split(md []byte) (front, body string, err error) {
 // Parse reads frontmatter: the YAML that opencode's definitions use in
 // practice. Maps nest by indentation; values are plain, single- or
 // double-quoted scalars, or block scalars (| and >); # starts a comment.
-// Lists, flow collections ({} and []), anchors and tags are refused, not
-// misread. As opencode does for Claude-style frontmatter, a top-level plain
-// value that holds ": " is taken whole.
+// Flow maps ({}), anchors and tags are refused, not misread. A list of
+// scalars (- a, or [a, b] on one line) is taken as one scalar: the items
+// joined by ", ", or the brackets as written (Claude Code's "tools: [Read,
+// Grep]" and "argument-hint: [env]"). As opencode does for Claude-style
+// frontmatter, a top-level plain value that holds ": " is taken whole.
 func Parse(front string) (*Value, error) {
 	var lines []line
 	for i, raw := range strings.Split(front, "\n") {
@@ -184,6 +186,11 @@ func (p *parser) block(indent int) (*Value, error) {
 		p.i++
 		var v *Value
 		switch rest = stripComment(rest); {
+		case rest == "" && p.listNext(indent):
+			// A list of scalars: one scalar, its items joined.
+			if v, err = p.list(); err != nil {
+				return nil, err
+			}
 		case rest == "":
 			// A nested map, or an empty value.
 			v = &Value{}
@@ -203,6 +210,50 @@ func (p *parser) block(indent int) (*Value, error) {
 		m.Map[key] = v
 	}
 	return m, nil
+}
+
+// listNext reports whether the next line that is not blank is a list's
+// item, at indent or deeper.
+func (p *parser) listNext(indent int) bool {
+	for j := p.i; j < len(p.lines); j++ {
+		if blank(p.lines[j].raw) {
+			continue
+		}
+		t := strings.TrimSpace(p.lines[j].raw)
+		return indentOf(p.lines[j].raw) >= indent && (strings.HasPrefix(t, "- ") || t == "-")
+	}
+	return false
+}
+
+// list reads a list of scalars from the next line: its items joined by
+// ", ".
+func (p *parser) list() (*Value, error) {
+	var items []string
+	at := -1
+	for p.i < len(p.lines) {
+		l := p.lines[p.i]
+		if blank(l.raw) {
+			p.i++
+			continue
+		}
+		t := strings.TrimSpace(l.raw)
+		if at < 0 {
+			at = indentOf(l.raw)
+		}
+		if indentOf(l.raw) != at || !(strings.HasPrefix(t, "- ") || t == "-") {
+			break
+		}
+		v, err := scalar(strings.TrimSpace(stripComment(strings.TrimPrefix(t, "-"))), false)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %v", l.n, err)
+		}
+		if v.IsMap() {
+			return nil, fmt.Errorf("line %d: a list of maps is not supported", l.n)
+		}
+		items = append(items, v.Scalar)
+		p.i++
+	}
+	return &Value{Scalar: strings.Join(items, ", ")}, nil
 }
 
 // nextIndent is the indentation of the next line that is not blank.
@@ -342,7 +393,12 @@ func scalar(s string, top bool) (*Value, error) {
 			b.WriteByte(s[i])
 		}
 		return nil, fmt.Errorf("unterminated string")
-	case '{', '[':
+	case '[':
+		if t := strings.TrimSpace(stripComment(s)); strings.HasSuffix(t, "]") && !strings.ContainsAny(t, "{}") {
+			return &Value{Scalar: t}, nil // a list on one line, as written
+		}
+		return nil, fmt.Errorf("flow collections ({} and []) are not supported")
+	case '{':
 		return nil, fmt.Errorf("flow collections ({} and []) are not supported")
 	case '&', '*', '!':
 		return nil, fmt.Errorf("anchors, aliases and tags are not supported")

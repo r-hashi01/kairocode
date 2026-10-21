@@ -73,10 +73,28 @@ Be brief.
 	}
 }
 
+// A list of scalars is one scalar: its items joined, or as written in
+// brackets (Claude Code's tools and argument-hint).
+func TestParseLists(t *testing.T) {
+	for in, want := range map[string]string{
+		"tools:\n  - Read\n  - Grep\n":   "Read, Grep",
+		"tools:\n- Read\n- \"Grep\"\n":   "Read, Grep",
+		"tools: [Read, Grep]\n":          "[Read, Grep]",
+		"argument-hint: [env] # where\n": "[env]",
+	} {
+		v, err := Parse(in)
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := v.Map[v.Keys[0]].String(); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestParseRefusesWhatItDoesNotRead(t *testing.T) {
 	for _, bad := range []string{
-		"tools:\n  - read\n",
-		"tools: [read, write]\n",
+		"tools:\n  - a: b\n",
 		"permission: {edit: deny}\n",
 		"a: &x 1\n",
 		"a:\n  b: c: d\n",

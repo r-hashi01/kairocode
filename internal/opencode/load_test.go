@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -254,5 +255,97 @@ func TestSkillRules(t *testing.T) {
 		if !ok || !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)
 		}
+	}
+}
+
+// Claude Code's definitions are read too (~/.claude, .claude, .agents):
+// its agents are subagents named by their frontmatter, their tools a list
+// (only those); its commands' argument-hint is their hint. One that cannot
+// be read is left out; .opencode, read after, wins a name.
+func TestClaudeDefinitions(t *testing.T) {
+	root, sub := newProject(t)
+	home := os.Getenv("HOME")
+	put(t, home, map[string]string{
+		".claude/agents/reviewer.md": "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep, mcp__x__y\nmodel: sonnet\ncolor: blue\n---\nYou review code.\n",
+	})
+	put(t, root, map[string]string{
+		".claude/commands/deploy.md": "---\ndescription: Deploy it\nargument-hint: [env]\nallowed-tools: Bash(git:*)\n---\nDeploy to $ARGUMENTS\n",
+		".claude/commands/broken.md": "---\ndescription: [\n---\n",
+		".claude/agents/helper.md":   "---\ndescription: Helps\n---\nHelp.\n",
+		".claude/agents/build.md":    "---\ndescription: Not KairoCode's build\n---\nNo.\n",
+		".claude/agents/odd.md":      "---\ndescription: Odd\nmode: sometimes\n---\nOdd.\n",
+		".claude/commands/plain.md":  "---\ndescription: No bash\n---\nNow: !`date`\n",
+		".agents/commands/tidy.md":   "---\ndescription: Tidy up\n---\nTidy.\n",
+		".opencode/agents/helper.md": "---\ndescription: The opencode helper\nmode: all\n---\nHelp more.\n",
+	})
+	dirs := DefinitionDirs(sub)
+	agents, err := Agents(dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := agents["code-reviewer"]
+	if r.Mode != "subagent" || r.Model != "sonnet" || r.Prompt != "You review code." || len(r.Permission) != 0 ||
+		!reflect.DeepEqual(r.Only, []string{"read", "grep", "mcp__x__y"}) {
+		t.Fatalf("code-reviewer %+v", r)
+	}
+	if h := agents["helper"]; h.Mode != "all" || h.Description != "The opencode helper" {
+		t.Fatalf("helper %+v", h)
+	}
+	cs, err := Commands(dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cs["deploy"]; c.Hint != "[env]" || c.Template != "Deploy to $ARGUMENTS" {
+		t.Fatalf("deploy %+v", c)
+	}
+	if _, ok := cs["tidy"]; !ok {
+		t.Fatal("no command from .agents")
+	}
+	if _, ok := cs["broken"]; ok {
+		t.Fatal("a command that cannot be read was taken")
+	}
+	if !cs["plain"].NoShell || cs["deploy"].NoShell {
+		t.Fatalf("!`…` allowed: plain %+v, deploy %+v", cs["plain"], cs["deploy"])
+	}
+	if _, ok := agents["build"]; ok {
+		t.Fatal("Claude Code's file changed KairoCode's build")
+	}
+	if _, ok := agents["odd"]; ok {
+		t.Fatal("a Claude Code agent with a field this cannot take was taken")
+	}
+}
+
+// A tools list names tools: a glob in it names none; Bash(git:*) is bash;
+// a comment is not a name.
+func TestToolList(t *testing.T) {
+	for in, want := range map[string][]string{
+		"Read, Grep":                          {"read", "grep"},
+		"[Read, \"*\"]":                       {"read"},
+		"Bash(git add:*, git commit:*), Edit": {"bash", "edit"},
+		"*":                                   {},
+	} {
+		if got := toolList(in); !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+	v, err := Parse("tools:\n  - Read # the reader\n")
+	if err != nil || v.Get("tools").String() != "Read" {
+		t.Fatalf("a comment in a list: %v %q", err, v.Get("tools").String())
+	}
+}
+
+// A project in a Claude Code worktree (…/.claude/worktrees/x) is not
+// Claude Code's: its .opencode agents are opencode's.
+func TestDefinitionsInAClaudeWorktree(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo", ".claude", "worktrees", "x")
+	put(t, root, map[string]string{".git/HEAD": "ref: refs/heads/main\n", ".opencode/agents/main.md": "---\ndescription: Main\n---\nMain.\n"})
+	agents, err := Agents(DefinitionDirs(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := agents["main"]; a.Mode != "" {
+		t.Fatalf("main %+v", a)
 	}
 }

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -273,5 +275,110 @@ func TestCodexOwnSkillsOff(t *testing.T) {
 	t.Setenv("CODEX_CONFIG", "model=m")
 	if _, env, _, err := r.acpArgv(workflows.EngineCodex, nil, ""); err != nil || env["CODEX_CONFIG"] != "" {
 		t.Fatalf("not JSON: %v %q", err, env["CODEX_CONFIG"])
+	}
+}
+
+// Claude Code's definitions are KairoCode's too: its subagents are told
+// to the model for the task tool, its CLAUDE.md files (the user's, the
+// project's .claude/) are instructions, and its model names are models.
+func TestClaudeCodeDefinitions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ws := repo(t)
+	for path, body := range map[string]string{
+		filepath.Join(home, ".claude", "CLAUDE.md"):                "Always answer in haiku.",
+		filepath.Join(ws, ".claude", "CLAUDE.md"):                  "This project is a parser.",
+		filepath.Join(ws, ".claude", "agents", "code-reviewer.md"): "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\nmodel: haiku\n---\nReview.\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "ok"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "claude-defs", workflows.SessionInput{Dir: ws})
+	turn(t, r, s, "hello")
+	system := systemOf(t, r, agentOf(t, ctx, r, s, 0))
+	for _, want := range []string{
+		`<instructions file="~/.claude/CLAUDE.md">` + "\nAlways answer in haiku.",
+		`<instructions file=".claude/CLAUDE.md">` + "\nThis project is a parser.",
+		"<agent><name>code-reviewer</name><description>Reviews code</description></agent>",
+	} {
+		if !strings.Contains(system, want) {
+			t.Errorf("no %q in\n%s", want, system)
+		}
+	}
+	if strings.Index(system, "Always answer in haiku") > strings.Index(system, "This project is a parser") {
+		t.Error("the user's instructions are not first")
+	}
+	for name, want := range map[string]string{"sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "inherit": "", "anthropic/claude-x": "claude-x"} {
+		if got, err := modelOf(name); err != nil || got != want {
+			t.Errorf("modelOf(%q) = %q, %v", name, got, err)
+		}
+	}
+}
+
+// A Claude Code agent given a tools list has only those tools: the others
+// are not shown it, and are denied; the list allows nothing the user's
+// rules do not.
+func TestClaudeAgentToolsList(t *testing.T) {
+	ws := workspaceWith(t, `{"read": "ask"}`)
+	for path, body := range map[string]string{
+		".claude/agents/looker.md":       "---\nname: looker\ndescription: Looks\ntools: Read, Grep\n---\nLook.\n",
+		".kairocode/workflows/look.star": "def main(input):\n    return agent(\"looker\", \"look\").output\n",
+	} {
+		os.MkdirAll(filepath.Dir(filepath.Join(ws, path)), 0o755)
+		if err := os.WriteFile(filepath.Join(ws, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "looked"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "looker", workflows.SessionInput{Dir: ws})
+	n, err := r.RunFlow(ctx, s, "look", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	var found *workflows.Agent
+	var walk func(id string)
+	walk = func(id string) {
+		kids, _ := r.K.Children(ctx, id)
+		for _, k := range kids {
+			if k.Plan == "kairo.call/"+workflows.ActAgentLoad && k.Finished() {
+				var a workflows.Agent
+				var in struct {
+					In workflows.AgentLoadInput `json:"in"`
+				}
+				if json.Unmarshal(k.Output, &a) == nil && json.Unmarshal(k.Input, &in) == nil && in.In.Agent == "looker" {
+					found = &a
+				}
+			}
+			walk(k.RunID)
+		}
+	}
+	walk(s)
+	if found == nil {
+		t.Fatal("the looker's agent.load is not there")
+	}
+	if !slices.Equal(found.Names, []string{"grep", "read"}) && !slices.Equal(found.Names, []string{"read", "grep"}) {
+		t.Fatalf("its tools %v", found.Names)
+	}
+	var rules []permission.Rule
+	if err := r.Store.GetJSON(ctx, found.Permissions, store.KindPermissions, &rules); err != nil {
+		t.Fatal(err)
+	}
+	if d := permission.Decide(rules, "bash", "ls"); d.Action != permission.Deny {
+		t.Errorf("bash: %v", d.Action)
+	}
+	if d := permission.Decide(rules, "read", "a.go"); d.Action != permission.Ask {
+		t.Errorf("read: %v, want the user's ask", d.Action)
 	}
 }

@@ -274,7 +274,11 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		if c.Skill {
 			desc = "(skill) " + desc
 		}
-		all = append(all, map[string]any{"name": c.Name, "description": desc, "input": map[string]any{"hint": "arguments"}})
+		hint := c.Hint
+		if hint == "" {
+			hint = "arguments"
+		}
+		all = append(all, map[string]any{"name": c.Name, "description": desc, "input": map[string]any{"hint": hint}})
 	}
 	a.update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": all})
 }

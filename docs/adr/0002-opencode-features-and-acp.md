@@ -177,3 +177,41 @@ opencode v1.19.3 のソースを読んで、同じ意味で読むようにしま
 - **名前の規則の出どころ:** Agent Skills の仕様では、name は SKILL.md の親ディレクトリの名前と一致しなければなりません。その仕様に合わせました。これまで名前の違うディレクトリで読めていたスキルは、読まれなくなります。読まれなかったものは、`/skills` に理由が出ます。
 - **組み込みのコマンドと同じ名前のスキル**（`skills`、`model`、`undo` など）は、組み込みのほうが先です。`/` では呼べませんが、モデルは skill ツールで使えます。
 - **テスト:** `TestSkillRules`、`TestSkills`、`TestSkillCommands`、`TestCodexOwnSkillsOff`（JSON でない設定はそのまま）、`TestACPSkills`。
+
+## 追記: .claude と .agents の定義も読む（2026-10-21、利用者の要望「.claude とか .agent のディレクトリも読みましょう」）
+
+- **エージェントとコマンドを読む場所**（`opencode.DefinitionDirs`）
+  - 後のものが勝つ順で、まず利用者の `~/.claude`、`~/.agents`、opencode の利用者の設定です。
+  - 続けて、リポジトリの根から作業ディレクトリまでの各階層の `.claude`、`.agents`、`.opencode` を読みます。
+  - 読むのは、それぞれの `agents/`・`commands/`（と単数形）の `.md` です。
+  - 同じ名前なら `.opencode` が勝ちます。opencode のものだけを読む場所（`Dirs`）は、そのまま残しました。
+- **Claude Code のエージェント**（`.claude/agents/*.md`）
+  - 名前は frontmatter の `name` で決め、`mode` が無ければサブエージェントにします（Claude Code のエージェントは、どれもサブエージェント）。
+  - `tools: Read, Grep`（や、リストの形）は、そのエージェントに渡すツールを絞ります（`Agent.Only`）。
+    - 名前は KairoCode のツールに直します（Read→read、Edit/MultiEdit→edit、LS→list、`Bash(git:*)`→bash など）。知らない名前（MCP のツールなど）は、そのまま使います。`*` などのグロブを含む名前は捨てます。
+    - リストに無いツールは、エージェントに見せず、断る規則も足します（`agent.load` で記録）。
+    - リストにあるツールを許すことはしません。許すか聞くかは、利用者と project の規則のままです。Claude Code の `tools` も、使えるツールを絞るだけです。
+    - opencode の定義の `tools` は、これまでどおり map だけを受けます。
+  - `model` の `sonnet`・`opus`・`haiku` は、最新の Claude のモデルに直します。`inherit` はモデルを指定しません。`color` などは読みません。
+- **Claude Code のコマンド**（`.claude/commands/*.md`）: opencode のコマンドと同じく展開します（`$ARGUMENTS`、`!` のコマンドなど）。`argument-hint` は、ACP のコマンドの入力の案内（hint）にします。
+- **読めない定義は外します。** `.claude` と `.agents` のファイルは別の道具のものなので、読めないものは外し、ほかを止めません。形が違う、本文が無い、`mode` などの値が受け取れない、が当たります。`.opencode` のものは、これまでどおり誤りとして止めます。
+  - どれが別の道具のものかは、定義を読むディレクトリ（`.claude`・`.agents`）で決めます。パスの途中に `/.claude/` があっても（Claude Code の worktree、`…/.claude/worktrees/x`）、その project の `.opencode` は opencode のものです。
+  - 別の道具のファイルは、KairoCode の組み込みのエージェント（`build`、`plan`）を変えられません。
+- **Claude Code のコマンドの `!`:** `allowed-tools` が Bash を許していなければ実行せず、「(not run: …)」に置き換えます。Claude Code と同じ扱いです。
+- **モデルの名前:** `sonnet` などを Claude のモデルに直すのは、API と Claude Code のエンジンのときだけです。codex などでは、そのエンジンの既定のモデルにします。
+- **frontmatter の読み方**
+  - スカラーのリスト（`- Read` の行、または 1 行の `[a, b]`）を、1 つのスカラーとして読むようにしました。行の形は項目を「, 」でつなぎ、1 行の形は括弧ごとそのまま読みます。
+  - Claude Code の `tools` と `argument-hint: [env]` が、これで読めます。map の flow（`{}`）、アンカー、タグは、これまでどおり受けません。
+- **指示のファイル:** `AGENTS.md`・`CLAUDE.md` に加えて、`.claude/CLAUDE.md`、`CLAUDE.local.md`、利用者の `~/.claude/CLAUDE.md` を読みます。利用者のものが最初です。
+- **サブエージェントの一覧:** task ツールを出すときは、渡せるエージェント（primary でなく、隠し・無効でなく、説明のあるもの）を、システムの指示に `<available_agents>` として並べます。Claude Code のエージェントも、モデルから見えるようになります。
+- **信頼の確認の文:** 読む場所（.kairocode、.opencode、.claude、.agents、AGENTS.md、CLAUDE.md）を書き足しました。
+- **durability-reviewer の指摘で直したこと**
+  - 最初の形では、ツールのリストを「リストのものを許す」層にしていました。そのため、利用者の「聞く」「断る」の規則を上書きし、`*` を書けばすべて許すことになっていました。今は、絞るだけで、許しません。
+  - あわせて直したこと（上に書いた分）:
+    - worktree の中の誤判定
+    - 組み込みのエージェントの上書き
+    - 受け取れない値の扱い
+    - `!` の扱い
+    - モデルの名前
+    - リストの中のコメントと括弧の中のカンマ
+- **テスト:** `TestClaudeDefinitions`、`TestToolList`、`TestDefinitionsInAClaudeWorktree`、`TestParseLists`、`TestClaudeCodeDefinitions`、`TestClaudeAgentToolsList`（リストが利用者の「聞く」を上書きしない。許す層の形に戻すと落ちる）、`TestAgentsRefuseBadDefinitions`。

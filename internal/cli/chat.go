@@ -118,7 +118,7 @@ func lineChat(ctx context.Context, fromAgent io.Reader, toAgent io.Writer, stdou
 	go t.read(ctx, stdin)
 	if !trusted {
 		t.line("Do you trust the files in " + abs + "?")
-		t.line("kairo will follow its permission rules (kairocode.json), and the agents, commands and skills in .opencode and .claude.")
+		t.line("kairo will follow its permission rules (kairocode.json), and the agents, commands and skills in .kairocode, .opencode, .claude and .agents, and its AGENTS.md and CLAUDE.md.")
 		t.mu.Lock()
 		io.WriteString(t.out, "trust it? (y/n): ")
 		t.midLine = true

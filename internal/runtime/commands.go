@@ -40,7 +40,7 @@ func (r *Runtime) Commands(ctx context.Context, session string) ([]opencode.Comm
 	if err != nil {
 		return nil, err
 	}
-	cs, err := opencode.Commands(opencode.Dirs(dir))
+	cs, err := opencode.Commands(opencode.DefinitionDirs(dir))
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (r *Runtime) RunCommand(ctx context.Context, session, name, args string) (i
 	if err != nil {
 		return 0, err
 	}
-	cs, err := opencode.Commands(opencode.Dirs(dir))
+	cs, err := opencode.Commands(opencode.DefinitionDirs(dir))
 	if err != nil {
 		return 0, err
 	}
@@ -95,7 +95,13 @@ func (r *Runtime) RunCommand(ctx context.Context, session, name, args string) (i
 	may := func(tool, subject string) bool {
 		return permission.Decide(rules, tool, subject).Action != permission.Deny
 	}
-	text, err := opencode.Expand(c, args, dir, func(cmd string) (string, error) { return shellOutput(ctx, dir, cmd) }, may)
+	run := func(cmd string) (string, error) { return shellOutput(ctx, dir, cmd) }
+	if c.NoShell { // Claude Code's, its allowed-tools not allowing Bash
+		run = func(cmd string) (string, error) {
+			return "(not run: the command's allowed-tools do not allow Bash)", nil
+		}
+	}
+	text, err := opencode.Expand(c, args, dir, run, may)
 	if err != nil {
 		return 0, fmt.Errorf("/%s: %w", name, err)
 	}

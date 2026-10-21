@@ -57,6 +57,34 @@ func Dirs(dir string) []string {
 	})
 }
 
+// DefinitionDirs are where agents and commands are read from, in the
+// order they apply, the last winning: the user's Claude Code (~/.claude),
+// ~/.agents and opencode's (as Dirs); then, from the repository's root
+// down to dir, each directory's .claude, .agents and .opencode. Those that
+// do not exist are left out.
+func DefinitionDirs(dir string) []string {
+	var out []string
+	if home, err := os.UserHomeDir(); err == nil {
+		out = append(out, filepath.Join(home, ".claude"), filepath.Join(home, ".agents"))
+	}
+	config := os.Getenv("XDG_CONFIG_HOME")
+	if config == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			config = filepath.Join(home, ".config")
+		}
+	}
+	if config != "" {
+		out = append(out, filepath.Join(config, "opencode"))
+	}
+	for _, d := range project(dir) {
+		out = append(out, filepath.Join(d, ".claude"), filepath.Join(d, ".agents"), filepath.Join(d, ".opencode"))
+	}
+	return slices.DeleteFunc(out, func(d string) bool {
+		info, err := os.Stat(d)
+		return err != nil || !info.IsDir()
+	})
+}
+
 // markdown lists the .md files under sub/ and subs/ of each directory, by
 // name: the path under that directory without .md ("team/review" for
 // agents/team/review.md). The files of every directory are returned in
@@ -80,7 +108,9 @@ func markdown(dirs []string, sub string) ([]file, error) {
 				if err != nil {
 					return err
 				}
-				out = append(out, file{name: filepath.ToSlash(strings.TrimSuffix(rel, ".md")), path: path})
+				base := filepath.Base(d)
+				out = append(out, file{name: filepath.ToSlash(strings.TrimSuffix(rel, ".md")), path: path,
+					borrowed: base == ".claude" || base == ".agents", claude: base == ".claude"})
 				return nil
 			})
 			if err != nil && !os.IsNotExist(err) {
@@ -91,7 +121,12 @@ func markdown(dirs []string, sub string) ([]file, error) {
 	return out, nil
 }
 
-type file struct{ name, path string }
+// file is a definition file: its name, its path, and whether it is
+// another tool's (under .claude or .agents: borrowed), Claude Code's.
+type file struct {
+	name, path       string
+	borrowed, claude bool
+}
 
 // read reads a definition: its frontmatter and its body (trimmed).
 func (f file) read() (*Value, string, error) {
@@ -127,6 +162,9 @@ type Agent struct {
 	// Workflow is a flow of .kairocode/workflows that runs the agent's turns
 	// in place of the model loop (KairoCode's, ADR 0003).
 	Workflow string `json:"workflow,omitempty"`
+	// Only, if not nil, are the only tools the agent is given (Claude
+	// Code's tools list): the others are neither shown nor allowed.
+	Only []string `json:"only,omitempty"`
 	// Permission are permission rules in kairocode.json's form, each object
 	// a layer after the one before (tools first, then permission, file by
 	// file): of the rules that match a call, the last wins.
@@ -143,79 +181,159 @@ func Agents(dirs []string) (map[string]Agent, error) {
 	}
 	out := map[string]Agent{}
 	for _, f := range files {
-		v, body, err := f.read()
-		if err != nil {
+		name, a, err := f.agent(out)
+		switch {
+		case err != nil && f.borrowed:
+			continue // another tool's file this one cannot take: left out, not in the way
+		case err != nil:
 			return nil, err
-		}
-		name := f.name
-		if n := v.Get("name").String(); n != "" {
-			name = n
-		}
-		a := out[name]
-		a.Name = name
-		if s := v.Get("description").String(); s != "" {
-			a.Description = s
-		}
-		if s := v.Get("mode").String(); s != "" {
-			switch s {
-			case "primary", "subagent", "all":
-				a.Mode = s
-			default:
-				return nil, fmt.Errorf("%s: mode %q is not primary, subagent or all", f.path, s)
-			}
-		}
-		if s := v.Get("model").String(); s != "" {
-			a.Model = s
-		}
-		if s := v.Get("workflow").String(); s != "" {
-			a.Workflow = s
-		}
-		if body != "" {
-			a.Prompt = body
-		}
-		for _, k := range []string{"steps", "maxSteps"} {
-			if v.Get(k) == nil {
-				continue
-			}
-			n, ok := v.Get(k).Int()
-			if !ok || n <= 0 {
-				return nil, fmt.Errorf("%s: %s must be a positive number", f.path, k)
-			}
-			if k == "steps" || a.Steps == 0 {
-				a.Steps = n
-			}
-		}
-		for _, k := range []string{"disable", "hidden"} {
-			if v.Get(k) == nil {
-				continue
-			}
-			b, ok := v.Get(k).Bool()
-			if !ok {
-				return nil, fmt.Errorf("%s: %s must be true or false", f.path, k)
-			}
-			if k == "disable" {
-				a.Disable = b
-			} else {
-				a.Hidden = b
-			}
-		}
-		if t := v.Get("tools"); t != nil {
-			layer, err := toolsLayer(t)
-			if err != nil {
-				return nil, fmt.Errorf("%s: tools: %w", f.path, err)
-			}
-			a.Permission = append(a.Permission, layer)
-		}
-		if p := v.Get("permission"); p != nil {
-			layer, err := permissionLayer(p)
-			if err != nil {
-				return nil, fmt.Errorf("%s: permission: %w", f.path, err)
-			}
-			a.Permission = append(a.Permission, layer)
+		case f.borrowed && slices.Contains(BuiltinAgents, name):
+			continue // KairoCode's own agents are not another tool's to change
 		}
 		out[name] = a
 	}
 	return out, nil
+}
+
+// BuiltinAgents are the agents there are without any definition (build
+// does the work, plan only reads); only opencode's definitions change them.
+var BuiltinAgents = []string{"build", "plan"}
+
+// agent reads f's definition over the one of its name in out: its name,
+// and the agent with what f sets.
+func (f file) agent(out map[string]Agent) (string, Agent, error) {
+	v, body, err := f.read()
+	if err != nil {
+		return "", Agent{}, err
+	}
+	name := f.name
+	if n := v.Get("name").String(); n != "" {
+		name = n
+	}
+	a := out[name]
+	a.Name = name
+	a.Permission = slices.Clone(a.Permission)
+	if s := v.Get("description").String(); s != "" {
+		a.Description = s
+	}
+	if s := v.Get("mode").String(); s != "" {
+		switch s {
+		case "primary", "subagent", "all":
+			a.Mode = s
+		default:
+			return "", Agent{}, fmt.Errorf("%s: mode %q is not primary, subagent or all", f.path, s)
+		}
+	} else if f.claude && a.Mode == "" {
+		a.Mode = "subagent" // Claude Code's agents are its subagents
+	}
+	if s := v.Get("model").String(); s != "" {
+		a.Model = s
+	}
+	if s := v.Get("workflow").String(); s != "" {
+		a.Workflow = s
+	}
+	if body != "" {
+		a.Prompt = body
+	}
+	for _, k := range []string{"steps", "maxSteps"} {
+		if v.Get(k) == nil {
+			continue
+		}
+		n, ok := v.Get(k).Int()
+		if !ok || n <= 0 {
+			return "", Agent{}, fmt.Errorf("%s: %s must be a positive number", f.path, k)
+		}
+		if k == "steps" || a.Steps == 0 {
+			a.Steps = n
+		}
+	}
+	for _, k := range []string{"disable", "hidden"} {
+		if v.Get(k) == nil {
+			continue
+		}
+		b, ok := v.Get(k).Bool()
+		if !ok {
+			return "", Agent{}, fmt.Errorf("%s: %s must be true or false", f.path, k)
+		}
+		if k == "disable" {
+			a.Disable = b
+		} else {
+			a.Hidden = b
+		}
+	}
+	if t := v.Get("tools"); t != nil && !t.IsMap() && f.borrowed {
+		// Claude Code's: the tools it may use, by its names ("Read,
+		// Grep"). Only these are given it; it is allowed nothing more
+		// than the user's rules allow.
+		a.Only = toolList(t.String())
+	} else if t != nil {
+		layer, err := toolsLayer(t)
+		if err != nil {
+			return "", Agent{}, fmt.Errorf("%s: tools: %w", f.path, err)
+		}
+		a.Permission = append(a.Permission, layer)
+	}
+	if p := v.Get("permission"); p != nil {
+		layer, err := permissionLayer(p)
+		if err != nil {
+			return "", Agent{}, fmt.Errorf("%s: permission: %w", f.path, err)
+		}
+		a.Permission = append(a.Permission, layer)
+	}
+	return name, a, nil
+}
+
+// claudeTools are Claude Code's tools by the names they have here.
+var claudeTools = map[string][]string{
+	"Read": {"read"}, "Write": {"write"}, "Edit": {"edit"}, "MultiEdit": {"edit"}, "Bash": {"bash"},
+	"Grep": {"grep"}, "Glob": {"glob"}, "LS": {"list"}, "Task": {"task"}, "Skill": {"skill"},
+}
+
+// toolList is a list of Claude Code's tools ("Read, Grep", "[Read,
+// Grep]", "Bash(git add:*), Read") by the names they have here. A name it
+// has not here is taken as it is (an MCP tool's); one with a glob in it
+// is left out: a list names tools, it does not match them.
+func toolList(list string) []string {
+	var out []string
+	depth, start := 0, 0
+	list = strings.Trim(strings.TrimSpace(list), "[]")
+	var items []string
+	for i, r := range list {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				items = append(items, list[start:i])
+				start = i + 1
+			}
+		}
+	}
+	items = append(items, list[start:])
+	for _, name := range items {
+		name = strings.Trim(strings.TrimSpace(name), `"'`)
+		if i := strings.Index(name, "("); i > 0 { // Bash(git:*): the tool
+			name = name[:i]
+		}
+		if name == "" || strings.ContainsAny(name, "*?[") {
+			continue
+		}
+		mapped, ok := claudeTools[name]
+		if !ok {
+			mapped = []string{name}
+		}
+		for _, m := range mapped {
+			if !slices.Contains(out, m) {
+				out = append(out, m)
+			}
+		}
+	}
+	if out == nil {
+		out = []string{} // a list of none: no tool
+	}
+	return out
 }
 
 // editTools are the tools opencode's "edit" permission covers, by their
@@ -300,6 +418,11 @@ type Command struct {
 	// runs as a turn of the session).
 	Subtask  bool   `json:"subtask,omitempty"`
 	Template string `json:"template"`
+	// Hint: what to give it, for the input (Claude Code's argument-hint).
+	Hint string `json:"hint,omitempty"`
+	// NoShell: its !`…` are not run (Claude Code's, whose allowed-tools
+	// do not allow Bash).
+	NoShell bool `json:"no_shell,omitempty"`
 	// Skill: not a command but a skill, run as /name (its SKILL.md is
 	// the turn's instructions).
 	Skill bool `json:"skill,omitempty"`
@@ -316,6 +439,9 @@ func Commands(dirs []string) (map[string]Command, error) {
 	for _, f := range files {
 		v, body, err := f.read()
 		if err != nil {
+			if f.borrowed {
+				continue
+			}
 			return nil, err
 		}
 		c := out[f.name]
@@ -329,17 +455,31 @@ func Commands(dirs []string) (map[string]Command, error) {
 		if s := v.Get("model").String(); s != "" {
 			c.Model = s
 		}
+		if s := v.Get("argument-hint").String(); s != "" { // Claude Code's
+			c.Hint = s
+		}
 		if v.Get("subtask") != nil {
 			b, ok := v.Get("subtask").Bool()
+			if !ok && f.borrowed {
+				continue
+			}
 			if !ok {
 				return nil, fmt.Errorf("%s: subtask must be true or false", f.path)
 			}
 			c.Subtask = b
 		}
+		if f.claude {
+			// Claude Code runs a command's !`…` only where its allowed-tools
+			// allow Bash.
+			c.NoShell = !strings.Contains(v.Get("allowed-tools").String(), "Bash")
+		}
 		if body != "" {
 			c.Template = body
 		}
 		if c.Template == "" {
+			if f.borrowed {
+				continue
+			}
 			return nil, fmt.Errorf("%s: the command has no template (its body)", f.path)
 		}
 		out[f.name] = c

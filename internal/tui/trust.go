@@ -68,7 +68,7 @@ func (m *trustModel) View() tea.View {
 	b.WriteString(warn.Bold(true).Render("Do you trust the files in this folder?") + "\n\n")
 	b.WriteString(bold.Render(cutLeft(m.dir, w)) + "\n\n")
 	b.WriteString(wrap("kairo will follow what this folder sets for it: the permission rules in kairocode.json, "+
-		"and the agents, commands and skills in .opencode and .claude. Its files are read and written, and its "+
+		"the agents, commands and skills in .kairocode, .opencode, .claude and .agents, and its AGENTS.md and CLAUDE.md. Its files are read and written, and its "+
 		"commands run, in a sandbox. If you did not write it, or do not know the project, look at those first.", w, "") + "\n\n")
 	for i, o := range []string{"Yes, I trust this folder", "No, exit"} {
 		if i == m.sel {
