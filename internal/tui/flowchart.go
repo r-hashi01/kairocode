@@ -45,6 +45,11 @@ type block struct {
 	lines []string
 	width int
 	mid   int
+	// reached: the run has come to it (a box that ran or runs, or a part
+	// with one); passive: it does not run (a phase, an if, an end), and is
+	// reached when what follows it is; phase: its name, for a phase.
+	reached, passive bool
+	phase            string
 }
 
 // Chart draws a flow's chart in at most width columns, top to bottom as
@@ -66,8 +71,9 @@ func ChartOf(v *flowchart.View, width int) string {
 type Live struct {
 	Since map[string]time.Time
 	Now   time.Time
-	Text  string // the last of what the agent writes
-	Tool  string // the call it makes now
+	Start time.Time // when the run began (zero: not known)
+	Text  string    // the last of what the agent writes
+	Tool  string    // the call it makes now
 }
 
 // spinFrames turn while a box runs.
@@ -87,8 +93,62 @@ func ChartLive(v *flowchart.View, width int, live *Live) string {
 			}
 		}
 		d.alone = running == 1
+		d.progress = progress(v, live)
 	}
 	return d.draw(v.Chart, width)
+}
+
+// progress is where a run is: its phase (of how many), the calls done,
+// and how long it has run.
+func progress(v *flowchart.View, live *Live) string {
+	var phases []string
+	now := ""
+	ran := func(n flowchart.Node) bool {
+		found := false
+		var walk func(flowchart.Node)
+		walk = func(n flowchart.Node) {
+			if st := v.States[n.Key()]; st != StatePending && (n.Kind == flowchart.Agent || n.Kind == flowchart.Tool ||
+				n.Kind == flowchart.Ask || n.Kind == flowchart.Decide || n.Kind == flowchart.Parallel) {
+				found = true
+			}
+			for _, k := range append(append(append([]flowchart.Node(nil), n.Then...), n.Else...), n.Body...) {
+				walk(k)
+			}
+			for _, br := range n.Branches {
+				for _, k := range br {
+					walk(k)
+				}
+			}
+		}
+		walk(n)
+		return found
+	}
+	current := ""
+	for _, n := range v.Chart.Nodes {
+		if n.Kind == flowchart.Phase {
+			phases = append(phases, n.Text)
+			current = n.Text
+			continue
+		}
+		if ran(n) {
+			now = current
+		}
+	}
+	done := 0
+	for _, st := range v.States {
+		if st == StateDone {
+			done++
+		}
+	}
+	var parts []string
+	if now != "" {
+		parts = append(parts, fmt.Sprintf("%s · phase %d/%d", now, slices.Index(phases, now)+1, len(phases)))
+	}
+	parts = append(parts, fmt.Sprintf("%d done", done))
+	if !live.Start.IsZero() {
+		parts = append(parts, live.Now.Sub(live.Start).Truncate(time.Second).String())
+	}
+	return strings.Join(parts, " · ")
 }
 
 func chart(c *flowchart.Chart, width int, state func(flowchart.Node) string, rounds func(flowchart.Node) int) string {
@@ -105,6 +165,9 @@ func chart(c *flowchart.Chart, width int, state func(flowchart.Node) string, rou
 func (d *drawer) draw(c *flowchart.Chart, width int) string {
 	state := d.state
 	title := bold.Render(c.Name)
+	if d.progress != "" {
+		title += "  " + accent.Render(d.progress)
+	}
 	if c.Description != "" {
 		title += faint.Render("  " + c.Description)
 	}
@@ -124,9 +187,10 @@ type drawer struct {
 	rounds  func(flowchart.Node) int
 	tooWide bool
 	// live: what a running flow does now; alone: one box runs, and what
-	// its agent does is drawn in it.
-	live  *Live
-	alone bool
+	// its agent does is drawn in it; progress: where the run is.
+	live     *Live
+	alone    bool
+	progress string
 }
 
 // pad is s padded with spaces to w columns.
@@ -211,7 +275,10 @@ func (d *drawer) box(n flowchart.Node, maxw int) block {
 		}
 		isCode = false
 	}
-	return d.drawBox(mark, style, label, text, isCode, maxw, more...)
+	b := d.drawBox(mark, style, label, text, isCode, maxw, more...)
+	st := d.state(n)
+	b.reached = st != StatePending
+	return b
 }
 
 // lines are what the agent of the box that runs does now: the call it
@@ -303,21 +370,28 @@ func (d *drawer) node(n flowchart.Node, maxw int) block {
 	switch n.Kind {
 	case "start":
 		label := "▶ start"
-		return block{lines: []string{accent.Render(label)}, width: lipgloss.Width(label), mid: 0}
+		return block{lines: []string{accent.Render(label)}, width: lipgloss.Width(label), mid: 0, passive: true}
 	case flowchart.Phase:
 		label := "── " + n.Text + " ──"
-		return block{lines: []string{accent.Bold(true).Render(label)}, width: lipgloss.Width(label), mid: lipgloss.Width(label) / 2}
+		return block{lines: []string{accent.Bold(true).Render(label)}, width: lipgloss.Width(label), mid: lipgloss.Width(label) / 2,
+			passive: true, phase: n.Text}
 	case flowchart.Break:
 		label := "↩ " + n.Text
-		return block{lines: []string{faint.Render(label)}, width: lipgloss.Width(label), mid: 0}
+		return block{lines: []string{faint.Render(label)}, width: lipgloss.Width(label), mid: 0, passive: true}
 	case flowchart.If:
 		if len(n.Else) == 0 && len(n.Then) == 1 && (n.Then[0].Kind == flowchart.Return || n.Then[0].Kind == flowchart.Break) {
-			return d.guard(n, n.Then[0], maxw)
+			g := d.guard(n, n.Then[0], maxw)
+			g.passive = true
+			return g
 		}
 		head := d.box(flowchart.Node{Kind: flowchart.If, Cond: n.Cond}, maxw)
 		head.lines[1] = strings.Replace(head.lines[1], "○", "◇", 1)
+		head.passive = true
 		cols := d.columns([][]flowchart.Node{n.Then, n.Else}, []string{"yes", "no"}, maxw)
-		return stack([]block{head, cols})
+		head.reached = cols.reached
+		b := stack([]block{head, cols})
+		b.reached = cols.reached
+		return b
 	case flowchart.Parallel:
 		if len(n.Branches) > 0 {
 			labels := make([]string, len(n.Branches))
@@ -327,7 +401,11 @@ func (d *drawer) node(n flowchart.Node, maxw int) block {
 	case flowchart.Loop:
 		return d.frame("⟳ "+n.Cond, d.seq(n.Body, maxw-4), n, maxw)
 	}
-	return d.box(n, maxw)
+	b := d.box(n, maxw)
+	if n.Kind == flowchart.Return {
+		b.passive = true
+	}
+	return b
 }
 
 // seq is nodes one after another, joined by a line.
@@ -339,7 +417,35 @@ func (d *drawer) seq(nodes []flowchart.Node, maxw int) block {
 	for i, n := range nodes {
 		blocks[i] = d.node(n, maxw)
 	}
-	return stack(blocks)
+	// What does not run is reached when something after it is; a phase is
+	// done when a phase after it is reached, and now when it is the last.
+	after, laterPhase := false, false
+	for i := len(blocks) - 1; i >= 0; i-- {
+		b := &blocks[i]
+		if b.passive && after {
+			b.reached = true
+		}
+		after = after || b.reached
+		if b.phase != "" {
+			label := "── " + b.phase + " ──"
+			switch {
+			case b.reached && laterPhase:
+				b.lines[0] = good.Render("── " + b.phase + " ✓ ──")
+			case b.reached && d.live != nil:
+				b.lines[0] = accent.Bold(true).Render("── " + b.phase + " ◂ now ──")
+			case d.live != nil:
+				b.lines[0] = faint.Render(label)
+			}
+			b.width = lipgloss.Width(b.lines[0])
+			b.mid = b.width / 2
+			laterPhase = laterPhase || b.reached
+		}
+	}
+	out := stack(blocks)
+	for _, b := range blocks {
+		out.reached = out.reached || b.reached && !b.passive
+	}
+	return out
 }
 
 // stack puts blocks one under another, their lines in and out on one
@@ -353,8 +459,12 @@ func stack(blocks []block) block {
 	w := left + right
 	var lines []string
 	for i, b := range blocks {
-		if i > 0 {
-			lines = append(lines, faint.Render(at(w, left, "│")))
+		if i > 0 { // the way the run has gone, green
+			style := faint
+			if b.reached {
+				style = good
+			}
+			lines = append(lines, style.Render(at(w, left, "│")))
 		}
 		off := left - b.mid
 		for _, l := range b.lines {
@@ -370,8 +480,10 @@ func (d *drawer) columns(seqs [][]flowchart.Node, labels []string, maxw int) blo
 	const gap = 3
 	colw := max((maxw-gap*(len(seqs)-1))/len(seqs), 14)
 	cols := make([]block, len(seqs))
+	reached := false
 	for i, s := range seqs {
 		cols[i] = d.seq(s, colw)
+		reached = reached || cols[i].reached
 	}
 	height := 0
 	for _, c := range cols {
@@ -403,6 +515,9 @@ func (d *drawer) columns(seqs [][]flowchart.Node, labels []string, maxw int) blo
 			b[m] = []rune(join)[0]
 		}
 		b[center] = []rune(cross)[0]
+		if reached {
+			return good.Render(string(b))
+		}
 		return faint.Render(string(b))
 	}
 	lines := []string{line("╭", "╮", "┴", "┬")}
@@ -416,7 +531,28 @@ func (d *drawer) columns(seqs [][]flowchart.Node, labels []string, maxw int) blo
 			}
 			lab[mids[i]] = '│'
 		}
-		lines = append(lines, faint.Render(string(lab)))
+		if reached { // the way taken, green; the others faint
+			var b strings.Builder
+			rs := []rune(string(lab))
+			for i := range cols {
+				from := mids[i]
+				to := w
+				if i+1 < len(cols) {
+					to = mids[i+1]
+				}
+				if i == 0 {
+					b.WriteString(faint.Render(string(rs[:from])))
+				}
+				style := faint
+				if cols[i].reached {
+					style = good
+				}
+				b.WriteString(style.Render(string(rs[from:to])))
+			}
+			lines = append(lines, b.String())
+		} else {
+			lines = append(lines, faint.Render(string(lab)))
+		}
 	}
 	for row := 0; row < height; row++ {
 		var b strings.Builder
@@ -436,7 +572,7 @@ func (d *drawer) columns(seqs [][]flowchart.Node, labels []string, maxw int) blo
 	if w > maxw {
 		d.tooWide = true
 	}
-	return block{lines: lines, width: w, mid: center}
+	return block{lines: lines, width: w, mid: center, reached: reached}
 }
 
 // frame draws inner in a frame titled title: a loop, or agents for each of
@@ -454,7 +590,7 @@ func (d *drawer) frame(title string, inner block, n flowchart.Node, maxw int) bl
 		lines = append(lines, style.Render("│ ")+strings.Repeat(" ", off)+pad(l, inner.width)+strings.Repeat(" ", w-4-off-inner.width)+style.Render(" │"))
 	}
 	lines = append(lines, style.Render("╰"+strings.Repeat("─", w-2)+"╯"))
-	return block{lines: lines, width: w, mid: 2 + off + inner.mid}
+	return block{lines: lines, width: w, mid: 2 + off + inner.mid, reached: inner.reached}
 }
 
 // FlowGraph draws the flow name of the project in dir (.kairocode/workflows),

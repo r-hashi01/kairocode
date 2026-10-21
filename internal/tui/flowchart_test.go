@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -250,5 +251,65 @@ func TestEditOnTheChart(t *testing.T) {
 	d.send(key("esc"))
 	if d.m.edit != nil || !strings.Contains(d.out(), "✎ flow fix") || len(a.prompts) != 0 {
 		t.Fatalf("leaving: edit %v, prompts %q\n%s", d.m.edit, a.prompts, d.out())
+	}
+}
+
+// A run shows the way it has gone: the lines to where it is green, the
+// phases done ✓ and the one now marked, the way an if took, and where it
+// is in its title.
+func TestFlowLivePath(t *testing.T) {
+	c, err := flowchart.Build("review-fix", []byte(sampleFlow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]string{}
+	var walk func([]flowchart.Node)
+	walk = func(nodes []flowchart.Node) {
+		for _, n := range nodes {
+			if n.Kind == flowchart.Ask || n.Kind == flowchart.Parallel {
+				states[n.Key()] = StateDone
+			}
+			if n.Title == "build" {
+				states[n.Key()] = StateRunning
+			}
+			walk(n.Body)
+		}
+	}
+	walk(c.Nodes)
+	now := time.Now()
+	out := ChartLive(&flowchart.View{Chart: c, States: states}, 100, &Live{Now: now, Start: now.Add(-72 * time.Second)})
+	p := plain(out)
+	for _, want := range []string{"fix · phase 2/2 · 3 done · 1m12s", "── review ✓ ──", "── fix ◂ now ──"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("no %q in\n%s", want, p)
+		}
+	}
+	green, grey := strings.Split(good.Render("x"), "x")[0], strings.Split(faint.Render("x"), "x")[0]
+	gone, ahead := false, false
+	for _, l := range strings.Split(out, "\n") {
+		if strings.TrimSpace(plain(l)) == "│" {
+			gone = gone || strings.HasPrefix(l, green)
+			ahead = ahead || strings.HasPrefix(l, grey)
+		}
+	}
+	if !strings.Contains(out, good.Render("── review ✓ ──")) || !gone || !ahead {
+		t.Errorf("the way gone is not green (%v), or the way ahead not faint (%v)", gone, ahead)
+	}
+	// An if: the way it took is green, the other faint.
+	c, err = flowchart.Build("fork", []byte("def main(input):\n    if input[\"args\"]:\n        agent(\"plan\", \"a\")\n    else:\n        agent(\"build\", \"b\")\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	states = map[string]string{}
+	for _, n := range c.Nodes[0].Else {
+		states[n.Key()] = StateRunning
+	}
+	out = ChartLive(&flowchart.View{Chart: c, States: states}, 100, &Live{Now: now})
+	if !strings.Contains(out, green+"│no") || strings.Contains(out, green+"│yes") {
+		t.Errorf("the way the if took:\n%s", plain(out))
+	}
+	// The chart of a review shows no way gone.
+	if strings.Contains(Chart(c, 100, nil), "◂ now") {
+		t.Error("a chart not run marks a phase")
 	}
 }

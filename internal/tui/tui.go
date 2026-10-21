@@ -175,6 +175,7 @@ type model struct {
 	// flowText and flowTool: what its agents write and run last.
 	flowSince          map[string]time.Time
 	flowText, flowTool string
+	flowStart          time.Time // when the running flow began
 	// flowTop: where the running flow's chart was moved to with shift+↑↓
 	// (-1: it follows what runs); shownTop: where it was drawn from last.
 	flowTop, shownTop, shownMax int
@@ -544,7 +545,7 @@ func (m *model) take(u acp.Update) {
 		}
 		if m.flow == nil {
 			m.flowTop = -1 // a new flow: its chart follows what runs
-			m.flowSince, m.flowText, m.flowTool = map[string]time.Time{}, "", ""
+			m.flowSince, m.flowText, m.flowTool, m.flowStart = map[string]time.Time{}, "", "", time.Now()
 		}
 		// When each box that runs began: how long it has run.
 		for k, st := range u.Flow.States {
@@ -598,7 +599,7 @@ func (m *model) flowView(w int) string {
 	// The chart, as the review draws it; taller than the screen, the part
 	// of it around what runs or waits now, or where shift+↑↓ moved it to.
 	// Only a chart too wide to draw is a tree.
-	out := ChartLive(m.flow, w, &Live{Since: m.flowSince, Now: time.Now(), Text: m.flowText, Tool: m.flowTool})
+	out := ChartLive(m.flow, w, &Live{Since: m.flowSince, Now: time.Now(), Start: m.flowStart, Text: m.flowText, Tool: m.flowTool})
 	var under []string // what the agents do, when more than one box runs
 	running := 0
 	for _, st := range m.flow.States {
