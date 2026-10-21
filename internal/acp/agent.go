@@ -19,6 +19,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -942,6 +943,16 @@ func (a *agent) event(session string, ev runtime.Event) {
 		a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(ev.Text)})
 	case runtime.EventToolStart:
 		a.update(session, toolCall(ev.Call, ev.Tool, ev.Input, "in_progress"))
+		if ev.Tool == tools.TodoTool.Name {
+			// The model's todo list is the session's plan (ADR 0022).
+			if todos, err := tools.Todos(ev.Input); err == nil {
+				entries := []any{}
+				for _, t := range todos {
+					entries = append(entries, map[string]any{"content": t.Content, "priority": "medium", "status": t.Status})
+				}
+				a.update(session, map[string]any{"sessionUpdate": "plan", "entries": entries})
+			}
+		}
 	case runtime.EventToolEnd:
 		a.update(session, toolResult(ev.Call, ev.Tool, ev.Output, ev.IsError))
 	case runtime.EventApprovalRequested, runtime.EventReviewRequested, runtime.EventQuestionRequested:

@@ -1354,3 +1354,36 @@ func TestACPFork(t *testing.T) {
 		t.Fatalf("no forked session: %v", err)
 	}
 }
+
+// The model's todo list reaches the client as the session's plan (ADR
+// 0022).
+func TestACPTodoPlan(t *testing.T) {
+	ws := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := runtime.Open(ctx, runtime.Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "acp",
+		Provider: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+			{Tools: []provider.FakeTool{{Name: "todo", Input: json.RawMessage(`{"todos":[{"content":"look","status":"in_progress"},{"content":"fix","status":"pending"}]}`)}}},
+			{Text: "planned"},
+		}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	c := start(t, ctx, &local{r: r})
+	initialize(c)
+	resp, _ := c.until(isResponse(c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})))
+	var out struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		t.Fatal(err)
+	}
+	prompt(c, out.SessionID, "plan it")
+	plan, _ := c.until(func(m message) bool {
+		return m.Method == "session/update" && updateOf(t, m).SessionUpdate == "plan"
+	})
+	if !strings.Contains(string(plan.Params), `"content":"look"`) || !strings.Contains(string(plan.Params), `"status":"in_progress"`) {
+		t.Fatalf("plan %s", plan.Params)
+	}
+}

@@ -415,3 +415,21 @@ func TestFlowWriteRefusesLinks(t *testing.T) {
 		t.Fatal("hello.star is in .git/hooks")
 	}
 }
+
+// todo gives back the list it is given, marked; a status it does not know
+// is refused (ADR 0022).
+func TestTodo(t *testing.T) {
+	root := workspace(t)
+	r := run(t, TodoTool, root, map[string]any{"todos": []map[string]string{
+		{"content": "read the code", "status": "completed"},
+		{"content": "write the fix", "status": "in_progress"},
+		{"content": "run the tests", "status": "pending"},
+	}})
+	want := "Todo (1 of 3 done):\n[x] read the code\n[>] write the fix\n[ ] run the tests"
+	if r.IsError || r.Output != want {
+		t.Fatalf("got %+v", r)
+	}
+	if r := run(t, TodoTool, root, map[string]any{"todos": []map[string]string{{"content": "x", "status": "done"}}}); !r.IsError {
+		t.Fatalf("an unknown status: %+v", r)
+	}
+}

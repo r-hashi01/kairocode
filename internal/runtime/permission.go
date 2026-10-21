@@ -45,6 +45,8 @@ var defaultRules = []permission.Rule{
 	{Tool: "skill", Action: permission.Allow},
 	// Checking a flow reads its script, and runs nothing.
 	{Tool: "flow_check", Action: permission.Allow},
+	// The todo list only shows what the model plans (ADR 0022).
+	{Tool: "todo", Action: permission.Allow},
 	// A subagent's tools are checked as they run.
 	{Tool: "task", Action: permission.Allow},
 }
