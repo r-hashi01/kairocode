@@ -236,7 +236,18 @@ func crashClaudeChild() {
 	if _, err := r.Send(ctx, s, "count once"); err != nil {
 		panic(err)
 	}
-	select {}
+	if os.Getenv("KC_ANSWER_HOOKS") == "" {
+		select {}
+	}
+	for { // the turn's hooks: run in the sandbox
+		ps, _ := r.Pending(ctx, s)
+		for _, p := range ps {
+			if p.Kind == KindQuestion {
+				r.Answer(ctx, p.Key, "Run it in KairoCode's sandbox")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // TestCrashClaudeEngine: KairoCode is killed while a real tool it runs for

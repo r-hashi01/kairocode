@@ -280,7 +280,8 @@ func TestWriteRefusesProtectedNames(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755)
 	os.WriteFile(filepath.Join(root, "kairocode.json"), []byte(`{}`), 0o644)
 	e := env(t, root)
-	for _, p := range []string{".git/hooks/pre-push", ".git/config", "kairocode.json", ".claude/settings.json", ".kairocode/x"} {
+	for _, p := range []string{".git/hooks/pre-push", ".git/config", "kairocode.json", ".claude/settings.json", ".kairocode/x",
+		".github/hooks/h.json", ".github/copilot/settings.json"} {
 		if pl := plan(t, WriteTool, e, map[string]any{"path": p, "content": "x"}); pl.Fail == nil || !strings.Contains(pl.Fail.Output, "protected") {
 			t.Errorf("write %s: want refused as protected, got %+v", p, pl.Fail)
 		}
@@ -290,6 +291,12 @@ func TestWriteRefusesProtectedNames(t *testing.T) {
 	}
 	if r := Apply(e, ".git/hooks/pre-push", Absent, Hash([]byte("x")), []byte("x"), ""); !r.IsError {
 		t.Error("apply wrote a git hook")
+	}
+	// The rest of .github is the project's.
+	for _, p := range []string{".github/workflows/ci.yml", ".github/hooks-notes.md"} {
+		if pl := plan(t, WriteTool, e, map[string]any{"path": p, "content": "x"}); pl.Fail != nil {
+			t.Errorf("write %s refused: %+v", p, pl.Fail)
+		}
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -282,5 +284,130 @@ func TestCrashHookRun(t *testing.T) {
 	runs, _ := os.ReadFile(filepath.Join(ws, "runs"))
 	if strings.Count(string(runs), "run") != 1 {
 		t.Fatalf("the hook ran %d times", strings.Count(string(runs), "run"))
+	}
+}
+
+// TestCrashHookOnMCPCall: killed while a PreToolUse hook runs around a call
+// Claude Code makes over MCP, KairoCode does not run the hook again
+// unasked. Claude Code, resumed, makes the call again and is told a person
+// has to say; the person is asked whether the hook took effect (ADR 0018,
+// invariant 4).
+func TestCrashHookOnMCPCall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	e := setupFakeClaude(t,
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "never"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "stopped"},
+	)
+	ws := allowCount(t)
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	hold := filepath.Join(ws, "holding")
+	cmd := `echo run >> "$CLAUDE_PROJECT_DIR/runs"; touch "$CLAUDE_PROJECT_DIR/holding"; sleep 60`
+	settings, _ := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": []any{
+		map[string]any{"matcher": "count", "hooks": []any{map[string]any{"type": "command", "command": cmd}}}}}})
+	if err := os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^$")
+	child.Env = append(os.Environ(), "KC_CRASH_CLAUDE_CHILD=1", "KC_ANSWER_HOOKS=1", "KC_DIR_ENV="+e.dir, "KC_DIR="+ws)
+	child.Stderr = os.Stderr
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, hold, child)
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(e.dir, "k.db"), Engine: workflows.EngineClaudeCode,
+		ClaudePath: os.Args[0], ExtraTools: []tools.Def{e.countTool()}, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("cc")
+	out, err := r.WaitTurn(ctx, s, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); !strings.HasPrefix(text, "stopped | Not run again") {
+		t.Fatalf("reply %q", text)
+	}
+	var review Pending
+	waitUntil(t, ctx, "the hook's review", func() bool {
+		ps, _ := r.Pending(ctx, s)
+		for _, p := range ps {
+			if p.Kind == "review" && p.Tool == "hook" {
+				review = p
+				return true
+			}
+		}
+		return false
+	})
+	if review.Subject != cmd {
+		t.Fatalf("review %+v", review)
+	}
+	if err := r.Approve(ctx, review.Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitPending(t, r, s, 0)
+	runs, _ := os.ReadFile(filepath.Join(ws, "runs"))
+	if got := strings.Count(string(runs), "run"); got != 1 {
+		t.Fatalf("the hook ran %d times", got)
+	}
+	if got := countRuns(t, e); got > 1 {
+		t.Fatalf("the call ran %d times", got)
+	}
+}
+
+// A hook run in KairoCode's sandbox writes in the project and not outside
+// it; one the user let out of it (the "outside" answer) can (ADR 0018).
+func TestClaudeHookSandboxed(t *testing.T) {
+	if err := sandbox.Available(); err != nil {
+		t.Skip("no sandbox:", err)
+	}
+	// Outside the project and the temporary directories, which the
+	// sandbox lets a command write.
+	outside, err := os.MkdirTemp(".", "hook-outside-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outside, err = filepath.Abs(outside); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(outside) })
+	for _, c := range []struct {
+		answer  string
+		escapes bool
+	}{{"Run it in KairoCode's sandbox", false}, {"Run it outside the sandbox", true}} {
+		t.Run(c.answer, func(t *testing.T) {
+			ws := workspaceWith(t, `{}`)
+			escaped := filepath.Join(outside, filepath.Base(ws))
+			os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+			hook := `echo in > "$CLAUDE_PROJECT_DIR/inside"; echo out > "` + escaped + `"`
+			settings, _ := json.Marshal(map[string]any{"hooks": map[string]any{"UserPromptSubmit": []any{
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hook}}}}}})
+			os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), settings, 0o644)
+			r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "ok"}}})
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			s, _ := r.CreateSession(ctx, "sandboxed", workflows.SessionInput{Dir: ws})
+			n, err := r.Send(ctx, s, "hi")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := answerHooks(t, ctx, r, s, n, c.answer); got != 1 {
+				t.Fatalf("asked %d", got)
+			}
+			if _, err := os.Stat(filepath.Join(ws, "inside")); err != nil {
+				t.Fatal("the hook did not write in the project")
+			}
+			if _, err := os.Stat(escaped); (err == nil) != c.escapes {
+				t.Fatalf("written outside: %v, want %v", err == nil, c.escapes)
+			}
+		})
 	}
 }

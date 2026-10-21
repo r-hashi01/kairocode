@@ -3,3 +3,5 @@
 *.db-*
 .claude/.cache/
 .kairocode/
+# left by TestClaudeHookSandboxed if it is killed
+internal/runtime/hook-outside-*

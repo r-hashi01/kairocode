@@ -117,7 +117,9 @@ func TestSandboxProtectsGitAndConfig(t *testing.T) {
 	}
 	if runtime.GOOS != "linux" {
 		// Names that do not exist yet: kept out on macOS, not on Linux.
-		scripts = append(scripts, "mkdir .kairocode", "mkdir -p .claude/hooks")
+		scripts = append(scripts, "mkdir .kairocode", "mkdir -p .claude/hooks",
+			// copilot's hooks (ADR 0018): .github itself stays writable.
+			"mkdir -p .github/hooks", "mkdir -p .github/copilot")
 	}
 	for _, script := range scripts {
 		if _, ok := run(t, p, "", script); ok {
@@ -139,6 +141,9 @@ func TestSandboxProtectsGitAndConfig(t *testing.T) {
 	}
 	if _, ok := run(t, p, "", "echo ok > notes.txt"); !ok {
 		t.Error("an ordinary write was refused")
+	}
+	if _, ok := run(t, p, "", "mkdir -p .github/workflows && echo 'on: push' > .github/workflows/ci.yml"); !ok {
+		t.Error("a write in .github was refused")
 	}
 }
 

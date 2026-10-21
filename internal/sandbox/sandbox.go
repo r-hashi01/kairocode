@@ -73,10 +73,12 @@ func protectedNames(p Policy) []string {
 // there: they hold the repository's history and the settings, hooks and
 // permissions of KairoCode and other agents (ADR 0005), kairocode.json among
 // them. A command in the sandbox cannot change what it is allowed to do.
+// copilot's hooks and settings are paths in .github (ADR 0018), the rest of
+// which stays writable.
 //
 // On Linux only those that exist are kept: one that does not exist yet can
 // be made (see platformCommand).
-var Protected = []string{".git", ".kairocode", ".opencode", ".claude", ".agents", "kairocode.json"}
+var Protected = []string{".git", ".kairocode", ".opencode", ".claude", ".agents", "kairocode.json", ".github/hooks", ".github/copilot"}
 
 // ErrUnavailable: there is no sandbox here. The caller asks the user every
 // time instead of running without one (ADR 0005: fail closed).

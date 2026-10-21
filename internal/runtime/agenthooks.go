@@ -7,6 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/r-hashi01/kairocode/internal/opencode"
 )
 
 // Agents' own hooks (ADR 0018). KairoCode runs Claude Code's hooks in its
@@ -157,4 +160,55 @@ func writeJSONFile(path string, v any, perm fs.FileMode) error {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// copilotRepoHooks refuses a working directory whose repository defines
+// hooks for copilot (.github/hooks/*.json, or "hooks" in
+// .github/copilot/settings.json or settings.local.json): copilot runs them
+// outside KairoCode's sandbox with no one asked, even with
+// disableAllHooks and in a folder it was not told to trust (checked with
+// copilot 1.0.101 over ACP), and nothing turns them off for one run. The
+// user's agents.ownHooks lets copilot run them.
+func copilotRepoHooks(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	var found []string
+	for _, d := range opencode.ProjectDirs(dir) {
+		gh := filepath.Join(d, ".github")
+		hooks := filepath.Join(gh, "hooks")
+		entries, err := os.ReadDir(hooks)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			found = append(found, hooks) // not read: copilot may read it
+		default:
+			for _, e := range entries {
+				if strings.HasSuffix(e.Name(), ".json") {
+					found = append(found, filepath.Join(hooks, e.Name()))
+				}
+			}
+		}
+		for _, name := range []string{"settings.json", "settings.local.json"} {
+			path := filepath.Join(gh, "copilot", name)
+			b, err := os.ReadFile(path)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			var s struct {
+				Hooks map[string]json.RawMessage `json:"hooks"`
+			}
+			// Not read: copilot may read it all the same.
+			if err != nil || json.Unmarshal(b, &s) != nil || len(s.Hooks) > 0 {
+				found = append(found, path)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	return fmt.Errorf("this repository defines hooks for copilot (%s), which copilot would run outside KairoCode's sandbox "+
+		"with no one asked, and which cannot be turned off for one run (ADR 0018): use another provider here, "+
+		"or let copilot run them with \"agents\": {\"ownHooks\": true} in %s",
+		strings.Join(found, ", "), filepath.Join(userConfigDir(), ConfigFile))
 }

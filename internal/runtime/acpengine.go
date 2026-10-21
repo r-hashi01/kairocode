@@ -33,7 +33,7 @@ import (
 // acpArgv is how to start engine's agent, and whether it then has no
 // tools of its own: Copilot is told KairoCode's are its only ones
 // (checked with copilot 1.0.54, ADR 0014). Env is the registry's for it.
-func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]string, map[string]string, bool, error) {
+func (r *Runtime) acpArgv(engine, dir string, tools []string, effort string) ([]string, map[string]string, bool, error) {
 	argv, env, err := r.agentCommand(engine)
 	if err != nil {
 		return nil, nil, false, err
@@ -82,6 +82,11 @@ func (r *Runtime) acpArgv(engine string, tools []string, effort string) ([]strin
 	// Its own hooks: off, unless the user lets it run them (ADR 0018).
 	if err := r.copilotHooks(own, env); err != nil {
 		return nil, nil, false, err
+	}
+	if !own {
+		if err := copilotRepoHooks(dir); err != nil {
+			return nil, nil, false, err
+		}
 	}
 	names := make([]string, len(tools))
 	for i, n := range tools {
@@ -133,7 +138,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		if in.Policy.Dry && !dryEngine(engine) { // it may act without asking: not in a try (ADR 0017)
 			return r.finishCLITurn(t, mt, fmt.Sprintf("[%s is not run in a try of a flow: it may change things without asking]", registryAgent(engine)), 0, msg.Usage{})
 		}
-		argv, agentEnv, bare, err := r.acpArgv(engine, in.Tools, in.Effort)
+		argv, agentEnv, bare, err := r.acpArgv(engine, in.Dir, in.Tools, in.Effort)
 		if err != nil { // not there to run: the user is told
 			return r.finishCLITurn(t, mt, fmt.Sprintf("[%s cannot run: %v]", registryAgent(engine), err), 0, msg.Usage{})
 		}
@@ -328,7 +333,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 // withAgent starts engine's agent in a directory of its own, initializes
 // it, gives fn the connection and what initialize said, and stops it.
 func (r *Runtime) withAgent(ctx context.Context, engine string, fn func(context.Context, *jsonrpc.Conn, json.RawMessage) error) error {
-	argv, agentEnv, _, err := r.acpArgv(engine, nil, "")
+	argv, agentEnv, _, err := r.acpArgv(engine, os.TempDir(), nil, "") // its directory: nothing of a repository's
 	if err != nil {
 		return err
 	}

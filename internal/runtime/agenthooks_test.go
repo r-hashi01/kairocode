@@ -44,13 +44,13 @@ func TestAgentsOwnHooks(t *testing.T) {
 	}
 	codexHooks := func() string {
 		t.Helper()
-		_, env, _, err := r.acpArgv(workflows.EngineCodex, nil, "")
+		_, env, _, err := r.acpArgv(workflows.EngineCodex, "", nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		return env["CODEX_CONFIG"]
 	}
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err != nil {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if m := read(); m["disableAllHooks"] != true || m["theme"] != "dark" || m["hooks"] == nil {
@@ -69,7 +69,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(ws)
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err != nil || read()["disableAllHooks"] != true {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err != nil || read()["disableAllHooks"] != true {
 		t.Fatalf("project: %v %v", err, read())
 	}
 
@@ -80,7 +80,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "kairocode", ConfigFile), []byte(`{"agents": {"ownHooks": true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err != nil {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if m := read(); m["disableAllHooks"] != nil || m["theme"] != "dark" {
@@ -97,7 +97,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"disableAllHooks": true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err != nil || read()["disableAllHooks"] != true {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err != nil || read()["disableAllHooks"] != true {
 		t.Fatalf("user's: %v %v", err, read())
 	}
 
@@ -108,7 +108,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"theme": `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err == nil {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err == nil {
 		t.Fatal("not JSON: started")
 	}
 
@@ -120,7 +120,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "kairocode", ConfigFile), []byte(`{"agents": {"ownHooks": true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err != nil {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err != nil {
 		t.Fatalf("released over not JSON: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, copilotMark)); !os.IsNotExist(err) {
@@ -141,7 +141,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "kairocode", ConfigFile), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, nil, ""); err != nil {
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, "", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Lstat(settings); err != nil || fi.Mode()&os.ModeSymlink == 0 {
@@ -149,5 +149,49 @@ func TestAgentsOwnHooks(t *testing.T) {
 	}
 	if m := read(); m["disableAllHooks"] != true || m["theme"] != "light" {
 		t.Fatalf("link: %v", m)
+	}
+}
+
+// A repository that defines hooks for copilot is not run on copilot:
+// copilot would run them outside the sandbox, disableAllHooks or not
+// (ADR 0018). The user's agents.ownHooks lets it.
+func TestCopilotRepoHooks(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	r, err := Open(context.Background(), Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test",
+		CopilotPath: os.Args[0], Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for name, files := range map[string]map[string]string{
+		"none":               {".github/copilot/settings.json": `{"theme": "dark"}`, ".github/workflows/ci.yml": "on: push"},
+		"hooks dir":          {".github/hooks/h.json": `{"version": 1}`},
+		"settings hooks":     {".github/copilot/settings.json": `{"hooks": {"SessionStart": []}}`},
+		"local hooks":        {".github/copilot/settings.local.json": `{"hooks": {"SessionStart": []}}`},
+		"unreadable setting": {".github/copilot/settings.json": `{"hooks": `},
+	} {
+		ws := repo(t)
+		sub := filepath.Join(ws, "sub")
+		putFiles(t, ws, map[string]string{".git/HEAD": "ref: refs/heads/main\n"}) // found from below
+		putFiles(t, ws, files)
+		os.MkdirAll(sub, 0o755)
+		_, _, _, err := r.acpArgv(workflows.EngineCopilot, sub, nil, "")
+		if (err != nil) != (name != "none") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".github/hooks/h.json": `{"version": 1}`})
+	os.MkdirAll(filepath.Join(cfgDir, "kairocode"), 0o700)
+	os.WriteFile(filepath.Join(cfgDir, "kairocode", ConfigFile), []byte(`{"agents": {"ownHooks": true}}`), 0o600)
+	if _, _, _, err := r.acpArgv(workflows.EngineCopilot, ws, nil, ""); err != nil {
+		t.Fatalf("let run: %v", err)
+	}
+	// Codex is not copilot.
+	os.WriteFile(filepath.Join(cfgDir, "kairocode", ConfigFile), []byte(`{}`), 0o600)
+	r.cfg.CodexPath = os.Args[0]
+	if _, _, _, err := r.acpArgv(workflows.EngineCodex, ws, nil, ""); err != nil {
+		t.Fatalf("codex: %v", err)
 	}
 }

@@ -178,7 +178,7 @@
 - **残る弱さ（受け入れたもの）**
   - copilot の設定にはロックがないので、KairoCode が読んで書く間に、ほかのプロセス（copilot、利用者）が書いた変更は失われ得ます。
   - 印は「KairoCode が書いた」としか言えません。印を書いた後、`disableAllHooks` を書く前に落ち、その後で利用者が自分で書いた場合などは、解除のときに利用者の値も消します。
-- **まだ確かめていないこと:** copilot のリポジトリの設定（`.github/copilot/settings.json`）が、利用者の `disableAllHooks` を上書きできるか。上書きできるなら、信頼したリポジトリでは copilot のフックが動き得ます。
+- **copilot のリポジトリのフック（確かめた。6 節）:** `disableAllHooks` では止まりませんでした。KairoCode は、そのリポジトリで copilot を動かしません。
 - **テスト:** `TestAgentsOwnHooks`（ほかの項目と権限が残る、プロジェクトの設定では効かない、解除で KairoCode の書いたものだけを消す、利用者の書いたものは残す、読めない設定では起動しない、解除のときは読めなくても起動する、シンボリックリンクを残す、codex の `features.hooks`）
 
 ### 5. 本物のモデルで確かめたこと（2026-10-21 追記）
@@ -194,3 +194,31 @@
   - 直した後に確かめ直し、重なりがなくなりました。
 - **copilot では、スキルの一覧は KairoCode の 1 つだけでした。** copilot 自身のスキルのツールは止まっていて（`Disabled tools: … skill`）、copilot 自身の一覧はモデルに並びません。二重にはなっていません。
 - **テスト:** `TestEnginesGetWhatTheyDoNotRead` に、codex 自身のスキル（`~/.codex/skills` と `.system`）と同じ名前のスキルと、同じ名前のプロジェクトのスキルを足しました。`/etc/codex/skills` はテストでは別の場所にします。
+
+### 6. copilot のリポジトリのフックと、残りのテスト（2026-10-21 追記）
+
+- **確かめたこと（copilot 1.0.101、ACP。モデルの小さな呼び出しを 1 回ずつ）**
+  - 使い捨ての `COPILOT_HOME` で、利用者の設定・リポジトリの `.github/hooks/*.json`・`.github/copilot/settings.json` に、それぞれ印のファイルを作る `SessionStart` のフックを置きました。フックは最初の prompt で動きます（`session/new` では動かない）。
+  - 利用者の設定に `"disableAllHooks": true` を書くと、利用者のフックは止まります。**`.github/hooks/*.json` のフックは止まりません。** リポジトリの設定の `false` の有無、`settings.local.json` も関係しませんでした。
+  - copilot が信頼していないフォルダーでも、ACP では `.github/hooks/*.json` のフックが動きました（`copilot help` は、信頼したフォルダーでだけ読むと書いている）。
+  - リポジトリの `settings.json` の `hooks` は、動きませんでした。
+  - 1 回の起動だけでリポジトリのフックを止める旗や環境変数は、見つかりませんでした。
+- **決定:** 作業ディレクトリーのリポジトリ（根から作業ディレクトリーまで）に copilot のフックの定義があれば、KairoCode は copilot を起動しません（`copilotRepoHooks`）。ターンには、理由と、別のプロバイダーを使うか `agents.ownHooks` で許すかを返します。
+  - 定義とみなすのは、`.github/hooks/*.json`、`.github/copilot/settings.json` と `settings.local.json` の `hooks` です。読めない設定も、copilot は読めるかもしれないので、定義があるとみなします。
+  - 利用者が `agents.ownHooks` を許しているときは、起動します。
+  - 本物の copilot で、フックのあるリポジトリが拒まれる（モデルを呼ばない）ことを確かめました。
+- **足したテスト**
+  - `TestCopilotRepoHooks`（フックの定義の 4 つの形、定義のないリポジトリ、`agents.ownHooks`、codex には効かない）
+  - `TestCrashHookOnMCPCall`（Claude Code の MCP の呼び出しの PreToolUse のフックの途中で落ちる。再開しても動かし直さず、人に聞く。フックは 1 回。フックの作用を `Unprotected` にすると落ちることを確かめた）
+  - `TestClaudeHookSandboxed`（sandbox で動かしたフックはプロジェクトの外に書けず、外で動かすと答えたものは書ける。sandbox を `FullAccess` にすると落ちることを確かめた）
+- **durability-reviewer の指摘で直したこと**
+  - **sandbox から copilot のフックを書かせない:** sandbox の中のコマンドが `.github/hooks` を書けると、`agents.ownHooks` を許した利用者では、次の copilot のターンがそれを sandbox の外で動かします。`sandbox.Protected` に `.github/hooks` と `.github/copilot` を足しました（ADR 0005 の守る名前。`.claude` と同じ理由）。
+    - `.github` のほかの場所（`workflows` など）は、これまでどおり書けます。
+    - write と edit も同じく拒みます（`internal/tools` の `protected` を、入れ子のパスにも合うようにした）。スナップショットにも入りません。
+    - Linux では、ほかの守る名前と同じく、まだ無いものは作れてしまいます（ADR 0005 の既知の弱さ）。その場合も、`agents.ownHooks` を許していなければ、次のターンで copilot を起動しません。
+  - **読めない `.github/hooks` は、定義があるとみなす:** 前は、一覧を取れないと「定義なし」になっていました。
+  - 認証のために copilot を起動するとき（prompt を送らない）も、作業ディレクトリーを一時ディレクトリーとして渡し、同じ検査を通します。
+  - テストが殺されて残る一時フォルダーを `.gitignore` に足しました。
+  - テスト: `TestSandboxProtectsGitAndConfig`、`TestWriteRefusesProtectedNames` に、`.github/hooks`・`.github/copilot` と、書けるままの `.github/workflows` を足しました。
+- **確かめていないこと:** copilot が、リポジトリの外や根より上の `.github` を読むか。KairoCode は、根（`.git` のあるところ）から作業ディレクトリーまでを見ます。
+- 2 節の「まだのテスト」のうち、上の 2 つは済みました。落ちたプロセスの子として残ったフックが最後まで動くことは、受け入れたままです。
