@@ -180,3 +180,17 @@
   - 印は「KairoCode が書いた」としか言えません。印を書いた後、`disableAllHooks` を書く前に落ち、その後で利用者が自分で書いた場合などは、解除のときに利用者の値も消します。
 - **まだ確かめていないこと:** copilot のリポジトリの設定（`.github/copilot/settings.json`）が、利用者の `disableAllHooks` を上書きできるか。上書きできるなら、信頼したリポジトリでは copilot のフックが動き得ます。
 - **テスト:** `TestAgentsOwnHooks`（ほかの項目と権限が残る、プロジェクトの設定では効かない、解除で KairoCode の書いたものだけを消す、利用者の書いたものは残す、読めない設定では起動しない、解除のときは読めなくても起動する、シンボリックリンクを残す、codex の `features.hooks`）
+
+### 5. 本物のモデルで確かめたこと（2026-10-21 追記）
+
+- 利用者の許可を得て、本物のモデルで確かめました（codex-acp と codex 0.163、copilot 1.0.101。KairoCode の `run` を、別のデータの置き場で動かした）。
+- **codex は、codex-acp を通しても `.agents/skills` を自分で読みます。** プロジェクトの `.agents/skills` に置いたスキルが、codex 自身の一覧に出て、中身も使えました。
+- **codex で、同じ名前のスキルが二重に並んでいた（直した）。**
+  - 原因は、codex 自身のスキル（`~/.codex/skills`、同梱の `~/.codex/skills/.system`）と同じ名前のスキルが `~/.claude/skills` にもあり、KairoCode がそれも渡していたことです。
+  - 直し方は、codex が自分で持つスキルと同じ名前のスキルを、KairoCode から渡さないことです（`nativeReads.ownSkillDirs`）。codex のものが代わりになります。
+    - 対象は `$CODEX_HOME/skills`（既定は `~/.codex/skills`。下の `.system` も含めて、下へたどる）と `/etc/codex/skills` です。`CODEX_HOME` は、ACP のレジストリーが codex に渡す環境を先に見ます。
+    - 名前は、ディレクトリーではなく `SKILL.md` の `name` で比べます。読めない codex のスキルは codex のものと数えません（悪くても二重に並ぶだけで、消えはしない）。
+    - プロジェクトのスキルは、同じ名前でも渡します。プロジェクトのものが先です。
+  - 直した後に確かめ直し、重なりがなくなりました。
+- **copilot では、スキルの一覧は KairoCode の 1 つだけでした。** copilot 自身のスキルのツールは止まっていて（`Disabled tools: … skill`）、copilot 自身の一覧はモデルに並びません。二重にはなっていません。
+- **テスト:** `TestEnginesGetWhatTheyDoNotRead` に、codex 自身のスキル（`~/.codex/skills` と `.system`）と同じ名前のスキルと、同じ名前のプロジェクトのスキルを足しました。`/etc/codex/skills` はテストでは別の場所にします。

@@ -294,6 +294,9 @@ func TestCLIAgentsConfig(t *testing.T) {
 func TestEnginesGetWhatTheyDoNotRead(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	defer func(d string) { codexAdminSkills = d }(codexAdminSkills)
+	codexAdminSkills = filepath.Join(home, "etc-codex-skills")
 	ws := repo(t)
 	for path, body := range map[string]string{
 		filepath.Join(home, ".claude", "CLAUDE.md"):                      "USER_MD",
@@ -302,6 +305,13 @@ func TestEnginesGetWhatTheyDoNotRead(t *testing.T) {
 		filepath.Join(ws, ".agents", "skills", "a-skill", "SKILL.md"):    "---\nname: a-skill\ndescription: AGENTS_SKILL\n---\n",
 		filepath.Join(ws, ".kairocode", "skills", "k-skill", "SKILL.md"): "---\nname: k-skill\ndescription: KAIRO_SKILL\n---\n",
 		filepath.Join(home, ".agents", "skills", "h-skill", "SKILL.md"):  "---\nname: h-skill\ndescription: HOME_AGENTS_SKILL\n---\n",
+		// Codex has a skill of its own by this name: its copy stands for it.
+		filepath.Join(home, ".claude", "skills", "c-skill", "SKILL.md"):           "---\nname: c-skill\ndescription: CLAUDE_SKILL\n---\n",
+		filepath.Join(home, ".codex", "skills", "c-skill", "SKILL.md"):            "---\nname: c-skill\ndescription: CODEX_SKILL\n---\n",
+		filepath.Join(home, ".claude", "skills", "s-skill", "SKILL.md"):           "---\nname: s-skill\ndescription: CLAUDE_SKILL\n---\n",
+		filepath.Join(home, ".codex", "skills", ".system", "s-skill", "SKILL.md"): "---\nname: s-skill\ndescription: CODEX_SYSTEM_SKILL\n---\n",
+		// The project's skill is given even so: the project's comes first.
+		filepath.Join(home, ".codex", "skills", "k-skill", "SKILL.md"): "---\nname: k-skill\ndescription: CODEX_K_SKILL\n---\n",
 	} {
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -313,12 +323,12 @@ func TestEnginesGetWhatTheyDoNotRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	for engine, want := range map[string][]string{
-		workflows.EngineAPI:        {"a-skill", "h-skill", "k-skill"},
-		workflows.EngineClaudeCode: {"a-skill", "h-skill", "k-skill"},
+		workflows.EngineAPI:        {"a-skill", "c-skill", "h-skill", "k-skill", "s-skill"},
+		workflows.EngineClaudeCode: {"a-skill", "c-skill", "h-skill", "k-skill", "s-skill"},
 		workflows.EngineCodex:      {"k-skill"},
-		workflows.EngineCopilot:    {"a-skill", "h-skill", "k-skill"},
+		workflows.EngineCopilot:    {"a-skill", "c-skill", "h-skill", "k-skill", "s-skill"},
 	} {
-		got := slices.Sorted(maps.Keys(nativeReadsOf(engine).supplied(ws, skills)))
+		got := slices.Sorted(maps.Keys(nativeReadsOf(engine).supplied(ws, skills, nil)))
 		if !slices.Equal(got, want) {
 			t.Errorf("%s is given skills %v, want %v", engine, got, want)
 		}

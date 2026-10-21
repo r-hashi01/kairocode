@@ -93,10 +93,21 @@ func agentDef(dir, name string, sub bool) (opencode.Agent, error) {
 // and its skills' directories (skillDirs, of a working directory).
 // KairoCode gives it the rest, so that every engine has the same, once.
 // Checked by hand with each CLI (scripts/agent-probe.sh).
+//
+// ownSkillDirs hold the agent's own skills (env is the registry's for the
+// agent): a user's skill of KairoCode's with the name of one of them is not
+// given, the agent's own copy standing for it (codex's ~/.codex/skills,
+// checked with codex 0.163). A project's skill is given all the same: the
+// project's comes first.
 type nativeReads struct {
 	instructions []string
 	skillDirs    func(dir string) []string
+	ownSkillDirs func(env map[string]string) []string
 }
+
+// codexAdminSkills is where codex reads the machine's skills (a variable
+// for the tests).
+var codexAdminSkills = "/etc/codex/skills"
 
 // nativeReadsOf is what engine's agent reads by itself. Claude Code reads
 // nothing: it would only with its own settings, whose hooks would run
@@ -115,6 +126,22 @@ func nativeReadsOf(engine string) nativeReads {
 				out = append(out, filepath.Join(d, ".agents", "skills"))
 			}
 			return out
+		}, ownSkillDirs: func(env map[string]string) []string {
+			home := env["CODEX_HOME"]
+			if home == "" {
+				home = os.Getenv("CODEX_HOME")
+			}
+			if home == "" {
+				if h, err := os.UserHomeDir(); err == nil {
+					home = filepath.Join(h, ".codex")
+				}
+			}
+			out := []string{codexAdminSkills}
+			if home != "" {
+				// With .system in it: the skills that come with codex.
+				out = append(out, filepath.Join(home, "skills"))
+			}
+			return out
 		}}
 	case copilotAgent:
 		return nativeReads{instructions: []string{"AGENTS.md", "CLAUDE.md"}}
@@ -123,14 +150,26 @@ func nativeReadsOf(engine string) nativeReads {
 }
 
 // supplied are the skills of skills the agent does not read by itself.
-func (n nativeReads) supplied(dir string, skills map[string]opencode.Skill) map[string]opencode.Skill {
+func (n nativeReads) supplied(dir string, skills map[string]opencode.Skill, env map[string]string) map[string]opencode.Skill {
 	if n.skillDirs == nil {
 		return skills
 	}
 	own := n.skillDirs(dir)
+	var ownNames map[string]opencode.Skill
+	if n.ownSkillDirs != nil {
+		// What cannot be read is not the agent's: given, at worst twice.
+		ownNames, _, _ = opencode.CheckedSkills(n.ownSkillDirs(env))
+	}
+	project := opencode.ProjectDirs(dir)
+	under := func(path string, dirs []string) bool {
+		return slices.ContainsFunc(dirs, func(d string) bool { return strings.HasPrefix(path, d+string(filepath.Separator)) })
+	}
 	out := map[string]opencode.Skill{}
 	for name, s := range skills {
-		if !slices.ContainsFunc(own, func(d string) bool { return strings.HasPrefix(s.Path, d+string(filepath.Separator)) }) {
+		if _, ok := ownNames[name]; ok && !under(s.Path, project) {
+			continue
+		}
+		if !under(s.Path, own) {
 			out[name] = s
 		}
 	}
@@ -246,7 +285,7 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if err != nil {
 		return workflows.Agent{}, err
 	}
-	if given := reads.supplied(in.Dir, skills); len(given) > 0 {
+	if given := reads.supplied(in.Dir, skills, r.agentEnv(engine)); len(given) > 0 {
 		b.WriteString("\n" + opencode.SkillList(given))
 	}
 	// The subagents the task tool can hand work to (theirs too: Claude
@@ -345,4 +384,12 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		Permissions: rulesHash,
 		ReadOnly:    readOnly,
 	}, nil
+}
+
+// agentEnv is the registry's environment for engine's agent, if any.
+func (r *Runtime) agentEnv(engine string) map[string]string {
+	if in, ok := r.agents.Command(registryAgent(engine)); ok {
+		return in.Env
+	}
+	return nil
 }
