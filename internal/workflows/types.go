@@ -187,6 +187,16 @@ type SessionInput struct {
 	Model  string `json:"model,omitempty"`
 	// Effort, if set, is the model's effort (ADR 0014, 追記).
 	Effort string `json:"effort,omitempty"`
+	// From and History: a session forked from a turn of another (ADR
+	// 0021) begins with that turn's conversation.
+	From    *ForkRef `json:"from,omitempty"`
+	History string   `json:"history,omitempty"`
+}
+
+// ForkRef is the turn a session was forked from.
+type ForkRef struct {
+	Session string `json:"session"`
+	Turn    int    `json:"turn"`
 }
 
 type SessionOutput struct {
@@ -208,6 +218,8 @@ type SessionEvent struct {
 	// Switch, if set, changes the session's engine or model from this
 	// event's turn on (/provider, /model; ADR 0014). Version 6 on.
 	Switch *Switch `json:"switch,omitempty"`
+	// Restore, for EventForkFiles, is the snapshot to put back.
+	Restore *UndoInput `json:"restore,omitempty"`
 }
 
 // Switch is a change of the session's engine (provider) or model. An
@@ -246,11 +258,18 @@ const (
 	// EventCompact starts a turn that only compacts the conversation
 	// (/compact, ADR 0020).
 	EventCompact = "compact"
+	// EventForkFiles starts a turn that puts the working files back as
+	// they were after the turn a session was forked from (ADR 0021): the
+	// event's Restore.
+	EventForkFiles = "fork_files"
 )
 
 type TurnInput struct {
 	// Compact: the turn only compacts the conversation (ADR 0020).
 	Compact bool `json:"compact,omitempty"`
+	// Forked: the turn is of a session forked from another (ADR 0021): a
+	// CLI engine's session that starts in it is given the conversation.
+	Forked bool `json:"forked,omitempty"`
 	// LastInput is the previous turn's last model call's input, as
 	// recorded: a turn that starts near the context compacts before its
 	// first call (ADR 0020).
@@ -407,6 +426,9 @@ type FlowPutInput struct {
 // out from its turns' recorded outputs.
 type UndoInput struct {
 	Redo bool `json:"redo,omitempty"`
+	// Fork: the files are put back as they were after turn Of of the
+	// session forked from (ADR 0021).
+	Fork bool `json:"fork,omitempty"`
 	// Of is the turn undone or redone; -1: there is none.
 	Of int `json:"of"`
 	// Tree is the snapshot to restore ("": the turn has none).

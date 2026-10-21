@@ -245,6 +245,9 @@ func (r *Runtime) restoreAction(t *kairo.TaskContext, in workflows.RestoreInput)
 	if u.Redo {
 		tag, verb, when, none = "[redo]", "redid", "after", "Nothing to redo."
 	}
+	if u.Fork {
+		tag = "[fork]"
+	}
 	out := workflows.RestoreOutput{}
 	var text string
 	switch {
@@ -263,6 +266,9 @@ func (r *Runtime) restoreAction(t *kairo.TaskContext, in workflows.RestoreInput)
 		}
 		out.Restored, out.Prior = true, prior
 		text = fmt.Sprintf("The user %s turn %d: the working files are back as they were %s it.", verb, u.Of, when)
+		if u.Fork {
+			text = fmt.Sprintf("The session was forked from turn %d of another: the working files are back as they were after it.", u.Of)
+		}
 	}
 	h, err := r.Store.PutMessage(t, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: tag + " " + text}}})
 	if err != nil {

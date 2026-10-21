@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -38,6 +39,7 @@ type Backend interface {
 	Undo(ctx context.Context, session string) (int, error)
 	Redo(ctx context.Context, session string) (int, error)
 	Compact(ctx context.Context, session string) (int, error)
+	Fork(ctx context.Context, session string, n int, files bool) (string, int, error)
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
 	// Skills are the session's skills, and the SKILL.md files not taken.
 	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
@@ -63,6 +65,7 @@ var builtinCommands = []map[string]any{
 	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
 	{"name": "redo", "description": "Put back what the last undo took away"},
 	{"name": "compact", "description": "Summarize the conversation and go on from the summary (the earlier messages are kept)"},
+	{"name": "fork", "description": "Start another session from a turn of this one (the last, unless named); --files puts the files back as they were after it", "input": map[string]any{"hint": "[turn] [--files]"}},
 	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them)", "input": map[string]any{"hint": "<name> [what to give it]"}},
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
@@ -541,6 +544,39 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
 	case name == "/redo":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	case name == "/fork":
+		n, files, bad := -1, false, ""
+		for _, f := range strings.Fields(args) {
+			if f == "--files" {
+				files = true
+			} else if v, err := strconv.Atoi(f); err == nil && v >= 0 {
+				n = v
+			} else {
+				bad = f
+			}
+		}
+		text := "Usage: /fork [turn] [--files]"
+		s, from, err := "", 0, error(nil)
+		if bad == "" { // nothing is made for a request it did not understand
+			s, from, err = a.b.Fork(ctx, p.SessionID, n, files)
+		}
+		switch {
+		case bad != "":
+		case errors.Is(err, runtime.ErrNoForkPoint):
+			text = "There is no finished turn to fork from there."
+		case errors.Is(err, runtime.ErrForkWhileRunning), errors.Is(err, runtime.ErrNoSnapshot):
+			text = err.Error()
+		case err != nil:
+			return nil, err
+		default:
+			text = fmt.Sprintf("Forked from turn %d as a new session; this one is as it was. To go on in it: kairocode chat -session %s", from,
+				strings.TrimPrefix(s, "s/"))
+			if files {
+				text += "\nThe working files are being put back as they were after that turn (/undo in the new session takes it back)."
+			}
+		}
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+		return map[string]any{"stopReason": "end_turn"}, nil
 	case name == "/compact":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Compact(ctx, s) }, true
 	case name == "/provider" && strings.HasPrefix(strings.TrimSpace(args), "install "):

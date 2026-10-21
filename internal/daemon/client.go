@@ -584,6 +584,27 @@ func (c *Client) Undo(ctx context.Context, session string) (int, error) {
 	return c.undo(ctx, session, "undo")
 }
 
+// Fork starts a session from turn n of this one (n < 0: its last finished
+// turn), with files put back as they were after it if asked (ADR 0021). It
+// returns the new session and the turn it was forked from; ErrNoForkPoint
+// when there is no such turn.
+func (c *Client) Fork(ctx context.Context, session string, n int, files bool) (string, int, error) {
+	in := map[string]any{"files": files}
+	if n >= 0 {
+		in["turn"] = n
+	}
+	var out struct {
+		ID   string `json:"id"`
+		Turn int    `json:"turn"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/fork", in, &out)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusConflict {
+		return "", 0, runtime.ErrNoForkPoint
+	}
+	return out.ID, out.Turn, err
+}
+
 // Compact starts a turn that only compacts the session's conversation
 // (ADR 0020), and returns its number.
 func (c *Client) Compact(ctx context.Context, session string) (int, error) {

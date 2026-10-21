@@ -49,6 +49,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
 	s.mux.HandleFunc("POST /sessions/{id}/compact", s.compact)
+	s.mux.HandleFunc("POST /sessions/{id}/fork", s.fork)
 	s.mux.HandleFunc("POST /sessions/{id}/cancel", s.cancel)
 	s.mux.HandleFunc("GET /sessions/{id}/flows", s.flows)
 	s.mux.HandleFunc("POST /sessions/{id}/flows", s.runFlow)
@@ -100,6 +101,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "<absolute path>", "agent", "engine", "model"}`))
 		return
 	}
+	in.From, in.History = nil, "" // a fork's, which Fork sets (ADR 0021)
 	id, err := s.rt.CreateSession(r.Context(), s.newID(), in)
 	if err != nil {
 		fail(w, http.StatusBadRequest, err)
@@ -125,6 +127,36 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+// fork starts a session from a turn of this one (ADR 0021): {"turn": n}
+// (absent: the last finished), {"files": true} to put the files back as
+// they were after it. 409 when there is no such turn.
+func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
+	in := struct {
+		Turn  *int `json:"turn"`
+		Files bool `json:"files"`
+	}{}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, http.StatusBadRequest, errors.New(`want {"turn": n, "files": bool}`))
+			return
+		}
+	}
+	n := -1
+	if in.Turn != nil {
+		n = *in.Turn
+	}
+	id, turn, err := s.rt.Fork(r.Context(), s.newID(), sessionOf(r), n, in.Files)
+	if errors.Is(err, runtime.ErrNoForkPoint) {
+		fail(w, http.StatusConflict, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "turn": turn})
 }
 
 // compact starts a turn that only compacts the session's conversation

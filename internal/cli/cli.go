@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,6 +37,7 @@ const usage = `usage:
   kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] "<request>"   answer one request, then exit
                                                      (-detach: stop when it waits for a person, exit 3)
   kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
+  kairocode fork [-data DIR] [-files] <session> [turn]   start another session from a turn of one (the last, unless named)
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
@@ -113,6 +115,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = run(ctx, args, stdout, stderr)
 	case "resume":
 		err = resume(ctx, args, stdout, stderr)
+	case "fork":
+		err = fork(ctx, args, stdout, stderr)
 	case "daemon":
 		err = runDaemon(ctx, args, stdout, stderr)
 	case "approvals":
@@ -332,6 +336,44 @@ func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	}
 	defer c.Close()
 	return follow(ctx, c, s, *detach, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
+}
+
+// fork starts a session from a turn of another (ADR 0021) and prints it.
+func fork(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("fork", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	files := fs.Bool("files", false, "put the working files back as they were after the turn")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	usage := errors.New("usage: kairocode fork [-data DIR] [-files] <session> [turn]")
+	if fs.NArg() < 1 || fs.NArg() > 2 {
+		return usage
+	}
+	s := fs.Arg(0)
+	if !strings.HasPrefix(s, "s/") {
+		s = runtime.SessionID(s)
+	}
+	n := -1
+	if fs.NArg() == 2 {
+		v, err := strconv.Atoi(fs.Arg(1))
+		if err != nil || v < 0 {
+			return usage
+		}
+		n = v
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	id, from, err := c.Fork(ctx, s, n, *files)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "%s (from turn %d of %s)\n", strings.TrimPrefix(id, "s/"), from, strings.TrimPrefix(s, "s/"))
+	return nil
 }
 
 // errWaiting: the turn waits for a person, and the command stopped

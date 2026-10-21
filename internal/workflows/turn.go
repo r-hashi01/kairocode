@@ -541,9 +541,10 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 	// that starts without it (ADR 0014): after a switch of engine, or an
 	// agent that cannot load its session. Claude Code's turns of the first
 	// epoch keep the input they had, so turns under way keep their calls'
-	// ids; a flow's agent starts with no history.
+	// ids; a flow's agent starts with no history. A forked session's
+	// starts with the conversation it was forked with (ADR 0021).
 	history := ""
-	if (in.Epoch > 0 || agent.Engine != EngineClaudeCode) && !in.Sub {
+	if (in.Epoch > 0 || in.Forked || agent.Engine != EngineClaudeCode) && !in.Sub {
 		history = in.History
 	}
 	// The tool calls' hooks run around each call over MCP (ADR 0018).

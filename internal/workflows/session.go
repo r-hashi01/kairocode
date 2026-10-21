@@ -82,7 +82,7 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 // runSession is RunSessionV4; with keepStopped RunSessionV5; with switches
 // too RunSessionV6; with settle too RunSession.
 func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, settle bool) (SessionOutput, error) {
-	head := ""
+	head := in.History // a forked session's (ADR 0021); "" otherwise
 	engine, model, effort, mode, epoch := in.Engine, in.Model, in.Effort, "", 0
 	// applied: turns in effect, the last undone first; undone: turns undone,
 	// the last redone first. A new turn clears undone.
@@ -116,7 +116,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 		}
 		tin := TurnInput{
 			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: engine, Model: model, History: head, Message: ev.Message,
-			Epoch: epoch, Effort: effort, Mode: mode, LastInput: lastInput,
+			Epoch: epoch, Effort: effort, Mode: mode, LastInput: lastInput, Forked: in.From != nil,
 		}
 		if mode == ModePlan {
 			tin.Agent = "plan" // it only reads (ADR 0016)
@@ -141,6 +141,12 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 			if len(undone) > 0 {
 				d := undone[len(undone)-1]
 				tin.Undo.Of, tin.Undo.Tree, tin.Undo.From = d.n, d.after, d.before
+			}
+		case EventForkFiles:
+			if ev.Restore != nil {
+				r := *ev.Restore
+				r.Fork = true
+				tin.Undo = &r
 			}
 		}
 		out, err := kairo.Child[TurnOutput](ctx, Turn, tin)
@@ -185,6 +191,13 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 		lastInput = out.LastInput
 		switch {
 		case out.Compacted: // no file changed: nothing to undo
+		case tin.Undo != nil && tin.Undo.Fork:
+			// The files put back as the fork began: an undo takes them back
+			// to what they were.
+			if out.Restored {
+				applied = append(applied, done{n: n, before: out.Prior, after: tin.Undo.Tree})
+				undone = nil
+			}
 		case tin.Undo != nil && (tin.Undo.Of < 0 || !(out.Restored || out.Skipped)):
 		case tin.Undo != nil && !tin.Undo.Redo:
 			// A redo puts back the files as they were just before the undo.

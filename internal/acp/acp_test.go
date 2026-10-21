@@ -90,6 +90,9 @@ func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Re
 func (l *local) Compact(ctx context.Context, s string) (int, error) {
 	return l.r.Compact(ctx, s)
 }
+func (l *local) Fork(ctx context.Context, s string, n int, files bool) (string, int, error) {
+	return l.r.Fork(ctx, "fork-"+strings.TrimPrefix(s, "s/"), s, n, files)
+}
 
 func (l *local) Commands(ctx context.Context, s string) ([]opencode.Command, error) {
 	return l.r.Commands(ctx, s)
@@ -1299,5 +1302,55 @@ func TestACPSkills(t *testing.T) {
 	}
 	if !strings.Contains(said, "/hello — Say hello well") || !strings.Contains(said, `its name "other" is not its directory's (bad)`) {
 		t.Fatalf("/skills said %q", said)
+	}
+}
+
+// /fork over ACP: a request it does not understand makes nothing; one it
+// does makes a session and says how to go on in it (ADR 0021).
+func TestACPFork(t *testing.T) {
+	b, ws := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	resp, _ := c.until(isResponse(c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})))
+	var r struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	s := r.SessionID
+	id := prompt(c, s, "write notes")
+	req, _ := c.until(isMethod("session/request_permission"))
+	allow(c, req, "allow_once")
+	c.until(isResponse(id))
+	said := func(command string) string {
+		t.Helper()
+		id := prompt(c, s, command)
+		resp, before := c.until(isResponse(id))
+		if resp.Error != nil {
+			t.Fatalf("%s: %v", command, resp.Error)
+		}
+		text := ""
+		for _, m := range before {
+			if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "agent_message_chunk" {
+				text += updateOf(t, m).text()
+			}
+		}
+		return text
+	}
+	forked := "s/fork-" + strings.TrimPrefix(s, "s/")
+	if text := said("/fork soon --files"); !strings.Contains(text, "Usage: /fork") {
+		t.Fatalf("a bad /fork said %q", text)
+	}
+	if _, err := b.r.K.Get(ctx, forked); err == nil {
+		t.Fatal("a bad /fork made a session")
+	}
+	if text := said("/fork 0"); !strings.Contains(text, "Forked from turn 0") || !strings.Contains(text, "kairocode chat -session fork-") {
+		t.Fatalf("/fork said %q", text)
+	}
+	if _, err := b.r.K.Get(ctx, forked); err != nil {
+		t.Fatalf("no forked session: %v", err)
 	}
 }
