@@ -97,9 +97,14 @@ type Options struct {
 	// when it found none answering: one that holds the lock then is one on
 	// its way out (idle, or killed and not yet gone).
 	WaitLock time.Duration
-	// Version names the build. A client of another build stops the daemon
-	// and starts its own, when no step runs and no other client uses it.
+	// Version names the build.
 	Version string
+	// Installed is the build installed now: the daemon's executable as it
+	// is on disk (InstalledAt). One other than Version retires the daemon
+	// once no step runs, and Successor starts it for the clients connected
+	// (ADR 0019). Nil, or "": the daemon does not retire.
+	Installed func() string
+	Successor func() Start
 	// DrainTimeout is how long a daemon that stops lets the steps under way
 	// finish (DefaultDrain when zero). A step still running then is cut, as
 	// in a crash: a real one waits in the next daemon for review.
@@ -220,6 +225,73 @@ func Serve(ctx context.Context, o Options) error {
 	// connection drop instead).
 	answered := make(chan struct{})
 	var stopping atomic.Bool
+	srv := &http.Server{Handler: mux, ConnState: idle.connState}
+	// handover gives the data directory to the build installed now (ADR
+	// 0019). A client that would start a daemon meanwhile waits on
+	// start.lock; this one drains and lets go; if clients are connected,
+	// it starts the new build for them to reconnect to, then lets them in.
+	// It reports whether this call handed over (once).
+	handover := func() bool {
+		if !stopping.CompareAndSwap(false, true) {
+			return false
+		}
+		slock, lerr := flockCtx(ctx, filepath.Join(o.Dir, startLock))
+		_, conns := idle.counts()
+		// A request on a connection kept open would meet the runtime
+		// closed; with none kept, the client finds no daemon and connects
+		// again (a request that never reached it, sent again).
+		srv.SetKeepAlivesEnabled(false)
+		shutdown()
+		if lerr != nil {
+			slog.Warn("daemon: handing over without start.lock", "err", lerr)
+			return true
+		}
+		defer slock.Close()
+		if conns > 0 && o.Successor != nil {
+			sctx, cancel := context.WithTimeout(context.Background(), o.DrainTimeout+30*time.Second)
+			defer cancel()
+			if err := spawn(sctx, o.Dir, o.Successor()); err != nil {
+				slog.Warn("daemon: starting the build installed now", "err", err) // the next client starts it
+			}
+		}
+		return true
+	}
+	// outdated says whether the build installed now is another.
+	outdated := func() (string, bool) {
+		if o.Installed == nil {
+			return "", false
+		}
+		v := o.Installed()
+		// A build that could not be named is not told from another.
+		return v, v != "" && o.Version != "" && v != o.Version
+	}
+	// When no step runs, the daemon looks at the build installed now: an
+	// outdated one hands over between steps (the workflows go on from
+	// their records in the next one).
+	idle.setOnNoStep(func() {
+		if _, old := outdated(); old && handover() {
+			close(answered)
+			stop()
+		}
+	})
+	mux.Handle("POST /daemon/update", api.Authorized(func(w http.ResponseWriter, r *http.Request) {
+		installed, old := outdated()
+		u := Update{Installed: installed}
+		if old {
+			if steps, _ := idle.counts(); steps == 0 && handover() {
+				defer close(answered)
+				u.Replaced = true
+				writeJSON(w, u)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				stop()
+				return
+			}
+			u.Later = true // once no step runs
+		}
+		writeJSON(w, u)
+	}))
 	mux.Handle("POST /daemon/stop", api.Authorized(func(w http.ResponseWriter, r *http.Request) {
 		// ?idle: only if no step runs and no other client is connected (a
 		// client of another build replacing the daemon). Checked here, not
@@ -246,7 +318,6 @@ func Serve(ctx context.Context, o Options) error {
 		}
 		stop()
 	}))
-	srv := &http.Server{Handler: mux, ConnState: idle.connState}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
@@ -259,7 +330,9 @@ func Serve(ctx context.Context, o Options) error {
 	if stopping.Load() {
 		select {
 		case <-answered:
-		case <-time.After(o.DrainTimeout + 10*time.Second): // the drain is in the handler
+		// The drain is in the handler, or in a handover, which then waits
+		// for the new build to be ready.
+		case <-time.After(o.DrainTimeout + 40*time.Second):
 		}
 	}
 	if !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
@@ -353,6 +426,57 @@ func socketPath(dir string) (string, error) {
 	return filepath.Join(d, name), nil
 }
 
+// Update is what POST /daemon/update says (ADR 0019): the build installed
+// now; Replaced, the daemon handed over to it (connect again); Later, it
+// will once no step runs.
+type Update struct {
+	Installed string `json:"installed,omitempty"`
+	Replaced  bool   `json:"replaced,omitempty"`
+	Later     bool   `json:"later,omitempty"`
+}
+
+// FileVersion names the build in the executable at path (a link is
+// followed): the hash of its content.
+func FileVersion(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)[:12]), nil
+}
+
+// InstalledAt is Options.Installed for the executable at path: its
+// version, measured again only when the file changed (its size, time or
+// identity), so that looking each time no step runs costs a stat.
+func InstalledAt(path string) func() string {
+	var (
+		mu   sync.Mutex
+		last os.FileInfo
+		v    string
+	)
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		fi, err := os.Stat(path)
+		if err != nil {
+			return "" // not there now (an update under way): not known
+		}
+		if last != nil && os.SameFile(last, fi) && fi.Size() == last.Size() && fi.ModTime().Equal(last.ModTime()) {
+			return v
+		}
+		if v, err = FileVersion(path); err != nil {
+			v = ""
+		}
+		last = fi
+		return v
+	}
+}
+
 // Status is what GET /daemon/status says.
 type Status struct {
 	Version string `json:"version"`
@@ -400,6 +524,9 @@ type idleTimer struct {
 	gen   int // which timer is t: one stopped too late still fires
 	// changed is closed and replaced whenever a count changes.
 	changed chan struct{}
+	// onNoStep, if set, is called (on its own goroutine) each time the
+	// last step running finishes.
+	onNoStep func()
 }
 
 func newIdleTimer(d time.Duration, stop func()) *idleTimer {
@@ -428,6 +555,13 @@ func (i *idleTimer) settle(ctx context.Context, conns int, d time.Duration) bool
 			return false
 		}
 	}
+}
+
+// setOnNoStep sets onNoStep: kairo may be telling of steps already.
+func (i *idleTimer) setOnNoStep(f func()) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.onNoStep = f
 }
 
 func (i *idleTimer) observe(o kairo.Observation) {
@@ -461,8 +595,15 @@ func (i *idleTimer) add(n *int, d int) {
 	*n = max(*n+d, 0)
 	close(i.changed)
 	i.changed = make(chan struct{})
+	onNoStep := i.onNoStep
+	if n != &i.steps || d >= 0 || i.steps != 0 {
+		onNoStep = nil
+	}
 	i.mu.Unlock()
 	i.check()
+	if onNoStep != nil {
+		go onNoStep() // kairo's observer must not block
+	}
 }
 
 // check starts the timer when the daemon became idle, and stops it when it

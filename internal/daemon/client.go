@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
@@ -22,13 +23,61 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// Client talks to a data directory's daemon.
+// Client talks to a data directory's daemon. When it cannot reach it (the
+// daemon handed over to a new build, or stopped), it connects again, as
+// Connect does (ADR 0019).
 type Client struct {
+	mu   sync.Mutex
 	info Info
 	http *http.Client
-	// Stale is set when the daemon is of another build than the client and
-	// could not be replaced (other clients use it): what to tell the user.
+	// dir and start: how to connect again (none: it does not).
+	dir   string
+	start *Start
+	// Stale is what to tell the user when the daemon cannot be of the
+	// client's build: the client is older than the build installed, or
+	// (an older daemon) others use it.
 	Stale string
+}
+
+// conn is how to reach the daemon now.
+func (c *Client) conn() (Info, *http.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.info, c.http
+}
+
+// reconnect connects again, as Connect does: to the daemon server.json
+// names now, or one it starts.
+func (c *Client) reconnect(ctx context.Context) error {
+	if c.start == nil {
+		return errors.New("no way to connect again")
+	}
+	n, err := Connect(ctx, c.dir, *c.start)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	old := c.http
+	c.info, c.http = n.info, n.http
+	if n.Stale != "" {
+		c.Stale = n.Stale
+	}
+	c.mu.Unlock()
+	old.CloseIdleConnections()
+	return nil
+}
+
+// unreached says the request never reached the daemon: no connection was
+// made, or it was refused for an old token (server.json has a new one).
+// Only such a request is sent again: one that may have reached it is not
+// (it may have taken effect, invariant 4).
+func unreached(err error) bool {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var se *statusError
+	return errors.As(err, &se) && se.code == http.StatusUnauthorized
 }
 
 // Start says how a client starts the daemon when none runs: the command
@@ -47,25 +96,39 @@ type Start struct {
 // start.lock, and the others wait on the lock and find the daemon it
 // started.
 func Connect(ctx context.Context, dir string, start Start) (*Client, error) {
+	c, err := connect(ctx, dir, start)
+	if err == nil {
+		c.dir, c.start = dir, &start
+	}
+	return c, err
+}
+
+func connect(ctx context.Context, dir string, start Start) (*Client, error) {
 	if c, err := dial(ctx, dir); err == nil {
 		if start.Version == "" || c.info.Version == start.Version {
 			return c, nil
 		}
-		// Only a daemon that runs no step and that no other client uses is
-		// replaced: a stop would make this client wait for the steps under
-		// way (a Claude Code run can take minutes), and cut one that runs
-		// longer than the drain. The daemon checks it as it stops (?idle),
-		// and says 409 if it is busy.
-		err := c.do(ctx, "POST", "/daemon/stop?idle", nil, nil)
+		// Another build: the daemon looks at the build installed now, and
+		// hands over to it at once if no step runs, or once none does
+		// (ADR 0019).
+		var u Update
+		err := c.do(ctx, "POST", "/daemon/update", nil, &u)
 		var se *statusError
-		if errors.As(err, &se) && se.code == http.StatusConflict {
-			c.Stale = fmt.Sprintf("the daemon (pid %d) is of another build of kairocode and is in use; it goes on. "+
-				"Run `kairocode daemon stop` when it is idle to start a new one", c.info.PID)
+		switch {
+		case errors.As(err, &se) && (se.code == http.StatusNotFound || se.code == http.StatusMethodNotAllowed):
+			if kept, err := c.replaceOlder(ctx); err != nil || kept != nil {
+				return kept, err
+			}
+		case err != nil:
+			c.Close()
+			return nil, fmt.Errorf("asking the daemon of another build to update: %w", err)
+		case u.Replaced:
+			c.Close() // the new build runs (or a client starts it below)
+		case u.Installed != "" && u.Installed != start.Version && u.Installed == c.info.Version:
+			c.Stale = "this kairocode is not the build installed, which the daemon runs; start the installed one to use it"
 			return c, nil
-		}
-		c.Close()
-		if err != nil {
-			return nil, fmt.Errorf("stopping the daemon of another build: %w", err)
+		default:
+			return c, nil // it hands over once no step runs; this client connects again then
 		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -83,6 +146,24 @@ func Connect(ctx context.Context, dir string, start Start) (*Client, error) {
 		return nil, err
 	}
 	return dial(ctx, dir)
+}
+
+// replaceOlder is ADR 0008's replacement, for a daemon of a build before
+// ADR 0019: it is stopped only if no step runs and no other client uses
+// it. It returns the client if the daemon is kept, nil if it stopped.
+func (c *Client) replaceOlder(ctx context.Context) (*Client, error) {
+	err := c.do(ctx, "POST", "/daemon/stop?idle", nil, nil)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusConflict {
+		c.Stale = fmt.Sprintf("the daemon (pid %d) is of an older build of kairocode and is in use; it goes on. "+
+			"Run `kairocode daemon stop` when it is idle to start a new one", c.info.PID)
+		return c, nil
+	}
+	c.Close()
+	if err != nil {
+		return nil, fmt.Errorf("stopping the daemon of another build: %w", err)
+	}
+	return nil, nil
 }
 
 // dial reaches the daemon server.json names, if it answers.
@@ -169,29 +250,52 @@ func (e *statusError) Error() string {
 }
 
 // PID is the daemon's process.
-func (c *Client) PID() int { return c.info.PID }
+func (c *Client) PID() int {
+	info, _ := c.conn()
+	return info.PID
+}
 
-func (c *Client) Close() { c.http.CloseIdleConnections() }
+func (c *Client) Close() {
+	_, h := c.conn()
+	h.CloseIdleConnections()
+}
 
-// do sends a request with in as its JSON body and decodes the reply into out.
+// do sends a request with in as its JSON body and decodes the reply into
+// out. One that never reached the daemon is sent again once connected
+// again.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
-	var body io.Reader
+	var b []byte
 	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
+		var err error
+		if b, err = json.Marshal(in); err != nil {
 			return err
 		}
+	}
+	err := c.doOnce(ctx, method, path, b, in != nil, out)
+	if unreached(err) && c.start != nil {
+		if rerr := c.reconnect(ctx); rerr != nil {
+			return fmt.Errorf("%w (connecting again: %v)", err, rerr)
+		}
+		err = c.doOnce(ctx, method, path, b, in != nil, out)
+	}
+	return err
+}
+
+func (c *Client) doOnce(ctx context.Context, method, path string, b []byte, hasBody bool, out any) error {
+	var body io.Reader
+	if hasBody {
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://kairocode"+path, body)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.info.Token)
-	if in != nil {
+	info, h := c.conn()
+	req.Header.Set("Authorization", "Bearer "+info.Token)
+	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http.Do(req)
+	resp, err := h.Do(req)
 	if err != nil {
 		return err
 	}
@@ -380,19 +484,15 @@ func (c *Client) Answer(ctx context.Context, key, option string) error {
 // ends or the stream does (the daemon stopped, or this client fell
 // behind); call it again to go on.
 func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Event, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://kairocode"+sessionPath(session)+"/events", nil)
+	resp, err := c.events(ctx, session)
+	if unreached(err) && c.start != nil {
+		if rerr := c.reconnect(ctx); rerr != nil {
+			return nil, fmt.Errorf("%w (connecting again: %v)", err, rerr)
+		}
+		resp, err = c.events(ctx, session)
+	}
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.info.Token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		return nil, &statusError{code: resp.StatusCode, msg: strings.TrimSpace(string(b))}
 	}
 	out := make(chan runtime.Event)
 	go func() {
@@ -427,6 +527,26 @@ func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Eve
 		}
 	}()
 	return out, nil
+}
+
+// events opens the session's stream.
+func (c *Client) events(ctx context.Context, session string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://kairocode"+sessionPath(session)+"/events", nil)
+	if err != nil {
+		return nil, err
+	}
+	info, h := c.conn()
+	req.Header.Set("Authorization", "Bearer "+info.Token)
+	resp, err := h.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return nil, &statusError{code: resp.StatusCode, msg: strings.TrimSpace(string(b))}
+	}
+	return resp, nil
 }
 
 // History is the session's conversation as of its last finished turn.

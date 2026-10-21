@@ -3,8 +3,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -175,11 +174,27 @@ func openRuntime(ctx context.Context, cfg runtime.Config) (*runtime.Runtime, err
 // daemonArgv is how a client starts the daemon: this program, in the
 // foreground, writing "ready" to its standard output.
 var daemonArgv = func(data string) ([]string, error) {
-	exe, err := os.Executable()
+	exe, err := invokedPath()
 	if err != nil {
 		return nil, err
 	}
 	return []string{exe, "daemon", "-data", data}, nil
+}
+
+// invokedPath is the path this program was started by, made absolute, a
+// link kept a link: a package manager installs a new build under another
+// directory and moves the link (ADR 0019), so the path names the build
+// installed now, where os.Executable names the one running.
+func invokedPath() (string, error) {
+	p := os.Args[0]
+	if !strings.Contains(p, string(filepath.Separator)) {
+		lp, err := exec.LookPath(p)
+		if err != nil {
+			return os.Executable()
+		}
+		p = lp
+	}
+	return filepath.Abs(p)
 }
 
 // connect reaches the daemon of data, starting it if none runs.
@@ -202,16 +217,8 @@ var buildVersion = sync.OnceValue(func() string {
 	if err != nil {
 		return ""
 	}
-	f, err := os.Open(exe)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return ""
-	}
-	return hex.EncodeToString(h.Sum(nil)[:12])
+	v, _ := daemon.FileVersion(exe)
+	return v
 })
 
 func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -241,9 +248,18 @@ func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	signal.Ignore(syscall.SIGPIPE)
 	ctx, cut, release := stopOnSignals(ctx)
 	defer release()
-	return daemon.Serve(ctx, daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, Version: buildVersion(),
+	o := daemon.Options{Dir: *data, Open: openRuntime, Idle: idle, Ready: stdout, Version: buildVersion(),
 		// A daemon on its way out may drain its steps for up to DefaultDrain.
-		WaitLock: daemon.DefaultDrain + 10*time.Second, Cut: cut})
+		WaitLock: daemon.DefaultDrain + 10*time.Second, Cut: cut}
+	// The build installed at the path it was started by: when it changes,
+	// the daemon hands over to it (ADR 0019).
+	if exe, err := filepath.Abs(os.Args[0]); err == nil {
+		o.Installed = daemon.InstalledAt(exe)
+		o.Successor = func() daemon.Start {
+			return daemon.Start{Argv: append([]string{exe}, os.Args[1:]...), Env: os.Environ()}
+		}
+	}
+	return daemon.Serve(ctx, o)
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +30,20 @@ func TestMain(m *testing.M) {
 	// Nor ACP's registry of agents (ADR 0015): no test reaches the network.
 	os.Setenv("KAIROCODE_ACP_REGISTRY", "off")
 	if os.Getenv("KC_DAEMON_CHILD") == "1" {
-		err := Serve(context.Background(), Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second,
-			Version: os.Getenv("KC_VERSION"), DrainTimeout: drainTimeout()})
+		o := Options{Dir: os.Getenv("KC_DATA"), Open: openFake, Idle: -1, Ready: os.Stdout, WaitLock: 10 * time.Second,
+			Version: os.Getenv("KC_VERSION"), DrainTimeout: drainTimeout()}
+		if f := os.Getenv("KC_INSTALLED"); f != "" {
+			// The build installed now is the file's word; the successor
+			// starts as that build (ADR 0019).
+			o.Installed = func() string {
+				b, _ := os.ReadFile(f)
+				return strings.TrimSpace(string(b))
+			}
+			o.Successor = func() Start {
+				return Start{Argv: os.Args, Env: append(os.Environ(), "KC_VERSION="+o.Installed())}
+			}
+		}
+		err := Serve(context.Background(), o)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -430,31 +445,56 @@ func TestLongDataDirSocket(t *testing.T) {
 	}
 }
 
-// childStartAt is childStart for a build named version.
-func childStartAt(data, fake, version string) Start {
+// childStartAt is childStart for a build named version, the build
+// installed being what the file installed says.
+func childStartAt(data, fake, version, installed string) Start {
 	s := childStart(data, fake)
-	s.Env = append(s.Env, "KC_VERSION="+version)
+	s.Env = append(s.Env, "KC_VERSION="+version, "KC_INSTALLED="+installed)
 	s.Version = version
 	return s
 }
 
-// A client of another build stops a daemon no one else uses and starts its
-// own (Codex checks the daemon's build too).
-func TestOtherBuildReplacesTheDaemon(t *testing.T) {
+// install makes version the build installed now.
+func install(t *testing.T, path, version string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(version), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitFor waits until cond holds.
+func waitFor(t *testing.T, ctx context.Context, what string, cond func() bool) {
+	t.Helper()
+	for !cond() {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s: %v", what, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// A new build installed: its client finds the daemon of the old build,
+// which hands over to the new one at once when no step runs (ADR 0019).
+func TestNewBuildReplacesTheDaemon(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts daemon processes")
 	}
 	data := dataDir(t)
-	fake := writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1})
+	dir := t.TempDir()
+	installed := filepath.Join(dir, "installed")
+	install(t, installed, "v1")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{HoldAt: -1})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	a, err := Connect(ctx, data, childStartAt(data, fake, "v1"))
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1", installed))
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := a.PID()
 	a.Close()
-	b, err := Connect(ctx, data, childStartAt(data, fake, "v2"))
+	install(t, installed, "v2")
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2", installed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,68 +508,124 @@ func TestOtherBuildReplacesTheDaemon(t *testing.T) {
 	}
 }
 
-// A daemon of another build that other clients use is left to them, and
-// the client is told.
-func TestOtherBuildKeepsABusyDaemon(t *testing.T) {
+// Clients of the old build that are connected do not keep it: the daemon
+// hands over, starts the new build for them, and they connect again to it,
+// told they are older (ADR 0019).
+func TestNewBuildReplacesADaemonInUse(t *testing.T) {
 	if testing.Short() {
-		t.Skip("starts a daemon process")
+		t.Skip("starts daemon processes")
 	}
 	data := dataDir(t)
-	fake := writeFake(t, filepath.Join(t.TempDir(), "fake.json"), provider.Fake{HoldAt: -1})
+	dir := t.TempDir()
+	installed := filepath.Join(dir, "installed")
+	install(t, installed, "v1")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{HoldAt: -1})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	a, err := Connect(ctx, data, childStartAt(data, fake, "v1"))
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1", installed))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close() // its connection stays open: a client that uses the daemon
-	b, err := Connect(ctx, data, childStartAt(data, fake, "v2"))
+	old := a.PID()
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: workspace(t, `{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	install(t, installed, "v2")
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2", installed))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	if b.PID() != a.PID() || b.Stale == "" {
-		t.Fatalf("pids %d %d, stale %q", a.PID(), b.PID(), b.Stale)
+	if b.PID() == old || b.Stale != "" {
+		t.Fatalf("pid %d (was %d), stale %q", b.PID(), old, b.Stale)
+	}
+	// a goes on, connected again to the new build.
+	if _, err := a.LastTurn(ctx, s); err != nil && !errors.Is(err, ErrNoTurn) {
+		t.Fatal(err)
+	}
+	st, err := a.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PID != b.PID() || st.Version != "v2" || a.Stale == "" {
+		t.Fatalf("a: status %+v, stale %q", st, a.Stale)
 	}
 }
 
-// A daemon of another build that runs a step is not stopped: the client
-// would wait for the step, or cut it if it outlasts the drain.
-func TestOtherBuildKeepsADaemonThatRuns(t *testing.T) {
+// A daemon of the old build that runs a step is not stopped: it hands over
+// once no step runs (between the turn's steps), and the turn goes on in the
+// new build (ADR 0019).
+func TestNewBuildWaitsForTheStep(t *testing.T) {
 	if testing.Short() {
-		t.Skip("starts a daemon process")
+		t.Skip("starts daemon processes")
 	}
 	data := dataDir(t)
 	dir := t.TempDir()
-	hold := filepath.Join(dir, "held")
-	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: []provider.FakeReply{{Text: "done"}}, HoldAt: 0, HoldFile: hold})
+	installed := filepath.Join(dir, "installed")
+	install(t, installed, "v1")
+	hold, release := filepath.Join(dir, "held"), filepath.Join(dir, "release")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: []provider.FakeReply{{Text: "done"}},
+		HoldAt: 0, HoldFile: hold, ReleaseFile: release})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	a, err := Connect(ctx, data, childStartAt(data, fake, "v1"))
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1", installed))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s, _ := a.CreateSession(ctx, workflows.SessionInput{Dir: workspace(t, `{}`)})
-	a.Send(ctx, s, "hi")
-	for {
-		if _, err := os.Stat(hold); err == nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("the model call never started")
-		case <-time.After(10 * time.Millisecond):
-		}
+	n, err := a.Send(ctx, s, "hi")
+	if err != nil {
+		t.Fatal(err)
 	}
+	waitFor(t, ctx, "the model call", func() bool { _, err := os.Stat(hold); return err == nil })
 	old := a.PID()
-	a.Close()
-	b, err := Connect(ctx, data, childStartAt(data, fake, "v2"))
+	install(t, installed, "v2")
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2", installed))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	if b.PID() != old || b.Stale == "" {
+	if b.PID() != old || b.Stale != "" {
 		t.Fatalf("pid %d (was %d), stale %q", b.PID(), old, b.Stale)
+	}
+	install(t, release, "")
+	waitFor(t, ctx, "the handover", func() bool { info, err := ReadInfo(data); return err == nil && info.PID != old })
+	turn, err := b.WaitTurn(ctx, s, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := b.Status(ctx); turn.Reply != "done" || st.Version != "v2" {
+		t.Fatalf("reply %q, status %+v", turn.Reply, st)
+	}
+}
+
+// A client of an older build than the one installed does not replace the
+// daemon of the new one: no back and forth (ADR 0019). It is told.
+func TestOlderClientKeepsTheDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts daemon processes")
+	}
+	data := dataDir(t)
+	dir := t.TempDir()
+	installed := filepath.Join(dir, "installed")
+	install(t, installed, "v2")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2", installed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1", installed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.PID() != b.PID() || !strings.Contains(a.Stale, "not the build installed") {
+		t.Fatalf("pids %d %d, stale %q", a.PID(), b.PID(), a.Stale)
 	}
 }
 
@@ -869,4 +965,22 @@ func isolatedHome() string {
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	return home
+}
+
+// Only a request that never reached the daemon is sent again after
+// connecting again: one cut off after it was sent may have taken effect
+// (ADR 0019, invariant 4).
+func TestOnlyUnreachedIsSentAgain(t *testing.T) {
+	for err, want := range map[error]bool{
+		&net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}:                   true,
+		fmt.Errorf("post: %w", &net.OpError{Op: "dial", Err: os.ErrNotExist}): true,
+		&statusError{code: http.StatusUnauthorized}:                           true,
+		&net.OpError{Op: "read", Err: syscall.ECONNRESET}:                     false,
+		io.ErrUnexpectedEOF: false,
+		&statusError{code: http.StatusInternalServerError}: false,
+	} {
+		if got := unreached(err); got != want {
+			t.Errorf("%v: %v, want %v", err, got, want)
+		}
+	}
 }
