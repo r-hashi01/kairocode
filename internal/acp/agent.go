@@ -37,6 +37,7 @@ type Backend interface {
 	History(ctx context.Context, session string) ([]msg.Message, error)
 	Undo(ctx context.Context, session string) (int, error)
 	Redo(ctx context.Context, session string) (int, error)
+	Compact(ctx context.Context, session string) (int, error)
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
 	// Skills are the session's skills, and the SKILL.md files not taken.
 	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
@@ -61,6 +62,7 @@ type Backend interface {
 var builtinCommands = []map[string]any{
 	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
 	{"name": "redo", "description": "Put back what the last undo took away"},
+	{"name": "compact", "description": "Summarize the conversation and go on from the summary (the earlier messages are kept)"},
 	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them)", "input": map[string]any{"hint": "<name> [what to give it]"}},
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
@@ -539,6 +541,8 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
 	case name == "/redo":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
+	case name == "/compact":
+		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Compact(ctx, s) }, true
 	case name == "/provider" && strings.HasPrefix(strings.TrimSpace(args), "install "):
 		// Typed: installed here, the user having asked for it (ADR 0015).
 		id := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), "install "))

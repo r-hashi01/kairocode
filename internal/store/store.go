@@ -146,9 +146,20 @@ func (s *Store) Message(ctx context.Context, hash string) (msg.Message, error) {
 // Link is one turn's worth of a conversation: the messages it added, after the
 // conversation up to Prev. A conversation is named by its last link, so a
 // workflow passes one hash however long the conversation is.
+//
+// A Base link starts a conversation afresh (ADR 0020): its messages (a
+// summary) stand for all before it, which Conversation does not read. Its
+// Prev still names them, so they are kept and can be looked at.
 type Link struct {
 	Prev     string   `json:"prev,omitempty"`
 	Messages []string `json:"messages"`
+	Base     bool     `json:"base,omitempty"`
+}
+
+// Compacted adds a Base link holding summary after the conversation that
+// ends at prev, and returns its hash.
+func (s *Store) Compacted(ctx context.Context, prev, summary string) (string, error) {
+	return s.PutJSON(ctx, KindHistory, Link{Prev: prev, Messages: []string{summary}, Base: true})
 }
 
 // Extend appends messages to the conversation that ends at prev.
@@ -166,6 +177,9 @@ func (s *Store) Conversation(ctx context.Context, head string) ([]string, error)
 			return nil, err
 		}
 		links = append(links, l.Messages)
+		if l.Base {
+			break // what is before it is in its summary
+		}
 		h = l.Prev
 	}
 	var out []string

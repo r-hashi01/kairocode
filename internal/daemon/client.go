@@ -584,6 +584,12 @@ func (c *Client) Undo(ctx context.Context, session string) (int, error) {
 	return c.undo(ctx, session, "undo")
 }
 
+// Compact starts a turn that only compacts the session's conversation
+// (ADR 0020), and returns its number.
+func (c *Client) Compact(ctx context.Context, session string) (int, error) {
+	return c.undo(ctx, session, "compact")
+}
+
 func (c *Client) Redo(ctx context.Context, session string) (int, error) {
 	return c.undo(ctx, session, "redo")
 }

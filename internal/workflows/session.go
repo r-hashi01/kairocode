@@ -87,6 +87,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 	// applied: turns in effect, the last undone first; undone: turns undone,
 	// the last redone first. A new turn clears undone.
 	var applied, undone []done
+	var lastInput int64 // the last turn's last model call's input (ADR 0020)
 	for n := 0; ; n++ {
 		ev, err := kairo.WaitFor[SessionEvent](ctx, SignalMessage)
 		if err != nil {
@@ -115,7 +116,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 		}
 		tin := TurnInput{
 			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: engine, Model: model, History: head, Message: ev.Message,
-			Epoch: epoch, Effort: effort, Mode: mode,
+			Epoch: epoch, Effort: effort, Mode: mode, LastInput: lastInput,
 		}
 		if mode == ModePlan {
 			tin.Agent = "plan" // it only reads (ADR 0016)
@@ -127,6 +128,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 			tin.Model = ev.Model
 		}
 		tin.Flow = ev.Flow
+		tin.Compact = ev.Kind == EventCompact
 		switch ev.Kind {
 		case EventUndo:
 			tin.Undo = &UndoInput{Of: -1}
@@ -180,7 +182,9 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 			return SessionOutput{Turns: n, Head: head}, err
 		}
 		head = out.Head
+		lastInput = out.LastInput
 		switch {
+		case out.Compacted: // no file changed: nothing to undo
 		case tin.Undo != nil && (tin.Undo.Of < 0 || !(out.Restored || out.Skipped)):
 		case tin.Undo != nil && !tin.Undo.Redo:
 			// A redo puts back the files as they were just before the undo.

@@ -76,6 +76,9 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 	if r.Force != "" {
 		params.ToolChoice = anthropic.BetaToolChoiceParamOfTool(r.Force)
 	}
+	if r.NoTools && len(r.Tools) > 0 {
+		params.ToolChoice = anthropic.BetaToolChoiceUnionParam{OfNone: &anthropic.BetaToolChoiceNoneParam{}}
+	}
 	resp, err := a.stream(ctx, params, r.OnText)
 	if err != nil {
 		if strings.Contains(err.Error(), "no Anthropic credentials") {
@@ -87,6 +90,9 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 			switch apierr.StatusCode {
 			case 400, 401, 403, 404, 413, 422:
 				// Asking again gets the same answer.
+				if strings.Contains(err.Error(), "prompt is too long") || apierr.StatusCode == 413 {
+					return Response{}, &PermanentError{Err: fmt.Errorf("%w: %v", ErrContextTooLong, err)}
+				}
 				return Response{}, &PermanentError{Err: err}
 			}
 		}

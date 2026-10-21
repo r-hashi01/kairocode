@@ -408,6 +408,7 @@ func (r *Runtime) declare() {
 			return r.Store.Extend(t, in.Prev, in.Messages)
 		})
 	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
+	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, kairo.Timeout(10*time.Minute))
 	kairo.Action(r.K, workflows.ActTurnSettled, kairo.Unprotected, r.turnSettled) // it reads kairo's record
 	kairo.Action(r.K, workflows.ActToolMissing, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {
@@ -635,6 +636,11 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	} else if err == nil {
 		r.authSeen(ProviderAnthropic, AuthSignedIn, nil)
 	}
+	if errors.Is(err, provider.ErrContextTooLong) {
+		// Recorded as such: the turn compacts the conversation and asks
+		// again (ADR 0020).
+		return workflows.ModelReply{Stop: workflows.StopContext}, nil
+	}
 	if err != nil {
 		var permanent *provider.PermanentError
 		if t.Err() != nil || errors.As(err, &permanent) {
@@ -733,6 +739,12 @@ func (r *Runtime) Undo(ctx context.Context, session string) (int, error) {
 }
 
 // Redo asks the session to put back what its last undo took away.
+// Compact starts a turn that only compacts the session's conversation
+// (/compact, ADR 0020), and returns its number.
+func (r *Runtime) Compact(ctx context.Context, session string) (int, error) {
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventCompact})
+}
+
 func (r *Runtime) Redo(ctx context.Context, session string) (int, error) {
 	return r.undo(ctx, session, workflows.EventRedo)
 }

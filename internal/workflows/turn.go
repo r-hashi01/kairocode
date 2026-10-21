@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
+
+	"github.com/r-hashi01/kairocode/internal/msg"
 )
 
 // RunTurn is one turn (design 5) of version 4: RunTurnV3 between two
@@ -68,6 +70,9 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		Effort: in.Effort})
 	if err != nil {
 		return TurnOutput{}, err
+	}
+	if in.Compact {
+		return compactTurn(ctx, in, agent)
 	}
 	if !in.Sub {
 		// How each command hook runs is settled first, asking the user
@@ -139,11 +144,22 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	out := TurnOutput{}
 	turn := []string{in.Message}
 	hookRounds := 0
+	// What compacting goes by, across the hook rounds: the last model
+	// call's input (the previous turn's, to begin with), and how many times
+	// this turn compacted (ADR 0020).
+	cs := compacting{last: in.LastInput}
 	for {
 		// The model loop, then the turn.end hooks: one that does not pass
 		// sends the model back to it (at most maxHookRounds times).
-		if err := modelLoop(ctx, in, agent, &out, &turn); err != nil {
+		if err := modelLoop(ctx, &in, agent, &out, &turn, &cs); err != nil {
 			return TurnOutput{}, err
+		}
+		if out.Stopped == StopContext && out.Reply == "" {
+			// No reply to give: the turn says why it stopped.
+			if out.Reply, err = kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "assistant",
+				Text: "The conversation is longer than the model's context, and could not be made shorter: start a new session, or /compact."}); err != nil {
+				return TurnOutput{}, err
+			}
 		}
 		if out.Stopped != "" || in.Sub || hookRounds == maxHookRounds {
 			break
@@ -173,19 +189,44 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		return TurnOutput{}, err
 	}
 	out.Head = head
+	out.LastInput = cs.last
 	return out, nil
 }
 
+// compacting is what compacting goes by in a turn (ADR 0020).
+type compacting struct {
+	last int64 // the last model call's input, as recorded
+	n    int   // times the turn compacted
+}
+
 // modelLoop is the turn's model loop: model, tools, model, ... until the
-// model asks for no tools, or the turn stops.
-func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, turnp *[]string) error {
+// model asks for no tools, or the turn stops. Near the model's context, the
+// conversation is compacted first (ADR 0020): in.History then starts from
+// the summary, and the turn so far is in it.
+func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, out *TurnOutput, turnp *[]string, cs *compacting) error {
 	turn := *turnp
 	defer func() { *turnp = turn }()
 	refused := 0 // calls auto mode's judge refused (ADR 0016)
+	compact := func() error {
+		c, err := kairo.Call[CompactOutput](ctx, ActHistoryCompact, CompactInput{Model: agent.Model, Effort: agent.Effort, Tools: agent.Tools,
+			History: in.History, Turn: turn})
+		if err != nil {
+			return err
+		}
+		in.History, turn, cs.last = c.Head, nil, 0
+		out.Usage.Add(c.Usage)
+		cs.n++ // a conversation that stays too long is not compacted for ever
+		return nil
+	}
 	for {
 		if out.Steps == agent.MaxSteps {
 			out.Stopped = "max_steps"
 			break
+		}
+		if agent.Context > 0 && cs.n < maxCompactions && cs.last > int64(agent.Context)*8/10 {
+			if err := compact(); err != nil {
+				return err
+			}
 		}
 		out.Steps++
 		reply, err := kairo.Call[ModelReply](ctx, ActModel, ModelInput{
@@ -195,6 +236,20 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 		if err != nil {
 			return err
 		}
+		if reply.Stop == StopContext {
+			// Not asked: longer than the context. Compacted, it is asked
+			// again (not a step of its own).
+			out.Steps--
+			if agent.Context == 0 || cs.n >= maxCompactions {
+				out.Stopped = StopContext
+				break
+			}
+			if err := compact(); err != nil {
+				return err
+			}
+			continue
+		}
+		cs.last = reply.Usage.Input + reply.Usage.CacheRead + reply.Usage.CacheWrite + reply.Usage.Output
 		out.Usage.Add(reply.Usage)
 		out.Reply = reply.Message
 		turn = append(turn, reply.Message)
@@ -239,7 +294,7 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 				if in.Mode == ModeAuto && refused < MaxAutoRefusals {
 					policy.Auto, policy.Request = true, in.Message
 				}
-				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil, &tryEnv{in: in})
+				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil, &tryEnv{in: *in})
 				if err != nil {
 					return err
 				}
@@ -255,7 +310,7 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 			calls[i] = func(ctx *kairo.Context) error {
 				run := runGated
 				if gates[i].Action == ActToolPrefix+TaskTool {
-					run = func(ctx *kairo.Context, _ Gate, ti ToolInput) (ToolOutput, error) { return runTask(ctx, in, ti) }
+					run = func(ctx *kairo.Context, _ Gate, ti ToolInput) (ToolOutput, error) { return runTask(ctx, *in, ti) }
 				}
 				r, err := run(ctx, gates[i], inputs[i])
 				results[i] = r
@@ -276,7 +331,7 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 				if !ran(gates[i]) {
 					continue
 				}
-				msg, err := runHooks(ctx, in, agent, HookToolAfter, fmt.Sprintf("tool%d.%d", out.Steps, i),
+				msg, err := runHooks(ctx, *in, agent, HookToolAfter, fmt.Sprintf("tool%d.%d", out.Steps, i),
 					strings.TrimSpace(c.Name+" "+gates[i].Subject), func(h Hook) bool { return h.Tool == "" || h.Tool == c.Name })
 				if err != nil {
 					return err
@@ -308,6 +363,35 @@ func modelLoop(ctx *kairo.Context, in TurnInput, agent Agent, out *TurnOutput, t
 		}
 	}
 	return nil
+}
+
+// maxCompactions is how many times a turn compacts its conversation.
+const maxCompactions = 3
+
+// compactTurn compacts the conversation and does nothing else (/compact,
+// ADR 0020). A CLI engine's agent compacts its own: the user is told.
+func compactTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, error) {
+	text := "The conversation is compacted: it goes on from a summary of it."
+	head := in.History
+	var usage msg.Usage
+	switch {
+	case CLIEngine(agent.Engine):
+		text = "This provider compacts its own conversation."
+	case in.History == "":
+		text = "There is nothing to compact yet."
+	default:
+		c, err := kairo.Call[CompactOutput](ctx, ActHistoryCompact, CompactInput{Model: agent.Model, Effort: agent.Effort, Tools: agent.Tools,
+			History: in.History})
+		if err != nil {
+			return TurnOutput{}, err
+		}
+		head, usage = c.Head, c.Usage
+	}
+	reply, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "assistant", Text: text})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	return TurnOutput{Head: head, Reply: reply, Usage: usage, Compacted: true}, nil
 }
 
 // runTask runs a task call (FR-13): a subagent, as a turn of its own (a

@@ -369,7 +369,14 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if def.Workflow != "" && !flowchart.ValidName(def.Workflow) {
 		return workflows.Agent{}, fmt.Errorf("the agent %q: workflow %q is not a flow's name", in.Agent, def.Workflow)
 	}
+	ctxTokens := 0 // a CLI engine's agent compacts its own (ADR 0020)
+	if engine == workflows.EngineAPI {
+		if ctxTokens, err = modelContext(model); err != nil {
+			return workflows.Agent{}, err
+		}
+	}
 	return workflows.Agent{
+		Context:     ctxTokens,
 		Hooks:       hooks,
 		Workflow:    def.Workflow,
 		Name:        in.Agent,

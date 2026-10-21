@@ -48,6 +48,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/commands", s.runCommand)
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
+	s.mux.HandleFunc("POST /sessions/{id}/compact", s.compact)
 	s.mux.HandleFunc("POST /sessions/{id}/cancel", s.cancel)
 	s.mux.HandleFunc("GET /sessions/{id}/flows", s.flows)
 	s.mux.HandleFunc("POST /sessions/{id}/flows", s.runFlow)
@@ -119,6 +120,17 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, err := s.rt.Send(r.Context(), sessionOf(r), in.Text)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+// compact starts a turn that only compacts the session's conversation
+// (ADR 0020).
+func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
+	n, err := s.rt.Compact(r.Context(), sessionOf(r))
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return

@@ -41,6 +41,9 @@ type Fake struct {
 	// Replies answers, in place of the script, a request whose first user
 	// message has the key in its text (a subagent given that prompt).
 	Replies map[string]FakeReply `json:"replies,omitempty"`
+	// Summary is what it answers a request to summarize the conversation
+	// (ADR 0020); CallLog has "summary" for it.
+	Summary string `json:"summary,omitempty"`
 	// Decide, if set, answers a request that forces a tool (Request.Force):
 	// it calls that tool with this input, whatever the script says.
 	Decide json.RawMessage `json:"decide,omitempty"`
@@ -54,6 +57,10 @@ type FakeReply struct {
 	Tools []FakeTool `json:"tools,omitempty"`
 	// Stop overrides the stop reason (e.g. StopRefusal, StopLength).
 	Stop string `json:"stop,omitempty"`
+	// Input, if set, is the reply's input tokens (a long conversation).
+	Input int64 `json:"input,omitempty"`
+	// TooLong: the call fails as one longer than the model's context.
+	TooLong bool `json:"too_long,omitempty"`
 }
 
 type FakeTool struct {
@@ -115,6 +122,19 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 			return Response{}, err
 		}
 	}
+	if r.System == CompactSystem { // a summary (ADR 0020)
+		if f.CallLog != "" {
+			if err := appendLine(f.CallLog, "summary"); err != nil {
+				return Response{}, err
+			}
+		}
+		text := f.Summary
+		if text == "" {
+			text = "the summary"
+		}
+		return Response{Message: msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.Text, Text: text}}},
+			Stop: StopEnd, Usage: msg.Usage{Input: 10, Output: 5}}, nil
+	}
 	if r.Force != "" && len(f.Decide) > 0 {
 		return Response{Message: msg.Message{Role: msg.Assistant, Parts: []msg.Part{
 			{Type: msg.ToolUse, ID: "toolu_force", Name: r.Force, Input: f.Decide}}}, Stop: StopToolUse,
@@ -151,6 +171,9 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 		}
 		m.Parts = append(m.Parts, msg.Part{Type: msg.ToolUse, ID: fmt.Sprintf("toolu_%d_%d", i, j), Name: t.Name, Input: in})
 	}
+	if s.TooLong {
+		return Response{}, &PermanentError{Err: ErrContextTooLong}
+	}
 	stop := StopEnd
 	if len(s.Tools) > 0 {
 		stop = StopToolUse
@@ -158,7 +181,11 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 	if s.Stop != "" {
 		stop = s.Stop
 	}
-	return Response{Message: m, Stop: stop, Usage: msg.Usage{Input: 10, Output: 5}}, nil
+	usage := msg.Usage{Input: 10, Output: 5}
+	if s.Input > 0 {
+		usage.Input = s.Input
+	}
+	return Response{Message: m, Stop: stop, Usage: usage}, nil
 }
 
 func appendLine(path, line string) error {

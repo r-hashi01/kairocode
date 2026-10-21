@@ -62,6 +62,10 @@ const (
 	ActAgentLoad     = "agent.load"
 	ActModel         = "model"
 	ActHistoryExtend = "history.extend"
+	// ActHistoryCompact summarizes the conversation and starts it afresh
+	// from the summary (ADR 0020): a model call (unprotected), kept as a
+	// Base link that still names what it summarizes.
+	ActHistoryCompact = "history.compact"
 	// ActFlowLoad reads a flow's script, to be recorded; ActFlowPut stores
 	// a message a flow makes (an agent's prompt, the flow's result);
 	// ActFlowText reads a stored message's text back.
@@ -239,9 +243,18 @@ const (
 	// (design 7).
 	EventUndo = "undo"
 	EventRedo = "redo"
+	// EventCompact starts a turn that only compacts the conversation
+	// (/compact, ADR 0020).
+	EventCompact = "compact"
 )
 
 type TurnInput struct {
+	// Compact: the turn only compacts the conversation (ADR 0020).
+	Compact bool `json:"compact,omitempty"`
+	// LastInput is the previous turn's last model call's input, as
+	// recorded: a turn that starts near the context compacts before its
+	// first call (ADR 0020).
+	LastInput int64 `json:"last_input,omitempty"`
 	// Session is the session's run id.
 	Session string `json:"session"`
 	// N is the turn's number in its session. It is part of the input so two
@@ -441,6 +454,12 @@ type RestoreOutput struct {
 type TurnOutput struct {
 	// Head is the conversation after this turn.
 	Head string `json:"head"`
+	// Compacted: the turn only compacted the conversation (ADR 0020): it
+	// changed no file, and is not one to undo.
+	Compacted bool `json:"compacted,omitempty"`
+	// LastInput is the turn's last model call's input, as recorded, for
+	// the next turn (ADR 0020).
+	LastInput int64 `json:"last_input,omitempty"`
 	// Reply is the turn's last assistant message.
 	Reply string    `json:"reply"`
 	Steps int       `json:"steps"`
@@ -478,13 +497,17 @@ type AgentLoadInput struct {
 type Agent struct {
 	Name string `json:"name"`
 	// Engine is EngineAPI or a CLI engine (CLIEngine).
-	Engine   string   `json:"engine"`
-	Model    string   `json:"model"`
-	Effort   string   `json:"effort,omitempty"`
-	MaxSteps int      `json:"max_steps"`
-	System   string   `json:"system"` // hash
-	Tools    string   `json:"tools"`  // hash
-	Names    []string `json:"names"`  // the tools it has
+	Engine   string `json:"engine"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
+	MaxSteps int    `json:"max_steps"`
+	// Context is the model's context in tokens: near it, the conversation
+	// is compacted (ADR 0020). 0 (a turn before it, or a CLI engine): it
+	// is not.
+	Context int      `json:"context,omitempty"`
+	System  string   `json:"system"` // hash
+	Tools   string   `json:"tools"`  // hash
+	Names   []string `json:"names"`  // the tools it has
 	// Planned are the tools among Names that plan a write and apply it.
 	Planned []string `json:"planned,omitempty"`
 	// Permissions are the rules as they were when the turn started, by hash.
@@ -747,6 +770,27 @@ type ModelReply struct {
 	Calls   []ToolCall `json:"calls,omitempty"`
 	Stop    string     `json:"stop"`
 	Usage   msg.Usage  `json:"usage"`
+}
+
+// StopContext: the model was not asked, the conversation being longer
+// than its context (no Message): it is compacted first (ADR 0020).
+const StopContext = "context"
+
+// CompactInput is the conversation to summarize: up to History, and the
+// turn so far; with the agent's model and tools (the conversation's tool
+// calls name them). CompactOutput is the conversation that starts from its
+// summary, and what the summary used.
+type CompactInput struct {
+	Model   string   `json:"model"`
+	Effort  string   `json:"effort,omitempty"`
+	Tools   string   `json:"tools"`
+	History string   `json:"history,omitempty"`
+	Turn    []string `json:"turn,omitempty"`
+}
+
+type CompactOutput struct {
+	Head  string    `json:"head"`
+	Usage msg.Usage `json:"usage"`
 }
 
 type ToolCall struct {

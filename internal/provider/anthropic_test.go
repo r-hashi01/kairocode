@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -112,5 +113,23 @@ func TestFakeStreamsText(t *testing.T) {
 		OnText: func(s string) { pieces = append(pieces, s) }})
 	if err != nil || strings.Join(pieces, "") != r.Message.Text() || len(pieces) != 3 {
 		t.Fatalf("pieces %q, reply %q, %v", pieces, r.Message.Text(), err)
+	}
+}
+
+// A 400 that says the prompt is too long is ErrContextTooLong (ADR 0020):
+// the turn compacts the conversation and asks again.
+func TestAnthropicPromptTooLong(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}`)
+	}))
+	defer srv.Close()
+	a := NewAnthropic(option.WithBaseURL(srv.URL), option.WithAPIKey("test-key"), option.WithMaxRetries(0))
+	_, err := a.Complete(t.Context(), Request{Model: "claude-opus-5-5",
+		Messages: []msg.Message{{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: "hi"}}}}})
+	var permanent *PermanentError
+	if !errors.Is(err, ErrContextTooLong) || !errors.As(err, &permanent) {
+		t.Fatalf("err %v", err)
 	}
 }
