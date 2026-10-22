@@ -46,6 +46,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/commands", s.commands)
 	s.mux.HandleFunc("GET /sessions/{id}/skills", s.skills)
 	s.mux.HandleFunc("GET /sessions/{id}/mcp", s.mcpList)
+	s.mux.HandleFunc("GET /sessions/{id}/log", s.sessionLog)
 	s.mux.HandleFunc("POST /sessions/{id}/commands", s.runCommand)
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
 	s.mux.HandleFunc("POST /sessions/{id}/redo", s.undo(true))
@@ -567,6 +568,20 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request) {
 }
 
 // skills lists the session's skills, and the SKILL.md files not taken.
+// sessionLog is the session's record (ADR 0023).
+func (s *Server) sessionLog(w http.ResponseWriter, r *http.Request) {
+	l, err := s.rt.Log(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
 // mcpList is the session's MCP servers and custom tools (ADR 0022).
 func (s *Server) mcpList(w http.ResponseWriter, r *http.Request) {
 	list, err := s.rt.MCP(r.Context(), sessionOf(r))

@@ -38,6 +38,7 @@ const usage = `usage:
                                                      (-detach: stop when it waits for a person, exit 3)
   kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
   kairocode fork [-data DIR] [-files] <session> [turn]   start another session from a turn of one (the last, unless named)
+  kairocode log [-data DIR] [-json] <session>         the session's record: turns, calls, results, waits, use
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
@@ -117,6 +118,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = resume(ctx, args, stdout, stderr)
 	case "fork":
 		err = fork(ctx, args, stdout, stderr)
+	case "log":
+		err = showLog(ctx, args, stdout, stderr)
 	case "daemon":
 		err = runDaemon(ctx, args, stdout, stderr)
 	case "approvals":
@@ -336,6 +339,40 @@ func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	}
 	defer c.Close()
 	return follow(ctx, c, s, *detach, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
+}
+
+// showLog prints a session's record (ADR 0023).
+func showLog(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("log", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	asJSON := fs.Bool("json", false, "as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: kairocode log [-data DIR] [-json] <session>")
+	}
+	s := fs.Arg(0)
+	if !strings.HasPrefix(s, "s/") {
+		s = runtime.SessionID(s)
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	l, err := c.Log(ctx, s)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(l)
+	}
+	_, err = io.WriteString(stdout, l.Text())
+	return err
 }
 
 // fork starts a session from a turn of another (ADR 0021) and prints it.

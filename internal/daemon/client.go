@@ -630,6 +630,13 @@ func (c *Client) Commands(ctx context.Context, session string) ([]opencode.Comma
 	return out, err
 }
 
+// Log is the session's record (ADR 0023).
+func (c *Client) Log(ctx context.Context, session string) (runtime.SessionLog, error) {
+	var out runtime.SessionLog
+	err := c.do(ctx, "GET", sessionPath(session)+"/log", nil, &out)
+	return out, err
+}
+
 // MCP lists the session's MCP servers and custom tools (ADR 0022).
 func (c *Client) MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error) {
 	var out []runtime.MCPInfo

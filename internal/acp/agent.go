@@ -46,6 +46,8 @@ type Backend interface {
 	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
 	// MCP lists the session's MCP servers and custom tools (ADR 0022).
 	MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error)
+	// Log is the session's record (ADR 0023).
+	Log(ctx context.Context, session string) (runtime.SessionLog, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
@@ -76,6 +78,7 @@ var builtinCommands = []map[string]any{
 	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},
 	{"name": "skills", "description": "The skills here (/<skill> runs one), and SKILL.md files not taken, and why"},
 	{"name": "mcp", "description": "The MCP servers and custom tools here: how each runs, and their tools"},
+	{"name": "log", "description": "The session's record: each turn, model call, tool call and result, what waited, and what was used"},
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -589,6 +592,16 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		text := "Installed " + id + ". /provider " + id + " switches to it."
 		if _, err := a.b.InstallProvider(ctx, id, ""); err != nil {
 			text = "Could not install " + id + ": " + err.Error()
+		}
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+		return map[string]any{"stopReason": "end_turn"}, nil
+	case name == "/log":
+		// Without a turn: the session's record (ADR 0023).
+		text := ""
+		if l, err := a.b.Log(ctx, p.SessionID); err != nil {
+			text = "The record could not be read: " + err.Error()
+		} else {
+			text = l.Text()
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
 		return map[string]any{"stopReason": "end_turn"}, nil

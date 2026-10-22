@@ -29,5 +29,5 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0020](0020-compact-the-history.md) | 履歴の圧縮: 文脈の上限が近づいたら要約して続け、前の記録は残す | 承認（2026-10-21） |
 | [0021](0021-fork-a-session.md) | セッションの分岐: 過去のターンから、別のセッションとして続ける | 承認（2026-10-21） |
 | [0022](0022-mcp-servers-custom-tools-todo.md) | 利用者の MCP サーバー、カスタムツール、todo | 承認（2026-10-21） |
-| [0023](0023-view-and-replay-records.md) | 記録の閲覧と再生 | 提案 |
+| [0023](0023-view-and-replay-records.md) | 記録の閲覧と再生 | 承認（2026-10-22） |
 | [0024](0024-limits-and-rate-limits.md) | 上限（トークン、金額、時間）と、プロバイダーごとの頻度の制限 | 提案 |
