@@ -87,6 +87,9 @@ func (l *local) History(ctx context.Context, s string) ([]msg.Message, error) {
 func (l *local) Undo(ctx context.Context, s string) (int, error) { return l.r.Undo(ctx, s) }
 
 func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Redo(ctx, s) }
+func (l *local) MCP(ctx context.Context, s string) ([]runtime.MCPInfo, error) {
+	return l.r.MCP(ctx, s)
+}
 func (l *local) Compact(ctx context.Context, s string) (int, error) {
 	return l.r.Compact(ctx, s)
 }

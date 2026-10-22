@@ -111,6 +111,12 @@ func decisionOf(dir string, h workflows.Hook, mode string) []byte {
 // hookCheckAction says how each command hook runs: as the user said in
 // this folder, else ask.
 func (r *Runtime) hookCheckAction(t *kairo.TaskContext, in workflows.HookCheckInput) ([]string, error) {
+	return r.hookModes(t, in)
+}
+
+// hookModes says how each command hook runs: as the user said in this
+// folder, else ask.
+func (r *Runtime) hookModes(t context.Context, in workflows.HookCheckInput) ([]string, error) {
 	out := make([]string, len(in.Hooks))
 	for i, h := range in.Hooks {
 		out[i] = workflows.HookAsk

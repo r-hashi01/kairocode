@@ -44,6 +44,8 @@ type Backend interface {
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
 	// Skills are the session's skills, and the SKILL.md files not taken.
 	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
+	// MCP lists the session's MCP servers and custom tools (ADR 0022).
+	MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
@@ -73,6 +75,7 @@ var builtinCommands = []map[string]any{
 	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
 	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},
 	{"name": "skills", "description": "The skills here (/<skill> runs one), and SKILL.md files not taken, and why"},
+	{"name": "mcp", "description": "The MCP servers and custom tools here: how each runs, and their tools"},
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -588,6 +591,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			text = "Could not install " + id + ": " + err.Error()
 		}
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+		return map[string]any{"stopReason": "end_turn"}, nil
+	case name == "/mcp":
+		// Without a turn: the MCP servers and custom tools (ADR 0022).
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.mcpText(ctx, p.SessionID))})
 		return map[string]any{"stopReason": "end_turn"}, nil
 	case name == "/skills":
 		// Without a turn: the skills, and what of them is not taken.
@@ -1273,4 +1280,41 @@ func (a *agent) skillsText(ctx context.Context, session string) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// mcpText is /mcp's answer: each MCP server, custom tool and server of
+// codex's own, and how it runs, with its tools and their effects.
+func (a *agent) mcpText(ctx context.Context, session string) string {
+	list, err := a.b.MCP(ctx, session)
+	if err != nil {
+		return "The MCP servers could not be listed: " + err.Error()
+	}
+	if len(list) == 0 {
+		return "No MCP server or custom tool is configured here. Add one to kairocode.json's \"mcp\" (or \"tools\" for a command), or Claude Code's .mcp.json."
+	}
+	var b strings.Builder
+	head := map[string]string{"mcp": "MCP servers", "tool": "Custom tools", "codex": "Codex's own MCP servers"}
+	last := ""
+	for _, m := range list {
+		if m.Kind != last {
+			if last != "" {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "%s:\n", head[m.Kind])
+			last = m.Kind
+		}
+		whose := "yours"
+		if m.Project {
+			whose = "the project's"
+		}
+		if m.Kind == "codex" {
+			whose = m.Source
+		}
+		fmt.Fprintf(&b, "- %s (%s): %s\n", m.Name, whose, m.State)
+		for _, t := range m.Tools {
+			fmt.Fprintf(&b, "    %s  %s\n", t.Name, t.Effect)
+		}
+	}
+	b.WriteString("\nA tool declared read may run again after an interruption; any other is real, and asked about if cut off. Declare effects in kairocode.json's \"tools\".")
+	return b.String()
 }

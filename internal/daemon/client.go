@@ -630,6 +630,13 @@ func (c *Client) Commands(ctx context.Context, session string) ([]opencode.Comma
 	return out, err
 }
 
+// MCP lists the session's MCP servers and custom tools (ADR 0022).
+func (c *Client) MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error) {
+	var out []runtime.MCPInfo
+	err := c.do(ctx, "GET", sessionPath(session)+"/mcp", nil, &out)
+	return out, err
+}
+
 // Skills are the session's skills, and the SKILL.md files not taken.
 func (c *Client) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
 	var out runtime.SkillsInfo

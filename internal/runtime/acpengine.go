@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,28 +43,65 @@ func (r *Runtime) acpArgv(engine, dir string, tools []string, effort string) ([]
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if registryAgent(engine) == codexAgent && !own {
+	if registryAgent(engine) == codexAgent {
 		// Codex reads its AGENTS.md and .agents/skills by itself, and
-		// KairoCode gives it the rest (ADR 0018); its own hooks are off,
-		// KairoCode running hooks. Over the user's CODEX_CONFIG, if there
-		// is one.
+		// KairoCode gives it the rest (ADR 0018); its own hooks are off
+		// (unless the user lets it run them), KairoCode running hooks; its
+		// own MCP servers are off (ADR 0022). Over the user's CODEX_CONFIG,
+		// if there is one.
 		cfg := map[string]any{}
 		user := env["CODEX_CONFIG"]
 		if user == "" {
 			user = os.Getenv("CODEX_CONFIG")
 		}
-		if user != "" && json.Unmarshal([]byte(user), &cfg) != nil {
-			// Not JSON (codex-acp could not read it either): KairoCode's
-			// alone, so that codex's own hooks are still off.
+		if user != "" && (json.Unmarshal([]byte(user), &cfg) != nil || cfg == nil) {
+			// Not a JSON object (codex-acp could not read it either):
+			// KairoCode's alone, so that codex's own hooks are still off.
 			r.logf("CODEX_CONFIG is not a JSON object: it is not given to codex")
 			cfg = map[string]any{}
 		}
-		features, _ := cfg["features"].(map[string]any)
-		if features == nil {
-			features = map[string]any{}
+		if !own {
+			features, _ := cfg["features"].(map[string]any)
+			if features == nil {
+				features = map[string]any{}
+			}
+			features["hooks"] = false
+			cfg["features"] = features
 		}
-		features["hooks"] = false
-		cfg["features"] = features
+		// Its own MCP servers off: codex would start them by itself, their
+		// calls not going through KairoCode (ADR 0022).
+		off, err := codexMCPOff(dir, codexHome(env))
+		if err != nil {
+			return nil, nil, false, err
+		}
+		servers, _ := cfg["mcp_servers"].(map[string]any)
+		if mine, err := ownMCP(); err != nil {
+			return nil, nil, false, err
+		} else if !mine {
+			// Servers the user's CODEX_CONFIG itself defines: the user's own.
+			for _, n := range slices.Sorted(maps.Keys(servers)) {
+				if !slices.Contains(off, n) {
+					off = append(off, n)
+				}
+			}
+		}
+		if len(off) > 0 {
+			if servers == nil {
+				servers = map[string]any{}
+			}
+			for _, n := range off {
+				s, _ := servers[n].(map[string]any)
+				if s == nil {
+					s = map[string]any{}
+				}
+				s["enabled"] = false
+				servers[n] = s
+			}
+			cfg["mcp_servers"] = servers
+		}
+		if len(cfg) == 0 {
+			return argv, env, false, nil // nothing to say: the user's as they are
+		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
 			return nil, nil, false, err

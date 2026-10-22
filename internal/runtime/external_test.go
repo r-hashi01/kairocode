@@ -452,3 +452,53 @@ func TestCrashMCPServerToolOnClaudeCode(t *testing.T) {
 		t.Fatalf("the tool ran %d times", n)
 	}
 }
+
+// /mcp: the user's server with its tools and their effects, a custom tool
+// that declares no effect as left out, a project's server not yet said
+// about (and not started for the list), codex's own servers as turned off
+// (ADR 0022).
+func TestMCPList(t *testing.T) {
+	userSettings(t, jsonOf(t, map[string]any{
+		"mcp":   map[string]any{"fake": fakeServerConfig(nil)},
+		"tools": map[string]any{"fake_lookup": map[string]string{"effect": "read"}, "no_effect": map[string]any{"command": []string{"true"}}},
+	}))
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("[mcp_servers.codex_one]\ncommand = \"x\"\n"), 0o600)
+	started := filepath.Join(t.TempDir(), "started")
+	ws := repo(t)
+	os.WriteFile(filepath.Join(ws, ConfigFile), []byte(jsonOf(t, map[string]any{
+		"mcp": map[string]any{"theirs": fakeServerConfig(map[string]string{"KC_MCP_STARTED": started})},
+	})), 0o644)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx := context.Background()
+	s, _ := r.CreateSession(ctx, "list", workflows.SessionInput{Dir: ws})
+	list, err := r.MCP(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]MCPInfo{}
+	for _, m := range list {
+		got[m.Kind+":"+m.Name] = m
+	}
+	fake := got["mcp:fake"]
+	effects := map[string]string{}
+	for _, tl := range fake.Tools {
+		effects[tl.Name] = tl.Effect
+	}
+	if !strings.Contains(fake.State, "connected") || effects["fake_lookup"] != "read" || effects["fake_change"] != "real" {
+		t.Errorf("the user's server: %+v", fake)
+	}
+	if m := got["tool:no_effect"]; !strings.Contains(m.State, "declares no effect") {
+		t.Errorf("a custom tool with no effect: %+v", m)
+	}
+	if m := got["mcp:theirs"]; !m.Project || !strings.Contains(m.State, "asked when a turn starts") || len(m.Tools) != 0 {
+		t.Errorf("the project's server: %+v", m)
+	}
+	if _, err := os.Stat(started); err == nil {
+		t.Error("the project's server was started for the list")
+	}
+	if m := got["codex:codex_one"]; !strings.Contains(m.State, "turned off") {
+		t.Errorf("codex's own server: %+v", m)
+	}
+}

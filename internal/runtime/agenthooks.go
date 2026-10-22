@@ -1,12 +1,15 @@
 package runtime
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/opencode"
@@ -211,4 +214,133 @@ func copilotRepoHooks(dir string) error {
 		"with no one asked, and which cannot be turned off for one run (ADR 0018): use another provider here, "+
 		"or let copilot run them with \"agents\": {\"ownHooks\": true} in %s",
 		strings.Join(found, ", "), filepath.Join(userConfigDir(), ConfigFile))
+}
+
+// codexMCPNames are the MCP servers codex's own settings at path name
+// (ADR 0022): codex, run over ACP, starts them by itself, outside
+// KairoCode. TOML has many ways to write a table's name, and a cloned
+// repository's settings may use any: only the plain ones are read
+// ([mcp_servers.<name>...], [mcp_servers."<name>"...], a dotted
+// mcp_servers.<name>.key =, the name of letters, digits, _ and -, or in
+// quotes also spaces and dots), and any other line that names
+// mcp_servers, or a table or key with an escape in it, is an error: codex
+// is then not started, rather than one of its servers missed. An error
+// names the file and the line, not what is on it (it may hold a secret).
+func codexMCPNames(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for i, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key := line // a table's name, or a key
+		if strings.HasPrefix(line, "[") {
+			key = line
+		} else if k, _, ok := strings.Cut(line, "="); ok {
+			key = k
+		}
+		if strings.Contains(key, "\\") && (strings.HasPrefix(line, "[") || strings.Contains(line, "=")) {
+			return nil, fmt.Errorf("%s:%d: a table or key with an escape: KairoCode cannot tell whether it is an MCP server, so codex is not started here", path, i+1)
+		}
+		if !strings.Contains(line, "mcp_servers") {
+			continue
+		}
+		m := codexServerLine.FindStringSubmatch(line)
+		if m == nil {
+			return nil, fmt.Errorf("%s:%d: mcp_servers is written in a way KairoCode does not read, so it cannot turn codex's own MCP servers off: codex is not started here", path, i+1)
+		}
+		name := cmp.Or(m[1], m[2], m[3])
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// codexServerLine is a line read as naming an MCP server: a table
+// [mcp_servers.<name>] or [mcp_servers."<name>"] (with more after, a dot
+// and plain keys), or a key mcp_servers.<name>.<key> =; a comment may
+// follow a table.
+var codexServerLine = regexp.MustCompile(`^(?:\[mcp_servers\.(?:([A-Za-z0-9_-]+)|"([A-Za-z0-9_ .-]+)")(?:\.[A-Za-z0-9_-]+)*\]\s*(?:#.*)?|mcp_servers\.(?:([A-Za-z0-9_-]+))\.[A-Za-z0-9_.-]+\s*=.*)$`)
+
+// codexHome is where codex, started with env (the registry's for it, over
+// this process's), keeps its settings: CODEX_HOME, else ~/.codex of its
+// HOME.
+func codexHome(env map[string]string) string {
+	if h := cmp.Or(env["CODEX_HOME"], os.Getenv("CODEX_HOME")); h != "" {
+		return h
+	}
+	home := env["HOME"]
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
+}
+
+// ownMCP is the user's agents.ownMCP: codex may start the MCP servers of
+// the user's own codex settings (not a project's).
+func ownMCP() (bool, error) {
+	path := filepath.Join(userConfigDir(), ConfigFile)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var cfg struct {
+		Agents struct {
+			OwnMCP bool `json:"ownMCP"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	return cfg.Agents.OwnMCP, nil
+}
+
+// codexMCPOff are the MCP servers of codex's own settings to turn off for
+// a session in dir (ADR 0022): those of the project's .codex/config.toml
+// always (a cloned repository's commands, run with no one asked), and the
+// user's own (codexHome's config.toml) unless agents.ownMCP. Their calls
+// would not go through KairoCode; servers the user wants are given
+// through KairoCode instead (kairocode.json's mcp).
+func codexMCPOff(dir, codexHome string) ([]string, error) {
+	var off []string
+	add := func(path string) error {
+		names, err := codexMCPNames(path)
+		for _, n := range names {
+			if !slices.Contains(off, n) {
+				off = append(off, n)
+			}
+		}
+		return err
+	}
+	if dir != "" {
+		for _, d := range opencode.ProjectDirs(dir) {
+			if err := add(filepath.Join(d, ".codex", "config.toml")); err != nil {
+				return nil, err
+			}
+		}
+	}
+	own, err := ownMCP()
+	if err != nil {
+		return nil, err
+	}
+	if !own && codexHome != "" {
+		if err := add(filepath.Join(codexHome, "config.toml")); err != nil {
+			return nil, err
+		}
+	}
+	return off, nil
 }

@@ -91,8 +91,6 @@ MCP サーバーとカスタムツールは、利用者の機械でコマンド�
   - Claude Code の `~/.claude.json` と `.mcp.json` の形が合わないときは、そのファイルを飛ばします（前は、API のエンジンのターンがすべて失敗した）。
   - テスト: `TestProjectMCPServerOfTheUsersName`、`TestProjectMCPServerChanged`、`TestProjectMCPServerGetsNoUsersValues`。
 - **まだのこと**
-  - codex は、自分の設定（`~/.codex/config.toml` の `mcp_servers`）の MCP サーバーも自分で読むかもしれません。読むなら、同じサーバーが KairoCode の経路と codex 自身の経路の両方に並び、後者は KairoCode を通りません（ADR 0018 の「エージェントが自分のものとして足すもの」）。確かめていません。
-  - `/tools` の一覧と、読み込まなかったツールの理由の表示はまだです。今はデーモンのログに出します。
   - MCP の `readOnlyHint` を、宣言を勧める文面に使うことはまだです。
 - **テスト:** `TestMCPServerTool`、`TestCustomTool`（作用の型のないものは渡さない）、`TestProjectMCPServerAsks`（聞く前に起動しない。「動かさない」なら起動しない）、`TestMCPEnvironmentNotRecorded`（DB に値が残らない）、`TestCrashMCPServerTool`（宣言のないツールの呼び出しの途中で落ちると、もう一度呼ばずに人に聞く。呼ばれたのは 1 回）。
 
@@ -103,3 +101,33 @@ MCP サーバーとカスタムツールは、利用者の機械でコマンド�
 - 呼び出しは、記録した定義を `MCPCallInput.Ext` で運び、API のエンジンと同じく `tool.ext.read` か `tool.ext.real` で動きます。落ちた後に Claude Code が同じ実の呼び出しをもう一度したときに聞くこと（ADR 0007）も、外のツールに同じく効きます。
 - 新しい欄（`ClaudeTurnInput.Ext`、`MCPCallInput.Ext`）は `omitempty` なので、外のツールがない記録の ID は変わりません。
 - テスト: `TestMCPServerToolOnClaudeCode`（Claude Code に `mcp__kairocode__fake_lookup` として渡り、呼び出しが動く）、`TestCrashMCPServerToolOnClaudeCode`（宣言のないツールを Claude Code が呼んでいる途中で落ちると、再開した Claude Code が同じ呼び出しをしても、もう一度は呼ばずに人に聞く。呼ばれたのは 1 回）。
+
+### 5. codex 自身の MCP サーバーと `/mcp`（2026-10-22）
+
+- **確かめたこと（codex-acp 2.2.2。モデルは呼ばない）**
+  - 使い捨ての `CODEX_HOME` に、起動されたら印のファイルを作るだけの MCP サーバーを書きました。ACP の `authenticate` は、偽の API キーで通しました。そのうえで、codex-acp に `session/new` だけを送りました。
+  - **codex は、ACP でも、セッションを作るときに自分の設定の MCP サーバーを起動します。** 利用者の `config.toml` のものも、作業ディレクトリーの `.codex/config.toml` のものも起動しました。codex が信頼したことのないフォルダーでも起動しました。
+  - KairoCode が渡す `CODEX_CONFIG` で `mcp_servers.<名前>.enabled = false` とすると、そのサーバーは起動しません。`mcp_servers = {}` では止まりません。
+- **決定（利用者の判断、2026-10-22）:** codex 自身の設定の MCP サーバーは、KairoCode が止めます。
+  - プロジェクトの `.codex/config.toml` のものは、いつも止めます。clone したリポジトリのコマンドが、承認なしに sandbox の外で動くためです（copilot のリポジトリのフック、ADR 0018 の 6 節と同じ種類）。
+  - 利用者の `~/.codex/config.toml`（`CODEX_HOME`）のものも、既定で止めます。その呼び出しは KairoCode を通らない（作用の型、要確認、権限が効かない）ためです。使いたいサーバーは、`kairocode.json` の `mcp` に書けば、KairoCode を通して、どのエンジンでも使えます。
+  - 利用者の `kairocode.json` の `{"agents": {"ownMCP": true}}` で、利用者のものだけを止めないようにできます。プロジェクトのものは止めたままです。
+- **実装:** `codexMCPOff`（`internal/runtime/agenthooks.go`）が、プロジェクトの（根から作業ディレクトリーまでの）`.codex/config.toml` と、利用者の `config.toml` から、サーバーの名前を読みます。`acpArgv` が、それぞれの `enabled = false` を `CODEX_CONFIG` に足します。
+  - TOML の読み込みの依存は足さず、`[mcp_servers.<名前>]`、`[mcp_servers."<名前>"]`、`mcp_servers.<名前>.<鍵> =` の形から名前を読みます。`mcp_servers` がほかの形（`mcp_servers = { ... }` など）で書かれていたら、止められないので codex を起動しません。
+  - `agents.ownHooks` で codex のフックを許していても、MCP サーバーは止めます（別の設定）。
+- **`/mcp`:** ACP の組み込みのコマンドです（サーバーの `GET /sessions/{id}/mcp`、`Runtime.MCP`）。次を見せます。
+  - MCP サーバーごとに、利用者のものかプロジェクトのものか、動かし方（sandbox で・外で・動かさない・まだ聞いていない）、つながったか、ツールとその作用の型。
+  - カスタムツール（作用の型のないものは、読み込まない理由とともに）。
+  - codex 自身のサーバー（止めること）。
+  - まだ聞いていないプロジェクトのサーバーは、一覧のためにも起動しません。
+- **テスト:** `TestCodexOwnMCPServersOff`（プロジェクトのものはいつも、利用者のものは `ownMCP` がなければ止まる。読めない形なら codex を起動しない）、`TestMCPList`。
+- **durability-reviewer の指摘で直したこと**
+  - **名前の読み違いで、別の名前を止めていた:** TOML には、表の名前の書き方がたくさんあります（`'…'`、空白を挟む、エスケープ、`"mcp_servers".x` のように `mcp_servers` 自体を引用する、など）。最初の読み方では、それらから違う名前を読み、存在しない名前を止めて、本物のサーバーが起動し得ました。clone したリポジトリの設定は、どの書き方でも書けます。
+    - いまは、読むのは素直な形だけです（`[mcp_servers.<名前>…]`、`[mcp_servers."<名前>"…]`、`mcp_servers.<名前>.<鍵> =`。名前は英数字と `_`・`-`、引用の中では空白と `.` も）。
+    - `mcp_servers` を含むほかの行と、エスケープを含む表の名前と鍵は、どれも誤りとして codex を起動しません。
+  - **誤りの文面に秘密が入り得た:** 文面には、行の中身ではなく、ファイルと行の番号だけを書きます（ターンの返事として記録されるため）。
+  - 利用者が `CODEX_CONFIG` に自分で書いたサーバーも、利用者のものとして止めます（`ownMCP` がなければ）。
+  - codex の設定の場所は、エージェントに渡す環境（`CODEX_HOME`、なければその `HOME` の `.codex`）で決めます。`/mcp` も同じ場所を見ます。
+  - `CODEX_CONFIG` が `null` のとき、落ちていました。
+  - テスト: `TestCodexMCPNamesStrict`、`TestCodexConfigServersOff`。
+- **確かめていないこと:** codex のシステムの設定（`/etc/codex` など）は読んでいません。
