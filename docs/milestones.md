@@ -2,7 +2,7 @@
 
 設計 10 節の段階を、受け入れ条件のテストに落としたものです。段階の作業は `/milestone` スキルで進めます。受け入れ条件は、実装の前にテストとして書きます（最初は落ちる）。すべて通ったら、その段階の「状態」を「完了（日付）」にします。
 
-今の段階: **M5（作業中）**。M3 は完了。M2 の残りは、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。M4 の残り（PostgreSQL、サスペンドモード、GitHub から起動）は ADR 0012 と一緒に保留です。
+今の段階: **M5 は完了（2026-10-22）**。M3 も完了。M2 の残りは、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。M4 の残り（PostgreSQL、サスペンドモード、GitHub から起動）は ADR 0012 と一緒に保留です。
 
 ## M0 骨組み
 
@@ -126,25 +126,24 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] HTTP(S) のツール（ADR 0013）: `fetch`（GET、読むだけ）と `http`（POST、実）。POST の途中で落ちても送り直さず、人に聞く。利用者の設定の認証は記録に残らない。（`TestFetch`、`TestHTTPPost`、`TestHTTPUnknown`、`TestNetAuth`、`TestNetPrivateRefused`、`TestNetRedirects`、`TestNetSettingsAreTheUsers`、`TestCrashHTTPPost`）
 - [x] `kairocode run` が承認で中断し、`kairocode resume` で続く。（`kairocode run -detach` が人を待つところで止まり（終了コード 3）、`kairocode resume <session>` が最新のターンを最後まで追う。Ctrl-C で止めたときも続け方を示す。`TestRunDetachAndResume`）
 
-## M5 長く使い続ける: 圧縮と分岐、ツールの広がり、記録、上限
+## M5 長く使い続ける: 圧縮と分岐、ツールの広がり、記録
 
-状態: 作業中（2026-10-21 開始。ADR 0020〜0024 の承認待ち）
+状態: 完了（2026-10-22）。ADR 0024（上限と頻度の制限）は利用者の判断で保留
 
 中身（利用者が選んだもの、2026-10-21。M4 の残りは ADR 0012 と一緒に保留）:
 
 - 履歴の圧縮（FR-3）と分岐（FR-4）。ADR 0020、0021。
 - 利用者の MCP サーバーのツール（FR-8）、カスタムツール（FR-9）、todo（FR-5）。ADR 0022。
 - 記録の閲覧（FR-24）。ADR 0023。再生（FR-25）は、利用者の判断で作らない（2026-10-22、ADR 0023 の実装の 2）。
-- 上限（FR-26）と頻度の制限（FR-27）。ADR 0024。
+- 上限（FR-26）と頻度の制限（FR-27）は、利用者の判断で保留（2026-10-22）。KairoCode 自身が課金する、使えるモデルを絞る、といった事情が出たときに、ADR 0024（提案のまま）で入れる。
 
 受け入れ条件:
 
-- [ ] 文脈の上限に近づいた会話が、要約して続く。要約の前の記録は消えず、閲覧できる。落ちて再開しても、要約は 1 度だけ（`TestCrash...`）。
-- [ ] 過去のターンから分岐したセッションが、そのターンまでの会話で続く。元のセッションは変わらない。
-- [ ] 利用者の MCP サーバーのツールを、宣言した作用の型で使える。宣言のないツールは実として扱い、結果が不明なら人に聞く。プロジェクトが定める MCP サーバーとカスタムツールは、承認なしに sandbox の外で動かない。
-- [ ] todo の一覧が、ターンをまたいで続き、クライアントに見える。
+- [x] 文脈の上限に近づいた会話が、要約して続く。要約の前の記録は消えず、閲覧できる。落ちて再開しても、要約は 1 度だけ（ADR 0020。`TestCompactNearTheContext`、`TestCompactAtTheTurnsStart`、`TestCompactWhenTooLong`、`TestCrashCompact`）。
+- [x] 過去のターンから分岐したセッションが、そのターンまでの会話で続く。元のセッションは変わらない（ADR 0021。`TestForkFromATurn`、`TestForkWithFiles`、`TestForkOnClaudeCode`）。
+- [x] 利用者の MCP サーバーのツールを、宣言した作用の型で使える。宣言のないツールは実として扱い、結果が不明なら人に聞く。プロジェクトが定める MCP サーバーとカスタムツールは、承認なしに sandbox の外で動かない（ADR 0022。どのエンジンでも。`TestMCPServerTool`、`TestCrashMCPServerTool`、`TestCrashMCPServerToolOnClaudeCode`、`TestProjectMCPServerAsks`、`TestProjectMCPServerChanged`、`TestCodexOwnMCPServersOff`）。
+- [x] todo の一覧が、ターンをまたいで続き、クライアントに見える（ADR 0022。`TestTodo`、`TestACPTodoPlan`）。
 - [x] セッションのすべてのターン、モデルの入出力、ツールの呼び出しと結果、待ち、使用量を見られる（`kairocode log`、`/log`。金額は ADR 0024 の後。`TestSessionLog`）。
-- [ ] セッションごとのトークン・金額、ターンごとの時間の上限を超えると止まり、人に知らせる。再開しても同じ所で止まる。プロバイダーごとの RPM・TPM を守る。
 
 ## 段階に割り当てていない今後の作業
 
