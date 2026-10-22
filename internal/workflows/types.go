@@ -913,6 +913,9 @@ type ClaudeTurnInput struct {
 	// Hooks: the turn's command hooks of its tool calls (tool.before,
 	// tool.after), as decided, for its calls over MCP (ADR 0018).
 	Hooks []Hook `json:"hooks,omitempty"`
+	// Ext: the turn's MCP servers' tools and custom tools, served with
+	// KairoCode's own (ADR 0022), by name.
+	Ext map[string]ExtRef `json:"ext,omitempty"`
 }
 
 type ClaudeTurnOutput struct {
@@ -936,6 +939,9 @@ type MCPCallInput struct {
 	// (ADR 0018).
 	Hooks   []Hook `json:"hooks,omitempty"`
 	Session string `json:"session,omitempty"`
+	// Ext, for an MCP server's tool or a custom tool (ADR 0022): its
+	// definition as the turn recorded it.
+	Ext *ExtRef `json:"ext,omitempty"`
 }
 
 // PlanOutput is a planned write, or (Done) the result to give the model at

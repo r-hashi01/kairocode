@@ -147,7 +147,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		return runFlowTurn(ctx, in)
 	}
 	if CLIEngine(agent.Engine) {
-		return runClaudeTurn(ctx, in, agent)
+		return runClaudeTurn(ctx, in, agent, ext)
 	}
 	out := TurnOutput{}
 	turn := []string{in.Message}
@@ -533,7 +533,7 @@ func hookBlockedTurn(ctx *kairo.Context, in TurnInput, why string) (TurnOutput, 
 // waits for each answer here (the process may stop meanwhile), records it,
 // and resumes claude with the answers; the call made again then goes by
 // the recorded answer.
-func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, error) {
+func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string]ExtRef) (TurnOutput, error) {
 	out := TurnOutput{}
 	note := ""
 	// The Claude Code session is the KairoCode session's, so its turns
@@ -572,7 +572,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, e
 		r, err := kairo.Call[ClaudeTurnOutput](ctx, act, ClaudeTurnInput{
 			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine, Effort: agent.Effort,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
-			System: agent.System, Tools: agent.Names, Message: in.Message,
+			System: agent.System, Tools: agent.Names, Message: in.Message, Ext: ext,
 			Policy: autoPolicy(agent, in), Hooks: hooks,
 		})
 		if err != nil {

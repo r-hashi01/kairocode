@@ -56,6 +56,8 @@ type mcpTurn struct {
 	// (ADR 0018).
 	hooks   []workflows.Hook
 	session string
+	// ext: the turn's external tools (ADR 0022), by name.
+	ext map[string]workflows.ExtRef
 
 	mu sync.Mutex
 	// live: calls a handler of this run is waiting on. A call never meets
@@ -98,17 +100,29 @@ func (s *mcpServer) close() error { return s.http.Close() }
 // open makes an endpoint for one claude run of turn, serving the named
 // tools. It returns its URL, the run's state, and a function that closes
 // the endpoint.
-func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy, hooks []workflows.Hook, session string) (string, *mcpTurn, func(), error) {
+func (s *mcpServer) open(ctx context.Context, turn, dir string, names []string, policy workflows.Policy, hooks []workflows.Hook, session string,
+	ext map[string]workflows.ExtRef) (string, *mcpTurn, func(), error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", nil, nil, err
 	}
 	token := hex.EncodeToString(b)
 	t := &mcpTurn{turn: turn, proc: token, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{},
-		hooks: hooks, session: session}
+		hooks: hooks, session: session, ext: ext}
 	t.srv = mcp.NewServer(&mcp.Implementation{Name: MCPServerName, Version: "0"}, nil)
 	for _, name := range names {
 		d, ok := s.rt.tool(name)
+		if ref, isExt := ext[name]; isExt {
+			// An external tool, as the turn recorded it (ADR 0022).
+			def, err := s.rt.extDefOf(ctx, ref.Def)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("tool %s: %w", name, err)
+			}
+			d, ok = tools.Def{Name: def.Name, Description: def.Description, Schema: def.Schema, Effect: tools.Real}, true
+			if ref.Read {
+				d.Effect = tools.Read
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -317,6 +331,9 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	in := workflows.MCPCallInput{
 		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy, Hooks: t.hooks,
 		MCP: workflows.MCPRef{Turn: t.turn, Run: id, Key: key, Ask: fmt.Sprintf("%s.%d", key, n), Repeat: repeat},
+	}
+	if ref, ok := t.ext[tool]; ok {
+		in.Ext = &ref
 	}
 	if len(t.hooks) > 0 {
 		in.Session = t.session

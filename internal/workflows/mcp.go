@@ -7,6 +7,9 @@ import kairo "github.com/r-hashi01/kairo/sdk/go"
 // call's content, makes a repeated call meet its earlier run.
 func RunMCPCall(ctx *kairo.Context, in MCPCallInput) (ToolOutput, error) {
 	ti := ToolInput{Dir: in.Dir, Args: in.Args}
+	if in.Ext != nil {
+		ti.Ext = in.Ext.Def
+	}
 	mcp := in.MCP
 	run := HookRunInput{Dir: in.Dir, Session: in.Session, Tool: in.Tool, Call: &ti}
 	if hasCommandHook(in.Hooks, HookToolBefore) {
@@ -23,6 +26,13 @@ func RunMCPCall(ctx *kairo.Context, in MCPCallInput) (ToolOutput, error) {
 	g, err := gateTool(ctx, in.Policy, in.Tool, in.Planned, ti, &mcp, nil)
 	if err != nil {
 		return ToolOutput{}, err
+	}
+	if in.Ext != nil && g.Action == ActToolPrefix+in.Tool {
+		// An external tool runs by its effect (ADR 0022).
+		g.Action = ActToolExtReal
+		if in.Ext.Read {
+			g.Action = ActToolExtRead
+		}
 	}
 	out, err := runGated(ctx, g, ti)
 	if err != nil || !ran(g) || !hasCommandHook(in.Hooks, HookToolAfter) {

@@ -376,3 +376,79 @@ func TestProjectMCPServerGetsNoUsersValues(t *testing.T) {
 		t.Fatalf("the project's server was given %q", b)
 	}
 }
+
+// On Claude Code, an MCP server's tool is served over KairoCode's MCP
+// server with its own tools, and runs as on the API engine (ADR 0022).
+func TestMCPServerToolOnClaudeCode(t *testing.T) {
+	userSettings(t, jsonOf(t, map[string]any{
+		"mcp":        map[string]any{"fake": fakeServerConfig(nil)},
+		"tools":      map[string]any{"fake_lookup": map[string]string{"effect": "read"}},
+		"permission": map[string]string{"fake_*": "allow"},
+	}))
+	e := setupFakeClaude(t, fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "fake_lookup", Args: map[string]any{"q": "plums"}}}, Reply: "done"})
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "cc-mcp", workflows.SessionInput{Dir: repo(t)})
+	out := turn(t, r, s, "look up plums")
+	text, _ := r.Reply(ctx, out.Reply)
+	st := e.starts(t)
+	if !strings.Contains(text, "found plums") || len(st) != 1 || !strings.Contains(st[0].Allowed, "mcp__kairocode__fake_lookup") {
+		t.Fatalf("reply %q, started %+v", text, st)
+	}
+}
+
+// TestCrashMCPServerToolOnClaudeCode: killed while Claude Code's call of an
+// MCP server's tool that declares no effect runs, KairoCode does not call
+// it again when Claude Code, resumed, makes the call again: the call
+// stops for a person to say (ADR 0022, ADR 0007, invariant 4).
+func TestCrashMCPServerToolOnClaudeCode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	dir := t.TempDir()
+	hold, log := filepath.Join(dir, "holding"), filepath.Join(dir, "changes")
+	settings := func(hold string) string {
+		env := map[string]string{"KC_MCP_LOG": log}
+		if hold != "" {
+			env["KC_MCP_HOLD"] = hold
+		}
+		return jsonOf(t, map[string]any{"mcp": map[string]any{"fake": fakeServerConfig(env)}, "permission": map[string]string{"fake_*": "allow"}})
+	}
+	userSettings(t, settings(hold))
+	e := setupFakeClaude(t,
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "fake_change", Args: map[string]any{"q": "x"}}}, Reply: "never"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "fake_change", Args: map[string]any{"q": "x"}}}, Reply: "stopped"},
+	)
+	ws := repo(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CLAUDE_CHILD=1", "KC_DIR_ENV="+e.dir, "KC_DIR="+ws)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, hold, cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	userSettings(t, settings(""))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(e.dir, "k.db"), Engine: workflows.EngineClaudeCode,
+		ClaudePath: os.Args[0], ExtraTools: nil, Owner: "crash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	out, err := r.WaitTurn(ctx, SessionID("cc"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); !strings.HasPrefix(text, "stopped | Not run again") {
+		t.Fatalf("reply %q", text)
+	}
+	if n := countLines(t, log, "changed"); n != 1 {
+		t.Fatalf("the tool ran %d times", n)
+	}
+}

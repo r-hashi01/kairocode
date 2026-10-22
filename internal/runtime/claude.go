@@ -173,7 +173,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 			prompt = in.Note
 		}
 	}
-	url, mt, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy, in.Hooks, in.Session)
+	url, mt, closeMCP, err := r.mcp.open(t, in.Turn, in.Dir, in.Tools, in.Policy, in.Hooks, in.Session, in.Ext)
 	if err != nil {
 		return workflows.ClaudeTurnOutput{}, err
 	}

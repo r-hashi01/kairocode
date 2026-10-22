@@ -91,7 +91,15 @@ MCP サーバーとカスタムツールは、利用者の機械でコマンド�
   - Claude Code の `~/.claude.json` と `.mcp.json` の形が合わないときは、そのファイルを飛ばします（前は、API のエンジンのターンがすべて失敗した）。
   - テスト: `TestProjectMCPServerOfTheUsersName`、`TestProjectMCPServerChanged`、`TestProjectMCPServerGetsNoUsersValues`。
 - **まだのこと**
-  - CLI のエンジン（Claude Code、codex、copilot）のターンには、まだ渡していません。KairoCode がこれらに渡す MCP のサーバーに、外のツールを載せる作業が残っています。
+  - codex は、自分の設定（`~/.codex/config.toml` の `mcp_servers`）の MCP サーバーも自分で読むかもしれません。読むなら、同じサーバーが KairoCode の経路と codex 自身の経路の両方に並び、後者は KairoCode を通りません（ADR 0018 の「エージェントが自分のものとして足すもの」）。確かめていません。
   - `/tools` の一覧と、読み込まなかったツールの理由の表示はまだです。今はデーモンのログに出します。
   - MCP の `readOnlyHint` を、宣言を勧める文面に使うことはまだです。
 - **テスト:** `TestMCPServerTool`、`TestCustomTool`（作用の型のないものは渡さない）、`TestProjectMCPServerAsks`（聞く前に起動しない。「動かさない」なら起動しない）、`TestMCPEnvironmentNotRecorded`（DB に値が残らない）、`TestCrashMCPServerTool`（宣言のないツールの呼び出しの途中で落ちると、もう一度呼ばずに人に聞く。呼ばれたのは 1 回）。
+
+### 4. CLI のエンジン（2026-10-22）
+
+- `agent.load` は、どのエンジンでも外の MCP サーバーとカスタムツールを記録します。ターンは、API のエンジンと同じく、ターンの始めに動かし方を決めて（`loadExternal`）一覧にします。
+- CLI のエンジン（Claude Code、codex、copilot）には、KairoCode の MCP のサーバーに、組み込みのツールと一緒に外のツールを載せて渡します（`ClaudeTurnInput.Ext`、`mcpServer.open`）。Claude Code には `--mcp-config` で、codex と copilot には ACP の `mcpServers` で渡す、今までの経路のままです。利用者のサーバーをエージェントに直接は渡しません（直接渡すと、呼び出しが KairoCode を通らず、作用の型・要確認・権限・sandbox・プロジェクトの承認が効かないため）。
+- 呼び出しは、記録した定義を `MCPCallInput.Ext` で運び、API のエンジンと同じく `tool.ext.read` か `tool.ext.real` で動きます。落ちた後に Claude Code が同じ実の呼び出しをもう一度したときに聞くこと（ADR 0007）も、外のツールに同じく効きます。
+- 新しい欄（`ClaudeTurnInput.Ext`、`MCPCallInput.Ext`）は `omitempty` なので、外のツールがない記録の ID は変わりません。
+- テスト: `TestMCPServerToolOnClaudeCode`（Claude Code に `mcp__kairocode__fake_lookup` として渡り、呼び出しが動く）、`TestCrashMCPServerToolOnClaudeCode`（宣言のないツールを Claude Code が呼んでいる途中で落ちると、再開した Claude Code が同じ呼び出しをしても、もう一度は呼ばずに人に聞く。呼ばれたのは 1 回）。

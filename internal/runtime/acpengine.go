@@ -130,7 +130,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 		}
-		url, mt, closeMCP, err := r.mcp.open(in.Turn, in.Dir, in.Tools, in.Policy, in.Hooks, in.Session)
+		url, mt, closeMCP, err := r.mcp.open(t, in.Turn, in.Dir, in.Tools, in.Policy, in.Hooks, in.Session, in.Ext)
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, err
 		}

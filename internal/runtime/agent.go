@@ -370,16 +370,16 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		return workflows.Agent{}, fmt.Errorf("the agent %q: workflow %q is not a flow's name", in.Agent, def.Workflow)
 	}
 	ctxTokens := 0 // a CLI engine's agent compacts its own (ADR 0020)
-	var external []workflows.ExtSource
 	if engine == workflows.EngineAPI {
 		if ctxTokens, err = modelContext(model); err != nil {
 			return workflows.Agent{}, err
 		}
-		// The MCP servers and custom tools (ADR 0022): the API engine's
-		// turns for now.
-		if external, err = externalSources(in.Dir); err != nil {
-			return workflows.Agent{}, err
-		}
+	}
+	// The MCP servers and custom tools (ADR 0022), for every engine: a CLI
+	// engine is given them over KairoCode's MCP server, with its own tools.
+	external, err := externalSources(in.Dir)
+	if err != nil {
+		return workflows.Agent{}, err
 	}
 	return workflows.Agent{
 		Context:     ctxTokens,
