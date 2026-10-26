@@ -265,6 +265,9 @@ func (c *client) checkFromAgent(m message) {
 		c.mu.Lock()
 		method := c.sent[string(m.ID)]
 		c.mu.Unlock()
+		if strings.HasPrefix(method, "_") {
+			return // an extension method (ACP's _name): no schema has it
+		}
 		name, ok = s.def("agent", method, "Response")
 		raw = m.Result
 	}

@@ -42,6 +42,7 @@ type Marketplace struct {
 	Source  string `json:"-"` // as added ("" when built in)
 	Commit  string `json:"-"` // a git one's
 	BuiltIn bool   `json:"-"`
+	Claude  bool   `json:"-"` // Claude Code's (.claude-plugin/marketplace.json)
 	files   fs.FS  // its files (a folder's: dir)
 	dir     string // its folder ("" when built in)
 }
@@ -50,11 +51,20 @@ type Marketplace struct {
 type MarketPlugin struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	// Source: ./<path> in the marketplace, or a git URL.
+	// Source: ./<path> in the marketplace, or a git URL: then Path, a
+	// folder in the repository (else all of it); Ref, a branch or a tag;
+	// SHA, the commit (else the ref's latest).
 	Source string `json:"source"`
+	Path   string `json:"path,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+	SHA    string `json:"sha,omitempty"`
 	// Connect: when its credentials are asked for: install (as it is
 	// installed), or use (when it is used; the default).
 	Connect string `json:"connect,omitempty"`
+	// Unsupported: why it cannot be installed (a Claude Code one's source
+	// KairoCode does not take, say).
+	Unsupported string        `json:"-"`
+	claude      *claudeLayout // a Claude Code marketplace's: how to lay it out
 }
 
 // addedMarket is a marketplace the user added, as marketplaces.json keeps
@@ -82,7 +92,7 @@ func folderName(name string) bool {
 func readMarket(files fs.FS, where string) (Marketplace, error) {
 	b, err := fs.ReadFile(files, MarketplaceManifest)
 	if err != nil {
-		return Marketplace{}, fmt.Errorf("%s has no %s", where, MarketplaceManifest)
+		return readClaudeMarket(files, where)
 	}
 	var m Marketplace
 	if err := json.Unmarshal(b, &m); err != nil {
@@ -97,6 +107,11 @@ func readMarket(files fs.FS, where string) (Marketplace, error) {
 		}
 		if p.Connect != "" && p.Connect != "install" && p.Connect != "use" {
 			return Marketplace{}, fmt.Errorf("%s: %s: connect is install or use, not %q", where, p.Name, p.Connect)
+		}
+	}
+	for i, p := range m.Plugins {
+		if !strings.HasPrefix(p.Source, "./") {
+			m.Plugins[i].Unsupported = checkGitSource(p)
 		}
 	}
 	m.files = files
@@ -338,6 +353,9 @@ func InstallPlugin(ctx context.Context, arg string) (Installed, error) {
 // remoteGit says a marketplace's plugin source is a git repository away:
 // a marketplace does not point to the user's own folders.
 func remoteGit(src string) bool {
+	if fileURLs && strings.HasPrefix(src, "file://") {
+		return true
+	}
 	for _, p := range []string{"https://", "http://", "ssh://", "git://", "git@"} {
 		if strings.HasPrefix(src, p) {
 			return true
@@ -345,6 +363,10 @@ func remoteGit(src string) bool {
 	}
 	return false
 }
+
+// fileURLs lets a marketplace's plugin be a file:// repository: in tests
+// only (ADR 0027).
+var fileURLs bool
 
 // shown is a source as it is shown: a URL without the credentials it may
 // carry (user:token@).
@@ -377,15 +399,7 @@ func installFrom(ctx context.Context, markets []Marketplace, market, name string
 	if _, err := os.Stat(dest); err == nil {
 		return Installed{}, fmt.Errorf("a plugin named %s is installed already: kairocode plugin update %s", name, name)
 	}
-	var tmp string
-	var err error
-	if rel, ok := strings.CutPrefix(mp.Source, "./"); ok {
-		tmp, err = copyOut(m, rel)
-	} else if remoteGit(mp.Source) {
-		tmp, err = cloneOut(ctx, mp.Source)
-	} else {
-		err = fmt.Errorf("the marketplace %s: %s's source %q is neither ./<folder in it> nor a git URL", market, name, mp.Source)
-	}
+	tmp, err := fetchPlugin(ctx, m, mp)
 	if err != nil {
 		return Installed{}, err
 	}
@@ -453,17 +467,25 @@ func manifestOf(dir string) (pluginManifest, bool) {
 // aside, then removed), with where it came from.
 func placePlugin(tmp, dest, name string, origin pluginOrigin) (Installed, error) {
 	m, _ := manifestOf(tmp)
-	if m.Name != "" && m.Name != name {
+	// KairoCode's manifest names its plugin; a Claude Code one goes by
+	// its marketplace's name for it, as in Claude Code.
+	if _, err := os.Stat(filepath.Join(tmp, PluginManifest)); err == nil && m.Name != "" && m.Name != name {
 		return Installed{}, fmt.Errorf("the plugin's manifest names it %q, not %s", m.Name, name)
 	}
 	// The markers are KairoCode's: none the plugin brings is taken.
 	os.Remove(filepath.Join(tmp, originFile))
 	os.Remove(filepath.Join(tmp, ".kairocode-commit"))
+	if isGit(tmp) {
+		os.Remove(filepath.Join(tmp, ".kairocode-at")) // a clone's own: not taken
+	}
 	// What it is at goes into its servers' fingerprint (ADR 0025): a
 	// clone's commit, else a hash of its files, so that turns under way
 	// do not call a server changed under them.
 	at := ""
-	if isGit(tmp) {
+	if b, err := os.ReadFile(filepath.Join(tmp, ".kairocode-at")); err == nil { // a folder of a repository's commit
+		at = string(b)
+		os.Remove(filepath.Join(tmp, ".kairocode-at"))
+	} else if isGit(tmp) {
 		commit, err := gitIn(context.Background(), tmp, "rev-parse", "HEAD")
 		if err != nil {
 			return Installed{}, err
@@ -585,7 +607,7 @@ func copyTree(files fs.FS, where string) (string, error) {
 		if d.Name() == ".git" && d.IsDir() {
 			return fs.SkipDir
 		}
-		if p == originFile || p == ".kairocode-commit" {
+		if p == originFile || p == ".kairocode-commit" || p == ".kairocode-at" {
 			return nil // KairoCode's markers, written as it is installed
 		}
 		to := filepath.Join(tmp, filepath.FromSlash(p))
@@ -610,6 +632,80 @@ func copyTree(files fs.FS, where string) (string, error) {
 		return "", fmt.Errorf("copying %s: %w", where, err)
 	}
 	return tmp, nil
+}
+
+// fetchPlugin puts market's plugin mp's files in a new folder: copied out
+// of the marketplace, or cloned (at its ref or commit, and only its path,
+// if it has them); a Claude Code one's laid out as KairoCode reads it.
+func fetchPlugin(ctx context.Context, m Marketplace, mp MarketPlugin) (string, error) {
+	if mp.Unsupported != "" {
+		return "", fmt.Errorf("%s of %s cannot be installed: %s", mp.Name, m.Name, mp.Unsupported)
+	}
+	var tmp string
+	var err error
+	if rel, ok := strings.CutPrefix(mp.Source, "./"); ok {
+		tmp, err = copyOut(m, rel)
+	} else {
+		tmp, err = cloneAt(ctx, mp)
+	}
+	if err != nil {
+		return "", err
+	}
+	if mp.claude != nil {
+		if err := layOut(tmp, mp.claude); err != nil {
+			os.RemoveAll(tmp)
+			return "", fmt.Errorf("%s of %s: %w", mp.Name, m.Name, err)
+		}
+	}
+	return tmp, nil
+}
+
+// cloneAt clones mp's git source at its ref or commit, and copies out its
+// path (else all of it), as a folder of a marketplace: no link and no .git
+// comes with it (a plugin of a marketplace is laid out after, and must not
+// be led out of its folder).
+func cloneAt(ctx context.Context, mp MarketPlugin) (string, error) {
+	if why := checkGitSource(mp); why != "" {
+		return "", fmt.Errorf("%s cannot be installed: %s", mp.Name, why)
+	}
+	tmp, err := pluginsTemp()
+	if err != nil {
+		return "", err
+	}
+	args := []string{"clone", "--quiet"}
+	if mp.Ref != "" && mp.SHA == "" {
+		args = append(args, "--depth", "1", "--branch", mp.Ref)
+	}
+	if _, err := gitIn(ctx, UserPluginsDir(), append(args, "--", mp.Source, tmp)...); err != nil {
+		os.RemoveAll(tmp)
+		return "", err
+	}
+	if mp.SHA != "" {
+		if _, err := gitIn(ctx, tmp, "checkout", "--quiet", "--detach", mp.SHA); err != nil {
+			os.RemoveAll(tmp)
+			return "", err
+		}
+	}
+	defer os.RemoveAll(tmp)
+	commit, err := gitIn(ctx, tmp, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	var out string
+	if rel := path.Clean(strings.TrimPrefix(mp.Path, "./")); rel == "." {
+		out, err = copyTree(os.DirFS(tmp), mp.Source)
+	} else {
+		out, err = copyOut(Marketplace{Name: mp.Name, dir: tmp}, rel)
+	}
+	if err != nil {
+		return "", err
+	}
+	// Its version is the repository's commit, not a hash of the copy.
+	if err := os.WriteFile(filepath.Join(out, ".kairocode-at"), []byte(commit[:12]), 0o600); err != nil {
+		os.RemoveAll(out)
+		return "", err
+	}
+	return out, nil
 }
 
 // cloneOut clones src to a new folder.
@@ -664,14 +760,7 @@ func UpdatePlugin(ctx context.Context, name string) (before, after string, err e
 		if j < 0 {
 			return "", "", fmt.Errorf("the marketplace %s has no plugin %q now", mk.Name, origin.Plugin)
 		}
-		var tmp string
-		if rel, ok := strings.CutPrefix(mk.Plugins[j].Source, "./"); ok {
-			tmp, err = copyOut(mk, rel)
-		} else if remoteGit(mk.Plugins[j].Source) {
-			tmp, err = cloneOut(ctx, mk.Plugins[j].Source)
-		} else {
-			err = fmt.Errorf("the marketplace %s: %s's source %q is neither ./<folder in it> nor a git URL", mk.Name, name, mk.Plugins[j].Source)
-		}
+		tmp, err := fetchPlugin(ctx, mk, mk.Plugins[j])
 		if err != nil {
 			return "", "", err
 		}
@@ -712,27 +801,64 @@ func RemovePlugin(name string) error {
 	return os.RemoveAll(dir)
 }
 
+// CatalogPlugin is a plugin of a marketplace, as /plugin shows it.
+type CatalogPlugin struct {
+	Name        string `json:"name"`
+	Marketplace string `json:"marketplace"`
+	Description string `json:"description,omitempty"`
+	Installed   bool   `json:"installed,omitempty"` // one of the user's has its name
+	// Unsupported: why it cannot be installed.
+	Unsupported string `json:"unsupported,omitempty"`
+}
+
+// MarketInfo is a marketplace, as /plugin shows it.
+type MarketInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source,omitempty"` // "" built in
+	Commit      string `json:"commit,omitempty"`
+	BuiltIn     bool   `json:"builtIn,omitempty"`
+	Claude      bool   `json:"claude,omitempty"` // Claude Code's
+	Plugins     int    `json:"plugins"`
+}
+
+// Catalog is every marketplace's plugins, the marketplaces, and why any
+// could not be read.
+func Catalog() (plugins []CatalogPlugin, markets []MarketInfo, errs []string) {
+	list, bad := Marketplaces()
+	for _, m := range list {
+		markets = append(markets, MarketInfo{Name: m.Name, Description: m.Description, Source: shown(m.Source),
+			Commit: m.Commit, BuiltIn: m.BuiltIn, Claude: m.Claude, Plugins: len(m.Plugins)})
+		for _, p := range m.Plugins {
+			_, err := os.Stat(filepath.Join(UserPluginsDir(), p.Name))
+			if !folderName(p.Name) {
+				err = os.ErrNotExist
+			}
+			plugins = append(plugins, CatalogPlugin{Name: p.Name, Marketplace: m.Name, Description: p.Description,
+				Installed: err == nil, Unsupported: p.Unsupported})
+		}
+	}
+	for _, err := range bad {
+		errs = append(errs, err.Error())
+	}
+	return plugins, markets, errs
+}
+
 // AvailableText lists the marketplaces' plugins not installed, by
 // marketplace, and how to install one (install: the command's words).
 func AvailableText(install string) string {
-	markets, errs := Marketplaces()
+	plugins, markets, errs := Catalog()
 	var b strings.Builder
 	for _, m := range markets {
-		var lines []string
+		var todo []CatalogPlugin
 		width := 0
-		for _, p := range m.Plugins {
-			if _, err := os.Stat(filepath.Join(UserPluginsDir(), p.Name)); err == nil {
-				continue
+		for _, p := range plugins {
+			if p.Marketplace == m.Name && !p.Installed && p.Unsupported == "" {
+				todo = append(todo, p)
+				width = max(width, len(p.Name))
 			}
-			width = max(width, len(p.Name))
 		}
-		for _, p := range m.Plugins {
-			if _, err := os.Stat(filepath.Join(UserPluginsDir(), p.Name)); err == nil {
-				continue
-			}
-			lines = append(lines, fmt.Sprintf("    %-*s  %s", width, p.Name, p.Description))
-		}
-		if len(lines) == 0 {
+		if len(todo) == 0 {
 			continue
 		}
 		head := m.Name
@@ -742,10 +868,13 @@ func AvailableText(install string) string {
 		case m.Description != "":
 			head += " (" + m.Description + ")"
 		}
-		fmt.Fprintf(&b, "  %s:\n%s\n", head, strings.Join(lines, "\n"))
+		fmt.Fprintf(&b, "  %s:\n", head)
+		for _, p := range todo {
+			fmt.Fprintf(&b, "    %-*s  %s\n", width, p.Name, p.Description)
+		}
 	}
 	for _, err := range errs {
-		fmt.Fprintf(&b, "  (a marketplace could not be read: %v)\n", err)
+		fmt.Fprintf(&b, "  (a marketplace could not be read: %s)\n", err)
 	}
 	if b.Len() == 0 {
 		return ""
@@ -764,6 +893,9 @@ func MarketplacesText() string {
 			where = shown(m.Source) + " at " + m.Commit
 		case m.Source != "":
 			where = m.Source + " (a folder, read where it is)"
+		}
+		if m.Claude {
+			where += ", Claude Code's"
 		}
 		fmt.Fprintf(&b, "%s: %s, %d plugins\n", m.Name, where, len(m.Plugins))
 	}

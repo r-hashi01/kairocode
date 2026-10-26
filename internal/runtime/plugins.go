@@ -94,6 +94,10 @@ func claudePlugin(dir string) (pluginManifest, string, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return m, path, fmt.Errorf("%s: %w", path, err)
 	}
+	// What is KairoCode's to say is not taken from Claude Code's manifest:
+	// its server is its .mcp.json's, and its tools declare no effect
+	// (invariant 3).
+	m.MCP, m.Auth, m.Tools = nil, pluginAuth{}, nil
 	var mcpFile struct {
 		MCPServers map[string]struct {
 			Type    string            `json:"type"`
@@ -211,6 +215,9 @@ type PluginInfo struct {
 	State       string        `json:"state"`
 	Tools       []MCPToolInfo `json:"tools,omitempty"`
 	Skills      []string      `json:"skills,omitempty"`
+	// Unused: what of a Claude Code plugin KairoCode does not use
+	// (commands, subagents, hooks…; ADR 0027).
+	Unused []string `json:"unused,omitempty"`
 }
 
 // Plugins lists the session's plugins and their state: whether each is
@@ -245,6 +252,9 @@ func (r *Runtime) PluginsIn(ctx context.Context, dir string) ([]PluginInfo, erro
 	for _, p := range readPlugins(dir) {
 		pi := PluginInfo{Name: p.Name, Description: p.Manifest.Description, Version: pluginVersion(p), Source: p.Source,
 			Project: p.Project, Auth: cmpOr(p.Manifest.Auth.Type, "none")}
+		if strings.HasSuffix(p.Source, filepath.Join(".claude-plugin", "plugin.json")) {
+			pi.Unused = claudeUnused(p.Dir)
+		}
 		for _, n := range slices.Sorted(mapKeys(skills)) {
 			if strings.HasPrefix(skills[n].Path, p.Dir+string(filepath.Separator)) {
 				pi.Skills = append(pi.Skills, n)
@@ -291,6 +301,9 @@ func PluginsText(list []PluginInfo) string {
 		}
 		if len(p.Skills) > 0 {
 			fmt.Fprintf(&b, "    skills: %s\n", strings.Join(p.Skills, ", "))
+		}
+		if len(p.Unused) > 0 {
+			fmt.Fprintf(&b, "    not used by KairoCode: %s\n", strings.Join(p.Unused, ", "))
 		}
 	}
 	return b.String()

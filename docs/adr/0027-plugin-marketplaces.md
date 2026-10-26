@@ -61,6 +61,22 @@ Codex（0.163.0 で確かめた）と Claude Code は、どちらも「マーケ
 - **URL の資格情報:** `https://user:token@…` のような URL は、表示（`From`、`marketplace list`）では `user:token@` を落とします。保存はそのままです（git が使うため）。
 - テスト: `TestCatalog`、`TestMarketplaceInstall`、`TestMarketplaceGit`、`TestCopiedPluginIsAtItsFiles`、`TestUpdateFromAMarketplaceGoneBad`、`TestPluginChange`（ACP）、`TestPluginCommand`（端末の画面）。
 
+追記（2026-10-26、利用者が承認）: **Claude Code のカタログも足せる。**
+- 背景: 同梱のカタログは 2 つしかなく、`/plugin` の画面がほぼ空です。KairoCode はもともと Claude Code のプラグイン（`.claude-plugin/plugin.json`、その `.mcp.json` とスキル）を読めます。なので、Claude Code のカタログ（`.claude-plugin/marketplace.json`。例: `anthropics/claude-plugins-official`、315 個）を足せれば、中身が一度に増えます。上の「検討した代替案」で退けた案を、プラグインの側はもう読めることを理由に取り入れます。
+- **読み方:** `marketplace add` で足したリポジトリかフォルダーに `kairocode-marketplace.json` がなく、`.claude-plugin/marketplace.json` があれば、それを読みます。各行の `source` は次のとおりに読みます。
+  - `./<パス>`: カタログの中のフォルダー（これまでどおり）。
+  - `{"source": "github", "repo": "owner/repo"}`、`{"source": "url", "url": …}`: git の URL。
+  - `{"source": "git-subdir", "url": …, "path": …}`: git のリポジトリの中のフォルダー。clone してから、そのフォルダーだけをコピーします（リポジトリの外を指す `path` は断る）。
+  - どれも、`ref`（ブランチかタグ）と `sha`（コミット）があれば、そこで固定します。
+  - それ以外（npm など）は、一覧に「入れられない」と理由つきで出し、入れません。
+- KairoCode のカタログの形にも、同じく `path`・`ref`・`sha` を足します（`source` が git の URL のとき）。
+- **`strict: false` の行:** プラグインの側に `plugin.json` がなく、カタログの行がプラグインを定義しているもの（例: `skills: ["./a", "./b"]`）は、入れるときに、その行から `.claude-plugin/plugin.json` を書き、挙げられたスキルのフォルダーを `skills/<名前>` に並べます。KairoCode が読める形に並べ替えるだけで、中身は変えません。
+- **使えるもの・使えないもの:** Claude Code のプラグインのうち KairoCode が使うのは、スキルと、`.mcp.json` の MCP サーバー（1 つまで）だけです。コマンド、サブエージェント、hook、LSP、出力のスタイルは使いません。`/plugin` の詳細と一覧に「KairoCode が使わないもの」を出します。MCP のツールは作用の型を宣言していないので、「実」として毎回承認を聞きます（不変条件 3、ADR 0025 と同じ）。
+- **リンクに従わない:** git のものは clone してから、`path`（なければ全体）をコピーで取り出します。リンクと `.git` は持ってきません（版は、そのリポジトリのコミットです）。並べ替えも、リンクを通る場所には書かず、動かしません。
+- **Claude Code の `plugin.json` は作用の型を決めない:** KairoCode の欄（`tools`、`mcp`、`auth`）があっても使いません。MCP のサーバーは `.mcp.json` のものだけで、ツールは「実」です。
+- テストの都合で、カタログの git の URL として `file://` を受けるのは、テストの中だけです。
+- テスト: `TestClaudeMarketplace`、`TestClaudePluginStaysInItsFolder`、`TestPluginsRPC`（ACP）、`TestPluginsScreen`・`TestPluginsScreenUnsupported`（端末の `/plugin` の画面）。
+
 ## 結果
 
 - 利用者は、何も設定しなくても `/plugin` で入れられるものを見て、`/plugin install github` で入れられます。会社や仲間のカタログも足せます。

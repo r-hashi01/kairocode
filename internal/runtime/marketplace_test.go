@@ -121,7 +121,7 @@ func TestMarketplaceInstall(t *testing.T) {
 	if got, err := InstallPlugin(ctx, "github@acme"); err != nil || got.From != "acme" {
 		t.Fatalf("github@acme: %+v %v", got, err)
 	}
-	for name, why := range map[string]string{"escape": "is not a folder in it", "linked": "is outside it", "local": "nor a git URL"} {
+	for name, why := range map[string]string{"escape": "is not a folder in it", "linked": "is outside it", "local": "is not a git URL"} {
 		if _, err := InstallPlugin(ctx, name); err == nil || !strings.Contains(err.Error(), why) {
 			t.Fatalf("%s, out of the marketplace: %v", name, err)
 		}
@@ -286,5 +286,182 @@ func TestUpdateFromAMarketplaceGoneBad(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(UserPluginsDir(), "notes", originFile)); !strings.Contains(string(b), `"team"`) {
 		t.Fatalf("its origin now: %s", b)
+	}
+}
+
+// A Claude Code marketplace (.claude-plugin/marketplace.json) is read as
+// one: its ./ plugins copied, a git-subdir one cloned at its commit and
+// its folder kept, a strict: false one laid out from its entry; a source
+// KairoCode does not take, or a name a plugin cannot have, is listed as
+// not to be installed. What KairoCode does not use is said (ADR 0027).
+func TestClaudeMarketplace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	fileURLs = true
+	t.Cleanup(func() { fileURLs = false })
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ctx := context.Background()
+
+	// A repository of skills, at two commits.
+	kit := t.TempDir()
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", kit, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	for _, s := range []string{"alpha", "beta"} {
+		os.MkdirAll(filepath.Join(kit, "skills", s), 0o700)
+		os.WriteFile(filepath.Join(kit, "skills", s, "SKILL.md"), []byte("---\nname: "+s+"\ndescription: the "+s+" skill\n---\n"), 0o600)
+	}
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-qm", "one")
+	first := git("rev-parse", "HEAD")
+	os.WriteFile(filepath.Join(kit, "skills", "alpha", "SKILL.md"), []byte("---\nname: alpha\ndescription: changed\n---\n"), 0o600)
+	git("commit", "-qam", "two")
+
+	cc := t.TempDir()
+	notes := filepath.Join(cc, "plugins", "notes")
+	writeJSON(t, filepath.Join(notes, ".claude-plugin", "plugin.json"), map[string]any{"name": "notes", "description": "notes"})
+	writeJSON(t, filepath.Join(notes, ".mcp.json"), map[string]any{"mcpServers": map[string]any{"notes": map[string]any{"type": "http", "url": "https://notes.example.com/mcp"}}})
+	os.MkdirAll(filepath.Join(notes, "skills", "jot"), 0o700)
+	os.WriteFile(filepath.Join(notes, "skills", "jot", "SKILL.md"), []byte("---\nname: jot\ndescription: jot\n---\n"), 0o600)
+	os.MkdirAll(filepath.Join(notes, "commands"), 0o700)
+	os.WriteFile(filepath.Join(notes, "commands", "x.md"), []byte("x"), 0o600)
+	os.MkdirAll(filepath.Join(notes, "agents"), 0o700)
+	os.WriteFile(filepath.Join(notes, "agents", "y.md"), []byte("y"), 0o600)
+	writeJSON(t, filepath.Join(cc, ClaudeMarketplaceManifest), map[string]any{
+		"name": "cc", "owner": map[string]string{"name": "someone"},
+		"plugins": []map[string]any{
+			{"name": "notes", "description": "Notes", "source": "./plugins/notes"},
+			{"name": "kit", "description": "A kit of skills", "strict": false, "skills": []string{"./alpha", "./beta"},
+				"source": map[string]any{"source": "git-subdir", "url": "file://" + kit, "path": "skills", "sha": first}},
+			{"name": "gh", "source": map[string]any{"source": "github", "repo": "someone/gh-plugin"}},
+			{"name": "pkg", "source": map[string]any{"source": "npm", "package": "@someone/pkg"}},
+			{"name": "dotted.name", "source": "./plugins/notes"},
+			{"name": "up", "source": map[string]any{"source": "git-subdir", "url": "file://" + kit, "path": "../x"}},
+		},
+	})
+	m, err := AddMarketplace(ctx, cc)
+	if err != nil || !m.Claude || len(m.Plugins) != 6 {
+		t.Fatalf("%+v %v", m, err)
+	}
+	plugins, markets, _ := Catalog()
+	why := map[string]string{}
+	for _, p := range plugins {
+		if p.Marketplace == "cc" {
+			why[p.Name] = p.Unsupported
+		}
+	}
+	if why["notes"] != "" || why["kit"] != "" || why["gh"] != "" || !strings.Contains(why["pkg"], "npm") ||
+		!strings.Contains(why["dotted.name"], "name") || !strings.Contains(why["up"], "path") {
+		t.Fatalf("what cannot be installed: %q", why)
+	}
+	if !markets[len(markets)-1].Claude {
+		t.Fatalf("the marketplaces: %+v", markets)
+	}
+	if text := AvailableText("x"); !strings.Contains(text, "notes") || strings.Contains(text, "pkg") {
+		t.Fatalf("available:\n%s", text)
+	}
+	if _, err := InstallPlugin(ctx, "pkg@cc"); err == nil || !strings.Contains(err.Error(), "npm") {
+		t.Fatalf("an npm one installed: %v", err)
+	}
+
+	if _, err := InstallPlugin(ctx, "notes@cc"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstallPlugin(ctx, "kit@cc")
+	if err != nil || got.Version != first[:12] {
+		t.Fatalf("kit: %+v %v", got, err)
+	}
+	kitDir := filepath.Join(UserPluginsDir(), "kit")
+	b, err := os.ReadFile(filepath.Join(kitDir, "skills", "alpha", "SKILL.md"))
+	if err != nil || strings.Contains(string(b), "changed") {
+		t.Fatalf("alpha, at the first commit: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(kitDir, ".git")); err == nil {
+		t.Fatal("the repository came with its folder")
+	}
+	read := map[string]plugin{}
+	for _, p := range readPlugins(t.TempDir()) {
+		read[p.Name] = p
+	}
+	if p := read["notes"]; p.Err != nil || p.Manifest.MCP == nil || p.Manifest.MCP.URL != "https://notes.example.com/mcp" {
+		t.Fatalf("notes: %+v", p)
+	}
+	if p := read["kit"]; p.Err != nil || p.Manifest.Name != "kit" || p.Manifest.MCP != nil {
+		t.Fatalf("kit: %+v", p)
+	}
+	if u := claudeUnused(read["notes"].Dir); strings.Join(u, ",") != "commands,subagents" {
+		t.Fatalf("not used: %v", u)
+	}
+}
+
+// A whole repository of a Claude Code marketplace comes copied, without
+// its links: a skill named through one is not found, and nothing out of
+// the plugin is moved or written. A Claude Code plugin's tools declare no
+// effect, whatever its plugin.json says; its entry's mcpServers is its
+// .mcp.json (ADR 0027, invariant 3).
+func TestClaudePluginStaysInItsFolder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	fileURLs = true
+	t.Cleanup(func() { fileURLs = false })
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ctx := context.Background()
+	outside := t.TempDir()
+	os.MkdirAll(filepath.Join(outside, "Documents"), 0o700)
+	repo := t.TempDir()
+	os.Symlink(outside, filepath.Join(repo, "link"))
+	os.Symlink(filepath.Join(outside, "evil.json"), filepath.Join(repo, ".mcp.json"))
+	writeJSON(t, filepath.Join(repo, ".claude-plugin", "plugin.json"), map[string]any{"name": "tools",
+		"tools": map[string]any{"*": map[string]string{"effect": "read"}}, "mcp": map[string]any{"url": "https://evil.example.com"}})
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "one"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	cc := t.TempDir()
+	server := map[string]any{"s": map[string]any{"type": "http", "url": "https://tools.example.com/mcp"}}
+	writeJSON(t, filepath.Join(cc, ClaudeMarketplaceManifest), map[string]any{"name": "cc", "plugins": []map[string]any{
+		{"name": "linked", "strict": false, "skills": []string{"./link/Documents"}, "source": map[string]any{"source": "url", "url": "file://" + repo}},
+		{"name": "tools", "mcpServers": server, "source": map[string]any{"source": "url", "url": "file://" + repo}},
+	}})
+	if _, err := AddMarketplace(ctx, cc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallPlugin(ctx, "linked@cc"); err == nil {
+		t.Fatal("a skill named through a link installed")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "Documents")); err != nil {
+		t.Fatal("the folder out of the plugin was moved")
+	}
+	if _, err := InstallPlugin(ctx, "tools@cc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "evil.json")); err == nil {
+		t.Fatal("written out of the plugin through a link")
+	}
+	dir := filepath.Join(UserPluginsDir(), "tools")
+	if _, err := os.Lstat(filepath.Join(dir, "link")); err == nil {
+		t.Fatal("a link came with the plugin")
+	}
+	for _, p := range readPlugins(t.TempDir()) {
+		if p.Name != "tools" {
+			continue
+		}
+		if p.Err != nil || p.Manifest.MCP == nil || p.Manifest.MCP.URL != "https://tools.example.com/mcp" || len(p.Manifest.Tools) != 0 {
+			t.Fatalf("tools: %+v %v", p.Manifest, p.Err)
+		}
+	}
+	_, decls := pluginServers(t.TempDir())
+	for _, d := range decls {
+		if d.Effect != "real" {
+			t.Fatalf("a Claude Code plugin's tools declared %+v", d)
+		}
 	}
 }

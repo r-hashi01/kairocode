@@ -118,7 +118,21 @@ const (
 	AuthMeta        = "kairocode/auth"
 	LoginMethodsRPC = "_kairocode/login_methods"
 	LoginRPC        = "_kairocode/login"
+	// PluginsRPC gives the session's plugins, the marketplaces' and the
+	// marketplaces ({"sessionId"} → PluginsView), for the terminal's
+	// /plugin; PluginRPC does /plugin's install, update, remove or
+	// marketplace ({"args": [...]} → {"text"}). ADR 0027.
+	PluginsRPC = "_kairocode/plugins"
+	PluginRPC  = "_kairocode/plugin"
 )
+
+// PluginsView is what the terminal's /plugin shows.
+type PluginsView struct {
+	Installed    []runtime.PluginInfo    `json:"installed"`
+	Catalog      []runtime.CatalogPlugin `json:"catalog"`
+	Marketplaces []runtime.MarketInfo    `json:"marketplaces"`
+	Errors       []string                `json:"errors,omitempty"`
+}
 
 // defaultModel is the value of the model option that leaves the choice to
 // the provider.
@@ -482,6 +496,28 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return nil, invalid(err)
 		}
 		return map[string]any{}, nil
+	case PluginsRPC:
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" {
+			return nil, invalid(errors.New(`want {"sessionId": "<id>"}`))
+		}
+		list, err := a.b.Plugins(ctx, p.SessionID)
+		if err != nil {
+			return nil, invalid(err)
+		}
+		v := PluginsView{Installed: list}
+		v.Catalog, v.Marketplaces, v.Errors = runtime.Catalog()
+		return v, nil
+	case PluginRPC:
+		var p struct {
+			Args []string `json:"args"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || len(p.Args) == 0 {
+			return nil, invalid(errors.New(`want {"args": [...]}`))
+		}
+		return map[string]any{"text": pluginChange(ctx, p.Args)}, nil
 	case ModelsMethod:
 		var p struct {
 			Provider string `json:"provider"`

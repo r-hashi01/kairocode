@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
 // driver runs a model as the program would, one message at a time and the
@@ -129,6 +131,39 @@ type fakeAgent struct {
 	cancels  []string
 	onPrompt func()   // what the turn does to the files
 	set      []string // settings set: id=value
+	plugins  acp.PluginsView
+	changes  []string // /plugin's changes asked for
+}
+
+func (a *fakeAgent) Plugins(ctx context.Context, session string) (acp.PluginsView, error) {
+	return a.plugins, nil
+}
+
+// PluginChange installs and removes in plugins, as the agent would.
+func (a *fakeAgent) PluginChange(ctx context.Context, args ...string) (string, error) {
+	a.changes = append(a.changes, strings.Join(args, " "))
+	v := &a.plugins
+	switch args[0] {
+	case "install":
+		name, _, _ := strings.Cut(args[1], "@")
+		for i := range v.Catalog {
+			if v.Catalog[i].Name == name {
+				v.Catalog[i].Installed = true
+			}
+		}
+		v.Installed = append(v.Installed, runtime.PluginInfo{Name: name, Auth: "key", State: "not connected: kairocode plugin connect " + name,
+			Tools: []runtime.MCPToolInfo{{Name: name + "_list_issues", Effect: "read"}, {Name: name + "_create_issue", Effect: "real"}}})
+		return "Installed " + name + ".", nil
+	case "remove":
+		v.Installed = slices.DeleteFunc(v.Installed, func(p runtime.PluginInfo) bool { return p.Name == args[1] })
+		for i := range v.Catalog {
+			if v.Catalog[i].Name == args[1] {
+				v.Catalog[i].Installed = false
+			}
+		}
+		return "Removed " + args[1] + ".", nil
+	}
+	return "done: " + strings.Join(args, " "), nil
 }
 
 func (a *fakeAgent) SetConfigOption(ctx context.Context, session, id, value string) error {

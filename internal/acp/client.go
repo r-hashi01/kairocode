@@ -110,6 +110,24 @@ func (cl *Client) Login(ctx context.Context, provider, method string, done bool)
 	return cl.c.Call(ctx, LoginRPC, map[string]any{"provider": provider, "method": method, "done": done}, nil)
 }
 
+// Plugins are the session's plugins, the marketplaces' and the
+// marketplaces (only KairoCode's agent has this; ADR 0027).
+func (cl *Client) Plugins(ctx context.Context, session string) (PluginsView, error) {
+	var out PluginsView
+	err := cl.c.Call(ctx, PluginsRPC, map[string]any{"sessionId": session}, &out)
+	return out, err
+}
+
+// PluginChange does /plugin's install, update, remove or marketplace, and
+// says what came of it.
+func (cl *Client) PluginChange(ctx context.Context, args ...string) (string, error) {
+	var out struct {
+		Text string `json:"text"`
+	}
+	err := cl.c.Call(ctx, PluginRPC, map[string]any{"args": args}, &out)
+	return out.Text, err
+}
+
 // InstallInfo is what installing a provider fetches.
 type InstallInfo struct {
 	Source  string `json:"source"`

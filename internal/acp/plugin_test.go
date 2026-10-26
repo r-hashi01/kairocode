@@ -2,8 +2,13 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
 // /plugin install, update, remove and marketplace are done by the agent,
@@ -28,5 +33,39 @@ func TestPluginChange(t *testing.T) {
 		if got := pluginChange(ctx, c.args); !strings.HasPrefix(got, c.want) {
 			t.Errorf("/plugin %s:\n got %s\nwant %s…", strings.Join(c.args, " "), got, c.want)
 		}
+	}
+}
+
+// The terminal's /plugin reads the plugins, the marketplaces' and the
+// marketplaces by PluginsRPC, and changes them by PluginRPC (ADR 0027).
+func TestPluginsRPC(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	b, ws := setup(t)
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	read := func() PluginsView {
+		var v PluginsView
+		if err := json.Unmarshal(c.call(PluginsRPC, map[string]any{"sessionId": s}), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	v := read()
+	if len(v.Installed) != 0 || len(v.Catalog) != 2 || len(v.Marketplaces) != 1 || !v.Marketplaces[0].BuiltIn {
+		t.Fatalf("%+v", v)
+	}
+	var out struct{ Text string }
+	if err := json.Unmarshal(c.call(PluginRPC, map[string]any{"args": []string{"install", "exa"}}), &out); err != nil || !strings.HasPrefix(out.Text, "Installed exa") {
+		t.Fatalf("%q %v", out.Text, err)
+	}
+	v = read()
+	if len(v.Installed) != 1 || v.Installed[0].Name != "exa" || !strings.HasPrefix(v.Installed[0].State, "not connected") {
+		t.Fatalf("after installing: %+v", v.Installed)
+	}
+	if i := slices.IndexFunc(v.Catalog, func(p runtime.CatalogPlugin) bool { return p.Name == "exa" }); i < 0 || !v.Catalog[i].Installed {
+		t.Fatalf("the catalog: %+v", v.Catalog)
 	}
 }

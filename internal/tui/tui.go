@@ -47,6 +47,9 @@ type Agent interface {
 	Login(ctx context.Context, provider, method string, done bool) error
 	// SetMode sets the session's mode (ADR 0016).
 	SetMode(ctx context.Context, session, mode string) error
+	// Plugins and PluginChange are /plugin's screen (ADR 0027).
+	Plugins(ctx context.Context, session string) (acp.PluginsView, error)
+	PluginChange(ctx context.Context, args ...string) (string, error)
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -222,6 +225,8 @@ type model struct {
 	// of them being chosen (/provider, /model).
 	config []acp.ConfigOption
 	pick   *pick
+	// plugins: /plugin's screen (ADR 0027).
+	plugins *browser
 	// history: what was sent, oldest first (↑ ↓); histAt, the one shown
 	// (len: none); draft, what was being typed before it.
 	history []string
@@ -426,7 +431,42 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case loginMsg:
 		return m.loginWays(msg)
+	case pluginsMsg:
+		if b := m.plugins; b != nil {
+			if msg.err != nil {
+				m.plugins = nil
+				m.print(bad.Render("  ⎿  the plugins could not be read: " + shortError(msg.err.Error())))
+				return nil
+			}
+			b.view, b.loaded = msg.view, true
+			if d := b.detail; d != nil { // shown again, as it is now
+				b.detail = nil
+				for _, r := range b.rowsOf(tabDiscover, tabInstalled) {
+					if r.name == d.name && r.project == d.project {
+						b.detail = &r
+						break
+					}
+				}
+			}
+		}
+		return nil
+	case pluginChangedMsg:
+		if b := m.plugins; b != nil {
+			b.note = msg.text
+			if msg.err != nil {
+				b.note = shortError(msg.err.Error())
+			}
+			return m.readPlugins()
+		}
+		return nil
 	case pluginDoneMsg:
+		if b := m.plugins; b != nil { // from /plugin's screen: shown there
+			b.note = msg.name + ": " + map[string]string{"connect": "connected", "disconnect": "disconnected", "install": "installed"}[msg.verb]
+			if msg.err != nil {
+				b.note = msg.name + ": " + shortError(msg.err.Error())
+			}
+			return m.readPlugins()
+		}
 		if msg.err != nil {
 			m.print(bad.Render("  ⎿  " + msg.name + ": " + shortError(msg.err.Error())))
 		} else {
@@ -945,6 +985,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case len(m.asks) > 0:
 		return m.askKey(k)
+	case m.plugins != nil:
+		return m.pluginsKey(key)
 	case m.pick != nil:
 		return m.pickKey(key)
 	case m.edit != nil:
@@ -1021,6 +1063,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		case "/help":
 			m.print(m.help())
 			return nil
+		}
+		if (text == "/plugin" || text == "/plugins") && m.session != "" { // to browse (ADR 0027)
+			return m.openPlugins()
 		}
 		if text == "/resume" { // another session of the folder
 			if m.running {
@@ -1224,6 +1269,8 @@ func (m *model) View() tea.View {
 	switch {
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
+	case m.plugins != nil:
+		b.WriteString(m.pluginsView(w))
 	case m.pick != nil:
 		b.WriteString(m.pickView(w))
 	case m.edit != nil:

@@ -33,9 +33,9 @@ type pluginDoneMsg struct {
 	err        error
 }
 
-// pluginConnect hands the terminal to kairocode plugin connect, which asks
-// for the plugin's credentials without showing them (ADR 0025): they go
-// to the key store, not through ACP.
+// pluginConnect hands the terminal to kairocode plugin <verb> (connect,
+// disconnect, install), which asks for the plugin's credentials without
+// showing them (ADR 0025): they go to the key store, not through ACP.
 func (m *model) pluginConnect(verb, name string) tea.Cmd {
 	argv := append(slices.Clip(m.o.Plugin), verb, name)
 	cmd := exec.Command(argv[0], argv[1:]...)
