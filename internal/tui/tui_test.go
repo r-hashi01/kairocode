@@ -590,13 +590,38 @@ func TestFlowGraphCommand(t *testing.T) {
 // leaves lines of the old one behind.
 func TestScreenKeepsItsHeightWhilePrinting(t *testing.T) {
 	d, _ := start(t, Options{})
-	d.m.printing, d.m.shown = true, 40
-	if n := strings.Count(d.m.View().Content, "\n") + 1; n != 40 {
-		t.Fatalf("%d lines while printing, want 40", n)
+	d.m.printing, d.m.shown = true, 20 // of the terminal's 24
+	if n := strings.Count(d.m.View().Content, "\n") + 1; n != 20 {
+		t.Fatalf("%d lines while printing, want 20", n)
 	}
 	d.m.printing = false
-	if n := strings.Count(d.m.View().Content, "\n") + 1; n >= 40 {
+	if n := strings.Count(d.m.View().Content, "\n") + 1; n >= 20 {
 		t.Fatalf("%d lines once printed: it did not shrink", n)
+	}
+}
+
+// The screen is never taller than the terminal: what would go above its
+// top could not be redrawn, and would stay as a copy of a screen before.
+// The input, the cursor in it and the status line stay at the bottom.
+func TestScreenNeverTallerThanTheTerminal(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.live = strings.Repeat("a long reply line\n", 60)
+	d.m.input.SetValue(strings.Repeat("a long message ", 80))
+	d.send(key("x")) // typed: the input scrolls to its cursor
+	v := d.m.View()
+	lines := strings.Split(v.Content, "\n")
+	if len(lines) > 23 {
+		t.Fatalf("%d lines in a terminal of 24", len(lines))
+	}
+	if !strings.Contains(plain(lines[len(lines)-1]), "session") {
+		t.Fatalf("the status line is not last:\n%s", plain(v.Content))
+	}
+	if v.Cursor == nil || v.Cursor.Y < 0 || v.Cursor.Y >= len(lines) || !strings.HasPrefix(plain(lines[v.Cursor.Y]), ">") {
+		t.Fatalf("the cursor is not in the input: %+v\n%s", v.Cursor, plain(v.Content))
+	}
+	d.m.printing, d.m.shown = true, 40 // drawn before the terminal shrank
+	if n := strings.Count(d.m.View().Content, "\n") + 1; n > 23 {
+		t.Fatalf("%d lines while printing", n)
 	}
 }
 

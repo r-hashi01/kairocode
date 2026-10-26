@@ -1320,6 +1320,20 @@ func (m *model) View() tea.View {
 			cursor.Y += pad
 		}
 	}
+	// Never taller than the terminal: what goes above its top cannot be
+	// redrawn, and stays there as copies of screens before (a review, say).
+	// The top goes; the input and the status line, at the bottom, stay.
+	if room := m.height - 1; m.height > 0 {
+		if lines := strings.Split(content, "\n"); len(lines) > room {
+			drop := len(lines) - room
+			content = strings.Join(lines[drop:], "\n")
+			if cursor != nil {
+				if cursor.Y -= drop; cursor.Y < 0 {
+					cursor = nil
+				}
+			}
+		}
+	}
 	m.shown = strings.Count(content, "\n") + 1
 	v := tea.NewView(content)
 	v.Cursor = cursor
