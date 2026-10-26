@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -641,6 +642,14 @@ func (c *Client) Log(ctx context.Context, session string) (runtime.SessionLog, e
 func (c *Client) MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error) {
 	var out []runtime.MCPInfo
 	err := c.do(ctx, "GET", sessionPath(session)+"/mcp", nil, &out)
+	return out, err
+}
+
+// Sessions lists the sessions of dir ("" all), the latest used first, at
+// most limit (0: all).
+func (c *Client) Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error) {
+	var out []runtime.SessionInfo
+	err := c.do(ctx, "GET", "/sessions?dir="+url.QueryEscape(dir)+"&limit="+strconv.Itoa(limit), nil, &out)
 	return out, err
 }
 

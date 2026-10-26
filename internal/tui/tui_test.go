@@ -122,6 +122,7 @@ type fakeAgent struct {
 	d        *driver
 	sessions int
 	loaded   string
+	list     []acp.SessionInfo
 	prompts  []string
 	turn     []acp.Update
 	cancels  []string
@@ -167,6 +168,10 @@ func (a *fakeAgent) Cancel(session string) error {
 func (a *fakeAgent) NewSession(ctx context.Context, cwd string) (string, error) {
 	a.sessions++
 	return "s/0123456789abcdef", nil
+}
+
+func (a *fakeAgent) ListSessions(ctx context.Context, cwd string) ([]acp.SessionInfo, error) {
+	return a.list, nil
 }
 
 func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error {
@@ -360,7 +365,7 @@ func TestKeys(t *testing.T) {
 		t.Fatalf("completed %q", got)
 	}
 	d.m.input.SetValue("/re")
-	d.send(key("enter")) // completes first
+	d.send(key("enter")) // completes first: the agent's /review before /resume
 	if got := d.m.input.Value(); got != "/review " || len(a.prompts) != 0 {
 		t.Fatalf("enter on a partial name: %q, prompts %q", got, a.prompts)
 	}
@@ -368,6 +373,12 @@ func TestKeys(t *testing.T) {
 	if len(a.prompts) != 1 || a.prompts[0] != "/review" {
 		t.Fatalf("prompts %q", a.prompts)
 	}
+	d.m.input.SetValue("/res")
+	d.send(key("tab"))
+	if got := d.m.input.Value(); got != "/resume " {
+		t.Fatalf("/res completed %q", got)
+	}
+	d.m.input.SetValue("")
 
 	d.m.input.SetValue("half typed")
 	d.send(key("ctrl+c"))
@@ -1190,5 +1201,62 @@ func TestFlowReviewChartScrolls(t *testing.T) {
 	d.send(key("up"))
 	if v := d.view(); !strings.Contains(v, "↓ 1 more lines") {
 		t.Fatalf("one up from the end\n%s", v)
+	}
+}
+
+// /resume lists the folder's other open sessions; the one chosen is loaded
+// and followed, and another's updates are not shown.
+func TestResume(t *testing.T) {
+	d, a := start(t, Options{})
+	other := acp.SessionInfo{ID: "s/aaaa", Title: "fix the login bug", Updated: "2026-10-26T10:00:00Z"}
+	other.Meta.KairoCode.Turns = 3
+	closed := acp.SessionInfo{ID: "s/cccc", Title: "an old one"}
+	closed.Meta.KairoCode.Closed = true
+	a.list = []acp.SessionInfo{{ID: "s/0123456789abcdef", Title: "this one"}, other, closed}
+	typed(d, "/resume")
+	v := d.view()
+	if d.m.pick == nil || !strings.Contains(v, "fix the login bug") || strings.Contains(v, "this one") || strings.Contains(v, "an old one") {
+		t.Fatalf("the list\n%s", v)
+	}
+	d.send(key("enter"))
+	if a.loaded != "s/aaaa" || d.m.session != "s/aaaa" {
+		t.Fatalf("loaded %q, on %q", a.loaded, d.m.session)
+	}
+	d.send(updateMsg{Session: "s/0123456789abcdef", Kind: "agent_message_chunk", Text: "from the one left"})
+	d.send(updateMsg{Session: "s/aaaa", Kind: "agent_message_chunk", Text: "from the one taken up"})
+	if v := d.view() + d.out(); strings.Contains(v, "from the one left") || !strings.Contains(v, "from the one taken up") {
+		t.Fatalf("shown\n%s", v)
+	}
+}
+
+// kairo -resume with no session to take up starts a new one.
+func TestResumeWithNoneStartsOne(t *testing.T) {
+	_, a := start(t, Options{Resume: true})
+	if a.sessions != 1 {
+		t.Fatalf("sessions started: %d", a.sessions)
+	}
+}
+
+// While a session taken up loads, nothing is typed into either; an ask of
+// a session left says whose it is.
+func TestResumeLoadingAndOthersAsks(t *testing.T) {
+	d, a := start(t, Options{})
+	a.list = []acp.SessionInfo{{ID: "s/aaaa", Title: "the other"}}
+	cmd := d.m.resume("s/aaaa")
+	if d.m.state != stateStarting || d.m.loading != "s/aaaa" {
+		t.Fatalf("state %v, loading %q", d.m.state, d.m.loading)
+	}
+	typed(d, "too early")
+	if len(a.prompts) != 0 {
+		t.Fatalf("sent while loading: %q", a.prompts)
+	}
+	d.run(cmd)
+	if d.m.session != "s/aaaa" || d.m.state != stateReady {
+		t.Fatalf("on %q, state %v", d.m.session, d.m.state)
+	}
+	d.send(askMsg{req: acp.PermissionRequest{Session: "s/0123456789abcdef", Title: "write a.txt",
+		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}}}, reply: make(chan string, 1)})
+	if v := d.view(); !strings.Contains(v, "[session 01234567] write a.txt") {
+		t.Fatalf("the ask\n%s", v)
 	}
 }

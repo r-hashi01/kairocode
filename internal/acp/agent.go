@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
@@ -47,6 +48,7 @@ type Backend interface {
 	// MCP lists the session's MCP servers and custom tools (ADR 0022).
 	MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error)
 	Plugins(ctx context.Context, session string) ([]runtime.PluginInfo, error)
+	Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error)
 	// Log is the session's record (ADR 0023).
 	Log(ctx context.Context, session string) (runtime.SessionLog, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
@@ -347,8 +349,9 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		return map[string]any{
 			"protocolVersion": ProtocolVersion,
 			"agentCapabilities": map[string]any{
-				"loadSession":        true,
-				"promptCapabilities": map[string]any{"image": false, "audio": false, "embeddedContext": false},
+				"loadSession":         true,
+				"sessionCapabilities": map[string]any{"list": map[string]any{}},
+				"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": false},
 			},
 			"authMethods": []any{},
 			"agentInfo":   map[string]any{"name": "kairocode", "version": a.o.Version},
@@ -381,6 +384,15 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		}
 		a.offerCommands(ctx, s)
 		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: w.release}, nil
+	case "session/list":
+		var p struct {
+			Cwd    string `json:"cwd"`
+			Cursor string `json:"cursor"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, invalid(err)
+		}
+		return a.listSessions(ctx, p.Cwd, p.Cursor)
 	case "session/load":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -1299,6 +1311,47 @@ func (a *agent) skillsText(ctx context.Context, session string) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// sessionsPage is how many sessions session/list gives at a time.
+const sessionsPage = 50
+
+// listSessions answers session/list: the sessions of cwd (all without),
+// the latest used first, a page at a time. The cursor is the last one
+// given (its last change and id): the next page goes on after it, though
+// sessions changed meanwhile move.
+func (a *agent) listSessions(ctx context.Context, cwd, cursor string) (any, error) {
+	list, err := a.b.Sessions(ctx, cwd, 0)
+	if err != nil {
+		return nil, err
+	}
+	from := 0
+	if cursor != "" {
+		at, id, ok := strings.Cut(cursor, "|")
+		t, err := time.Parse(time.RFC3339Nano, at)
+		if !ok || err != nil {
+			return nil, invalid(fmt.Errorf("not a cursor of session/list: %q", cursor))
+		}
+		// After it; if it is gone (or changed since), after where it was.
+		from = len(list)
+		if i := slices.IndexFunc(list, func(s runtime.SessionInfo) bool { return s.ID == id }); i >= 0 && list[i].Updated.Equal(t) {
+			from = i + 1
+		} else if i := slices.IndexFunc(list, func(s runtime.SessionInfo) bool { return s.Updated.Before(t) }); i >= 0 {
+			from = i
+		}
+	}
+	sessions := []map[string]any{}
+	for _, s := range list[min(from, len(list)):min(from+sessionsPage, len(list))] {
+		sessions = append(sessions, map[string]any{"sessionId": s.ID, "cwd": s.Dir, "title": s.Title,
+			"updatedAt": s.Updated.UTC().Format(time.RFC3339),
+			"_meta":     map[string]any{"kairocode": map[string]any{"turns": s.Turns, "closed": s.Closed}}})
+	}
+	out := map[string]any{"sessions": sessions}
+	if end := from + sessionsPage; end < len(list) {
+		last := list[end-1]
+		out["nextCursor"] = last.Updated.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+	}
+	return out, nil
 }
 
 // pluginText is /plugin's answer. Connecting asks for credentials, which

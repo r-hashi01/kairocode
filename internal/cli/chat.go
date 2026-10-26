@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/trust"
 	"github.com/r-hashi01/kairocode/internal/tui"
@@ -32,6 +34,8 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	dir := fs.String("dir", ".", "working directory")
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	session := fs.String("session", "", "a session to take up again (as the chat printed it)")
+	cont := fs.Bool("continue", false, "take up the session of this folder used last")
+	pickOne := fs.Bool("resume", false, "choose a session of this folder to take up (in the terminal UI; else as -continue)")
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (/provider switches it)")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (/model switches it)")
 	if err := fs.Parse(args); err != nil {
@@ -57,6 +61,12 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer c.Close()
+	_, _, onTerminal := terminal(stdout)
+	if s == "" && (*cont || *pickOne && !onTerminal) {
+		if s, err = lastSession(ctx, c, abs); err != nil {
+			return err
+		}
+	}
 
 	// The agent, in this process, on two pipes.
 	toAgentR, toAgentW := io.Pipe()
@@ -94,7 +104,7 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 		}
-		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Version: buildVersion(), Engine: *prov, Model: *model,
+		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Resume: *pickOne && s == "", Version: buildVersion(), Engine: *prov, Model: *model,
 			Usage: func(ctx context.Context, s string) (int64, error) {
 				u, err := c.Usage(ctx, s)
 				return u.Total.Input + u.Total.Output, err
@@ -401,4 +411,67 @@ func terminal(stdout io.Writer) (io.Reader, io.Writer, bool) {
 		}
 	}
 	return in, out, true
+}
+
+// lastSession is dir's session used last that is open ("" if none).
+func lastSession(ctx context.Context, c *daemon.Client, dir string) (string, error) {
+	list, err := c.Sessions(ctx, dir, 0)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range list {
+		if !s.Closed {
+			return s.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// listSessions prints the sessions of a folder (kairocode sessions).
+func listSessions(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("sessions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", ".", "working directory")
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	all := fs.Bool("all", false, "the sessions of every folder")
+	asJSON := fs.Bool("json", false, "as JSON")
+	limit := fs.Int("n", 20, "at most this many (0: all)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	abs := ""
+	if !*all {
+		var err error
+		if abs, err = filepath.Abs(*dir); err != nil {
+			return err
+		}
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	list, err := c.Sessions(ctx, abs, *limit)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(stdout).Encode(list)
+	}
+	if len(list) == 0 {
+		fmt.Fprintln(stdout, "No session here yet.")
+		return nil
+	}
+	for _, s := range list {
+		state := ""
+		if s.Closed {
+			state = " (closed)"
+		}
+		fmt.Fprintf(stdout, "%s  %s  %3d turns  %s%s\n", strings.TrimPrefix(s.ID, "s/"), s.Updated.Local().Format("2006-01-02 15:04"), s.Turns, s.Title, state)
+		if *all {
+			fmt.Fprintf(stdout, "    %s\n", s.Dir)
+		}
+	}
+	fmt.Fprintln(stdout, "kairo -session <id> takes one up; kairo -continue, the last; kairo -resume, one chosen.")
+	return nil
 }

@@ -29,6 +29,8 @@ import (
 type Agent interface {
 	NewSession(ctx context.Context, cwd string) (string, error)
 	LoadSession(ctx context.Context, session, cwd string) error
+	// ListSessions are the sessions of cwd, the latest used first.
+	ListSessions(ctx context.Context, cwd string) ([]acp.SessionInfo, error)
 	Prompt(ctx context.Context, session, text string) (string, error)
 	// Cancel asks for the turn under way to stop (ADR 0011).
 	Cancel(session string) error
@@ -55,6 +57,9 @@ type Options struct {
 	Version, Engine, Model string
 	// Usage is the tokens the session's model calls used, if known.
 	Usage func(ctx context.Context, session string) (int64, error)
+	// Resume: the sessions of Dir are offered to take up first (kairo
+	// -resume); esc starts a new one.
+	Resume bool
 	// Plugin is how to run kairocode plugin (its argv up to the verb), for
 	// /plugin connect and disconnect, which ask for credentials here.
 	Plugin []string
@@ -189,6 +194,8 @@ type model struct {
 
 	state   state
 	session string
+	// loading: a session being taken up (/resume): its updates are shown.
+	loading string
 	running bool
 	queued  []string // typed during a turn, sent after it
 
@@ -332,6 +339,10 @@ func (m *model) start() tea.Cmd {
 		if o.Session != "" {
 			return startedMsg{session: o.Session, err: a.LoadSession(ctx, o.Session, o.Dir)}
 		}
+		if o.Resume {
+			l, err := a.ListSessions(ctx, o.Dir)
+			return sessionsMsg{list: l, err: err}
+		}
 		s, err := a.NewSession(ctx, o.Dir)
 		return startedMsg{session: s, err: err}
 	}
@@ -386,10 +397,24 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			m.print(bad.Render("Could not start the session: " + msg.err.Error()))
 			return m.leave()
 		}
-		m.session, m.state = msg.session, stateReady
+		m.session, m.state, m.loading = msg.session, stateReady, ""
 		return tea.Batch(m.input.Focus(), m.usage())
+	case sessionsMsg:
+		return m.sessionPick(msg)
+	case resumedMsg:
+		m.loading, m.state = "", stateReady
+		if msg.err != nil {
+			m.print(bad.Render("  ⎿  the session could not be taken up: " + shortError(msg.err.Error())))
+			m.block(faint.Render("── back to session " + short(m.session) + " ──"))
+			return nil
+		}
+		m.session = msg.session
+		return m.usage()
 	case updateMsg:
-		m.take(acp.Update(msg))
+		// Only the session on the screen (or the one being loaded) is shown.
+		if u := acp.Update(msg); u.Session == "" || m.session == "" || u.Session == m.session || u.Session == m.loading {
+			m.take(u)
+		}
 		return nil
 	case loginMsg:
 		return m.loginWays(msg)
@@ -417,6 +442,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case askMsg:
+		if s := msg.req.Session; s != "" && m.session != "" && s != m.session && s != m.loading {
+			// Another session's (one left by /resume): said whose it is.
+			msg.req.Title = "[session " + short(s) + "] " + msg.req.Title
+		}
 		a := &ask{req: msg.req, reply: msg.reply, sel: -1}
 		if hasAllow(msg.req.Options) {
 			a.sel = 0
@@ -983,6 +1012,13 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			m.print(m.help())
 			return nil
 		}
+		if text == "/resume" { // another session of the folder
+			if m.running {
+				m.note = "a turn is under way: /resume when it ends (esc stops it)"
+				return nil
+			}
+			return m.listSessions()
+		}
 		if name, ok := strings.CutPrefix(text+" ", "/login "); ok { // sign in (ADR 0015)
 			return m.login(strings.TrimSpace(name))
 		}
@@ -1026,7 +1062,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 // commands are the slash commands: the UI's own, then the agent's.
 func (m *model) commands() []acp.Command {
 	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session stays in the daemon)"},
-		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"}}, m.cmds...)
+		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"},
+		{Name: "resume", Description: "Take up another session of this folder"}}, m.cmds...)
 }
 
 // completions are the commands that begin with what is typed, while a
@@ -1036,8 +1073,11 @@ func (m *model) completions() []acp.Command {
 	if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \n") {
 		return nil
 	}
+	// The agent's first: what it offers is what the user came for; the
+	// screen's own are found by a letter more.
 	var out []acp.Command
-	for _, c := range m.commands() {
+	builtin := m.commands()[:len(m.commands())-len(m.cmds)]
+	for _, c := range append(slices.Clip(m.cmds), builtin...) {
 		if strings.HasPrefix("/"+c.Name, v) {
 			out = append(out, c)
 		}

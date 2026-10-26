@@ -90,6 +90,9 @@ func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Re
 func (l *local) Log(ctx context.Context, s string) (runtime.SessionLog, error) {
 	return l.r.Log(ctx, s)
 }
+func (l *local) Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error) {
+	return l.r.Sessions(ctx, dir, limit)
+}
 func (l *local) Plugins(ctx context.Context, s string) ([]runtime.PluginInfo, error) {
 	return l.r.Plugins(ctx, s)
 }
@@ -505,6 +508,21 @@ func TestACPContract(t *testing.T) {
 	want := []string{"user_message_chunk", "tool_call", "tool_call_update", "agent_message_chunk", "available_commands_update"}
 	if fmt.Sprint(kinds) != fmt.Sprint(want) {
 		t.Fatalf("replayed %v, want %v", kinds, want)
+	}
+	// session/list: the folder's sessions, titled by their first message.
+	var listed struct {
+		Sessions []struct {
+			SessionID string `json:"sessionId"`
+			Cwd       string `json:"cwd"`
+			Title     string `json:"title"`
+			UpdatedAt string `json:"updatedAt"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(d.call("session/list", map[string]any{"cwd": ws}), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 1 || listed.Sessions[0].SessionID != s || listed.Sessions[0].Title != "write notes" || listed.Sessions[0].UpdatedAt == "" {
+		t.Fatalf("session/list: %+v", listed)
 	}
 	if m, _ := c.until(isResponse(c.request("no/such_method", map[string]any{}))); m.Error == nil || m.Error.Code != codeMethodNotFound {
 		t.Fatalf("an unknown method: %+v", m)

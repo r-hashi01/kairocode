@@ -365,6 +365,44 @@ func (cl *Client) NewSession(ctx context.Context, cwd string) (string, error) {
 	return out.SessionID, err
 }
 
+// SessionInfo is a session as session/list gives it.
+type SessionInfo struct {
+	ID      string `json:"sessionId"`
+	Cwd     string `json:"cwd"`
+	Title   string `json:"title"`
+	Updated string `json:"updatedAt"`
+	Meta    struct {
+		KairoCode struct {
+			Turns  int  `json:"turns"`
+			Closed bool `json:"closed"`
+		} `json:"kairocode"`
+	} `json:"_meta"`
+}
+
+// ListSessions lists the agent's sessions of cwd, every page of them.
+func (cl *Client) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
+	var all []SessionInfo
+	cursor := ""
+	for {
+		p := map[string]any{"cwd": cwd}
+		if cursor != "" {
+			p["cursor"] = cursor
+		}
+		var out struct {
+			Sessions   []SessionInfo `json:"sessions"`
+			NextCursor string        `json:"nextCursor"`
+		}
+		if err := cl.c.Call(ctx, "session/list", p, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Sessions...)
+		if out.NextCursor == "" || len(out.Sessions) == 0 {
+			return all, nil
+		}
+		cursor = out.NextCursor
+	}
+}
+
 // LoadSession takes up a session: its conversation comes again as updates,
 // and what waits for a person is asked again.
 func (cl *Client) LoadSession(ctx context.Context, session, cwd string) error {

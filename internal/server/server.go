@@ -32,6 +32,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s := &Server{rt: rt, token: token, mux: http.NewServeMux(), newID: newID}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("POST /sessions", s.createSession)
+	s.mux.HandleFunc("GET /sessions", s.listSessions)
 	s.mux.HandleFunc("POST /sessions/{id}/messages", s.sendMessage)
 	s.mux.HandleFunc("GET /sessions/{id}/turns", s.lastTurn)
 	s.mux.HandleFunc("GET /sessions/{id}/turns/{n}", s.getTurn)
@@ -592,6 +593,18 @@ func (s *Server) mcpList(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// listSessions lists the sessions of ?dir= (all without), the latest used
+// first, at most ?limit=.
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	list, err := s.rt.Sessions(r.Context(), r.URL.Query().Get("dir"), limit)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return

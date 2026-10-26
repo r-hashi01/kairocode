@@ -33,7 +33,8 @@ import (
 )
 
 const usage = `usage:
-  kairocode [chat] [-dir DIR] [-data DIR] [-session ID]   talk with it in the terminal (kairo is the same)
+  kairocode [chat] [-dir DIR] [-data DIR] [-session ID | -continue | -resume]   talk with it in the terminal (kairo is the same)
+  kairocode sessions [-dir DIR] [-all] [-n N] [-json]   the sessions of a folder, the latest used first
   kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] "<request>"   answer one request, then exit
                                                      (-detach: stop when it waits for a person, exit 3)
   kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
@@ -123,6 +124,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = showLog(ctx, args, stdout, stderr)
 	case "plugin":
 		err = pluginCommand(ctx, args, stdout, stderr)
+	case "sessions":
+		err = listSessions(ctx, args, stdout, stderr)
 	case "daemon":
 		err = runDaemon(ctx, args, stdout, stderr)
 	case "approvals":

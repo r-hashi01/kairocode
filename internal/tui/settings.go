@@ -31,6 +31,8 @@ type pick struct {
 	provider string
 	// login: the ways to sign in being chosen from (/login).
 	login *loginMsg
+	// resume: sessions to take up (/resume).
+	resume bool
 }
 
 // setMsg: a setting was set, or could not be.
@@ -339,6 +341,8 @@ func (m *model) pickKey(key string) tea.Cmd {
 		}
 		m.pick = nil
 		switch {
+		case p.resume:
+			return m.resume(v.Value)
 		case p.login != nil: // a way to sign in
 			for _, w := range p.login.methods {
 				if w.ID == v.Value {
@@ -363,6 +367,9 @@ func (m *model) pickKey(key string) tea.Cmd {
 			return nil
 		}
 		m.pick = nil
+		if p.resume {
+			return m.newIfNone() // kairo -resume: none taken, a new one
+		}
 	case len([]rune(key)) == 1 || key == "space":
 		if key == "space" {
 			key = " "
