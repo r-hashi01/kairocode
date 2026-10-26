@@ -215,6 +215,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger),
 		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
 	r.ev = newEvents(r)
+	r.ext.logf = r.logf
 	if id := registryAgent(cfg.Engine); id != "" && cfg.Engine != workflows.EngineCodex && cfg.Engine != workflows.EngineCopilot &&
 		!r.knownAgent(ctx, id) {
 		r.lsp.Close()

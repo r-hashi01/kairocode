@@ -39,8 +39,9 @@ type pluginManifest struct {
 // pluginAuth is what a plugin needs to connect: none, keys (each named,
 // given where the manifest writes {secret:NAME}), or oauth.
 type pluginAuth struct {
-	Type string      `json:"type"` // none, key, oauth
-	Keys []pluginKey `json:"keys"`
+	Type     string      `json:"type"` // none, key, oauth
+	Keys     []pluginKey `json:"keys"`
+	ClientID string      `json:"client_id"` // oauth: a client registered beforehand (else registered dynamically)
 }
 
 type pluginKey struct {
@@ -182,10 +183,11 @@ func pluginServers(dir string) ([]extServer, []extDecl) {
 			continue
 		}
 		s := extServer{Name: p.Name, Source: p.Source, Project: p.Project, Command: c.Command, Env: c.Environment,
-			URL: c.URL, Headers: c.Headers, Plugin: p.Name, PluginDir: p.Dir}
+			URL: c.URL, Headers: c.Headers, Plugin: p.Name, PluginDir: p.Dir,
+			Auth: p.Manifest.Auth.Type, ClientID: p.Manifest.Auth.ClientID}
 		// Its version is in: a turn under way does not call, with what it
 		// listed, a server updated since.
-		s.Spec = fingerprint([]any{s.Command, s.Env, s.URL, s.Headers, pluginVersion(p), pluginCommit(p.Dir)})
+		s.Spec = fingerprint([]any{s.Command, s.Env, s.URL, s.Headers, pluginVersion(p), pluginCommit(p.Dir), s.Auth, s.ClientID})
 		servers = append(servers, s)
 		// A plugin's effects are for its own tools only.
 		for _, pat := range slices.Sorted(mapKeys(p.Manifest.Tools)) {

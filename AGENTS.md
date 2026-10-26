@@ -83,7 +83,7 @@ make check | quick | build
 - **ツールを足す・変える。** `/tool-change` スキル（作用の型、結果が不明なときの確かめ方、権限の規則の形、crash のテスト）。
 - **ワークフロー（`internal/workflows`）を変える。** `/workflow-change` スキル（決定性、記録された値、ID の規則、版の扱い）。
 - **kairo の API が足りない。** `/kairo-gap` スキル。
-- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003、承認済み）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
+- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003、承認済み）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）、`golang.org/x/oauth2`（ADR 0025。MCP の SDK の `auth` の型。プラグインの OAuth だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
 
 ## コーディング規約
 

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 
@@ -278,7 +279,11 @@ func pluginConnect(ctx context.Context, data, dir, name string, in *os.File, std
 		fmt.Fprintf(stdout, "%s needs no credentials.\n", name)
 		return nil
 	case "oauth":
-		return fmt.Errorf("%s signs in with OAuth, which is not supported yet", name)
+		if err := runtime.PluginOAuth(ctx, dir, name, func(u string) error { return openBrowser(stdout, u) }); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Connected %s; its tokens are kept in %s.\n", name, runtime.Secrets().Where())
+		return notifyConnected(ctx, data, name)
 	case "key":
 	default:
 		return fmt.Errorf("%s: auth type %q is not known", name, kind)
@@ -316,7 +321,7 @@ func pluginDisconnect(ctx context.Context, data, dir, name string, stdout io.Wri
 		return err
 	}
 	store := runtime.Secrets()
-	for _, k := range keys {
+	for _, k := range append(keys, struct{ Name, Description string }{Name: "oauth"}) {
 		if err := store.Delete(runtime.PluginSecretKey(p, k.Name)); err != nil {
 			return err
 		}
@@ -337,6 +342,24 @@ func notifyConnected(ctx context.Context, data, name string) error {
 	}
 	defer c.Close()
 	return c.PluginConnected(ctx, name)
+}
+
+// openBrowser shows the user url: printed, and opened in the browser
+// where there is a way to.
+func openBrowser(stdout io.Writer, u string) error {
+	fmt.Fprintf(stdout, "Sign in in your browser. If it does not open, go to:\n  %s\n", u)
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", u)
+	case "linux":
+		cmd = exec.Command("xdg-open", u)
+	default:
+		return nil
+	}
+	_ = cmd.Start() // the URL is printed, if it does not open
+	go cmd.Wait()
+	return nil
 }
 
 // readSecret reads a line without showing it, if in is a terminal.

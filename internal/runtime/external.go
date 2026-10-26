@@ -78,6 +78,8 @@ type extServer struct {
 	Spec         string
 	Plugin       string // a plugin's server (ADR 0025): its credentials are put in
 	PluginDir    string // its folder: whose credentials they are
+	Auth         string // a plugin's: oauth puts its access token in
+	ClientID     string // a plugin's OAuth client, if registered beforehand
 }
 
 // fingerprint is a short hash of v's JSON (map keys come out sorted).
@@ -508,6 +510,9 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 		return tools.Result{Output: fmt.Sprintf("the MCP server %q of %s is not configured as it was when the turn began: not called", d.Server, d.Source), IsError: true}
 	}
 	cs, err := r.ext.session(dir, servers[i], d.Mode)
+	if err != nil && errors.Is(err, errNotSent) {
+		return tools.Result{Output: fmt.Sprintf("the MCP server %q was not reached: %s", d.Server, serverErr(servers[i], err)), IsError: true}
+	}
 	if errors.Is(err, errNotConnected) {
 		return tools.Result{Output: fmt.Sprintf("the plugin %s is not connected: the user needs to run kairocode plugin connect %s", d.Server, d.Server), IsError: true}
 	}
@@ -523,6 +528,11 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 	ctx, cancel := context.WithTimeout(ctx, extLimit)
 	defer cancel()
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: d.Tool, Arguments: a})
+	if err != nil && (errors.Is(err, errNotSent) || errors.Is(err, errNotConnected)) {
+		// Its token could not be had (or was disconnected): the request
+		// was not sent.
+		return tools.Result{Output: fmt.Sprintf("the call to %s was not sent: %s", d.Name, serverErr(servers[i], err)), IsError: true}
+	}
 	if err != nil && refused(servers[i], err) {
 		// Refused: it did not run. The user connects again (ADR 0025).
 		r.ext.markAuthFailed(servers[i])
@@ -555,6 +565,35 @@ type extServers struct {
 	// credentials (ADR 0025), until they are connected again; the
 	// plugin's name.
 	expired map[string]string
+	// tokens: plugins' OAuth tokens, one holder per grant kept.
+	tokens map[string]*pluginTokens
+	logf   func(format string, args ...any)
+}
+
+// tokensOf is the holder of s's OAuth tokens (e.mu held).
+func (e *extServers) tokensOf(s extServer) (*pluginTokens, error) {
+	key := pluginSecretKey(s.PluginDir, s.Project, s.Plugin, oauthKey)
+	if p := e.tokens[key]; p != nil {
+		return p, nil
+	}
+	g, ok, err := readGrant(key)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: kairocode plugin connect %s", errNotConnected, s.Plugin)
+	}
+	logf := e.logf
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	p := &pluginTokens{key: key, name: s.Plugin, grant: g, logf: logf,
+		refused: func() { go e.refusedTokens(s) }} // e.mu may be held: a session starting
+	if e.tokens == nil {
+		e.tokens = map[string]*pluginTokens{}
+	}
+	e.tokens[key] = p
+	return p, nil
 }
 
 // markAuthFailed notes that s, a plugin's server, refused its credentials.
@@ -587,6 +626,26 @@ func (e *extServers) connected(plugin string) {
 			delete(e.expired, src)
 		}
 	}
+	for key, t := range e.tokens { // read again from what is kept now
+		if t.name == plugin {
+			delete(e.tokens, key)
+		}
+	}
+	e.mu.Unlock()
+	e.drop(plugin)
+}
+
+// refusedTokens: s's token could not be refreshed. It is expired, and its
+// sessions are stopped: one whose event stream failed would only make the
+// next call's outcome unknown.
+func (e *extServers) refusedTokens(s extServer) {
+	e.markAuthFailed(s)
+	e.drop(s.Plugin)
+}
+
+// drop stops plugin's sessions.
+func (e *extServers) drop(plugin string) {
+	e.mu.Lock()
 	var stop []*extConn
 	for k, c := range e.conns {
 		if c.plugin == plugin {
@@ -675,7 +734,14 @@ func (e *extServers) session(dir string, s extServer, mode string) (*mcp.ClientS
 				return nil, err
 			}
 		}
-		transport = &mcp.StreamableClientTransport{Endpoint: u, HTTPClient: &http.Client{Transport: headers{s}}}
+		h := headers{s: s}
+		if s.Plugin != "" && s.Auth == "oauth" {
+			if h.tokens, err = e.tokensOf(s); err != nil {
+				stop()
+				return nil, err
+			}
+		}
+		transport = &mcp.StreamableClientTransport{Endpoint: u, HTTPClient: serverClient(h)}
 	default:
 		stop()
 		return nil, errors.New("it has no command and no URL")
@@ -743,7 +809,30 @@ func (e *extServers) close() {
 }
 
 // headers adds a remote server's configured headers to each request.
-type headers struct{ s extServer }
+// serverClient reaches a remote MCP server: a redirect to another host is
+// not followed, as the request carries credentials (invariant 6).
+func serverClient(h headers) *http.Client {
+	return &http.Client{Transport: h, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		if req.URL.Host != via[0].URL.Host {
+			return fmt.Errorf("a redirect to another host (%s) is not followed", req.URL.Host)
+		}
+		if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+			return errors.New("a redirect from https to http is not followed")
+		}
+		return nil
+	}}
+}
+
+type headers struct {
+	s      extServer
+	tokens *pluginTokens // a plugin's OAuth tokens
+	// connecting: kairocode plugin connect's OAuth flow, which answers a
+	// refusal itself.
+	connecting bool
+}
 
 func (h headers) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
@@ -754,8 +843,15 @@ func (h headers) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		req.Header.Set(k, val)
 	}
+	if h.tokens != nil {
+		t, err := h.tokens.token(req.Context())
+		if err != nil {
+			return nil, err // not sent
+		}
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
 	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err == nil && h.s.Plugin != "" && req.Method == http.MethodPost &&
+	if err == nil && h.s.Plugin != "" && !h.connecting && req.Method == http.MethodPost &&
 		(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 		// The message was turned away before the server took it: nothing
 		// it asked for ran (ADR 0025). A GET (the event stream) is not a
