@@ -193,7 +193,7 @@ func lineChat(ctx context.Context, fromAgent io.Reader, toAgent io.Writer, stdou
 			t.help()
 			continue
 		}
-		stop, err := cl.Prompt(ctx, s, text)
+		stop, err := cl.Prompt(ctx, s, text, tui.Mentioned(abs, text)...)
 		switch {
 		case ctx.Err() != nil:
 			t.line("Left during the turn: it goes on in the daemon.")

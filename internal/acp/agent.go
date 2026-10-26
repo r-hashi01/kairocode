@@ -339,6 +339,25 @@ type agent struct {
 	// lang: the language a flow's review is put in (its words, not its
 	// labels).
 	lang string
+	// dirs: the folder of each session made or loaded here, where the
+	// files a prompt points to are read from.
+	dirs map[string]string
+}
+
+// dirOf is the folder of a session made or loaded here.
+func (a *agent) dirOf(session string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.dirs[session]
+}
+
+func (a *agent) setDir(session, dir string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.dirs == nil {
+		a.dirs = map[string]string{}
+	}
+	a.dirs[session] = dir
 }
 
 func invalid(err error) error { return &rpcError{Code: codeInvalidParams, Message: err.Error()} }
@@ -351,7 +370,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			"agentCapabilities": map[string]any{
 				"loadSession":         true,
 				"sessionCapabilities": map[string]any{"list": map[string]any{}},
-				"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": false},
+				"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
 			},
 			"authMethods": []any{},
 			"agentInfo":   map[string]any{"name": "kairocode", "version": a.o.Version},
@@ -370,6 +389,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
+		a.setDir(s, p.Cwd)
 		opts, err := a.configOptions(ctx, s)
 		if err != nil {
 			return nil, err
@@ -396,9 +416,13 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 	case "session/load":
 		var p struct {
 			SessionID string `json:"sessionId"`
+			Cwd       string `json:"cwd"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, invalid(err)
+		}
+		if filepath.IsAbs(p.Cwd) {
+			a.setDir(p.SessionID, p.Cwd)
 		}
 		if err := a.replay(ctx, p.SessionID); err != nil {
 			return nil, err
@@ -528,22 +552,43 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	var p struct {
 		SessionID string `json:"sessionId"`
 		Prompt    []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			URI  string `json:"uri"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			URI      string `json:"uri"`
+			Resource struct {
+				URI  string `json:"uri"`
+				Text string `json:"text"`
+			} `json:"resource"`
 		} `json:"prompt"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, invalid(err)
 	}
-	var text []string
+	var text, files []string
+	dir := a.dirOf(p.SessionID)
 	for _, b := range p.Prompt {
 		switch b.Type {
 		case "text":
 			text = append(text, b.Text)
 		case "resource_link":
-			text = append(text, b.URI)
+			// A file of the session's folder is put in; anything else
+			// stays a link.
+			if f := attachment(dir, b.URI); dir != "" && f != "" {
+				files = append(files, f)
+			} else {
+				text = append(text, b.URI)
+			}
+		case "resource":
+			// What the editor put in itself (embeddedContext).
+			if b.Resource.Text != "" {
+				files = append(files, fmt.Sprintf("<file uri=%q>\n%s\n</file>", b.Resource.URI, strings.TrimRight(b.Resource.Text, "\n")))
+			}
 		}
+	}
+	if len(text) > 0 && len(files) > 0 {
+		text = append(text, "\n"+strings.Join(files, "\n\n"))
+	} else {
+		text = append(text, files...)
 	}
 	if len(text) == 0 {
 		return nil, invalid(errors.New("the prompt has no text"))

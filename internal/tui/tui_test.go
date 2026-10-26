@@ -123,6 +123,7 @@ type fakeAgent struct {
 	sessions int
 	loaded   string
 	list     []acp.SessionInfo
+	files    []string
 	prompts  []string
 	turn     []acp.Update
 	cancels  []string
@@ -179,8 +180,9 @@ func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error 
 	return nil
 }
 
-func (a *fakeAgent) Prompt(ctx context.Context, session, text string) (string, error) {
+func (a *fakeAgent) Prompt(ctx context.Context, session, text string, files ...string) (string, error) {
 	a.prompts = append(a.prompts, text)
+	a.files = append(a.files, files...)
 	if a.onPrompt != nil {
 		a.onPrompt()
 	}
@@ -1258,5 +1260,30 @@ func TestResumeLoadingAndOthersAsks(t *testing.T) {
 		Options: []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}}}, reply: make(chan string, 1)})
 	if v := d.view(); !strings.Contains(v, "[session 01234567] write a.txt") {
 		t.Fatalf("the ask\n%s", v)
+	}
+}
+
+// @ completes the folder's paths; what is sent goes with the files it
+// points to.
+func TestMentions(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "internal", "tui"), 0o700)
+	os.WriteFile(filepath.Join(dir, "internal", "tui", "tui.go"), nil, 0o600)
+	os.WriteFile(filepath.Join(dir, "README.md"), nil, 0o600)
+	d, a := start(t, Options{Dir: dir})
+	d.run(listFiles(dir))
+	d.m.input.SetValue("look at @tu")
+	if v := d.view(); !strings.Contains(v, "@internal/tui/tui.go") {
+		t.Fatalf("completions\n%s", v)
+	}
+	d.send(key("tab"))
+	if got := d.m.input.Value(); got != "look at @internal/tui/ " && got != "look at @internal/tui/tui.go " {
+		t.Fatalf("completed %q", got)
+	}
+	d.m.input.SetValue("look at @internal/tui/tui.go and @README.md, not @nothing")
+	d.send(key("enter"))
+	want := []string{filepath.Join(dir, "internal/tui/tui.go"), filepath.Join(dir, "README.md")}
+	if len(a.prompts) != 1 || fmt.Sprint(a.files) != fmt.Sprint(want) {
+		t.Fatalf("prompts %q, files %q", a.prompts, a.files)
 	}
 }

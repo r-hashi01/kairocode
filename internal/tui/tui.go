@@ -31,7 +31,8 @@ type Agent interface {
 	LoadSession(ctx context.Context, session, cwd string) error
 	// ListSessions are the sessions of cwd, the latest used first.
 	ListSessions(ctx context.Context, cwd string) ([]acp.SessionInfo, error)
-	Prompt(ctx context.Context, session, text string) (string, error)
+	// Prompt sends text, with the files it points to (@path).
+	Prompt(ctx context.Context, session, text string, files ...string) (string, error)
 	// Cancel asks for the turn under way to stop (ADR 0011).
 	Cancel(session string) error
 	// SetConfigOption sets one of the session's settings: its provider or
@@ -196,6 +197,8 @@ type model struct {
 	session string
 	// loading: a session being taken up (/resume): its updates are shown.
 	loading string
+	// files: the folder's paths, for @ (nil until listed).
+	files   []string
 	running bool
 	queued  []string // typed during a turn, sent after it
 
@@ -273,7 +276,9 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	return m
 }
 
-func (m *model) Init() tea.Cmd { return tea.Batch(tea.RequestBackgroundColor, m.start()) }
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(tea.RequestBackgroundColor, m.start(), listFiles(m.o.Dir))
+}
 
 // restyle gives the parts that keep a style the colours now in use.
 func (m *model) restyle() {
@@ -399,6 +404,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		m.session, m.state, m.loading = msg.session, stateReady, ""
 		return tea.Batch(m.input.Focus(), m.usage())
+	case filesMsg:
+		m.files = msg.paths
+		return nil
 	case sessionsMsg:
 		return m.sessionPick(msg)
 	case resumedMsg:
@@ -495,7 +503,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		case msg.stop != "" && msg.stop != "end_turn":
 			m.print(warn.Render("  ⎿  stopped: " + msg.stop))
 		}
-		cmds := []tea.Cmd{m.usage()}
+		cmds := []tea.Cmd{m.usage(), listFiles(m.o.Dir)} // the turn may have made files
 		if len(m.queued) > 0 {
 			next := m.queued[0]
 			m.queued = m.queued[1:]
@@ -880,8 +888,9 @@ func (m *model) submit(text string) tea.Cmd {
 		m.flowsBefore = readFlows(m.o.Dir)
 	}
 	ctx, a, s := m.ctx, m.a, m.session
+	files := Mentioned(m.o.Dir, text)
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
-		stop, err := a.Prompt(ctx, s, text)
+		stop, err := a.Prompt(ctx, s, text, files...)
 		return turnDoneMsg{stop: stop, err: err}
 	})
 }
@@ -971,7 +980,7 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.nextEffort()
 	case "tab":
 		if c := m.completions(); len(c) > 0 {
-			m.input.SetValue("/" + c[min(m.compSel, len(c)-1)].Name + " ")
+			m.input.SetValue(c[min(m.compSel, len(c)-1)].value)
 			m.input.CursorEnd()
 		}
 		return nil
@@ -995,8 +1004,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		if c := m.completions(); len(c) > 0 {
-			if name := "/" + c[min(m.compSel, len(c)-1)].Name; text != name {
-				m.input.SetValue(name + " ")
+			if v := c[min(m.compSel, len(c)-1)].value; text != strings.TrimSpace(v) {
+				m.input.SetValue(v)
 				m.input.CursorEnd()
 				return nil
 			}
@@ -1068,18 +1077,21 @@ func (m *model) commands() []acp.Command {
 
 // completions are the commands that begin with what is typed, while a
 // command's name is being typed.
-func (m *model) completions() []acp.Command {
+func (m *model) completions() []completion {
 	v := m.input.Value()
+	if c := m.fileCompletions(v); c != nil {
+		return c
+	}
 	if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \n") {
 		return nil
 	}
 	// The agent's first: what it offers is what the user came for; the
 	// screen's own are found by a letter more.
-	var out []acp.Command
+	var out []completion
 	builtin := m.commands()[:len(m.commands())-len(m.cmds)]
 	for _, c := range append(slices.Clip(m.cmds), builtin...) {
 		if strings.HasPrefix("/"+c.Name, v) {
-			out = append(out, c)
+			out = append(out, completion{label: "/" + c.Name, desc: c.Description, value: "/" + c.Name + " "})
 		}
 	}
 	if len(out) > 6 {
@@ -1098,7 +1110,8 @@ func (m *model) help() string {
 		"  esc            stop the turn",
 		"  /flow edit <name>   change a flow on its chart; /flow graph <name> draws it",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
-		"  tab            complete a command",
+		"  tab            complete a command, or a path after @",
+		"  @path          put a file (or a folder's list) of this folder in the message",
 		"  shift+tab      the next mode: manual, auto, plan",
 		"  ctrl+e         the next effort (how hard the model thinks), where the provider has one",
 		"  ctrl+c         clear the input; twice to leave",
@@ -1243,11 +1256,10 @@ func (m *model) View() tea.View {
 		}
 		b.WriteString(m.input.View() + "\n" + line + "\n")
 		for i, c := range m.completions() {
-			name := "/" + c.Name
 			if i == m.compSel {
-				b.WriteString(accent.Render(fmt.Sprintf("  %-14s %s", name, c.Description)) + "\n")
+				b.WriteString(accent.Render(fmt.Sprintf("  %-14s %s", c.label, c.desc)) + "\n")
 			} else {
-				b.WriteString(faint.Render(fmt.Sprintf("  %-14s %s", name, c.Description)) + "\n")
+				b.WriteString(faint.Render(fmt.Sprintf("  %-14s %s", c.label, c.desc)) + "\n")
 			}
 		}
 	}

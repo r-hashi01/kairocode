@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
@@ -472,11 +474,14 @@ func (cl *Client) Cancel(session string) error {
 
 // Prompt runs a turn, and returns why it stopped (ACP's stopReason). The
 // turn's updates have all been given to the handler when it returns.
-func (cl *Client) Prompt(ctx context.Context, session, text string) (string, error) {
+func (cl *Client) Prompt(ctx context.Context, session, text string, files ...string) (string, error) {
 	var out struct {
 		StopReason string `json:"stopReason"`
 	}
-	err := cl.c.Call(ctx, "session/prompt", map[string]any{"sessionId": session,
-		"prompt": []any{textBlock(text)}}, &out)
+	blocks := []any{textBlock(text)}
+	for _, f := range files { // what @ pointed to: the agent puts it in
+		blocks = append(blocks, map[string]any{"type": "resource_link", "uri": (&url.URL{Scheme: "file", Path: f}).String(), "name": filepath.Base(f)})
+	}
+	err := cl.c.Call(ctx, "session/prompt", map[string]any{"sessionId": session, "prompt": blocks}, &out)
 	return out.StopReason, err
 }

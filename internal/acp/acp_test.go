@@ -1414,3 +1414,28 @@ func TestACPTodoPlan(t *testing.T) {
 		t.Fatalf("plan %s", plan.Params)
 	}
 }
+
+// A prompt's link to a file of the session's folder (@ in the terminal, an
+// editor's resource_link) puts the file in the user's message.
+func TestACPPromptWithFile(t *testing.T) {
+	b, ws := setup(t)
+	os.WriteFile(filepath.Join(ws, "spec.md"), []byte("the notes say hello\n"), 0o644)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	id := c.request("session/prompt", map[string]any{"sessionId": s, "prompt": []any{
+		map[string]any{"type": "text", "text": "write notes as @spec.md says"},
+		map[string]any{"type": "resource_link", "uri": "file://" + filepath.Join(ws, "spec.md"), "name": "spec.md"}}})
+	req, _ := c.until(isMethod("session/request_permission"))
+	allow(c, req, "allow_once")
+	c.until(isResponse(id))
+	h, err := b.History(ctx, s)
+	if err != nil || len(h) == 0 {
+		t.Fatalf("history %v %v", h, err)
+	}
+	if got := h[0].Text(); !strings.Contains(got, "write notes as @spec.md says") || !strings.Contains(got, "<file path=\"spec.md\">\nthe notes say hello\n</file>") {
+		t.Fatalf("the user's message:\n%s", got)
+	}
+}
