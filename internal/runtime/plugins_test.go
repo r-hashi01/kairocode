@@ -367,3 +367,16 @@ func TestAnswerOfCut(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// A long credential is shown by its ends alone; a short one, not at all.
+func TestMasked(t *testing.T) {
+	for v, want := range map[string]string{
+		"ghp_" + strings.Repeat("Z", 32) + "wxyz": "ghp_…wxyz",
+		"kc-wrong-key":          "***",
+		strings.Repeat("a", 19): "***",
+	} {
+		if got := masked(v); got != want {
+			t.Errorf("masked(%q) = %q, want %q", v, got, want)
+		}
+	}
+}

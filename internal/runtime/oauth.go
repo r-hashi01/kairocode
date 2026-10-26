@@ -226,10 +226,10 @@ func (p *pluginTokens) token(ctx context.Context) (string, error) {
 			if re.Response != nil {
 				answer = "the token endpoint answered HTTP " + re.Response.Status
 			}
-			hidden := strings.ReplaceAll(string(re.Body), used, "***")
+			hidden := strings.ReplaceAll(string(re.Body), used, masked(used))
 			for _, v := range []string{p.grant.Token.AccessToken, p.grant.ClientSecret} {
 				if v != "" {
-					hidden = strings.ReplaceAll(hidden, v, "***")
+					hidden = strings.ReplaceAll(hidden, v, masked(v))
 				}
 			}
 			if body := strings.Join(strings.Fields(hidden), " "); body != "" {

@@ -117,6 +117,16 @@ func serverErr(s extServer, err error) string {
 	return redact(s, safeErr(err))
 }
 
+// masked is what is shown of a credential: its first and last four
+// characters, to tell which one it was; nothing of a short one, which they
+// would be most of.
+func masked(v string) string {
+	if r := []rune(v); len(r) >= 20 {
+		return string(r[:4]) + "…" + string(r[len(r)-4:])
+	}
+	return "***"
+}
+
 // redact is text with server s's credentials put out of it.
 func redact(s extServer, text string) string {
 	if s.Plugin == "" {
@@ -134,7 +144,7 @@ func redact(s extServer, text string) string {
 		for _, m := range secretRef.FindAllStringSubmatch(v, -1) {
 			if sec, ok, _ := store.Get(pluginSecretKey(s.PluginDir, s.Project, s.Plugin, m[1])); ok && sec != "" {
 				for _, form := range []string{sec, url.PathEscape(sec), url.QueryEscape(sec)} {
-					text = strings.ReplaceAll(text, form, "***")
+					text = strings.ReplaceAll(text, form, masked(sec))
 				}
 			}
 		}
@@ -890,7 +900,7 @@ func (h headers) RoundTrip(req *http.Request) (*http.Response, error) {
 		defer resp.Body.Close()
 		hide := func(text string) string {
 			if token != "" {
-				text = strings.ReplaceAll(text, token, "***")
+				text = strings.ReplaceAll(text, token, masked(token))
 			}
 			return redact(h.s, text)
 		}
