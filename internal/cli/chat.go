@@ -98,7 +98,7 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			Usage: func(ctx context.Context, s string) (int64, error) {
 				u, err := c.Usage(ctx, s)
 				return u.Total.Input + u.Total.Output, err
-			}})
+			}, Plugin: pluginArgv(*data, abs)})
 		cl := acp.Dial(ctx, fromAgentR, toAgentW, acp.ClientHandler{Update: ui.Update, Permission: ui.Permission})
 		if _, err := cl.Initialize(ctx); err != nil {
 			return err

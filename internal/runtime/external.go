@@ -76,6 +76,8 @@ type extServer struct {
 	URL          string
 	Headers      map[string]string
 	Spec         string
+	Plugin       string // a plugin's server (ADR 0025): its credentials are put in
+	PluginDir    string // its folder: whose credentials they are
 }
 
 // fingerprint is a short hash of v's JSON (map keys come out sorted).
@@ -105,11 +107,40 @@ func safeErr(err error) string {
 	return err.Error()
 }
 
+// serverErr is safeErr for server s's error: a plugin's credentials, which
+// an error's text may carry (a URL with one in it), are put out of it
+// (invariant 6).
+func serverErr(s extServer, err error) string {
+	text := safeErr(err)
+	if s.Plugin == "" {
+		return text
+	}
+	vals := []string{s.URL}
+	for _, k := range slices.Sorted(mapKeys(s.Headers)) {
+		vals = append(vals, s.Headers[k])
+	}
+	for _, k := range slices.Sorted(mapKeys(s.Env)) {
+		vals = append(vals, s.Env[k])
+	}
+	store := Secrets()
+	for _, v := range vals {
+		for _, m := range secretRef.FindAllStringSubmatch(v, -1) {
+			if sec, ok, _ := store.Get(pluginSecretKey(s.PluginDir, s.Project, s.Plugin, m[1])); ok && sec != "" {
+				for _, form := range []string{sec, url.PathEscape(sec), url.QueryEscape(sec)} {
+					text = strings.ReplaceAll(text, form, "***")
+				}
+			}
+		}
+	}
+	return text
+}
+
 // extDecl is an effect declared for MCP tools: by name, or a prefix
 // ending in *.
 type extDecl struct {
 	Pattern, Effect string
 	Project         bool
+	Source          string // a plugin's: for its own server's tools only (ADR 0025)
 }
 
 // extCustom is a custom tool of the configuration.
@@ -212,6 +243,10 @@ func externals(dir string) ([]extServer, []extCustom, []extDecl, error) {
 			}
 		}
 	}
+	// The plugins' servers (ADR 0025), after the configured ones.
+	ps, pd := pluginServers(dir)
+	servers = append(servers, ps...)
+	decls = append(decls, pd...)
 	return servers, customs, decls, nil
 }
 
@@ -264,10 +299,10 @@ func customSpec(c extCustom) string {
 // server's tools only read). The exact name first, then the longest
 // prefix. Undeclared, idempotent or unknown: real (invariant 3; how to
 // check an idempotent MCP tool is not known here, ADR 0022).
-func effectOf(name string, project bool, decls []extDecl) string {
+func effectOf(name string, s extServer, decls []extDecl) string {
 	best, effect := -1, "real"
 	for _, d := range decls {
-		if d.Project && !project {
+		if d.Project && !s.Project || d.Source != "" && d.Source != s.Source {
 			continue
 		}
 		n := -1
@@ -359,18 +394,18 @@ func (r *Runtime) extLoad(t *kairo.TaskContext, in workflows.ExtLoadInput) (work
 		}
 		cs, err := r.ext.session(in.Dir, s, m)
 		if err != nil {
-			r.logf("MCP server %q of %s: %s", s.Name, s.Source, safeErr(err))
+			r.logf("MCP server %q of %s: %s", s.Name, s.Source, serverErr(s, err))
 			continue
 		}
 		listed, err := cs.ListTools(t, nil)
 		if err != nil {
-			r.logf("MCP server %q of %s: listing its tools: %s", s.Name, s.Source, safeErr(err))
+			r.logf("MCP server %q of %s: listing its tools: %s", s.Name, s.Source, serverErr(s, err))
 			continue
 		}
 		for _, tl := range listed.Tools {
 			schema, _ := json.Marshal(tl.InputSchema)
 			name := s.Name + "_" + tl.Name
-			if err := add(extDef{Kind: "mcp", Name: name, Description: tl.Description, Schema: schema, Effect: effectOf(name, s.Project, decls),
+			if err := add(extDef{Kind: "mcp", Name: name, Description: tl.Description, Schema: schema, Effect: effectOf(name, s, decls),
 				Mode: m, Source: s.Source, Project: s.Project, Server: s.Name, Tool: tl.Name, Spec: s.Spec}); err != nil {
 				return workflows.ExtLoadOutput{}, err
 			}
@@ -473,17 +508,30 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 		return tools.Result{Output: fmt.Sprintf("the MCP server %q of %s is not configured as it was when the turn began: not called", d.Server, d.Source), IsError: true}
 	}
 	cs, err := r.ext.session(dir, servers[i], d.Mode)
+	if errors.Is(err, errNotConnected) {
+		return tools.Result{Output: fmt.Sprintf("the plugin %s is not connected: the user needs to run kairocode plugin connect %s", d.Server, d.Server), IsError: true}
+	}
+	if err != nil && refused(servers[i], err) {
+		r.ext.markAuthFailed(servers[i])
+		return tools.Result{Output: fmt.Sprintf("the plugin %s's credentials were refused: the user needs to run kairocode plugin connect %s", servers[i].Plugin, servers[i].Plugin), IsError: true}
+	}
 	if err != nil {
-		return tools.Result{Output: fmt.Sprintf("the MCP server %q did not start: %s", d.Server, safeErr(err)), IsError: true}
+		return tools.Result{Output: fmt.Sprintf("the MCP server %q did not start: %s", d.Server, serverErr(servers[i], err)), IsError: true}
 	}
 	var a map[string]any
 	_ = json.Unmarshal(args, &a)
 	ctx, cancel := context.WithTimeout(ctx, extLimit)
 	defer cancel()
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: d.Tool, Arguments: a})
+	if err != nil && refused(servers[i], err) {
+		// Refused: it did not run. The user connects again (ADR 0025).
+		r.ext.markAuthFailed(servers[i])
+		r.ext.dropSession(dir, servers[i], d.Mode, cs)
+		return tools.Result{Output: fmt.Sprintf("the plugin %s's credentials were refused: the user needs to run kairocode plugin connect %s", servers[i].Plugin, servers[i].Plugin), IsError: true}
+	}
 	if err != nil {
 		r.ext.dropSession(dir, servers[i], d.Mode, cs) // started again at the next call
-		return tools.Result{Output: fmt.Sprintf("the call to %s may have reached the server, and no answer came: %s", d.Name, safeErr(err)), Unknown: true}
+		return tools.Result{Output: fmt.Sprintf("the call to %s may have reached the server, and no answer came: %s", d.Name, serverErr(servers[i], err)), Unknown: true}
 	}
 	var b strings.Builder
 	for _, c := range res.Content {
@@ -503,13 +551,61 @@ type extServers struct {
 	mu     sync.Mutex
 	conns  map[string]*extConn
 	closed bool
+	// expired: plugins' servers (by their manifest) that refused their
+	// credentials (ADR 0025), until they are connected again; the
+	// plugin's name.
+	expired map[string]string
+}
+
+// markAuthFailed notes that s, a plugin's server, refused its credentials.
+func (e *extServers) markAuthFailed(s extServer) {
+	if s.Plugin == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.expired == nil {
+		e.expired = map[string]string{}
+	}
+	e.expired[s.Source] = s.Plugin
+}
+
+// authFailed says s refused its credentials.
+func (e *extServers) authFailed(s extServer) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.expired[s.Source]
+	return ok
+}
+
+// connected forgets that plugin's credentials were refused, and stops its
+// sessions, to start them with the new ones.
+func (e *extServers) connected(plugin string) {
+	e.mu.Lock()
+	for src, p := range e.expired {
+		if p == plugin {
+			delete(e.expired, src)
+		}
+	}
+	var stop []*extConn
+	for k, c := range e.conns {
+		if c.plugin == plugin {
+			stop = append(stop, c)
+			delete(e.conns, k)
+		}
+	}
+	e.mu.Unlock()
+	for _, c := range stop {
+		c.close()
+	}
 }
 
 type extConn struct {
-	cs    *mcp.ClientSession
-	stop  context.CancelFunc
-	timer *time.Timer
-	used  time.Time // last handed out
+	cs     *mcp.ClientSession
+	stop   context.CancelFunc
+	timer  *time.Timer
+	used   time.Time // last handed out
+	plugin string
 }
 
 func extKey(dir string, s extServer, mode string) string {
@@ -518,12 +614,19 @@ func extKey(dir string, s extServer, mode string) string {
 
 // value is a configured value as given: a project's as written; the
 // user's with {env:NAME} put in (a project's cannot have the user's
-// environment's values sent where it says, invariant 6).
-func value(s extServer, v string) string {
-	if s.Project {
-		return v
+// environment's values sent where it says, invariant 6); a plugin's with
+// its own credentials put in where it writes {secret:NAME} (ADR 0025).
+func value(s extServer, v string) (string, error) {
+	if s.Plugin != "" {
+		var err error
+		if v, err = withSecrets(s, v); err != nil {
+			return "", err
+		}
 	}
-	return expand(v)
+	if s.Project {
+		return v, nil
+	}
+	return expand(v), nil
 }
 
 // session is the server's session, started if need be.
@@ -552,11 +655,27 @@ func (e *extServers) session(dir string, s extServer, mode string) (*mcp.ClientS
 			cmd.Env = os.Environ() // the user's own server, or one they let out: as they run it
 		}
 		for _, k := range slices.Sorted(mapKeys(s.Env)) {
-			cmd.Env = append(cmd.Env, k+"="+value(s, s.Env[k]))
+			v, err := value(s, s.Env[k])
+			if err != nil {
+				stop()
+				return nil, err
+			}
+			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 		transport = &mcp.CommandTransport{Command: cmd}
 	case s.URL != "":
-		transport = &mcp.StreamableClientTransport{Endpoint: value(s, s.URL), HTTPClient: &http.Client{Transport: headers{s}}}
+		u, err := value(s, s.URL)
+		if err != nil {
+			stop()
+			return nil, err
+		}
+		for _, k := range slices.Sorted(mapKeys(s.Headers)) { // a credential not there yet: not connected
+			if _, err := value(s, s.Headers[k]); err != nil {
+				stop()
+				return nil, err
+			}
+		}
+		transport = &mcp.StreamableClientTransport{Endpoint: u, HTTPClient: &http.Client{Transport: headers{s}}}
 	default:
 		stop()
 		return nil, errors.New("it has no command and no URL")
@@ -568,7 +687,7 @@ func (e *extServers) session(dir string, s extServer, mode string) (*mcp.ClientS
 		stop()
 		return nil, err
 	}
-	c := &extConn{cs: cs, stop: stop, used: time.Now()}
+	c := &extConn{cs: cs, stop: stop, used: time.Now(), plugin: s.Plugin}
 	c.timer = time.AfterFunc(mcpIdle, func() { e.idle(key, c) })
 	if e.conns == nil {
 		e.conns = map[string]*extConn{}
@@ -629,9 +748,22 @@ type headers struct{ s extServer }
 func (h headers) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	for k, v := range h.s.Headers {
-		req.Header.Set(k, value(h.s, v))
+		val, err := value(h.s, v)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set(k, val)
 	}
-	return http.DefaultTransport.RoundTrip(req)
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err == nil && h.s.Plugin != "" && req.Method == http.MethodPost &&
+		(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		// The message was turned away before the server took it: nothing
+		// it asked for ran (ADR 0025). A GET (the event stream) is not a
+		// message: a call may be under way, and its refusal says nothing.
+		resp.Body.Close()
+		return nil, fmt.Errorf("%w (HTTP %d)", errRefused, resp.StatusCode)
+	}
+	return resp, err
 }
 
 // MCPInfo is what /mcp shows of an MCP server, a custom tool, or a server
@@ -720,12 +852,12 @@ func (r *Runtime) MCP(ctx context.Context, session string) ([]MCPInfo, error) {
 					mi.State += "; connected"
 					for _, tl := range listed.Tools {
 						name := s.Name + "_" + tl.Name
-						mi.Tools = append(mi.Tools, MCPToolInfo{Name: name, Effect: effectOf(name, s.Project, decls)})
+						mi.Tools = append(mi.Tools, MCPToolInfo{Name: name, Effect: effectOf(name, s, decls)})
 					}
 				}
 			}
 			if err != nil {
-				mi.State += "; did not connect: " + safeErr(err)
+				mi.State += "; did not connect: " + serverErr(s, err)
 			}
 		}
 		out = append(out, mi)

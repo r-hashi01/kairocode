@@ -72,3 +72,21 @@ KairoCode には、ADR 0022 で MCP サーバーとカスタムツールを足�
 - **`kairocode.json` の `mcp` のままにする（ADR 0022）:** 生の設定を書く手間と、認証の状態が見えないことが残ります。プラグインの下の層として、`mcp` は残します。
 - **Dify や n8n のように、プラグインのコードを KairoCode の中で動かす:** KairoCode は Go の単一のバイナリなので、別の言語の実行環境が要ります。また、ワークフローの中で動けば決定性が崩れます。MCP サーバーとして外で動かせば、どの言語でも書け、記録と再開の仕組みにも乗ります。
 - **資格情報を `kairocode.json` に書く:** 平文で残り、プロジェクトの設定に紛れ込むおそれがあります。
+
+## 実装（2026-10-26、1・2: キーの資格情報まで。OAuth は次）
+
+- 読み込み: `opencode.PluginDirs`（利用者のもの、次にプロジェクトのもの）、`internal/runtime/plugins.go`。プラグインのサーバーは ADR 0022 の `extServer` として `externals()` に加わり（`Plugin` にプラグインの名前）、ツールの名前、記録、作用の型、プロジェクトのものへの問いは ADR 0022 と同じ道を通ります。マニフェストの `tools` の宣言は、そのプラグインのツールにだけ効きます（`<プラグイン>_` を前に付ける）。スキルは `SkillDirs` が `<プラグイン>/skills` を足します。
+- 資格情報: `internal/runtime/secrets.go`（`SecretStore`）。鍵は、利用者のプラグインが `<プラグイン>/<名前>`、プロジェクトのプラグインが `project/<フォルダーのハッシュ>/<プラグイン>/<名前>`（`PluginSecretKey`）です。利用者のプラグインと同じ名前のプロジェクトのプラグインでも、利用者の値は読めません。エラーの文面とログからは、そのプラグインの値を伏せます（`serverErr`）。値は、サーバーを起動するとき・つなぐときに `{secret:NAME}` へ入れ（`value`）、ないときは起動せず「未接続」とします。`{env:}` は、ADR 0022 と同じく利用者のものだけで広げます。
+- CLI: `kairocode plugin [list|install|update|remove|connect|disconnect]`（`internal/cli/plugin.go`）。`connect` は端末のエコーを止めて値を読み、保管庫に置いてから、デーモンが動いていれば `POST /plugins/{name}/connected` で知らせます。デーモンは、そのプラグインのサーバーを止め（次の呼び出しで、新しい値で起動し直す）、「認証が切れた」を消します。
+- API: `GET /sessions/{id}/plugins`、`GET /plugins?dir=`、`POST /plugins/{name}/connected`。ACP の `/plugin`（一覧）。
+- TUI: `/plugin connect <名前>`・`/plugin disconnect <名前>` は、`tea.ExecProcess` で端末を `kairocode plugin connect` に渡します（`/login` のコマンドと同じ）。
+
+決定からのずれ（実装で決めたこと。決定の趣旨は変えない）:
+- **置き場所:** 利用者のプラグインは、データの置き場ではなく、利用者の設定の置き場（`$XDG_CONFIG_HOME/kairocode/plugins/<名前>`、なければ `~/.config/kairocode/plugins/<名前>`）です。`kairocode.json` やスキルと同じ置き場で、データの置き場（DB）を消しても残ります。資格情報のファイル（保管庫がないとき）も同じ置き場の `credentials.json`（0600）です。
+- **値を聞く場所:** 値は ACP を通しません（記録とクライアントの間を通さないため）。端末の対話（`kairo`）は、上のとおり CLI に端末を渡します。ほかの ACP のクライアント（Zed など）の `/plugin connect` は、端末で `kairocode plugin connect <名前>` を実行するよう案内します。
+- **macOS のキーチェーン:** `security add-generic-password` は値を標準入力から読めないので、値はコマンドの引数で渡します。その短い間、同じ利用者のプロセスの一覧から見え得ます。Linux の `secret-tool` は標準入力で渡します。
+- **認証の失敗の判定:** 「認証が切れた」とするのは、リモート（URL だけ）のプラグインのサーバーが、メッセージを運ぶ POST に HTTP の 401・403 を返したときだけです。これは `headers.RoundTrip` が型付きのエラー（`errRefused`）で返し、文面では判定しません。断られた POST は、サーバーが受け取っていないので、動いていないと言えます。
+  - イベントの流れ（GET）の 401 や、JSON-RPC のエラーの文面（動いたツールが返した「403 Forbidden」など）、手元で起動するサーバーのエラーは、これに当たりません。結果が不明なら、これまでどおり不明として扱います（不変条件 4）。
+- **作用の型の宣言:** マニフェストの `tools` は、そのプラグインのサーバー（マニフェストのパス）のツールにだけ効きます。同じ名前のほかのサーバーには効きません。
+- **更新:** プラグインの版とコミットを、サーバーの指紋（`Spec`）に入れます。`update` の後、進行中のターンは、始めに一覧したサーバーとは違うものとして、そのツールを呼びません。
+- テスト: `TestPluginTool`（未接続→接続、キーがサーバーに渡り DB に残らない、作用の型、スキル）、`TestPluginRefused`（呼び出しの 401 でモデルに `kairocode plugin connect` を返し、一覧が「認証が切れた」。接続し直すと戻る。起動時の 401 も同じ）、`TestProjectPluginAsks`（プロジェクトのものは聞く前に起動しない。スキルだけのもの）、`TestProjectPluginGetsNoUsersKey`、`TestPluginRefusedOnlyWhenTurnedAway`、`TestPluginDeclsAndErrors`、`TestPluginInstallConnectRemove`（git のコミットで固定、標準入力からの値、取り消し、外への削除の拒否）。

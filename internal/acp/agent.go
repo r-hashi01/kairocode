@@ -46,6 +46,7 @@ type Backend interface {
 	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
 	// MCP lists the session's MCP servers and custom tools (ADR 0022).
 	MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error)
+	Plugins(ctx context.Context, session string) ([]runtime.PluginInfo, error)
 	// Log is the session's record (ADR 0023).
 	Log(ctx context.Context, session string) (runtime.SessionLog, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
@@ -78,6 +79,7 @@ var builtinCommands = []map[string]any{
 	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},
 	{"name": "skills", "description": "The skills here (/<skill> runs one), and SKILL.md files not taken, and why"},
 	{"name": "mcp", "description": "The MCP servers and custom tools here: how each runs, and their tools"},
+	{"name": "plugin", "description": "The plugins here and their state; connect <name> signs one in"},
 	{"name": "log", "description": "The session's record: each turn, model call, tool call and result, what waited, and what was used"},
 }
 
@@ -608,6 +610,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	case name == "/mcp":
 		// Without a turn: the MCP servers and custom tools (ADR 0022).
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.mcpText(ctx, p.SessionID))})
+		return map[string]any{"stopReason": "end_turn"}, nil
+	case name == "/plugin":
+		// Without a turn: the plugins and their state (ADR 0025).
+		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.pluginText(ctx, p.SessionID, strings.Fields(args)))})
 		return map[string]any{"stopReason": "end_turn"}, nil
 	case name == "/skills":
 		// Without a turn: the skills, and what of them is not taken.
@@ -1293,6 +1299,23 @@ func (a *agent) skillsText(ctx context.Context, session string) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// pluginText is /plugin's answer. Connecting asks for credentials, which
+// do not go through ACP (nor the record): kairo's terminal runs kairocode
+// plugin connect itself; another client's user runs it in a terminal.
+func (a *agent) pluginText(ctx context.Context, session string, args []string) string {
+	if len(args) > 0 && (args[0] == "connect" || args[0] == "disconnect") {
+		if len(args) != 2 {
+			return "/plugin " + args[0] + " <name>"
+		}
+		return "Run kairocode plugin " + args[0] + " " + args[1] + " in a terminal, in this folder: credentials are asked for there, and kept in the system's key store."
+	}
+	list, err := a.b.Plugins(ctx, session)
+	if err != nil {
+		return "The plugins could not be listed: " + err.Error()
+	}
+	return strings.TrimRight(runtime.PluginsText(list), "\n")
 }
 
 // mcpText is /mcp's answer: each MCP server, custom tool and server of

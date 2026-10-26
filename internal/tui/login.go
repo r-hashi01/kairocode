@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,6 +15,30 @@ import (
 // agent offers; a command is run here, in the terminal, the screen
 // handed to it until it ends; an agent's own way (a browser, say) is the
 // daemon's to carry out.
+
+// pluginCommand reads /plugin connect <name> and /plugin disconnect <name>.
+func pluginCommand(text string) (verb, name string, ok bool) {
+	f := strings.Fields(text)
+	if len(f) == 3 && f[0] == "/plugin" && (f[1] == "connect" || f[1] == "disconnect") {
+		return f[1], f[2], true
+	}
+	return "", "", false
+}
+
+// pluginDoneMsg: kairocode plugin connect (or disconnect) ended.
+type pluginDoneMsg struct {
+	verb, name string
+	err        error
+}
+
+// pluginConnect hands the terminal to kairocode plugin connect, which asks
+// for the plugin's credentials without showing them (ADR 0025): they go
+// to the key store, not through ACP.
+func (m *model) pluginConnect(verb, name string) tea.Cmd {
+	argv := append(slices.Clip(m.o.Plugin), verb, name)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return pluginDoneMsg{verb: verb, name: name, err: err} })
+}
 
 // loginMsg: the ways to sign in to provider, read for /login.
 type loginMsg struct {

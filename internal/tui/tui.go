@@ -55,6 +55,9 @@ type Options struct {
 	Version, Engine, Model string
 	// Usage is the tokens the session's model calls used, if known.
 	Usage func(ctx context.Context, session string) (int64, error)
+	// Plugin is how to run kairocode plugin (its argv up to the verb), for
+	// /plugin connect and disconnect, which ask for credentials here.
+	Plugin []string
 }
 
 // UI is a running terminal UI.
@@ -390,6 +393,13 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case loginMsg:
 		return m.loginWays(msg)
+	case pluginDoneMsg:
+		if msg.err != nil {
+			m.print(bad.Render("  ⎿  " + msg.name + ": " + shortError(msg.err.Error())))
+		} else {
+			m.print(good.Render("  ⎿  " + msg.name + ": " + msg.verb + "ed"))
+		}
+		return nil
 	case loggedInMsg:
 		if msg.err != nil {
 			m.print(bad.Render("  ⎿  " + msg.provider + ": " + shortError(msg.err.Error())))
@@ -975,6 +985,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		if name, ok := strings.CutPrefix(text+" ", "/login "); ok { // sign in (ADR 0015)
 			return m.login(strings.TrimSpace(name))
+		}
+		if verb, name, ok := pluginCommand(text); ok && len(m.o.Plugin) > 0 { // credentials (ADR 0025)
+			return m.pluginConnect(verb, name)
 		}
 		if id, value, ok := settingCommand(text); ok { // the provider or the model (ADR 0014)
 			return m.setting(id, value)

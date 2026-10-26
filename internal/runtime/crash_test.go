@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	os.Setenv(lsp.Off, "off")
 	// Nor the user's claude, codex and copilot (invariant 9).
 	os.Setenv("KAIROCODE_NO_CLIS", "1")
+	// Nor the system's key store: plugins' credentials go to a file in the
+	// test's config directory (ADR 0025).
+	os.Setenv("KAIROCODE_SECRETS", "file")
 	// The fake ACP agent is started with no arguments but --acp; a crash
 	// test's child, which has KC_FAKE_CLI too, with -test.run.
 	if os.Getenv("KC_FAKE_CLI") == "1" && (len(os.Args) == 1 || len(os.Args) > 1 && os.Args[1] == "--acp") {

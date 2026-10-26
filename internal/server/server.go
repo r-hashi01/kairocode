@@ -46,6 +46,9 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/commands", s.commands)
 	s.mux.HandleFunc("GET /sessions/{id}/skills", s.skills)
 	s.mux.HandleFunc("GET /sessions/{id}/mcp", s.mcpList)
+	s.mux.HandleFunc("GET /sessions/{id}/plugins", s.sessionPlugins)
+	s.mux.HandleFunc("GET /plugins", s.plugins)
+	s.mux.HandleFunc("POST /plugins/{name}/connected", s.pluginConnected)
 	s.mux.HandleFunc("GET /sessions/{id}/log", s.sessionLog)
 	s.mux.HandleFunc("POST /sessions/{id}/commands", s.runCommand)
 	s.mux.HandleFunc("POST /sessions/{id}/undo", s.undo(false))
@@ -594,6 +597,42 @@ func (s *Server) mcpList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// sessionPlugins lists the session's plugins and their state (ADR 0025).
+func (s *Server) sessionPlugins(w http.ResponseWriter, r *http.Request) {
+	list, err := s.rt.Plugins(r.Context(), sessionOf(r))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// plugins lists the plugins of ?dir= and their state.
+func (s *Server) plugins(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		fail(w, http.StatusBadRequest, errors.New("want ?dir="))
+		return
+	}
+	list, err := s.rt.PluginsIn(r.Context(), dir)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// pluginConnected: a plugin's credentials changed (kairocode plugin
+// connect or disconnect).
+func (s *Server) pluginConnected(w http.ResponseWriter, r *http.Request) {
+	s.rt.PluginConnected(r.PathValue("name"))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) skills(w http.ResponseWriter, r *http.Request) {

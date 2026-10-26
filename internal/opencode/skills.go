@@ -46,6 +46,46 @@ func SkillDirs(dir string) []string {
 	for _, d := range project(dir) {
 		out = append(out, filepath.Join(d, ".kairocode", "skills"))
 	}
+	for _, p := range PluginDirs(dir) { // a plugin's skills (ADR 0025)
+		out = append(out, filepath.Join(p.Dir, "skills"))
+	}
+	return out
+}
+
+// Plugin is a plugin's folder (ADR 0025): the user's
+// ($XDG_CONFIG_HOME/kairocode/plugins/<name>, or ~/.config/...), or a
+// project's (.kairocode/plugins/<name> from the repository's root down to
+// dir).
+type Plugin struct {
+	Name    string
+	Dir     string
+	Project bool
+}
+
+// PluginDirs are the plugins of dir, the user's first; a project's of a
+// name taken comes after it, and is told apart by Project.
+func PluginDirs(dir string) []Plugin {
+	var roots []Plugin
+	if cfg := os.Getenv("XDG_CONFIG_HOME"); cfg != "" {
+		roots = append(roots, Plugin{Dir: filepath.Join(cfg, "kairocode", "plugins")})
+	} else if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots, Plugin{Dir: filepath.Join(home, ".config", "kairocode", "plugins")})
+	}
+	for _, d := range project(dir) {
+		roots = append(roots, Plugin{Dir: filepath.Join(d, ".kairocode", "plugins"), Project: true})
+	}
+	var out []Plugin
+	for _, r := range roots {
+		entries, err := os.ReadDir(r.Dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+				out = append(out, Plugin{Name: e.Name(), Dir: filepath.Join(r.Dir, e.Name()), Project: r.Project})
+			}
+		}
+	}
 	return out
 }
 

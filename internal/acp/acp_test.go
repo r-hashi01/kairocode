@@ -90,6 +90,9 @@ func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Re
 func (l *local) Log(ctx context.Context, s string) (runtime.SessionLog, error) {
 	return l.r.Log(ctx, s)
 }
+func (l *local) Plugins(ctx context.Context, s string) ([]runtime.PluginInfo, error) {
+	return l.r.Plugins(ctx, s)
+}
 func (l *local) MCP(ctx context.Context, s string) ([]runtime.MCPInfo, error) {
 	return l.r.MCP(ctx, s)
 }

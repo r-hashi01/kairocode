@@ -39,6 +39,7 @@ const usage = `usage:
   kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
   kairocode fork [-data DIR] [-files] <session> [turn]   start another session from a turn of one (the last, unless named)
   kairocode log [-data DIR] [-json] <session>         the session's record: turns, calls, results, waits, use
+  kairocode plugin [-dir DIR] [list|install SRC|update N|remove N|connect N|disconnect N]   plugins (ADR 0025)
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
@@ -120,6 +121,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = fork(ctx, args, stdout, stderr)
 	case "log":
 		err = showLog(ctx, args, stdout, stderr)
+	case "plugin":
+		err = pluginCommand(ctx, args, stdout, stderr)
 	case "daemon":
 		err = runDaemon(ctx, args, stdout, stderr)
 	case "approvals":

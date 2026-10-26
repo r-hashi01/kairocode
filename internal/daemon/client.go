@@ -644,6 +644,25 @@ func (c *Client) MCP(ctx context.Context, session string) ([]runtime.MCPInfo, er
 	return out, err
 }
 
+// Plugins lists the session's plugins and their state (ADR 0025).
+func (c *Client) Plugins(ctx context.Context, session string) ([]runtime.PluginInfo, error) {
+	var out []runtime.PluginInfo
+	err := c.do(ctx, "GET", sessionPath(session)+"/plugins", nil, &out)
+	return out, err
+}
+
+// PluginsIn lists dir's plugins and their state.
+func (c *Client) PluginsIn(ctx context.Context, dir string) ([]runtime.PluginInfo, error) {
+	var out []runtime.PluginInfo
+	err := c.do(ctx, "GET", "/plugins?dir="+url.QueryEscape(dir), nil, &out)
+	return out, err
+}
+
+// PluginConnected tells the daemon a plugin's credentials changed.
+func (c *Client) PluginConnected(ctx context.Context, name string) error {
+	return c.do(ctx, "POST", "/plugins/"+url.PathEscape(name)+"/connected", nil, nil)
+}
+
 // Skills are the session's skills, and the SKILL.md files not taken.
 func (c *Client) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
 	var out runtime.SkillsInfo
