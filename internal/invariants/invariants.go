@@ -265,7 +265,8 @@ func Secrets(roots ...string) ([]string, error) {
 var commandStarters = []string{"internal/sandbox/", "internal/agents/", "internal/runtime/claude.go", "internal/runtime/cliengines.go", "internal/runtime/acpengine.go", "internal/tui/login.go", "internal/daemon/spawn.go",
 	"internal/runtime/secrets.go",     // the key store's commands, security and secret-tool (ADR 0025)
 	"internal/cli/plugin.go",          // the browser, for a plugin's OAuth (ADR 0025)
-	"internal/runtime/marketplace.go"} // git, to install and update plugins and marketplaces (ADR 0025, 0027)
+	"internal/runtime/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
+	"scripts/envcheck/"}               // check.sh's look at whether a sandbox can be started here
 
 // fullAccessUsers may name sandbox.FullAccess: the tools that run outside
 // the sandbox only once the user approved (escalated bash, git_push).

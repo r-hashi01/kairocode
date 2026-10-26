@@ -21,6 +21,9 @@ go vet ./...
 step build
 go build ./...
 
+step env
+go run ./scripts/envcheck # the tests listen on 127.0.0.1 and start sandboxes: fail first where they cannot
+
 step test
 if $quick; then
   go test -short -count=1 ./...
