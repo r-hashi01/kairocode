@@ -40,19 +40,19 @@ Exa は、キーなしでも回数の制限つきで使えます。利用者の 
 
 ## 2. API キーで使う（プラグイン）
 
-キーは `kairocode.json` に書かず、プラグインとして入れて、キーを OS の鍵の保管庫に預けます（ADR 0025）。例のプラグインは [`plugins/exa`](plugins/exa/kairocode-plugin.json) です。
+キーは `kairocode.json` に書かず、プラグインとして入れて、キーを OS の鍵の保管庫に預けます（ADR 0025）。exa は KairoCode に同梱のカタログ（ADR 0027）にあるので、名前だけで入ります。中身は例の [`plugins/exa`](plugins/exa/kairocode-plugin.json) と同じです。
 
 ```sh
-mkdir -p ~/.config/kairocode/plugins
-cp -R docs/examples/plugins/exa ~/.config/kairocode/plugins/exa
-kairocode plugin connect exa   # API キーを聞かれる（入力は表示されない）
+kairocode plugin install exa   # 入れて、続けて API キーを聞かれる（入力は表示されない）
 kairocode plugin               # exa: connected と、ツールの作用の型が出る
 ```
 
+会話の中なら `/plugin install exa` です。例のフォルダーから入れるなら `kairocode plugin install docs/examples/plugins/exa` です（git のリポジトリでないフォルダーは、そのままコピーされる）。
+
 - マニフェストの `"x-api-key": "{secret:api_key}"` に、預けたキーが入ります。キーは記録・ログ・エラーの文面に残りません。
 - このプラグインには、検索の使い方を書いたスキル（`skills/web-search/SKILL.md`）も入っています。
-- キーが無効になると、`/plugin` に「authentication expired」と出て、モデルには `kairocode plugin connect exa` が要ると返ります。
-- プラグインを git のリポジトリに置けば、`kairocode plugin install <git の URL>` で入れられます（コミットで固定され、`kairocode plugin update exa` で更新）。
+- キーが無効になると、`/plugin` に `refused:` とサーバーの答えがそのまま出て、モデルには `kairocode plugin connect exa` が要ると返ります。
+- 自分のプラグインは、git のリポジトリに置けば `kairocode plugin install <git の URL>` で入れられます（コミットで固定され、`kairocode plugin update <名前>` で更新）。何個かまとめて配るなら、`kairocode-marketplace.json` を置いたカタログにして、`kairocode plugin marketplace add <git の URL>` で足してもらいます（ADR 0027）。
 - 権限の規則は、ほかのツールと同じく `kairocode.json` の `permission` に `"exa_*": "allow"` と書けます。
 
 ## 3. OAuth でサインインする（プラグイン）
@@ -60,7 +60,7 @@ kairocode plugin               # exa: connected と、ツールの作用の型�
 Exa は OAuth でもサインインできます（`?login`。利用料は Exa のチームに付く）。例は [`plugins/exa-oauth`](plugins/exa-oauth/kairocode-plugin.json) です。
 
 ```sh
-cp -R docs/examples/plugins/exa-oauth ~/.config/kairocode/plugins/exa
+kairocode plugin install docs/examples/plugins/exa-oauth
 kairocode plugin connect exa   # ブラウザーが開く。サインインすると端末に戻る
 ```
 

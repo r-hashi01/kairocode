@@ -263,8 +263,9 @@ func Secrets(roots ...string) ([]string, error) {
 // their model lists (ADR 0007, 0014), the installers of ACP agents (ADR
 // 0015), and a client's start of the daemon (ADR 0008).
 var commandStarters = []string{"internal/sandbox/", "internal/agents/", "internal/runtime/claude.go", "internal/runtime/cliengines.go", "internal/runtime/acpengine.go", "internal/tui/login.go", "internal/daemon/spawn.go",
-	"internal/runtime/secrets.go", // the key store's commands, security and secret-tool (ADR 0025)
-	"internal/cli/plugin.go"}      // git, to install and update plugins (ADR 0025)
+	"internal/runtime/secrets.go",     // the key store's commands, security and secret-tool (ADR 0025)
+	"internal/cli/plugin.go",          // the browser, for a plugin's OAuth (ADR 0025)
+	"internal/runtime/marketplace.go"} // git, to install and update plugins and marketplaces (ADR 0025, 0027)
 
 // fullAccessUsers may name sandbox.FullAccess: the tools that run outside
 // the sandbox only once the user approved (escalated bash, git_push).

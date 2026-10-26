@@ -270,7 +270,7 @@ func (r *Runtime) PluginConnected(plugin string) { r.ext.connected(plugin) }
 // PluginsText is /plugin's answer.
 func PluginsText(list []PluginInfo) string {
 	if len(list) == 0 {
-		return "No plugin is installed here. kairocode plugin install <git URL or path> installs one; a project's go in .kairocode/plugins/<name>.\n"
+		return "No plugin is installed here (a project's go in .kairocode/plugins/<name>).\n"
 	}
 	var b strings.Builder
 	for _, p := range list {

@@ -31,14 +31,14 @@ func TestPluginInstallConnectRemove(t *testing.T) {
 	}
 	ctx := context.Background()
 	var out strings.Builder
-	if err := pluginInstall(ctx, src, &out); err != nil {
+	if err := pluginInstall(ctx, t.TempDir(), t.TempDir(), src, nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(userPlugins(), "notes")
+	dir := filepath.Join(runtime.UserPluginsDir(), "notes")
 	if b, err := os.ReadFile(filepath.Join(dir, ".kairocode-commit")); err != nil || len(strings.TrimSpace(string(b))) != 12 {
 		t.Fatalf("the commit kept: %q %v", b, err)
 	}
-	if err := pluginInstall(ctx, src, &out); err == nil {
+	if err := pluginInstall(ctx, t.TempDir(), t.TempDir(), src, nil, &out); err == nil {
 		t.Fatal("installed twice")
 	}
 

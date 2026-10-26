@@ -430,7 +430,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			m.print(bad.Render("  ⎿  " + msg.name + ": " + shortError(msg.err.Error())))
 		} else {
-			m.print(good.Render("  ⎿  " + msg.name + ": " + msg.verb + "ed"))
+			done := map[string]string{"connect": "connected", "disconnect": "disconnected", "install": "installed"}[msg.verb]
+			m.print(good.Render("  ⎿  " + msg.name + ": " + done))
 		}
 		return nil
 	case loggedInMsg:

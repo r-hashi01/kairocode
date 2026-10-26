@@ -41,7 +41,7 @@ func pluginCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if len(rest) > 0 {
 		verb, rest = rest[0], rest[1:]
 	}
-	usage := errors.New("usage: kairocode plugin [-dir DIR] [list | install <git URL or path> | update <name> | remove <name> | connect <name> | disconnect <name>]")
+	usage := errors.New("usage: kairocode plugin [-dir DIR] [list | install <name[@marketplace], git URL or path> | update <name> | remove <name> | connect <name> | disconnect <name> | marketplace ...]")
 	switch verb {
 	case "", "list":
 		return pluginList(ctx, *data, abs, stdout)
@@ -49,7 +49,7 @@ func pluginCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		if len(rest) != 1 {
 			return usage
 		}
-		return pluginInstall(ctx, rest[0], stdout)
+		return pluginInstall(ctx, *data, abs, rest[0], os.Stdin, stdout)
 	case "update":
 		if len(rest) != 1 {
 			return usage
@@ -65,6 +65,8 @@ func pluginCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 			return usage
 		}
 		return pluginConnect(ctx, *data, abs, rest[0], os.Stdin, stdout)
+	case "marketplace":
+		return pluginMarketplace(ctx, rest, stdout)
 	case "disconnect":
 		if len(rest) != 1 {
 			return usage
@@ -84,15 +86,6 @@ func pluginArgv(data, dir string) []string {
 	return []string{exe, "plugin", "-data", data, "-dir", dir}
 }
 
-// userPlugins is the folder of the user's plugins.
-func userPlugins() string {
-	if cfg := os.Getenv("XDG_CONFIG_HOME"); cfg != "" {
-		return filepath.Join(cfg, "kairocode", "plugins")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "kairocode", "plugins")
-}
-
 // pluginList prints the plugins of dir and their state, from the daemon.
 func pluginList(ctx context.Context, data, dir string, stdout io.Writer) error {
 	c, err := connect(ctx, data)
@@ -104,121 +97,107 @@ func pluginList(ctx context.Context, data, dir string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(stdout, runtime.PluginsText(list))
+	text := runtime.PluginsText(list)
+	if more := runtime.AvailableText("kairocode plugin install"); more != "" {
+		text += "\n" + more
+	}
+	_, err = io.WriteString(stdout, text)
 	return err
 }
 
-// git runs git, its output given back.
-func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// pluginInstall clones a plugin into the user's plugins, named by its
-// manifest (or its folder), at the commit it is at; the commit is kept.
-func pluginInstall(ctx context.Context, src string, stdout io.Writer) error {
-	if abs, err := filepath.Abs(src); err == nil {
-		if _, err := os.Stat(abs); err == nil {
-			src = abs
-		}
-	}
-	root := userPlugins()
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.MkdirTemp(root, ".install-")
+// pluginInstall installs a plugin (ADR 0027): name or name@market of a
+// marketplace, a git URL, or a folder. Its credentials are asked for
+// next, if its marketplace says so and this is a terminal.
+func pluginInstall(ctx context.Context, data, dir, arg string, in *os.File, stdout io.Writer) error {
+	got, err := runtime.InstallPlugin(ctx, arg)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
-	if _, err := git(ctx, root, "clone", "--quiet", "--", src, tmp); err != nil {
-		return err
+	at := ""
+	if got.Version != "" {
+		at = " " + got.Version
 	}
-	commit, err := git(ctx, tmp, "rev-parse", "HEAD")
-	if err != nil {
-		return err
+	fmt.Fprintf(stdout, "Installed %s%s from %s.\n", got.Name, at, got.From)
+	if got.Auth == "none" {
+		return nil
 	}
-	name := strings.TrimSuffix(filepath.Base(strings.TrimRight(src, "/")), ".git")
-	var m struct {
-		Name string `json:"name"`
+	if got.ConnectNow && isTerminal(in) {
+		return pluginConnect(ctx, data, dir, got.Name, in, stdout)
 	}
-	if b, err := os.ReadFile(filepath.Join(tmp, runtime.PluginManifest)); err == nil && json.Unmarshal(b, &m) == nil && m.Name != "" {
-		name = m.Name
-	} else if b, err := os.ReadFile(filepath.Join(tmp, ".claude-plugin", "plugin.json")); err == nil && json.Unmarshal(b, &m) == nil && m.Name != "" {
-		name = m.Name
-	}
-	if !filepathSafe(name) || strings.HasPrefix(name, ".") {
-		return fmt.Errorf("the plugin's name %q cannot be a folder's", name)
-	}
-	dest := filepath.Join(root, name)
-	if _, err := os.Stat(dest); err == nil {
-		return fmt.Errorf("a plugin named %s is installed already: kairocode plugin update %s", name, name)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, ".kairocode-commit"), []byte(commit[:12]+"\n"), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "Installed %s at %s. kairocode plugin connect %s, if it needs credentials.\n", name, commit[:12], name)
+	fmt.Fprintf(stdout, "It needs credentials: kairocode plugin connect %s\n", got.Name)
 	return nil
 }
 
-// pluginUpdate brings an installed plugin to its source's latest commit.
+// isTerminal says f is a terminal.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// pluginUpdate brings an installed plugin up to date.
 func pluginUpdate(ctx context.Context, name string, stdout io.Writer) error {
-	if !filepathSafe(name) {
-		return fmt.Errorf("no plugin %q", name)
-	}
-	dir := filepath.Join(userPlugins(), name)
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		return fmt.Errorf("%s is not a plugin installed from git", name)
-	}
-	before, err := git(ctx, dir, "rev-parse", "HEAD")
+	before, after, err := runtime.UpdatePlugin(ctx, name)
 	if err != nil {
 		return err
 	}
-	if _, err := git(ctx, dir, "pull", "--quiet", "--ff-only"); err != nil {
-		return err
-	}
-	after, err := git(ctx, dir, "rev-parse", "HEAD")
-	if err != nil {
-		return err
-	}
-	if after == before {
-		fmt.Fprintf(stdout, "%s is up to date (%s).\n", name, after[:12])
+	if before == after {
+		fmt.Fprintf(stdout, "%s is up to date (%s).\n", name, cmpOr(after, "no version"))
 		return nil
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".kairocode-commit"), []byte(after[:12]+"\n"), 0o600); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "Updated %s: %s → %s. Turns under way go on with what they started with.\n", name, before[:12], after[:12])
+	fmt.Fprintf(stdout, "Updated %s: %s → %s. Turns under way go on with what they started with.\n", name, cmpOr(before, "?"), cmpOr(after, "?"))
 	return nil
 }
 
 // pluginRemove removes an installed plugin; its credentials stay until
 // disconnected.
 func pluginRemove(name string, stdout io.Writer) error {
-	if !filepathSafe(name) {
-		return fmt.Errorf("no plugin %q", name)
-	}
-	dir := filepath.Join(userPlugins(), name)
-	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("no plugin %q is installed", name)
-	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := runtime.RemovePlugin(name); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Removed %s. Its credentials are kept until kairocode plugin disconnect %s.\n", name, name)
 	return nil
 }
 
-func filepathSafe(name string) bool {
-	return name != "" && !strings.ContainsAny(name, `/\`) && name != "." && name != ".."
+// pluginMarketplace adds, lists, updates or removes a marketplace.
+func pluginMarketplace(ctx context.Context, args []string, stdout io.Writer) error {
+	usage := errors.New("usage: kairocode plugin marketplace [list | add <git URL, owner/repo or folder> | update <name> | remove <name>]")
+	verb := "list"
+	if len(args) > 0 {
+		verb, args = args[0], args[1:]
+	}
+	if (verb == "list") != (len(args) == 0) || len(args) > 1 {
+		return usage
+	}
+	switch verb {
+	case "list":
+		_, err := io.WriteString(stdout, runtime.MarketplacesText())
+		return err
+	case "add":
+		m, err := runtime.AddMarketplace(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Added the marketplace %s (%d plugins). kairocode plugin list shows them.\n", m.Name, len(m.Plugins))
+		return nil
+	case "update":
+		before, after, err := runtime.UpdateMarketplace(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if before == after {
+			fmt.Fprintf(stdout, "%s is up to date (%s).\n", args[0], after)
+		} else {
+			fmt.Fprintf(stdout, "Updated %s: %s → %s. kairocode plugin update <name> brings its plugins up to it.\n", args[0], before, after)
+		}
+		return nil
+	case "remove":
+		if err := runtime.RemoveMarketplace(args[0]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Removed the marketplace %s. The plugins installed from it stay.\n", args[0])
+		return nil
+	}
+	return usage
 }
 
 // pluginOf finds dir's plugin of that name.

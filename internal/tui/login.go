@@ -16,16 +16,18 @@ import (
 // handed to it until it ends; an agent's own way (a browser, say) is the
 // daemon's to carry out.
 
-// pluginCommand reads /plugin connect <name> and /plugin disconnect <name>.
+// pluginCommand reads /plugin connect, disconnect and install <name>:
+// run in the terminal, as they may ask for credentials (installing goes
+// on to connect, when its marketplace says so; ADR 0027).
 func pluginCommand(text string) (verb, name string, ok bool) {
 	f := strings.Fields(text)
-	if len(f) == 3 && f[0] == "/plugin" && (f[1] == "connect" || f[1] == "disconnect") {
+	if len(f) == 3 && f[0] == "/plugin" && (f[1] == "connect" || f[1] == "disconnect" || f[1] == "install") {
 		return f[1], f[2], true
 	}
 	return "", "", false
 }
 
-// pluginDoneMsg: kairocode plugin connect (or disconnect) ended.
+// pluginDoneMsg: kairocode plugin connect (disconnect, install) ended.
 type pluginDoneMsg struct {
 	verb, name string
 	err        error

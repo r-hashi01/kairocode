@@ -1,0 +1,26 @@
+{
+  "name": "github",
+  "description": "GitHub: issues, pull requests, code and Actions",
+  "version": "1.0.0",
+  "mcp": {
+    "type": "remote",
+    "url": "https://api.githubcopilot.com/mcp/",
+    "headers": { "Authorization": "Bearer {secret:token}" }
+  },
+  "auth": {
+    "type": "key",
+    "keys": [
+      {
+        "name": "token",
+        "description": "a GitHub token: what gh auth token prints, or a personal access token (https://github.com/settings/tokens)"
+      }
+    ]
+  },
+  "tools": {
+    "get_*": { "effect": "read" },
+    "list_*": { "effect": "read" },
+    "search_*": { "effect": "read" },
+    "issue_read": { "effect": "read" },
+    "pull_request_read": { "effect": "read" }
+  }
+}
