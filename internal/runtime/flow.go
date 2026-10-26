@@ -74,14 +74,18 @@ func (r *Runtime) flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (wo
 // or cannot be undone) is not called, and the flow is told what it would
 // have been called with.
 func (r *Runtime) flowWould(t *kairo.TaskContext, in workflows.WouldInput) (workflows.WouldOutput, error) {
-	if d, ok := r.tool(in.Tool); ok && d.Effect == tools.Read && !strings.HasPrefix(in.Tool, "mcp__") {
+	if d, ok := r.tool(in.Tool); ok && d.Effect == tools.Read && !strings.HasPrefix(in.Tool, "mcp__") && !in.In.Unstarted {
 		return workflows.WouldOutput{Run: true}, nil
 	}
 	args, err := r.toolArgs(t, in.In)
 	if err != nil {
 		return workflows.WouldOutput{}, err
 	}
-	text := fmt.Sprintf("This is a try of the flow: %s was not called, as it does more than read. It would have been called with:\n%s", in.Tool, args)
+	why := "as it does more than read"
+	if in.In.Unstarted {
+		why = "as a try does not start MCP servers and plugins"
+	}
+	text := fmt.Sprintf("This is a try of the flow: %s was not called, %s. It would have been called with:\n%s", in.Tool, why, args)
 	out, err := r.toolResult(t, in.In.Call, tools.Result{Output: text})
 	if err != nil {
 		return workflows.WouldOutput{}, err

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -378,5 +379,134 @@ func TestMasked(t *testing.T) {
 		if got := masked(v); got != want {
 			t.Errorf("masked(%q) = %q, want %q", v, got, want)
 		}
+	}
+}
+
+// A flow calls a plugin's tools with tool(), as the permission rules let
+// it: a real one runs once; the key reaches the server and not the record
+// (ADR 0025, 0022).
+func TestFlowUsesPluginTools(t *testing.T) {
+	userSettings(t, jsonOf(t, map[string]any{"permission": map[string]string{"tracker_list_*": "allow", "tracker_create_issue": "allow"}}))
+	created, _ := trackerPlugin(t)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/triage.star": `
+DESCRIPTION = "File the first issue's follow-up"
+
+def main(input):
+    phase("look")
+    issues = tool("tracker_list_issues")
+    if not issues.ok:
+        return {"ok": False, "message": issues.error}
+    phase("file")
+    made = tool("tracker_create_issue", title = "follow up: " + issues.output.split(";")[0])
+    return {"ok": made.ok, "message": made.output}
+`})
+	db := filepath.Join(t.TempDir(), "k.db")
+	r := open(t, db, &provider.Fake{HoldAt: -1})
+	_, text, _ := flowTurn(t, r, ws, "triage", "")
+	if text != "created #3: follow up: #1 the login breaks" || created.Load() != 1 {
+		t.Fatalf("flow said %q, created %d", text, created.Load())
+	}
+	r.Close()
+	for _, f := range []string{db, db + "-wal"} {
+		if b, err := os.ReadFile(f); err == nil && bytes.Contains(b, []byte("kc-tracker-key")) {
+			t.Fatalf("%s holds the key", f)
+		}
+	}
+}
+
+// trackerPlugin is a user's remote plugin, tracker, with its key kept: its
+// list_* tools declared read, create_issue real (counted); and the
+// requests its server had.
+func trackerPlugin(t *testing.T) (created, requests *atomic.Int32) {
+	t.Helper()
+	t.Setenv("KAIROCODE_SECRETS", "file")
+	created, requests = new(atomic.Int32), new(atomic.Int32)
+	s := mcp.NewServer(&mcp.Implementation{Name: "tracker", Version: "0"}, nil)
+	s.AddTool(&mcp.Tool{Name: "list_issues", Description: "list", InputSchema: map[string]any{"type": "object"}},
+		func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "#1 the login breaks; #2 slow pages"}}}, nil
+		})
+	s.AddTool(&mcp.Tool{Name: "create_issue", Description: "create", InputSchema: map[string]any{"type": "object"}},
+		func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			created.Add(1)
+			var a struct{ Title string }
+			json.Unmarshal(req.Params.Arguments, &a)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "created #3: " + a.Title}}}, nil
+		})
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer kc-tracker-key" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	writePlugin(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "kairocode", "plugins"), "tracker", map[string]any{
+		"name":  "tracker",
+		"mcp":   map[string]any{"type": "remote", "url": srv.URL, "headers": map[string]string{"Authorization": "Bearer {secret:token}"}},
+		"auth":  map[string]any{"type": "key", "keys": []map[string]string{{"name": "token"}}},
+		"tools": map[string]any{"list_*": map[string]string{"effect": "read"}},
+	})
+	if err := Secrets().Set("tracker/token", "kc-tracker-key"); err != nil {
+		t.Fatal(err)
+	}
+	return created, requests
+}
+
+// A try of a flow (ADR 0017) does not start a plugin's server (ADR 0022):
+// its tools, read or real, are not called, and the try shows what each
+// would have been called with; the flow goes on past them.
+func TestTryFlowWithPluginTools(t *testing.T) {
+	userSettings(t, jsonOf(t, map[string]any{"permission": map[string]string{"tracker_*": "allow"}}))
+	created, requests := trackerPlugin(t)
+	in, _ := json.Marshal(map[string]any{"name": "triage", "source": `
+DESCRIPTION = "File a follow-up of the first issue"
+
+def main(input):
+    issues = tool("tracker_list_issues", state = "open")
+    made = tool("tracker_create_issue", title = "follow up")
+    return "listed: %s; made: %s" % (issues.ok, made.ok)
+`})
+	ws := workspaceWith(t, `{"flow_write": "ask"}`)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
+		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "written"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "try-plugin", workflows.SessionInput{Dir: ws})
+	if _, err := r.Send(ctx, s, "make a flow that files a follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	var p []Pending
+	waitUntil(t, ctx, "the flow's approval", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1 && p[0].Try != nil
+	})
+	before := requests.Load() // the turn's own listing of the tools
+	if err := r.TryFlow(ctx, p[0].Key, ""); err != nil {
+		t.Fatal(err)
+	}
+	var try string
+	waitUntil(t, ctx, "the try", func() bool {
+		p, _ = r.Pending(ctx, s)
+		for _, q := range p {
+			for _, sec := range q.Sections {
+				if sec.Name == "Try" {
+					try = sec.Text
+					return true
+				}
+			}
+		}
+		return false
+	})
+	for _, want := range []string{"listed: True; made: True", "tracker_list_issues", `"state": "open"`, "tracker_create_issue", `"title": "follow up"`} {
+		if !strings.Contains(try, want) {
+			t.Errorf("no %q in the try:\n%s", want, try)
+		}
+	}
+	if created.Load() != 0 || requests.Load() != before {
+		t.Fatalf("the try reached the server: %d created, %d requests (%d before)", created.Load(), requests.Load(), before)
 	}
 }

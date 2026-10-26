@@ -27,7 +27,7 @@ The script:
 What it can call (each returns a value with ok, output, error and value, never raises):
 - agent(agent = "build", prompt = "...") runs an agent with the prompt; .output is its reply. Agents: build (can change files), plan (reads only), or any of .opencode/agents.
 - parallel([{"agent": "...", "prompt": "..."}, ...]) runs agents at once; a list of results, in order.
-- tool("bash", command = "..."), tool("read", path = "..."), and the other tools; the user's permission rules apply.
+- tool("bash", command = "..."), tool("read", path = "..."), and the other tools; the user's permission rules apply. Your MCP servers' and plugins' tools too, by the names you have them (tool("github_list_issues", owner = "...", repo = "...")), with the arguments their schemas take; .output is their result's text.
 - ask("question", options = ["...", "..."]) asks the user and waits for the answer; .value is the option chosen.
 - decide("question", type = "bool" | "number" | "choice", choices = [...]) has the model decide; .value is True/False, a number, or one of the choices.
 - phase("name") names the part of the flow that follows. Give each part of the flow a phase.

@@ -845,6 +845,10 @@ type ToolInput struct {
 	// Ext, for a call of an MCP server's tool or a custom tool (ADR 0022):
 	// its definition, as the turn recorded it.
 	Ext string `json:"ext,omitempty"`
+	// Unstarted: in a try of a flow, a call of an MCP server's tool or a
+	// custom tool, whose server a try does not start (ADR 0017, 0022): it
+	// is not called, whatever a tool of its name does.
+	Unstarted bool `json:"unstarted,omitempty"`
 	// At: for a call a flow makes, where in the script ("line:col").
 	At      string          `json:"at,omitempty"`
 	Dir     string          `json:"dir"`

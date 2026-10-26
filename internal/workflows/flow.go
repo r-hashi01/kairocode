@@ -674,7 +674,11 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	for _, n := range r.policy.Names {
 		known = known || n == name
 	}
-	if !known {
+	// A try does not start the MCP servers (ADR 0022), so their tools are
+	// not listed; they are there all the same, and a try records what
+	// they would have been called with (ADR 0017).
+	unstarted := !known && r.in.Dry && external(r.policy.External, name)
+	if !known && !unstarted {
 		return outcome(false, "", "no tool "+name), nil
 	}
 	at := r.at(thread)
@@ -684,7 +688,7 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	r.tools++
 	// The call's id names it in the conversation and in the wait for its
 	// approval: the flow's turn and the call's place among its tool calls.
-	in := ToolInput{At: at, Dir: r.in.Dir, Call: fmt.Sprintf("%s%d_%d", FlowCallPrefix, r.in.N, r.tools), Args: raw, Ext: r.ext[name].Def}
+	in := ToolInput{At: at, Dir: r.in.Dir, Call: fmt.Sprintf("%s%d_%d", FlowCallPrefix, r.in.N, r.tools), Args: raw, Ext: r.ext[name].Def, Unstarted: unstarted}
 	planned := false
 	for _, n := range r.policy.Planned {
 		planned = planned || n == name
@@ -779,4 +783,15 @@ func toGo(v starlark.Value) (any, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("a %s cannot be given to a tool", v.Type())
+}
+
+// external says name is one of the agent's MCP servers' tools
+// (<server>_<tool>) or custom tools, as its definition lists them.
+func external(srcs []ExtSource, name string) bool {
+	for _, s := range srcs {
+		if (s.Kind == "mcp" && strings.HasPrefix(name, s.Name+"_")) || (s.Kind == "tool" && name == s.Name) {
+			return true
+		}
+	}
+	return false
 }
