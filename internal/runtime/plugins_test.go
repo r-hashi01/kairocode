@@ -269,3 +269,30 @@ func TestPluginDeclsAndErrors(t *testing.T) {
 		t.Errorf("the secret is in %q", got)
 	}
 }
+
+// The example plugins (docs/examples/plugins) read as plugins, each with a
+// remote server and its tools' effects declared.
+func TestExamplePlugins(t *testing.T) {
+	userSettings(t, `{}`)
+	root := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "kairocode", "plugins")
+	examples, err := filepath.Glob(filepath.Join("..", "..", "docs", "examples", "plugins", "*"))
+	if err != nil || len(examples) == 0 {
+		t.Fatalf("no examples: %v", err)
+	}
+	for _, ex := range examples {
+		dir := filepath.Join(root, filepath.Base(ex))
+		if err := os.CopyFS(dir, os.DirFS(ex)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range readPlugins(repo(t)) {
+		if p.Err != nil || p.Manifest.MCP == nil || p.Manifest.MCP.URL == "" || len(p.Manifest.Tools) == 0 {
+			t.Errorf("%s: %+v (%v)", p.Name, p.Manifest, p.Err)
+		}
+		for name, tc := range p.Manifest.Tools {
+			if tc.Effect != "read" {
+				t.Errorf("%s: %s is %q", p.Name, name, tc.Effect)
+			}
+		}
+	}
+}
