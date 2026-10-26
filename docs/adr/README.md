@@ -31,3 +31,4 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0022](0022-mcp-servers-custom-tools-todo.md) | 利用者の MCP サーバー、カスタムツール、todo | 承認（2026-10-21） |
 | [0023](0023-view-and-replay-records.md) | 記録の閲覧と再生 | 承認（2026-10-22） |
 | [0024](0024-limits-and-rate-limits.md) | 上限（トークン、金額、時間）と、プロバイダーごとの頻度の制限 | 提案（保留） |
+| [0025](0025-plugins.md) | プラグイン: 外のサービスへの接続とスキルの束、`/plugin` と `/plugin connect` | 承認（2026-10-26） |

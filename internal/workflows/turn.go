@@ -82,7 +82,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		}
 	}
 	var ext map[string]ExtRef
-	if len(agent.External) > 0 && !in.Sub {
+	if len(agent.External) > 0 && !in.Dry {
 		// The MCP servers' tools and the custom tools (ADR 0022): a
 		// project's run as the user says, asked now if not said.
 		if agent, ext, err = loadExternal(ctx, in, agent); err != nil {

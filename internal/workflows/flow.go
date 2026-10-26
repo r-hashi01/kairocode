@@ -101,8 +101,10 @@ type flowRun struct {
 	usage  msg.Usage
 	tools  int
 	asks   int
-	// policy: the session agent's rules, loaded at the first tool call.
+	// policy: the session agent's rules, loaded at the first tool call;
+	// ext, its MCP servers' and custom tools (ADR 0022, 0025).
 	policy *Agent
+	ext    map[string]ExtRef
 	phase  string
 
 	maxAgents int
@@ -658,6 +660,14 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 		if err != nil {
 			return nil, r.fail(err)
 		}
+		if len(a.External) > 0 && !r.in.Dry {
+			// The MCP servers' tools and custom tools, as a turn has them
+			// (ADR 0022): a project's run as the user says. A try does not
+			// start them.
+			if a, r.ext, err = loadExternal(r.ctx, TurnInput{Session: r.in.Session, N: r.in.N, Dir: r.in.Dir}, a); err != nil {
+				return nil, r.fail(err)
+			}
+		}
 		r.policy = &a
 	}
 	known := false
@@ -674,7 +684,7 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	r.tools++
 	// The call's id names it in the conversation and in the wait for its
 	// approval: the flow's turn and the call's place among its tool calls.
-	in := ToolInput{At: at, Dir: r.in.Dir, Call: fmt.Sprintf("%s%d_%d", FlowCallPrefix, r.in.N, r.tools), Args: raw}
+	in := ToolInput{At: at, Dir: r.in.Dir, Call: fmt.Sprintf("%s%d_%d", FlowCallPrefix, r.in.N, r.tools), Args: raw, Ext: r.ext[name].Def}
 	planned := false
 	for _, n := range r.policy.Planned {
 		planned = planned || n == name
@@ -682,6 +692,12 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	g, err := gateTool(r.ctx, Policy{Rules: r.policy.Permissions, ReadOnly: r.policy.ReadOnly, Dry: r.in.Dry}, name, planned, in, nil, nil)
 	if err != nil {
 		return nil, r.fail(err)
+	}
+	if ref, ok := r.ext[name]; ok && g.Action == ActToolPrefix+name {
+		g.Action = ActToolExtReal // an external tool runs by its effect
+		if ref.Read {
+			g.Action = ActToolExtRead
+		}
 	}
 	res, err := runGated(r.ctx, g, in)
 	if err != nil {

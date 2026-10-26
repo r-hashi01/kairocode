@@ -131,3 +131,11 @@ MCP サーバーとカスタムツールは、利用者の機械でコマンド�
   - `CODEX_CONFIG` が `null` のとき、落ちていました。
   - テスト: `TestCodexMCPNamesStrict`、`TestCodexConfigServersOff`。
 - **確かめていないこと:** codex のシステムの設定（`/etc/codex` など）は読んでいません。
+
+### 6. フローとサブエージェント（2026-10-26）
+
+- フローの `tool(...)` は、セッションのエージェントの定義を読むとき（最初の `tool()`）に外のツールも一覧にし（`loadExternal`）、外のツールの呼び出しを `tool.ext.read`・`tool.ext.real` で動かします。
+- フローの `agent(...)` とサブエージェント（`task`）のターンも、外のツールを持ちます（前は `Sub` のターンでは読まなかった）。
+- 試運転（ADR 0017）では、外のツールを読み込みません（問いを出さず、サーバーも起動しない）。
+- どれも、記録された `agent.load` に外の設定があるときだけ呼び出しが増えるので、版は上げていません。
+- テスト: `TestFlowUsesMCPServerTools`。

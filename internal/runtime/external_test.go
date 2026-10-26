@@ -502,3 +502,39 @@ func TestMCPList(t *testing.T) {
 		t.Errorf("codex's own server: %+v", m)
 	}
 }
+
+// A flow reaches the user's MCP server's tools: tool() from its script,
+// and its agent from the model loop (ADR 0022, 0025).
+func TestFlowUsesMCPServerTools(t *testing.T) {
+	userSettings(t, jsonOf(t, map[string]any{
+		"mcp":        map[string]any{"fake": fakeServerConfig(nil)},
+		"tools":      map[string]any{"fake_lookup": map[string]string{"effect": "read"}},
+		"permission": map[string]string{"fake_*": "allow"},
+	}))
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/look.star": `
+DESCRIPTION = "Look things up"
+
+def main(input):
+    direct = tool("fake_lookup", q = "plums")
+    if not direct.ok:
+        return {"ok": False, "message": direct.error}
+    told = agent("build", "look up pears")
+    return {"ok": True, "message": direct.output + " / " + told.output}
+`})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "fake_lookup", Input: json.RawMessage(`{"q":"pears"}`)}}},
+		{Text: "the agent found pears"},
+	}})
+	_, text, s := flowTurn(t, r, ws, "look", "")
+	if !strings.Contains(text, "found plums") || !strings.Contains(text, "the agent found pears") {
+		t.Fatalf("flow said %q", text)
+	}
+	l, err := r.Log(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(l.Text(), "found pears") {
+		t.Fatalf("the agent's call is not in the record:\n%s", l.Text())
+	}
+}
