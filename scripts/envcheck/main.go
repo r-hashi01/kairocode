@@ -47,6 +47,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  - "+m)
 	}
 	fmt.Fprintln(os.Stderr, "It is a sandbox around this command (an agent's, say), not KairoCode failing. Run scripts/check.sh outside it:")
-	fmt.Fprintln(os.Stderr, "in Codex, run the command with escalated permissions (outside the sandbox). See AGENTS.md.")
+	fmt.Fprintln(os.Stderr, "in KairoCode, bash with sandbox \"escalate\"; in Codex, escalated permissions. See AGENTS.md.")
 	os.Exit(2)
 }

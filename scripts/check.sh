@@ -4,6 +4,9 @@
 #                             including the crash/resume tests
 #   scripts/check.sh --quick  what the hooks run: go test -short (crash tests
 #                             skip themselves under -short)
+# Exit 3: the tests cannot run here (an agent's sandbox; == env says why).
+# Passed, it notes so for the Stop hook (.claude/.cache/last-green), which
+# then does not run it again until the sources change.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 quick=false
@@ -22,7 +25,12 @@ step build
 go build ./...
 
 step env
-go run ./scripts/envcheck # the tests listen on 127.0.0.1 and start sandboxes: fail first where they cannot
+# The tests listen on 127.0.0.1 and start sandboxes: where they cannot, stop
+# first, with exit 3 (built, then run: go run would make it 1).
+envcheck=$(mktemp -d)
+trap 'rm -rf "$envcheck"' EXIT
+go build -o "$envcheck/envcheck" ./scripts/envcheck
+"$envcheck/envcheck" || exit 3
 
 step test
 if $quick; then
@@ -34,4 +42,9 @@ fi
 step adr
 scripts/adr-lint.sh
 
+if [ -f .claude/hooks/lib.sh ]; then
+  . .claude/hooks/lib.sh
+  mkdir -p .claude/.cache
+  source_hash > .claude/.cache/last-green
+fi
 echo "check: ok$($quick && echo ' (quick)' || true)"
