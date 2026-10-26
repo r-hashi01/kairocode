@@ -109,7 +109,8 @@ func TestPluginTool(t *testing.T) {
 }
 
 // refusingServer is a remote MCP server that turns away, with 401, what
-// refuse says.
+// refuse says; a key not in its form, with 400 and invalid_token, as
+// GitHub's does (and the key in its words).
 func refusingServer(t *testing.T, refuse func(body string) bool) *httptest.Server {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "remote", Version: "0"}, nil)
@@ -121,6 +122,11 @@ func refusingServer(t *testing.T, refuse func(body string) bool) *httptest.Serve
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer kc-wrong") {
+			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="badly formatted"`)
+			http.Error(w, "bad request: Authorization header is badly formatted: "+auth, http.StatusBadRequest)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer good" || refuse(string(b)) {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
@@ -132,8 +138,8 @@ func refusingServer(t *testing.T, refuse func(body string) bool) *httptest.Serve
 	return srv
 }
 
-// A remote plugin whose credentials are refused: the list says its
-// authentication expired, and a call tells the model to connect it again;
+// A remote plugin whose credentials are refused: the list and the model
+// are given the server's answer as it was, and told to connect it again;
 // connecting clears it (ADR 0025).
 func TestPluginRefused(t *testing.T) {
 	t.Setenv("KAIROCODE_SECRETS", "file")
@@ -158,11 +164,11 @@ func TestPluginRefused(t *testing.T) {
 	s, _ := r.CreateSession(ctx, "refused", workflows.SessionInput{Dir: ws})
 	turn(t, r, s, "send it")
 	conv := strings.Join(conversationOf(t, r, s, true), "\n")
-	if !strings.Contains(conv, "kairocode plugin connect mail") {
-		t.Fatalf("the model was not told to connect:\n%s", conv)
+	if !strings.Contains(conv, "kairocode plugin connect mail") || !strings.Contains(conv, "HTTP 401 Unauthorized: no") {
+		t.Fatalf("the model was not given the answer and told to connect:\n%s", conv)
 	}
 	list, _ := r.PluginsIn(ctx, ws)
-	if p := pluginOfList(t, list, "mail"); !strings.HasPrefix(p.State, "authentication expired") {
+	if p := pluginOfList(t, list, "mail"); p.State != "refused: HTTP 401 Unauthorized: no; kairocode plugin connect mail" {
 		t.Fatalf("after the refusal: %+v", p)
 	}
 	refuseCalls.Store(false)
@@ -172,12 +178,22 @@ func TestPluginRefused(t *testing.T) {
 		t.Fatalf("connected again: %+v", p)
 	}
 
-	// Refused from the start (a key that is not good): expired, too.
+	// Refused from the start (a key that is not good): refused, too.
 	Secrets().Set("mail/token", "bad")
 	r.PluginConnected("mail")
 	list, _ = r.PluginsIn(ctx, ws)
-	if p := pluginOfList(t, list, "mail"); !strings.HasPrefix(p.State, "authentication expired") {
+	if p := pluginOfList(t, list, "mail"); !strings.HasPrefix(p.State, "refused: HTTP 401 Unauthorized") {
 		t.Fatalf("with a bad key: %+v", p)
+	}
+
+	// A key not in its form: 400 and invalid_token, refused as well, the
+	// answer as the server gave it, without the key (invariant 6).
+	Secrets().Set("mail/token", "kc-wrong-key")
+	r.PluginConnected("mail")
+	list, _ = r.PluginsIn(ctx, ws)
+	want := `refused: HTTP 400 Bad Request: bad request: Authorization header is badly formatted: Bearer *** (WWW-Authenticate: Bearer error="invalid_token", error_description="badly formatted"); kairocode plugin connect mail`
+	if p := pluginOfList(t, list, "mail"); p.State != want {
+		t.Fatalf("with a key not in its form:\n got %s\nwant %s", p.State, want)
 	}
 }
 
@@ -294,5 +310,60 @@ func TestExamplePlugins(t *testing.T) {
 				t.Errorf("%s: %s is %q", p.Name, name, tc.Effect)
 			}
 		}
+	}
+}
+
+// A refusal is 401 or 403, or a 4xx that says the token is not good (as
+// GitHub answers a token not in its form): not any other answer.
+func TestTurnedAway(t *testing.T) {
+	for _, c := range []struct {
+		code int
+		auth string
+		want bool
+	}{
+		{401, "", true},
+		{403, "", true},
+		{400, `Bearer error="invalid_token", error_description="Invalid token"`, true},
+		{400, "", false},
+		{400, `Bearer error="invalid_request"`, false},
+		{500, `Bearer error="invalid_token"`, false},
+		{200, "", false},
+	} {
+		resp := &http.Response{StatusCode: c.code, Header: http.Header{}}
+		if c.auth != "" {
+			resp.Header.Set("WWW-Authenticate", c.auth)
+		}
+		if got := turnedAway(resp); got != c.want {
+			t.Errorf("%d %q: %v", c.code, c.auth, got)
+		}
+	}
+}
+
+// A refusal's answer is the server's, on one line, with the credentials
+// it says back put out before it is cut (invariant 6).
+func TestAnswerOf(t *testing.T) {
+	token := "kc-token-" + strings.Repeat("x", 40)
+	body := strings.Repeat("a", 280) + " token\n" + token + " was\tnot good"
+	resp := &http.Response{Status: "400 Bad Request", StatusCode: 400,
+		Header: http.Header{"Www-Authenticate": {`Bearer error="invalid_token"`}},
+		Body:   io.NopCloser(strings.NewReader(body))}
+	got := answerOf(resp, func(s string) string { return strings.ReplaceAll(s, token, "***") })
+	if strings.Contains(got, "kc-token") || strings.Contains(got, "xxxx") {
+		t.Fatalf("the token is in %q", got)
+	}
+	want := "HTTP 400 Bad Request: " + strings.Repeat("a", 280) + " token *** was not g… (WWW-Authenticate: Bearer error=\"invalid_token\")"
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+// A credential cut by the 2 KiB read is not shown in part.
+func TestAnswerOfCut(t *testing.T) {
+	token := "kc-token-" + strings.Repeat("y", 40)
+	body := strings.Repeat(" ", 2<<10-20) + "Bearer " + token
+	resp := &http.Response{Status: "401 Unauthorized", StatusCode: 401, Body: io.NopCloser(strings.NewReader(body))}
+	got := answerOf(resp, func(s string) string { return strings.ReplaceAll(s, token, "***") })
+	if strings.Contains(got, "kc-tok") || got != "HTTP 401 Unauthorized: Bearer" {
+		t.Fatalf("got %q", got)
 	}
 }

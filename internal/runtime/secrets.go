@@ -41,7 +41,7 @@ func Secrets() SecretStore {
 			return secretTool{}
 		}
 	}
-	return &fileSecrets{path: filepath.Join(userConfigDir(), "credentials.json")}
+	return &fileSecrets{path: filepath.Join(userConfigDir(), "credentials.json"), chosen: os.Getenv("KAIROCODE_SECRETS") == "file"}
 }
 
 func onPath(name string) bool {
@@ -115,11 +115,15 @@ func (secretTool) Delete(key string) error {
 
 // fileSecrets keeps values in a JSON file of mode 0600.
 type fileSecrets struct {
-	mu   sync.Mutex
-	path string
+	mu     sync.Mutex
+	path   string
+	chosen bool // KAIROCODE_SECRETS=file, not for want of a key store
 }
 
 func (f *fileSecrets) Where() string {
+	if f.chosen {
+		return f.path + " (a file only you can read, as KAIROCODE_SECRETS=file says)"
+	}
 	return f.path + " (no key store here: a file only you can read)"
 }
 

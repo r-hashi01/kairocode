@@ -171,7 +171,7 @@ func TestPluginOAuth(t *testing.T) {
 	o.down.Store(true)
 	r.PluginConnected("cal")
 	list, _ = r.PluginsIn(ctx, ws)
-	if p := pluginOfList(t, list, "cal"); strings.HasPrefix(p.State, "authentication expired") || p.State == "connected" {
+	if p := pluginOfList(t, list, "cal"); strings.HasPrefix(p.State, "refused") || p.State == "connected" {
 		t.Fatalf("with the token endpoint down: %+v", p)
 	}
 	o.down.Store(false)
@@ -179,7 +179,7 @@ func TestPluginOAuth(t *testing.T) {
 	o.refuse.Store(true)
 	r.PluginConnected("cal")
 	list, _ = r.PluginsIn(ctx, ws)
-	if p := pluginOfList(t, list, "cal"); !strings.HasPrefix(p.State, "authentication expired") {
+	if p := pluginOfList(t, list, "cal"); !strings.HasPrefix(p.State, "refused: the token endpoint answered HTTP 400") {
 		t.Fatalf("with the refresh refused: %+v", p)
 	}
 	r.Close()

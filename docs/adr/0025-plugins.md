@@ -98,7 +98,12 @@ KairoCode には、ADR 0022 で MCP サーバーとカスタムツールを足�
 - **値を聞く場所:** 値は ACP を通しません（記録とクライアントの間を通さないため）。端末の対話（`kairo`）は、上のとおり CLI に端末を渡します。ほかの ACP のクライアント（Zed など）の `/plugin connect` は、端末で `kairocode plugin connect <名前>` を実行するよう案内します。
 - **macOS のキーチェーン:** `security add-generic-password` は値を標準入力から読めないので、値はコマンドの引数で渡します。その短い間、同じ利用者のプロセスの一覧から見え得ます。OAuth のトークンを更新して書き戻すときも同じです。Linux の `secret-tool` は標準入力で渡します。
 - **認証の失敗の判定:** 「認証が切れた」とするのは、リモート（URL だけ）のプラグインのサーバーが、メッセージを運ぶ POST に HTTP の 401・403 を返したときだけです。これは `headers.RoundTrip` が型付きのエラー（`errRefused`）で返し、文面では判定しません。断られた POST は、サーバーが受け取っていないので、動いていないと言えます。
+  - 追記（2026-10-26、本物の GitHub の MCP サーバーで確かめて。利用者が承認）
+    - **判定:** GitHub は、形のおかしいトークンに 401 でなく `400` と `WWW-Authenticate: Bearer error="invalid_token"` を返します。RFC 6750 の `invalid_token` は、トークンを確かめた段階での拒否（要求は処理されていない）なので、POST への 4xx に `error="invalid_token"` があるときも、401・403 と同じく「断られた」とします（`turnedAway`）。上の 4 の「401・403」は、これを含みます。
+    - **表示:** 断られたときは、言い換えず、サーバーの答えをそのまま見せます。一覧の状態は `refused: HTTP 400 Bad Request: <本文> (WWW-Authenticate: …); kairocode plugin connect <名前>`、モデルへの返事も同じ答えに「動いていない」と `kairocode plugin connect` を添えます。更新を拒まれたときは、トークンの端点の答え（状態と本文）です。上の 4 と下の「認証が切れた」は、この表示を指します。
+    - 手を入れるのは、1 行にまとめる、本文と `WWW-Authenticate` をそれぞれ 300 文字で切る、送った資格情報（預けた値、OAuth のアクセストークン。更新ではリフレッシュトークンとクライアントの秘密も）を切る前に `***` に伏せる、の 3 つだけです（不変条件 6）。本文は先頭の 2 KiB を 2 秒まで読み、読み切れなければ途中で切れた最後の語を落とします（資格情報の頭だけが残らないように）。答えは `refusal` のエラーが運び、`errRefused` として判定します。
+    - テスト: `TestTurnedAway`、`TestAnswerOf`、`TestAnswerOfCut`、`TestPluginRefused`。
   - イベントの流れ（GET）の 401 や、JSON-RPC のエラーの文面（動いたツールが返した「403 Forbidden」など）、手元で起動するサーバーのエラーは、これに当たりません。結果が不明なら、これまでどおり不明として扱います（不変条件 4）。
 - **作用の型の宣言:** マニフェストの `tools` は、そのプラグインのサーバー（マニフェストのパス）のツールにだけ効きます。同じ名前のほかのサーバーには効きません。
 - **更新:** プラグインの版とコミットを、サーバーの指紋（`Spec`）に入れます。`update` の後、進行中のターンは、始めに一覧したサーバーとは違うものとして、そのツールを呼びません。
-- テスト: `TestPluginTool`（未接続→接続、キーがサーバーに渡り DB に残らない、作用の型、スキル）、`TestPluginRefused`（呼び出しの 401 でモデルに `kairocode plugin connect` を返し、一覧が「認証が切れた」。接続し直すと戻る。起動時の 401 も同じ）、`TestProjectPluginAsks`（プロジェクトのものは聞く前に起動しない。スキルだけのもの）、`TestProjectPluginGetsNoUsersKey`、`TestPluginRefusedOnlyWhenTurnedAway`、`TestPluginDeclsAndErrors`、`TestPluginInstallConnectRemove`（git のコミットで固定、標準入力からの値、取り消し、外への削除の拒否）。
+- テスト: `TestPluginTool`（未接続→接続、キーがサーバーに渡り DB に残らない、作用の型、スキル）、`TestPluginRefused`（呼び出しの 401 でモデルに答えと `kairocode plugin connect` を返し、一覧がその答えになる。接続し直すと戻る。起動時の 401 も同じ。GitHub の形の 400 と `invalid_token` も断られたとし、答えをそのまま、キーを伏せて見せる）、`TestProjectPluginAsks`（プロジェクトのものは聞く前に起動しない。スキルだけのもの）、`TestProjectPluginGetsNoUsersKey`、`TestPluginRefusedOnlyWhenTurnedAway`、`TestPluginDeclsAndErrors`、`TestPluginInstallConnectRemove`（git のコミットで固定、標準入力からの値、取り消し、外への削除の拒否）。

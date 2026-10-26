@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -169,7 +170,7 @@ type pluginTokens struct {
 	grant oauthGrant
 	// refused is told when a refresh is refused; logf when the new tokens
 	// could not be kept.
-	refused func()
+	refused func(answer string)
 	logf    func(format string, args ...any)
 }
 
@@ -187,7 +188,7 @@ func readGrant(key string) (oauthGrant, bool, error) {
 }
 
 // token is the access token, refreshed if it runs out soon. A refresh the
-// authorization server refuses is errRefused; one that does not reach it,
+// authorization server refuses is a refusal (errRefused); one that does not reach it,
 // errNotSent: either way the request is not sent.
 func (p *pluginTokens) token(ctx context.Context) (string, error) {
 	p.mu.Lock()
@@ -209,8 +210,9 @@ func (p *pluginTokens) token(ctx context.Context) (string, error) {
 		return p.grant.Token.AccessToken, nil
 	}
 	if p.grant.Token.RefreshToken == "" {
-		p.refused()
-		return "", fmt.Errorf("%w: the token ran out, and there is no refresh token", errRefused)
+		const answer = "the token ran out, and there is no refresh token"
+		p.refused(answer)
+		return "", &refusal{answer: answer}
 	}
 	c := &oauth2.Config{ClientID: p.grant.ClientID, ClientSecret: p.grant.ClientSecret, Scopes: p.grant.Scopes,
 		Endpoint: oauth2.Endpoint{TokenURL: p.grant.TokenURL, AuthStyle: p.grant.AuthStyle}}
@@ -220,8 +222,21 @@ func (p *pluginTokens) token(ctx context.Context) (string, error) {
 	if err != nil {
 		var re *oauth2.RetrieveError
 		if errors.As(err, &re) && (re.ErrorCode == "invalid_grant" || re.ErrorCode == "invalid_client" || re.ErrorCode == "unauthorized_client") {
-			p.refused()
-			return "", fmt.Errorf("%w: the authorization server refused to refresh the token (%s)", errRefused, re.ErrorCode)
+			answer := "the token endpoint refused it: " + re.ErrorCode
+			if re.Response != nil {
+				answer = "the token endpoint answered HTTP " + re.Response.Status
+			}
+			hidden := strings.ReplaceAll(string(re.Body), used, "***")
+			for _, v := range []string{p.grant.Token.AccessToken, p.grant.ClientSecret} {
+				if v != "" {
+					hidden = strings.ReplaceAll(hidden, v, "***")
+				}
+			}
+			if body := strings.Join(strings.Fields(hidden), " "); body != "" {
+				answer += ": " + clip(body, 300)
+			}
+			p.refused(answer)
+			return "", &refusal{answer: answer}
 		}
 		return "", fmt.Errorf("%w: the token could not be refreshed: the token endpoint did not answer as it should", errNotSent)
 	}

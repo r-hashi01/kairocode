@@ -130,9 +130,10 @@ var secretRef = regexp.MustCompile(`\{secret:([A-Za-z0-9_.-]+)\}`)
 // errNotConnected: a plugin's credential is not there yet.
 var errNotConnected = errors.New("not connected")
 
-// errRefused: a plugin's remote server turned a message away (HTTP 401 or
-// 403) before taking it.
-var errRefused = errors.New("the server refused the plugin's credentials")
+// errRefused: a plugin's remote server turned a message away for its
+// credentials (turnedAway, a refusal) before taking it, or its token could
+// not be refreshed.
+var errRefused = errors.New("refused")
 
 // PluginSecretKey is where a plugin's credential is kept. A project's
 // plugin's are its own, by its folder: one that takes a plugin of the
@@ -329,16 +330,17 @@ func (r *Runtime) pluginState(ctx context.Context, dir string, p plugin, srcs []
 	case workflows.HookAsk:
 		return "not run yet: you are asked when a turn starts", nil
 	}
-	if r.ext.authFailed(s) {
-		return "authentication expired: kairocode plugin connect " + p.Name, nil
+	if answer, ok := r.ext.authFailed(s); ok {
+		return refusedState(p, answer), nil
 	}
 	cs, err := r.ext.session(dir, s, mode)
 	if errors.Is(err, errNotConnected) {
 		return "not connected: kairocode plugin connect " + p.Name, nil
 	}
 	if err != nil && refused(s, err) {
-		r.ext.markAuthFailed(s)
-		return "authentication expired: kairocode plugin connect " + p.Name, nil
+		answer := refusalOf(s, err)
+		r.ext.markAuthFailed(s, answer)
+		return refusedState(p, answer), nil
 	}
 	if err != nil {
 		return "does not start: " + serverErr(s, err), nil
@@ -346,8 +348,9 @@ func (r *Runtime) pluginState(ctx context.Context, dir string, p plugin, srcs []
 	listed, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		if refused(s, err) {
-			r.ext.markAuthFailed(s)
-			return "authentication expired: kairocode plugin connect " + p.Name, nil
+			answer := refusalOf(s, err)
+			r.ext.markAuthFailed(s, answer)
+			return refusedState(p, answer), nil
 		}
 		return "does not answer: " + serverErr(s, err), nil
 	}
@@ -357,6 +360,12 @@ func (r *Runtime) pluginState(ctx context.Context, dir string, p plugin, srcs []
 		tools = append(tools, MCPToolInfo{Name: name, Effect: effectOf(name, s, decls)})
 	}
 	return "connected", tools
+}
+
+// refusedState is the state of p, whose server refused its credentials
+// with answer: the answer as it was given (ADR 0025).
+func refusedState(p plugin, answer string) string {
+	return "refused: " + answer + "; kairocode plugin connect " + p.Name
 }
 
 // pluginVersion is the plugin's version: its manifest's, else its git
@@ -375,7 +384,7 @@ func pluginCommit(dir string) string {
 }
 
 // refused says a plugin's remote server turned the message away (its POST
-// answered 401 or 403, seen by headers.RoundTrip): nothing it asked for
+// answered 401, 403 or invalid_token: turnedAway): nothing it asked for
 // ran. Any other error, a local server's or one in a JSON-RPC answer,
 // whatever its words, is not this (invariant 4).
 func refused(s extServer, err error) bool {

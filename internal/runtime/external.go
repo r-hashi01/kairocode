@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -113,7 +114,11 @@ func safeErr(err error) string {
 // an error's text may carry (a URL with one in it), are put out of it
 // (invariant 6).
 func serverErr(s extServer, err error) string {
-	text := safeErr(err)
+	return redact(s, safeErr(err))
+}
+
+// redact is text with server s's credentials put out of it.
+func redact(s extServer, text string) string {
 	if s.Plugin == "" {
 		return text
 	}
@@ -517,8 +522,9 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 		return tools.Result{Output: fmt.Sprintf("the plugin %s is not connected: the user needs to run kairocode plugin connect %s", d.Server, d.Server), IsError: true}
 	}
 	if err != nil && refused(servers[i], err) {
-		r.ext.markAuthFailed(servers[i])
-		return tools.Result{Output: fmt.Sprintf("the plugin %s's credentials were refused: the user needs to run kairocode plugin connect %s", servers[i].Plugin, servers[i].Plugin), IsError: true}
+		answer := refusalOf(servers[i], err)
+		r.ext.markAuthFailed(servers[i], answer)
+		return tools.Result{Output: fmt.Sprintf("the MCP server %q refused it, and it did not run: %s (the user can run kairocode plugin connect %s)", d.Server, answer, servers[i].Plugin), IsError: true}
 	}
 	if err != nil {
 		return tools.Result{Output: fmt.Sprintf("the MCP server %q did not start: %s", d.Server, serverErr(servers[i], err)), IsError: true}
@@ -535,9 +541,10 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 	}
 	if err != nil && refused(servers[i], err) {
 		// Refused: it did not run. The user connects again (ADR 0025).
-		r.ext.markAuthFailed(servers[i])
+		answer := refusalOf(servers[i], err)
+		r.ext.markAuthFailed(servers[i], answer)
 		r.ext.dropSession(dir, servers[i], d.Mode, cs)
-		return tools.Result{Output: fmt.Sprintf("the plugin %s's credentials were refused: the user needs to run kairocode plugin connect %s", servers[i].Plugin, servers[i].Plugin), IsError: true}
+		return tools.Result{Output: fmt.Sprintf("the call to %s was refused, and it did not run: %s (the user can run kairocode plugin connect %s)", d.Name, answer, servers[i].Plugin), IsError: true}
 	}
 	if err != nil {
 		r.ext.dropSession(dir, servers[i], d.Mode, cs) // started again at the next call
@@ -562,9 +569,8 @@ type extServers struct {
 	conns  map[string]*extConn
 	closed bool
 	// expired: plugins' servers (by their manifest) that refused their
-	// credentials (ADR 0025), until they are connected again; the
-	// plugin's name.
-	expired map[string]string
+	// credentials (ADR 0025), until they are connected again.
+	expired map[string]refusedBy
 	// tokens: plugins' OAuth tokens, one holder per grant kept.
 	tokens map[string]*pluginTokens
 	logf   func(format string, args ...any)
@@ -588,7 +594,7 @@ func (e *extServers) tokensOf(s extServer) (*pluginTokens, error) {
 		logf = func(string, ...any) {}
 	}
 	p := &pluginTokens{key: key, name: s.Plugin, grant: g, logf: logf,
-		refused: func() { go e.refusedTokens(s) }} // e.mu may be held: a session starting
+		refused: func(answer string) { go e.refusedTokens(s, answer) }} // e.mu may be held: a session starting
 	if e.tokens == nil {
 		e.tokens = map[string]*pluginTokens{}
 	}
@@ -596,33 +602,39 @@ func (e *extServers) tokensOf(s extServer) (*pluginTokens, error) {
 	return p, nil
 }
 
-// markAuthFailed notes that s, a plugin's server, refused its credentials.
-func (e *extServers) markAuthFailed(s extServer) {
+// refusedBy is a plugin whose server refused its credentials, and the
+// server's answer.
+type refusedBy struct{ plugin, answer string }
+
+// markAuthFailed notes that s, a plugin's server, refused its credentials
+// with answer.
+func (e *extServers) markAuthFailed(s extServer, answer string) {
 	if s.Plugin == "" {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.expired == nil {
-		e.expired = map[string]string{}
+		e.expired = map[string]refusedBy{}
 	}
-	e.expired[s.Source] = s.Plugin
+	e.expired[s.Source] = refusedBy{s.Plugin, answer}
 }
 
-// authFailed says s refused its credentials.
-func (e *extServers) authFailed(s extServer) bool {
+// authFailed is the answer with which s refused its credentials, if it
+// did.
+func (e *extServers) authFailed(s extServer) (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, ok := e.expired[s.Source]
-	return ok
+	f, ok := e.expired[s.Source]
+	return f.answer, ok
 }
 
 // connected forgets that plugin's credentials were refused, and stops its
 // sessions, to start them with the new ones.
 func (e *extServers) connected(plugin string) {
 	e.mu.Lock()
-	for src, p := range e.expired {
-		if p == plugin {
+	for src, f := range e.expired {
+		if f.plugin == plugin {
 			delete(e.expired, src)
 		}
 	}
@@ -638,8 +650,8 @@ func (e *extServers) connected(plugin string) {
 // refusedTokens: s's token could not be refreshed. It is expired, and its
 // sessions are stopped: one whose event stream failed would only make the
 // next call's outcome unknown.
-func (e *extServers) refusedTokens(s extServer) {
-	e.markAuthFailed(s)
+func (e *extServers) refusedTokens(s extServer, answer string) {
+	e.markAuthFailed(s, answer)
 	e.drop(s.Plugin)
 }
 
@@ -808,7 +820,24 @@ func (e *extServers) close() {
 	}
 }
 
-// headers adds a remote server's configured headers to each request.
+// turnedAway says the server refused the request's credentials: 401 or
+// 403, or another 4xx whose WWW-Authenticate says the token is not good
+// (RFC 6750's invalid_token; GitHub answers a token not in its form with
+// 400 so).
+func turnedAway(resp *http.Response) bool {
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return true
+	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+		for _, v := range resp.Header.Values("WWW-Authenticate") {
+			if strings.Contains(v, `error="invalid_token"`) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // serverClient reaches a remote MCP server: a redirect to another host is
 // not followed, as the request carries credentials (invariant 6).
 func serverClient(h headers) *http.Client {
@@ -826,6 +855,7 @@ func serverClient(h headers) *http.Client {
 	}}
 }
 
+// headers adds a remote server's configured headers to each request.
 type headers struct {
 	s      extServer
 	tokens *pluginTokens // a plugin's OAuth tokens
@@ -843,23 +873,70 @@ func (h headers) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		req.Header.Set(k, val)
 	}
+	token := ""
 	if h.tokens != nil {
 		t, err := h.tokens.token(req.Context())
 		if err != nil {
 			return nil, err // not sent
 		}
+		token = t
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
 	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err == nil && h.s.Plugin != "" && !h.connecting && req.Method == http.MethodPost &&
-		(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+	if err == nil && h.s.Plugin != "" && !h.connecting && req.Method == http.MethodPost && turnedAway(resp) {
 		// The message was turned away before the server took it: nothing
 		// it asked for ran (ADR 0025). A GET (the event stream) is not a
 		// message: a call may be under way, and its refusal says nothing.
-		resp.Body.Close()
-		return nil, fmt.Errorf("%w (HTTP %d)", errRefused, resp.StatusCode)
+		defer resp.Body.Close()
+		hide := func(text string) string {
+			if token != "" {
+				text = strings.ReplaceAll(text, token, "***")
+			}
+			return redact(h.s, text)
+		}
+		return nil, &refusal{answer: answerOf(resp, hide)}
 	}
 	return resp, err
+}
+
+// answerOf is a refusing response as the server gave it: its status, its
+// body's first words, and its WWW-Authenticate, on one line, with what
+// hide puts out of it (credentials the server may say back) before it is
+// cut. Only its first 2 KiB are read, for 2 seconds at most.
+func answerOf(resp *http.Response, hide func(string) string) string {
+	stop := time.AfterFunc(2*time.Second, func() { resp.Body.Close() }) // a body that does not come
+	defer stop.Stop()
+	const most = 2 << 10
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, most+1))
+	fields := strings.Fields(hide(string(b)))
+	if len(b) > most && len(fields) > 0 {
+		fields = fields[:len(fields)-1] // cut in its middle: a credential's start, maybe
+	}
+	answer := "HTTP " + resp.Status
+	if body := strings.Join(fields, " "); body != "" {
+		answer += ": " + clip(body, 300)
+	}
+	for _, v := range resp.Header.Values("WWW-Authenticate") {
+		answer += " (WWW-Authenticate: " + clip(strings.Join(strings.Fields(hide(v)), " "), 300) + ")"
+	}
+	return answer
+}
+
+// refusal is a remote plugin's server's refusal of its credentials
+// (errRefused), with the server's answer.
+type refusal struct{ answer string }
+
+func (e *refusal) Error() string        { return "refused: " + e.answer }
+func (e *refusal) Is(target error) bool { return target == errRefused }
+
+// refusalOf is the answer with which s refused err's request, redacted:
+// the server's own (a refusal), else err's text (a refresh refused).
+func refusalOf(s extServer, err error) string {
+	var r *refusal
+	if errors.As(err, &r) {
+		return redact(s, r.answer)
+	}
+	return serverErr(s, err)
 }
 
 // MCPInfo is what /mcp shows of an MCP server, a custom tool, or a server
