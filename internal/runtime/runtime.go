@@ -237,14 +237,14 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		!r.knownAgent(ctx, id) {
 		r.lsp.Close()
 		r.ev.close()
-		db.Close()
+		closeDB(db)
 		return nil, fmt.Errorf("runtime: the engine %q: %w: %s", cfg.Engine, ErrNoProvider, id)
 	}
 	fail := func(err error) (*Runtime, error) {
 		r.bgCancel()
 		r.ev.close()
 		r.lsp.Close()
-		db.Close()
+		closeDB(db)
 		return nil, err
 	}
 	if r.Store, err = store.New(ctx, db); err != nil {
@@ -329,9 +329,29 @@ func (r *Runtime) Close() error {
 		err = errors.Join(err, r.K.Close())
 		r.lsp.Close()
 		r.ext.close()
-		r.closeErr = errors.Join(err, r.db.Close())
+		r.closeErr = errors.Join(err, closeDB(r.db))
 	})
 	return r.closeErr
+}
+
+// closeDB closes db and returns once it holds no connection. database/sql's
+// Close does not wait for its opener: a connection asked for before (a
+// query cut short as kairo closed, with another waiting: the pool has one)
+// is opened after Close returns and only then closed, touching the files
+// (kairo.db-wal) of a closed runtime, after a daemon let go of its lock.
+// The pool's count of open connections, which counts that one from when it
+// is asked for, is the only sign of it.
+// A connection that stays (one leaked, or the opener stopped with one asked
+// for) is an error after a while, not a wait without end.
+func closeDB(db *sql.DB) error {
+	err := db.Close()
+	for end := time.Now().Add(5 * time.Second); db.Stats().OpenConnections > 0; {
+		if time.Now().After(end) {
+			return errors.Join(err, fmt.Errorf("closing the database: %d connections still open after 5s", db.Stats().OpenConnections))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return err
 }
 
 // toolDefs is every tool this runtime offers.
