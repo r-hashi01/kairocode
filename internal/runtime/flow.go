@@ -131,6 +131,8 @@ type FlowInfo struct {
 	// Draft: a draft, which runs only as a try (/flow <name> --draft, ADR
 	// 0030).
 	Draft bool `json:"draft,omitempty"`
+	// Args: what it is to be given (its ARGS).
+	Args string `json:"args,omitempty"`
 }
 
 // Flows are the flows of the session's project, by name, with their
@@ -172,7 +174,8 @@ func scripts(dir, sub string) ([]FlowInfo, error) {
 		}
 		f := FlowInfo{Name: name}
 		if b, err := os.ReadFile(filepath.Join(dir, sub, e.Name())); err == nil {
-			f.Description = description(e.Name(), b)
+			f.Description = description(e.Name(), b, "DESCRIPTION")
+			f.Args = description(e.Name(), b, "ARGS")
 		}
 		out = append(out, f)
 	}
@@ -180,8 +183,9 @@ func scripts(dir, sub string) ([]FlowInfo, error) {
 	return out, nil
 }
 
-// description is a script's DESCRIPTION = "..." at its top level.
-func description(name string, src []byte) string {
+// description is a script's <constant> = "..." at its top level
+// (DESCRIPTION, ARGS).
+func description(name string, src []byte, constant string) string {
 	f, err := (&syntax.FileOptions{While: true}).Parse(name, src, 0)
 	if err != nil {
 		return ""
@@ -191,7 +195,7 @@ func description(name string, src []byte) string {
 		if !ok {
 			continue
 		}
-		if id, ok := a.LHS.(*syntax.Ident); ok && id.Name == "DESCRIPTION" {
+		if id, ok := a.LHS.(*syntax.Ident); ok && id.Name == constant {
 			if lit, ok := a.RHS.(*syntax.Literal); ok && lit.Token == syntax.STRING {
 				s, _ := lit.Value.(string)
 				return s
@@ -254,4 +258,26 @@ func (r *Runtime) flowStep(t *kairo.TaskContext, in workflows.FlowStep) (bool, e
 		}
 	}
 	return true, nil
+}
+
+// FlowHelp is what the flow name of the project in dir is to be given and
+// what it does (/flow <name> --help): of its published script, else of
+// its draft (ADR 0030).
+func FlowHelp(dir, name string) (string, error) {
+	if !FlowName(name) {
+		return "", fmt.Errorf("%q is not a flow's name", name)
+	}
+	pub, perr := os.ReadFile(filepath.Join(dir, FlowsDir, name+".star"))
+	draft, derr := os.ReadFile(filepath.Join(dir, flowchart.DraftsDir, name+".star"))
+	switch {
+	case perr == nil:
+		h, err := flowchart.Help(name, pub, false)
+		if err == nil && derr == nil {
+			h += "\nIt has a draft as well: /flow " + name + " --draft tries it, --publish publishes it.\n"
+		}
+		return h, err
+	case derr == nil:
+		return flowchart.Help(name, draft, true)
+	}
+	return "", fmt.Errorf("there is no flow %q (%s/%s.star), nor a draft of one", name, FlowsDir, name)
 }

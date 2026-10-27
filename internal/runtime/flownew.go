@@ -20,6 +20,7 @@ A flow is a Starlark script (Starlark is a small dialect of Python). It runs wit
 
 The script:
 - DESCRIPTION = "one line saying what the flow does" at the top.
+- ARGS = "<what> [what else]" at the top, if the flow reads input["args"]: what to give it after /flow <name>, as a usage line (shown by /flow <name> --help).
 - LIMITS = {"agents": N, "steps": N, "tokens": N} if the flow needs other limits (all optional).
 - def main(input): ... is where it starts; input["args"] is the words after /flow <name>.
 - main returns a string (what the flow did), or {"ok": True/False, "message": "..."}.

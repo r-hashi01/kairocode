@@ -299,6 +299,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if flow, ok := strings.CutPrefix(request, "/flow "); ok { // what a flow is to be given: no session for it
+		if name, rest, _ := strings.Cut(strings.TrimSpace(flow), " "); strings.TrimSpace(rest) == "--help" {
+			text, err := runtime.FlowHelp(abs, name)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprint(stdout, text)
+			return err
+		}
+	}
 	c, err := connect(ctx, *data)
 	if err != nil {
 		return err

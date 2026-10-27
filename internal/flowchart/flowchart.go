@@ -92,7 +92,10 @@ type Arg struct {
 type Chart struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Nodes       []Node `json:"nodes"`
+	// Args is what the flow is to be given (its ARGS): the words after
+	// /flow <name>, as their use says (ADR 0003, 追記).
+	Args  string `json:"args,omitempty"`
+	Nodes []Node `json:"nodes"`
 }
 
 // textMax is how much of a prompt or a command a box keeps.
@@ -115,9 +118,14 @@ func Build(name string, src []byte) (*Chart, error) {
 				main = s
 			}
 		case *syntax.AssignStmt:
-			if id, ok := s.LHS.(*syntax.Ident); ok && id.Name == "DESCRIPTION" {
+			if id, ok := s.LHS.(*syntax.Ident); ok && (id.Name == "DESCRIPTION" || id.Name == "ARGS") {
 				if lit, ok := s.RHS.(*syntax.Literal); ok && lit.Token == syntax.STRING {
-					c.Description, _ = lit.Value.(string)
+					v, _ := lit.Value.(string)
+					if id.Name == "ARGS" {
+						c.Args = v
+					} else {
+						c.Description = v
+					}
 				}
 			}
 		}

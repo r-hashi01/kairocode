@@ -764,6 +764,14 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		if flow == "" { // the list, without a turn
 			return a.listFlows(ctx, p.SessionID)
 		}
+		if strings.TrimSpace(rest) == "--help" { // what it is to be given, without a turn
+			text, err := runtime.FlowHelp(a.dirOf(p.SessionID), flow)
+			if err != nil {
+				text = err.Error()
+			}
+			a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(strings.TrimRight(text, "\n"))})
+			return map[string]any{"stopReason": "end_turn"}, nil
+		}
 		if flow == "runs" { // the runs kept, without a turn (ADR 0029)
 			a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.flowRunsText(ctx, p.SessionID))})
 			return map[string]any{"stopReason": "end_turn"}, nil
@@ -912,13 +920,17 @@ func (a *agent) listFlows(ctx context.Context, session string) (any, error) {
 	}
 	text := "There are no flows yet: they are .kairocode/workflows/<name>.star."
 	if len(fs) > 0 {
-		lines := []string{"Flows (/flow <name> [what to give it]):"}
+		lines := []string{"Flows (/flow <name> [what to give it]; /flow <name> --help says what):"}
 		for _, f := range fs {
+			name := f.Name
+			if f.Args != "" {
+				name += " " + f.Args
+			}
 			if f.Draft {
-				lines = append(lines, "- "+f.Name+" (draft: /flow "+f.Name+" --draft tries it, --publish publishes it)"+describe(f.Description))
+				lines = append(lines, "- "+name+" (draft: /flow "+f.Name+" --draft tries it, --publish publishes it)"+describe(f.Description))
 				continue
 			}
-			lines = append(lines, "- "+f.Name+describe(f.Description))
+			lines = append(lines, "- "+name+describe(f.Description))
 		}
 		text = strings.Join(lines, "\n")
 	}

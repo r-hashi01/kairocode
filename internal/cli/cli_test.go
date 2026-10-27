@@ -616,3 +616,32 @@ func TestFlowRunsAndShow(t *testing.T) {
 		}
 	}
 }
+
+// kairocode run "/flow <name> --help" says what the flow is to be given,
+// with no daemon and no session; a draft says it is one (ADR 0003, 0030).
+func TestRunFlowHelp(t *testing.T) {
+	ws := t.TempDir()
+	os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows", "drafts"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "triage.star"),
+		[]byte("DESCRIPTION = \"Triage\"\nARGS = \"<owner/repo>\"\ndef main(input):\n    return input[\"args\"]\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "drafts", "next.star"),
+		[]byte("def main(input):\n    return input[\"args\"]\n"), 0o644)
+	data := filepath.Join(t.TempDir(), "no-daemon")
+	var out, errs bytes.Buffer
+	if c := Main(context.Background(), []string{"run", "-dir", ws, "-data", data, "/flow triage --help"}, &out, &errs); c != 0 {
+		t.Fatalf("exit %d: %s", c, errs.String())
+	}
+	if !strings.Contains(out.String(), "/flow triage <owner/repo>") {
+		t.Fatalf("help:\n%s", out.String())
+	}
+	out.Reset()
+	if c := Main(context.Background(), []string{"run", "-dir", ws, "-data", data, "/flow next --help"}, &out, &errs); c != 0 {
+		t.Fatalf("exit %d: %s", c, errs.String())
+	}
+	if !strings.Contains(out.String(), "a draft: /flow next --draft") || !strings.Contains(out.String(), `2: return input["args"]`) {
+		t.Fatalf("help:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(data, "server.json")); err == nil {
+		t.Fatal("a daemon was started for --help")
+	}
+}
