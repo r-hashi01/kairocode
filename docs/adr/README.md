@@ -14,7 +14,7 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0001](0001-go-on-the-kairo-go-sdk.md) | KairoCode を Go で書き、kairo の Go の SDK（埋め込みのランタイム）の上で動かす | 承認（2026-10-09） |
 | [0002](0002-opencode-features-and-acp.md) | 機能と設定の形は opencode を手本にし、利用者の側の入口は ACP にする | 承認（2026-10-09） |
 | [0003](0003-workflows-started-by-people-and-events.md) | ワークフローは、人と出来事が始める。中身は Starlark で、言葉から作り、端末にフローの図として見せる | 承認（2026-10-19） |
-| [0004](0004-dspchr-integration.md) | dspchr の中でよく振る舞うエージェントになる | 提案 |
+| [0004](0004-dspchr-integration.md) | dspchr の中でよく振る舞うエージェントになる | 提案（保留） |
 | [0005](0005-sandbox-for-processes.md) | KairoCode が動かすプロセスは、Codex にならった OS の sandbox の中で動かす | 承認（2026-10-09） |
 | [0006](0006-conversation-storage.md) | 会話は、内容のハッシュで引く 1 つの表と、ターンごとのリンクの鎖で持つ。セッションはターンを子として順に動かす | 承認（2026-10-09） |
 | [0007](0007-claude-code-engine-for-local-use.md) | 手元では、利用者自身の Claude Code（サブスクリプション）をモデルのエンジンとして使える | 承認（2026-10-09） |
