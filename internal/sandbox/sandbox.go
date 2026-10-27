@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type Mode int
@@ -62,6 +63,33 @@ type Policy struct {
 	// SocketDir is the Loopback command's own temporary directory, made by
 	// SocketDir().
 	SocketDir string
+}
+
+var (
+	hiddenMu sync.Mutex
+	hidden   []string
+)
+
+// HideFromLoopback adds directories a loopback command must not see, for
+// the Unix sockets in them: the daemon's data directory, whose socket would
+// let a command approve its own calls (ADR 0031). Each process that starts
+// loopback commands says it (the daemon, a background job's runner). On
+// macOS the sandbox already keeps such sockets out of reach; on Linux it
+// hides them.
+func HideFromLoopback(dirs ...string) {
+	hiddenMu.Lock()
+	defer hiddenMu.Unlock()
+	for _, d := range dirs {
+		if abs, err := filepath.Abs(d); err == nil {
+			hidden = append(hidden, abs)
+		}
+	}
+}
+
+func hiddenFromLoopback() []string {
+	hiddenMu.Lock()
+	defer hiddenMu.Unlock()
+	return append([]string(nil), hidden...)
 }
 
 // protectedNames are the names a policy keeps out of reach.

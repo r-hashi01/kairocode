@@ -7,12 +7,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	seccomp "github.com/elastic/go-seccomp-bpf"
+	"github.com/elastic/go-seccomp-bpf/arch"
 	"golang.org/x/net/bpf"
 )
+
+// unixDomain is AF_UNIX, socket's first argument.
+const unixDomain = 1
 
 // bwrapPath is bubblewrap, found on PATH once.
 var bwrapPath = "bwrap"
@@ -45,6 +51,12 @@ func Available() error {
 // names under them read-only again, no network namespace unless allowed,
 // and a seccomp filter.
 //
+// A network namespace does not keep Unix sockets apart, and a read-only
+// mount does not refuse a connect: without the network, a command makes no
+// Unix socket at all (as on macOS), and a loopback one sees the temporary
+// and runtime directories empty, where others' sockets are (the daemon's,
+// tmux's, ssh-agent's: ADR 0031).
+//
 // A protected name that does not exist yet can be made: binding it
 // read-only would need it to exist (Codex has the same open issue). macOS
 // refuses that too.
@@ -61,21 +73,48 @@ func platformCommand(ctx context.Context, p Policy, root string, argv []string) 
 		"--die-with-parent", "--new-session",
 	}
 	roots := writableRoots(p, root)
-	for _, w := range roots {
-		args = append(args, "--bind", w, w)
-	}
-	for _, w := range roots {
-		for _, name := range protectedNames(p) {
-			pp := filepath.Join(w, name)
-			if _, err := os.Lstat(pp); err == nil {
-				args = append(args, "--ro-bind", pp, pp)
+	bound := roots
+	var later []string // hidden directories under a writable root
+	if p.Loopback && !p.Network {
+		bound = nil
+		for _, w := range roots {
+			if w != p.SocketDir {
+				bound = append(bound, w)
 			}
 		}
+		dirs, sockets := socketPlaces()
+		for _, d := range dirs {
+			if slices.Contains(bound, d) {
+				return nil, fmt.Errorf("sandbox: loopback in %s, which holds others' sockets", d)
+			}
+			if within(d, bound) {
+				later = append(later, d)
+			} else {
+				args = append(args, "--tmpfs", d)
+			}
+		}
+		for _, s := range sockets {
+			args = append(args, "--ro-bind", "/dev/null", s)
+		}
+	}
+	for _, w := range bound {
+		args = append(args, "--bind", w, w)
+	}
+	args = append(args, protect(p, bound)...)
+	// A writable root binds back what is under it: what is hidden there is
+	// hidden again after it (and after its protected names), and the
+	// command's own directory bound last.
+	for _, d := range later {
+		args = append(args, "--tmpfs", d)
+	}
+	if len(bound) < len(roots) {
+		args = append(args, "--bind", p.SocketDir, p.SocketDir)
+		args = append(args, protect(p, []string{p.SocketDir})...)
 	}
 	if !p.Network {
 		args = append(args, "--unshare-net")
 	}
-	filter, err := seccompFilter()
+	filter, err := seccompFilter(!p.Network && !p.Loopback)
 	if err != nil {
 		return nil, err
 	}
@@ -85,10 +124,62 @@ func platformCommand(ctx context.Context, p Policy, root string, argv []string) 
 	return cmd, nil
 }
 
+// protect binds the protected names under roots read-only again.
+func protect(p Policy, roots []string) []string {
+	var args []string
+	for _, w := range roots {
+		for _, name := range protectedNames(p) {
+			pp := filepath.Join(w, name)
+			if _, err := os.Lstat(pp); err == nil {
+				args = append(args, "--ro-bind", pp, pp)
+			}
+		}
+	}
+	return args
+}
+
+// within says whether d is under one of dirs.
+func within(d string, dirs []string) bool {
+	for _, w := range dirs {
+		if strings.HasPrefix(d, w+"/") || w == "/" {
+			return true
+		}
+	}
+	return false
+}
+
+// socketPlaces are where others' Unix sockets are, for a loopback command
+// to see empty: the temporary and runtime directories, the daemon's data
+// directory (HideFromLoopback), and the sockets directly in /run (docker's).
+// Sockets elsewhere (under the home directory: gpg-agent's) stay in sight:
+// Linux has no rule for which socket a process may reach (ADR 0031).
+func socketPlaces() (dirs, sockets []string) {
+	cands := []string{"/tmp", "/var/tmp", os.TempDir(), os.Getenv("XDG_RUNTIME_DIR"), fmt.Sprintf("/run/user/%d", os.Getuid())}
+	for _, d := range append(cands, hiddenFromLoopback()...) {
+		if d == "" {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(d)
+		// One under another is kept: a writable root may lie between them.
+		if err != nil || real == "/" || slices.Contains(dirs, real) {
+			continue
+		}
+		dirs = append(dirs, real)
+	}
+	if entries, err := os.ReadDir("/run"); err == nil {
+		for _, e := range entries {
+			if e.Type()&os.ModeSocket != 0 {
+				sockets = append(sockets, filepath.Join("/run", e.Name()))
+			}
+		}
+	}
+	return dirs, sockets
+}
+
 // seccompFilter is the filter bubblewrap loads (--seccomp): calls that let
 // a process reach into others or around the filter fail with EPERM, as in
-// Codex.
-func seccompFilter() (*os.File, error) {
+// Codex. With noUnix, so does making a Unix socket (socketpair stays).
+func seccompFilter(noUnix bool) (*os.File, error) {
 	policy := seccomp.Policy{
 		DefaultAction: seccomp.ActionAllow,
 		Syscalls: []seccomp.SyscallGroup{{
@@ -103,7 +194,11 @@ func seccompFilter() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := bpf.Assemble(insts)
+	pre, err := filterPrefix(noUnix)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := bpf.Assemble(append(pre, insts...))
 	if err != nil {
 		return nil, err
 	}
@@ -127,4 +222,40 @@ func seccompFilter() (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// filterPrefix comes before the library's filter. It refuses every call of
+// another architecture (the library lets those through: i386's socket by
+// int 0x80 on amd64 would pass it). With noUnix, it refuses socket with
+// AF_UNIX, looking at the low 32 bits alone: the kernel reads the family as
+// an int, and the library compares all 64 (1<<32|AF_UNIX would pass it).
+func filterPrefix(noUnix bool) ([]bpf.Instruction, error) {
+	info, err := arch.GetInfo("")
+	if err != nil {
+		return nil, err
+	}
+	eperm := bpf.RetConstant{Val: uint32(seccomp.ActionErrno) | uint32(syscall.EPERM)}
+	pre := []bpf.Instruction{
+		bpf.LoadAbsolute{Off: 4, Size: 4}, // arch
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(info.ID), SkipTrue: 1},
+		eperm,
+	}
+	if !noUnix {
+		return pre, nil
+	}
+	nr, ok := info.SyscallNames["socket"]
+	if !ok {
+		return nil, fmt.Errorf("sandbox: no socket call on %s", info.Name)
+	}
+	lo := uint32(16) // args[0], its low half on a little-endian machine
+	if binary.NativeEndian.Uint16([]byte{0, 1}) == 1 {
+		lo += 4
+	}
+	return append(pre,
+		bpf.LoadAbsolute{Off: 0, Size: 4}, // nr
+		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(nr), SkipTrue: 3},
+		bpf.LoadAbsolute{Off: lo, Size: 4},
+		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: unixDomain, SkipTrue: 1},
+		eperm,
+	), nil
 }

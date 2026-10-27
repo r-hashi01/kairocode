@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -109,14 +110,20 @@ func TestLoopbackInTheBackground(t *testing.T) {
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/lo.star": `
 def main(input):
-    s = tool("bash", command = "echo \"dir=$TMPDIR\"", background = True, sandbox = "loopback")
+    s = tool("bash", command = "echo \"dir=$TMPDIR\"; test -e data/k.db && echo data=seen || echo data=hidden", background = True, sandbox = "loopback")
     if not s.ok:
         return "not started: " + s.error
     id = s.output.split("started in the background: ")[1].split(" ")[0]
     return tool("bash_wait", id = id).output
 `})
-	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	// The data directory under the working directory, as under the home
+	// directory a session may start in: on Linux the runner hides it, with
+	// the daemon's socket (macOS keeps the socket out of reach instead).
+	r := open(t, filepath.Join(ws, "data", "k.db"), &provider.Fake{HoldAt: -1})
 	_, text, _ := flowTurn(t, r, ws, "lo", "")
+	if goruntime.GOOS == "linux" && !strings.Contains(text, "data=hidden") {
+		t.Errorf("the data directory, in sight:\n%s", text)
+	}
 	i := strings.LastIndex(text, "dir=") // after the command's own text
 	if i < 0 {
 		t.Fatalf("the command's output:\n%s", text)

@@ -502,7 +502,10 @@ func RunJob(folder string) error {
 	}
 	p := sandbox.Policy{Mode: mode, Root: s.Dir}
 	if s.Loopback && mode == sandbox.WorkspaceWrite {
-		// Its own TMPDIR, gone with the command (ADR 0031).
+		// Its own TMPDIR, gone with the command (ADR 0031). The data
+		// directory (<data>/jobs/<id>), with the daemon's socket, out of its
+		// sight: this runner is not the daemon, which hides it there.
+		sandbox.HideFromLoopback(filepath.Dir(filepath.Dir(folder)))
 		p.Loopback = true // without its directory, sandbox.Command refuses it
 		if dir, done, err := sandbox.SocketDir(); err == nil {
 			defer done()

@@ -30,6 +30,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/server"
 )
 
@@ -192,6 +193,9 @@ func Serve(ctx context.Context, o Options) error {
 	idle := newIdleTimer(o.Idle, stop)
 	defer idle.close()
 
+	// Its socket and token are there: a loopback command must not reach
+	// them (ADR 0031).
+	sandbox.HideFromLoopback(o.Dir)
 	if rt, err = o.Open(ctx, runtime.Config{DB: runtime.DBIn(o.Dir), Owner: Owner, Observe: idle.observe}); err != nil {
 		return err
 	}
