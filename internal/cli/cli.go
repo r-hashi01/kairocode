@@ -53,6 +53,7 @@ const usage = `usage:
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
   kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
   kairocode acp [-data DIR]                          an ACP agent on stdin and stdout, for editors (ADR 0002)
+  kairocode version                                  the version, its commit, Go and the platform
 
 One daemon per data directory runs the sessions (ADR 0008); the commands
 above start it when it is not running, and it stops after 10 minutes with
@@ -82,6 +83,9 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case len(args) > 0 && isHelp(args[0]):
 		fmt.Fprint(stdout, usage)
 		return 0
+	case len(args) > 0 && isVersion(args[0]):
+		printVersion(stdout)
+		return 0
 	case len(args) == 0 || strings.HasPrefix(args[0], "-"):
 		// No command: the chat, as claude has it.
 		err = chat(ctx, args, stdout, stderr)
@@ -105,6 +109,14 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func isHelp(arg string) bool {
 	switch arg {
 	case "-h", "-help", "--help", "help":
+		return true
+	}
+	return false
+}
+
+func isVersion(arg string) bool {
+	switch arg {
+	case "version", "-version", "--version":
 		return true
 	}
 	return false

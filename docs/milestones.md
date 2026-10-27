@@ -1,8 +1,8 @@
-# 進め方（M0〜M4）
+# 進め方（M0〜M9）
 
 設計 10 節の段階を、受け入れ条件のテストに落としたものです。段階の作業は `/milestone` スキルで進めます。受け入れ条件は、実装の前にテストとして書きます（最初は落ちる）。すべて通ったら、その段階の「状態」を「完了（日付）」にします。
 
-今の段階: **M5 は完了（2026-10-22）**。M3 も完了。M2 の残りは、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。M4 の残り（PostgreSQL、サスペンドモード、GitHub から起動）は ADR 0012 と一緒に保留です。
+今の段階: **M6（公開の準備）を作業中（2026-10-27）**。M5 は完了（2026-10-22）。M3 も完了。M2 の残りは、dspchr（ADR 0004 の承認待ち）、本物の `claude` と Zed での手での確認です。M4 の残り（PostgreSQL、サスペンドモード、GitHub から起動）は ADR 0012 と一緒に保留です。
 
 ## M0 骨組み
 
@@ -144,6 +144,48 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] 利用者の MCP サーバーのツールを、宣言した作用の型で使える。宣言のないツールは実として扱い、結果が不明なら人に聞く。プロジェクトが定める MCP サーバーとカスタムツールは、承認なしに sandbox の外で動かない（ADR 0022。どのエンジンでも。`TestMCPServerTool`、`TestCrashMCPServerTool`、`TestCrashMCPServerToolOnClaudeCode`、`TestProjectMCPServerAsks`、`TestProjectMCPServerChanged`、`TestCodexOwnMCPServersOff`）。
 - [x] todo の一覧が、ターンをまたいで続き、クライアントに見える（ADR 0022。`TestTodo`、`TestACPTodoPlan`）。
 - [x] セッションのすべてのターン、モデルの入出力、ツールの呼び出しと結果、待ち、使用量を見られる（`kairocode log`、`/log`。金額は ADR 0024 の後。`TestSessionLog`）。
+
+## M6 公開の準備（個人向けの OSS として出す）
+
+状態: 作業中（2026-10-27 に計画）
+
+中身（利用者が選んだもの、2026-10-27: 個人向けの OSS として出す）: ライセンス、版の表示、CI、リリース、README、上限、手での確認。ここまでで公開する。
+
+受け入れ条件:
+
+- [x] LICENSE（MIT）を置く（2026-10-27）。`third_party/codex-sandbox` の Apache-2.0 と NOTICE はそのまま残す。README から辿れるようにするのは、README の項目で。
+- [x] kairo の SDK を、外の人が `replace` なしで取れる（proxy.golang.org に v0.4.1 がある。2026-10-27 に確かめた）。
+- [x] `kairocode version` が、ビルドのときに埋めた版とコミットを出す（埋めていなければ Go のビルド情報から。`TestVersionLine`、`TestVersionCommand`）。
+- [ ] CI（GitHub Actions、macOS と Linux）で `scripts/check.sh` が通る。 → `.github/workflows/check.yml` は書いた。GitHub で動かして通るのを見るのが残り。
+- [ ] タグからリリースのバイナリ（macOS と Linux、amd64 と arm64）ができ、`go install` と Homebrew の tap で入る。 → 公開まで保留（利用者の判断、2026-10-27）。
+- [ ] 利用者向けの README（入れ方、最初の設定、`kairo` の使い方、`/flow`、sandbox、対応 OS は macOS と Linux、第三者のライセンス）。 → 下書きは書いた（`README.md`、2026-10-27）。公開の前に、手での確認（下の関門）の結果に合わせて直す。
+- [ ] 上限（ADR 0024 の承認の後）: トークンと金額の上限で止まり、人に知らせる。
+- [ ] 公開の前の関門: Zed と TUI で、普段の作業（バグの修正、機能の追加、リファクタリング）を手でこなす（M2 の残り）。出た不具合を直してから公開する。
+
+## M7 強みを見せる
+
+状態: 未着手
+
+- [ ] 耐久性のデモ: `kill -9` しても続き、何も二重に起きない様子の録画と、再現の手順（`docs/durability.md`）。README の冒頭に置く。
+- [ ] 承認の求めを手元の外（Slack など）に知らせる。hook に「承認の求め」の出来事を足し、フローで送る（ADR が要る）。外から答えるのは後で別に決める。
+- [ ] 他社のエージェント（Claude Code、codex）をエンジンにしても同じ保証が保たれることの説明とデモ。本物の `claude` での確認（M2 の残り）もここで済ませる。
+
+## M8 入口の格差を埋める
+
+状態: 未着手
+
+- [ ] OpenAI 互換の API のアダプター（手元のモデルを含む）。標準ライブラリの HTTP で書く（ADR 0014 の追記か新しい ADR）。
+- [ ] 画像の入力（ADR 0026 の承認の後）。
+- [ ] `/init`: リポジトリを読んで AGENTS.md の下書きを作る。
+
+## M9 差別化を深める
+
+状態: 未着手
+
+- [ ] うまくいったセッションからフローを作る（下の「今後の作業」の案。ADR が要る）。
+- [ ] worktree で並べるセッションと、その一覧の画面（ADR が要る）。
+
+M6〜M9 の後に回すもの: VS Code の拡張、Windows、GitHub とサーバーレス（ADR 0012）、セッションの共有、外から承認に答える、検査の報告が回答の後に割り込んで回答を押し流す問題（Stop hook。急ぐなら M6 に入れる）。
 
 ## 段階に割り当てていない今後の作業
 
