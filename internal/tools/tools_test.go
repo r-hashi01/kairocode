@@ -135,11 +135,12 @@ func TestBuiltinToolsAreWellFormed(t *testing.T) {
 		if d.Plan != nil && d.Effect != Idempotent {
 			t.Errorf("%s: a planned write is idempotent, got %v", d.Name, d.Effect)
 		}
-		// bash, and http's POST (ADR 0013).
-		if d.Run != nil && d.Effect != Read && d.Name != "bash" && d.Name != "http" {
-			t.Errorf("%s: of the tools that run directly, only bash and http act, got %v", d.Name, d.Effect)
+		// bash, http's POST (ADR 0013), and stopping a command in the
+		// background (ADR 0028).
+		if d.Run != nil && d.Effect != Read && d.Name != "bash" && d.Name != "http" && d.Name != "bash_kill" {
+			t.Errorf("%s: of the tools that run directly, only bash, http and bash_kill act, got %v", d.Name, d.Effect)
 		}
-		if (d.Name == "bash" || d.Name == "http") && d.Effect != Real {
+		if (d.Name == "bash" || d.Name == "http" || d.Name == "bash_kill") && d.Effect != Real {
 			t.Errorf("%s is real, got %v", d.Name, d.Effect)
 		}
 		if d.Name == "fetch" && d.Effect != Read {

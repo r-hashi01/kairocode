@@ -672,6 +672,12 @@ func (c *Client) PluginConnected(ctx context.Context, name string) error {
 	return c.do(ctx, "POST", "/plugins/"+url.PathEscape(name)+"/connected", nil, nil)
 }
 
+// JobDone tells the daemon that a command in the background ended (its
+// runner, ADR 0028).
+func (c *Client) JobDone(ctx context.Context, id string) error {
+	return c.do(ctx, "POST", "/jobs/"+url.PathEscape(id)+"/done", nil, nil)
+}
+
 // Skills are the session's skills, and the SKILL.md files not taken.
 func (c *Client) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
 	var out runtime.SkillsInfo

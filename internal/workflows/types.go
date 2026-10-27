@@ -145,6 +145,14 @@ const (
 	// SignalAnswerPrefix + a question's id is the signal that answers a
 	// flow's ask() (ADR 0003).
 	SignalAnswerPrefix = "answer/"
+	// SignalJobPrefix + a command's id + "/" + the call is the signal that
+	// tells a run waiting for it (bash_wait) that it ended (ADR 0028). ActJobWatch
+	// starts the wait (or finds the command ended), ActJobResult answers
+	// it; BashWaitTool is the tool waited for so.
+	SignalJobPrefix = "job/"
+	ActJobWatch     = "job.watch"
+	ActJobResult    = "job.result"
+	BashWaitTool    = "bash_wait"
 	// ActToolPrefix + a tool's name is that tool's action. A tool that writes
 	// a file has two instead (design 3.1): ActToolPrefix + name +
 	// ActPlanSuffix works the write out, and ActFileApply makes it.
@@ -1026,4 +1034,35 @@ type ExtLoadOutput struct {
 type ExtRef struct {
 	Def  string `json:"def"`
 	Read bool   `json:"read,omitempty"`
+}
+
+// JobWatchInput is bash_wait's call, and the run that waits.
+type JobWatchInput struct {
+	Call   ToolInput `json:"call"`
+	Waiter string    `json:"waiter"`
+}
+
+// JobWatchOutput: Done, the call's result (the command ended, or the call
+// was not one to wait on); else the command to wait for, at most WaitMS.
+type JobWatchOutput struct {
+	Done   bool       `json:"done,omitempty"`
+	Result ToolOutput `json:"result,omitempty"`
+	ID     string     `json:"id,omitempty"`
+	Signal string     `json:"signal,omitempty"` // the call's own (SignalJobPrefix + id + "/" + call)
+	WaitMS int64      `json:"wait_ms,omitempty"`
+}
+
+// JobResultInput is bash_wait's answer, once the command ended or the wait
+// ran out (TimedOut).
+type JobResultInput struct {
+	Call     ToolInput `json:"call"`
+	Waiter   string    `json:"waiter"`
+	ID       string    `json:"id"`
+	Signal   string    `json:"signal"`
+	TimedOut bool      `json:"timed_out,omitempty"`
+}
+
+// JobEnded is the signal that a command in the background ended.
+type JobEnded struct {
+	ID string `json:"id"`
 }

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
@@ -56,6 +57,9 @@ type Config struct {
 	AgentRegistry string
 	// ExtraTools are offered besides the built-in ones (tests).
 	ExtraTools []tools.Def
+	// JobRunner runs a command in the background, given its folder
+	// (ADR 0028; default: this binary's kairocode jobs run).
+	JobRunner []string
 	// Model is the model an agent uses unless it names one.
 	Model    string
 	MaxSteps int
@@ -100,6 +104,8 @@ type Runtime struct {
 	agents *agents.Manager
 	// ext keeps the MCP servers' sessions (ADR 0022).
 	ext extServers
+	// jobs are the commands in the background (ADR 0028).
+	jobs *jobManager
 	// copilotHooks: one change of copilot's settings at a time.
 	copilotHooksMu sync.Mutex
 	auth           auths
@@ -115,6 +121,7 @@ type Runtime struct {
 
 	closeOnce sync.Once
 	closeErr  error
+	closed    atomic.Bool
 
 	mu      sync.Mutex
 	changed chan struct{} // closed and replaced whenever a run starts or settles here
@@ -216,6 +223,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
 	r.ev = newEvents(r)
 	r.ext.logf = r.logf
+	r.jobs = newJobs(r)
 	if id := registryAgent(cfg.Engine); id != "" && cfg.Engine != workflows.EngineCodex && cfg.Engine != workflows.EngineCopilot &&
 		!r.knownAgent(ctx, id) {
 		r.lsp.Close()
@@ -257,8 +265,12 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		r.K.Close()
 		return fail(err)
 	}
+	r.jobs.recover()
 	return r, nil
 }
+
+// closing says the runtime is closing (or closed).
+func (r *Runtime) closing() bool { return r.closed.Load() }
 
 // Drain stops the runtime at the edges of its steps (kairo's Drain): no new
 // step starts, and the steps under way finish with their outcomes recorded,
@@ -269,6 +281,7 @@ func (r *Runtime) Drain(ctx context.Context) error { return r.K.Drain(ctx) }
 // Close closes the runtime; closing it again does nothing.
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
+		r.closed.Store(true)
 		r.ev.close()
 		err := r.mcp.close()
 		err = errors.Join(err, r.K.Close())
@@ -378,6 +391,10 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
 	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, r.flowLoad)
 	kairo.Action(r.K, workflows.ActFlowWould, kairo.Unprotected, r.flowWould)
+	// bash_wait (ADR 0028): watching a command and reading it change
+	// nothing; done again, they find the same.
+	kairo.Action(r.K, workflows.ActJobWatch, kairo.Unprotected, r.jobWatch)
+	kairo.Action(r.K, workflows.ActJobResult, kairo.Unprotected, r.jobResult)
 	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
 	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,
@@ -582,7 +599,8 @@ func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolIn
 		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
 	}
 	defer root.Close()
-	env := tools.Env{Root: root, Dir: in.Dir}
+	env := tools.Env{Root: root, Dir: in.Dir,
+		Jobs: jobEnv{m: r.jobs, session: sessionOf(t.RunID), dir: in.Dir, key: t.IdempotencyKey}}
 	if d.Name == tools.FetchTool.Name || d.Name == tools.HTTPTool.Name {
 		if env.Net, err = userNet(); err != nil {
 			return r.toolResult(t, in.Call, tools.Result{Output: err.Error(), IsError: true})

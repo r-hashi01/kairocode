@@ -129,6 +129,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = listSessions(ctx, args, stdout, stderr)
 	case "daemon":
 		err = runDaemon(ctx, args, stdout, stderr)
+	case "jobs":
+		err = jobsCommand(ctx, args, stderr)
 	case "approvals":
 		err = approvals(ctx, args, stdout, stderr)
 	case "approve":

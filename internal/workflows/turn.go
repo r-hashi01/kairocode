@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
@@ -732,6 +733,9 @@ func runGated(ctx *kairo.Context, g Gate, in ToolInput) (ToolOutput, error) {
 	if g.Would != nil {
 		return *g.Would, nil
 	}
+	if g.Action == ActToolPrefix+BashWaitTool && g.Denied == nil && g.Ask == nil {
+		return waitJob(ctx, in)
+	}
 	if g.Denied != nil {
 		return kairo.Call[ToolOutput](ctx, ActToolDenied, *g.Denied)
 	}
@@ -771,4 +775,20 @@ func autoPolicy(agent Agent, in TurnInput) Policy {
 // hasHook reports whether the agent has a hook of event.
 func hasHook(agent Agent, event string) bool {
 	return slices.ContainsFunc(agent.Hooks, func(h Hook) bool { return h.Event == event })
+}
+
+// waitJob is bash_wait (ADR 0028): it waits for a command in the
+// background to end, as a signal, the process let go meanwhile, at most
+// the call's time; then answers with what the command wrote.
+func waitJob(ctx *kairo.Context, in ToolInput) (ToolOutput, error) {
+	w, err := kairo.Call[JobWatchOutput](ctx, ActJobWatch, JobWatchInput{Call: in, Waiter: ctx.ID()})
+	if err != nil || w.Done {
+		return w.Result, err
+	}
+	_, err = kairo.WaitFor[JobEnded](ctx, w.Signal, kairo.WaitTimeout(time.Duration(w.WaitMS)*time.Millisecond))
+	timedOut := errors.Is(err, kairo.ErrTimedOut)
+	if err != nil && !timedOut {
+		return ToolOutput{}, err
+	}
+	return kairo.Call[ToolOutput](ctx, ActJobResult, JobResultInput{Call: in, Waiter: ctx.ID(), ID: w.ID, Signal: w.Signal, TimedOut: timedOut})
 }

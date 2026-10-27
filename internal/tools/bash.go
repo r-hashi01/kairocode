@@ -24,11 +24,14 @@ var BashTool = Def{
 	Description: "Run a shell command (sh -c) in the working directory. It runs in a sandbox: it may write only " +
 		"inside the working directory and the temporary directories, not to .git or the agents' settings, and has " +
 		"no network. If the sandbox stops something the task needs, call again with sandbox set to \"escalate\" " +
-		"and a justification: the user is asked, and the command runs outside the sandbox only if they approve.",
+		"and a justification: the user is asked, and the command runs outside the sandbox only if they approve. " +
+		"A command that may take long (a build, the tests, a server): background true starts it and returns its id at once; " +
+		"bash_output reads what it writes, bash_wait waits for its end, bash_kill stops it.",
 	Schema: json.RawMessage(`{"properties":{
 		"command":{"type":"string","description":"The command"},
 		"cwd":{"type":"string","description":"Directory to run in, inside the working directory (default: the working directory)"},
-		"timeout_ms":{"type":"integer","description":"Stop the command after this long (default 120000, at most 600000)"},
+		"timeout_ms":{"type":"integer","description":"Stop the command after this long (default 120000, at most 600000; in the background: default 7200000, at most 86400000)"},
+		"background":{"type":"boolean","description":"Start it in the background and return at once with its id"},
 		"sandbox":{"type":"string","enum":["default","escalate"],"description":"escalate: run outside the sandbox, if the user approves"},
 		"justification":{"type":"string","description":"Why escalation is needed (shown to the user)"}},
 		"required":["command"]}`),
@@ -41,6 +44,7 @@ type BashInput struct {
 	Command       string `json:"command"`
 	Cwd           string `json:"cwd"`
 	TimeoutMS     int    `json:"timeout_ms"`
+	Background    bool   `json:"background"`
 	Sandbox       string `json:"sandbox"`
 	Justification string `json:"justification"`
 }
@@ -65,6 +69,9 @@ func runBash(ctx context.Context, env Env, input json.RawMessage) Result {
 		// Reached only after the user approved it: permission.check asks
 		// for every escalation, whatever the rules say (ADR 0005).
 		mode = sandbox.FullAccess
+	}
+	if in.Background {
+		return startJob(env, in, mode)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -111,4 +118,21 @@ func deniedBySandbox(out string) bool {
 		}
 	}
 	return false
+}
+
+// startJob starts bash's command in the background (ADR 0028).
+func startJob(env Env, in BashInput, mode sandbox.Mode) Result {
+	if env.Jobs == nil {
+		return failed("commands in the background are not available here")
+	}
+	timeout := JobDefaultTimeout
+	if in.TimeoutMS > 0 {
+		timeout = min(time.Duration(in.TimeoutMS)*time.Millisecond, JobMaxTimeout)
+	}
+	id, err := env.Jobs.Start(JobSpec{Command: in.Command, Cwd: in.Cwd, Escape: mode == sandbox.FullAccess, Timeout: timeout})
+	if err != nil {
+		return failed("not started: %v", err)
+	}
+	return Result{Output: fmt.Sprintf("started in the background: %s (it is stopped after %v)\n"+
+		"bash_output {\"id\": %q} reads what it writes; bash_wait {\"id\": %q} waits for its end. Meanwhile, go on with other work.", id, timeout, id, id)}
 }

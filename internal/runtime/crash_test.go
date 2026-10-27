@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,15 @@ func TestMain(m *testing.M) {
 	os.Setenv("KAIROCODE_SECRETS", "file")
 	// The fake ACP agent is started with no arguments but --acp; a crash
 	// test's child, which has KC_FAKE_CLI too, with -test.run.
+	// The runner of a command in the background (ADR 0028), as the tests'
+	// runtimes start it (Config.JobRunner).
+	if len(os.Args) == 3 && os.Args[1] == "kc-job-runner" {
+		if err := RunJob(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv("KC_FAKE_CLI") == "1" && (len(os.Args) == 1 || len(os.Args) > 1 && os.Args[1] == "--acp") {
 		fakeCLI()
 		return
@@ -39,6 +49,10 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("KC_CRASH_CHILD") == "1" {
 		crashChild()
+		return
+	}
+	if os.Getenv("KC_CRASH_JOB_CHILD") == "1" {
+		crashJobChild()
 		return
 	}
 	if os.Getenv("KC_CRASH_FLOW_CHILD") == "1" {

@@ -49,6 +49,10 @@ var defaultRules = []permission.Rule{
 	{Tool: "todo", Action: permission.Allow},
 	// A subagent's tools are checked as they run.
 	{Tool: "task", Action: permission.Allow},
+	// Reading a command in the background, and waiting for it, change
+	// nothing (ADR 0028); stopping one is asked about.
+	{Tool: "bash_output", Action: permission.Allow},
+	{Tool: "bash_wait", Action: permission.Allow},
 }
 
 // userConfigDir is where the user's kairocode.json lives.

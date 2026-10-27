@@ -23,13 +23,16 @@ func open(t *testing.T, db string, p provider.Provider) *Runtime {
 	defer cancel()
 	// Never the real claude (invariant 9): a judge or a decision that
 	// falls back to Claude Code finds none.
-	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude")})
+	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude"), JobRunner: jobRunner})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { r.Close() })
 	return r
 }
+
+// jobRunner is this test binary as a command's runner (TestMain).
+var jobRunner = []string{os.Args[0], "kc-job-runner"}
 
 func repo(t *testing.T) string {
 	t.Helper()
