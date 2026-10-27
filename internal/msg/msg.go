@@ -19,6 +19,24 @@ const (
 	Text       = "text"
 	ToolUse    = "tool_use"
 	ToolResult = "tool_result"
+	Image      = "image"
+)
+
+// Images: the kinds a message may carry, and how many and how large (ADR
+// 0026, after the Claude API's limits).
+var ImageTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+const (
+	MaxImages = 8
+	// MaxImageBytes is an image's bytes at most: the API's 5 MB is of its
+	// base64.
+	MaxImageBytes = 5 << 20 / 4 * 3
+	// MaxRequestImageBytes is the images' bytes at most in a message, and
+	// in what one model call is given (base64 20 MB, the request 32 MB at
+	// most): older images past it are not sent again.
+	MaxRequestImageBytes = 20 << 20 / 4 * 3
+	// MaxRequestImages is how many images one model call is given at most.
+	MaxRequestImages = 50
 )
 
 // Part is one piece of a message, in the provider-neutral shape KairoCode
@@ -33,6 +51,12 @@ type Part struct {
 	// ToolUseID and IsError describe a tool_result (its content is Text).
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+	// MediaType and Ref describe an image (ADR 0026): its bytes are stored
+	// once, apart, by their hash (Ref). Data is those bytes, filled in for a
+	// provider and never stored.
+	MediaType string `json:"media_type,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	Data      []byte `json:"-"`
 }
 
 // Message is one message of a conversation. It is stored once, by the hash of

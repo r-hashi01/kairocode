@@ -2,14 +2,18 @@ package runtime
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -130,6 +134,30 @@ type streamLine struct {
 	} `json:"usage"`
 }
 
+// claudeImageInput is the user's message as Claude Code's stream-json
+// input, prompt and then the images, when it has images; nil when not.
+func (r *Runtime) claudeImageInput(ctx context.Context, user msg.Message, prompt string) ([]byte, error) {
+	if !slices.ContainsFunc(user.Parts, func(p msg.Part) bool { return p.Type == msg.Image }) {
+		return nil, nil
+	}
+	ms, err := r.withImages(ctx, []msg.Message{user})
+	if err != nil {
+		return nil, err
+	}
+	content := []any{map[string]any{"type": "text", "text": prompt}}
+	for _, p := range ms[0].Parts {
+		if p.Type == msg.Image {
+			content = append(content, map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": p.MediaType, "data": base64.StdEncoding.EncodeToString(p.Data)}})
+		}
+	}
+	line, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": content}})
+	if err != nil {
+		return nil, err
+	}
+	return append(line, '\n'), nil
+}
+
 // claudeTurn runs a turn in the user's Claude Code (ADR 0007): built-in tools
 // off, KairoCode's tools over MCP, the user's settings, hooks and plugins not
 // loaded. Done again after the process died, it resumes the same session.
@@ -165,6 +193,9 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		}
 		prompt = "<conversation so far, with another model>\n" + history + "</conversation so far>\n\n" + prompt
 	}
+	// The user's images go with the prompt as content (ADR 0026): by
+	// stream-json on stdin, the input that takes them.
+	var input []byte
 	if transcript != "" && fileContains(transcript, mark) {
 		// Claude Code has the prompt: tell it the user's answers, or just
 		// to go on after being cut short.
@@ -172,6 +203,8 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		if in.Note != "" {
 			prompt = in.Note
 		}
+	} else if input, err = r.claudeImageInput(t, user, prompt); err != nil {
+		return workflows.ClaudeTurnOutput{}, err
 	}
 	url, mt, closeMCP, err := r.mcp.open(t, in.Turn, in.Dir, in.Tools, in.Policy, in.Hooks, in.Session, in.Ext)
 	if err != nil {
@@ -185,6 +218,9 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		return workflows.ClaudeTurnOutput{}, err
 	}
 	args := []string{"-p", prompt}
+	if input != nil {
+		args = []string{"-p", "--input-format", "stream-json"}
+	}
 	if transcript != "" {
 		args = append(args, "--resume", sid)
 	} else {
@@ -213,6 +249,9 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	cmd.Dir = in.Dir
 	cmd.Env = claudeEnv()
 	cmd.Stdin = nil // /dev/null: claude -p otherwise waits for input
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input) // one message; the end of it ends the input
+	}
 	cmd.SysProcAttr = claudeProcAttr()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -281,10 +320,15 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 
 func tail(s string, n int) string {
 	if len(s) > n {
-		return "…" + s[len(s)-n:]
+		s = "…" + s[len(s)-n:]
 	}
-	return s
+	// An image's base64 (the stream-json input echoed back) is not kept
+	// in an error (ADR 0026).
+	return longRun.ReplaceAllString(s, "[…]")
 }
+
+// longRun is a long run of base64.
+var longRun = regexp.MustCompile(`[A-Za-z0-9+/=]{64,}`)
 
 // claudeDecide asks Claude Code for a flow's decision (decide.go),
 // fitting schema: one run, no tools, nothing kept of it. claude starts

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -195,6 +196,14 @@ func anthropicMessages(ms []msg.Message) ([]anthropic.BetaMessageParam, error) {
 					p.Content = append(p.Content, anthropic.NewBetaToolUseBlock(part.ID, in, part.Name))
 				case msg.ToolResult:
 					p.Content = append(p.Content, anthropic.NewBetaToolResultBlock(part.ToolUseID, part.Text, part.IsError))
+				case msg.Image:
+					if len(part.Data) == 0 {
+						return nil, fmt.Errorf("image %s: its bytes were not given", part.Ref)
+					}
+					p.Content = append(p.Content, anthropic.NewBetaImageBlock(anthropic.BetaBase64ImageSourceParam{
+						Data:      base64.StdEncoding.EncodeToString(part.Data),
+						MediaType: anthropic.BetaBase64ImageSourceMediaType(part.MediaType),
+					}))
 				}
 			}
 		}

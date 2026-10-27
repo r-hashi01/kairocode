@@ -272,6 +272,14 @@ func (r *Runtime) messageText(ctx context.Context, h string) string {
 	}
 	var parts []string
 	for _, p := range m.Parts { // a tool's result too
+		if p.Type == msg.Image { // its kind and size, not its bytes (ADR 0026)
+			size := "?"
+			if _, data, err := r.Store.Get(ctx, p.Ref); err == nil {
+				size = fmt.Sprintf("%d KB", (len(data)+1023)/1024)
+			}
+			parts = append(parts, fmt.Sprintf("[image: %s, %s]", p.MediaType, size))
+			continue
+		}
 		if t := strings.TrimSpace(p.Text); t != "" {
 			parts = append(parts, t)
 		}

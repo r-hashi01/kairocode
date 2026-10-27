@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -259,6 +260,9 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 				MCPCapabilities struct {
 					HTTP bool `json:"http"`
 				} `json:"mcpCapabilities"`
+				PromptCapabilities struct {
+					Image bool `json:"image"`
+				} `json:"promptCapabilities"`
 			} `json:"agentCapabilities"`
 		}
 		if err := conn.Call(t, "initialize", map[string]any{
@@ -332,15 +336,25 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 				note += fmt.Sprintf("[%s did not take the effort %s (%v)]\n", engine, in.Effort, err)
 			}
 		}
-		prompt, err := r.cliPrompt(t, in, !loaded)
+		imageParts := init.AgentCapabilities.PromptCapabilities.Image
+		prompt, err := r.cliPrompt(t, in, !loaded, imageParts)
 		if err != nil {
 			return workflows.ClaudeTurnOutput{}, err
+		}
+		blocks := []any{map[string]any{"type": "text", "text": prompt}}
+		if imageParts {
+			images, err := r.acpImages(t, in.Message)
+			if err != nil {
+				return workflows.ClaudeTurnOutput{}, err
+			}
+			blocks = append(blocks, images...)
 		}
 		if loaded && strings.Contains(c.replayed.String(), turnMark(in.Turn)) {
 			prompt = continuePrompt // the agent has the prompt: it was cut short
 			if in.Note != "" {
 				prompt = in.Note
 			}
+			blocks = []any{map[string]any{"type": "text", "text": prompt}}
 		}
 		var res struct {
 			StopReason string `json:"stopReason"`
@@ -351,7 +365,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			} `json:"usage"`
 		}
 		if err := conn.Call(t, "session/prompt", map[string]any{"sessionId": id,
-			"prompt": []any{map[string]any{"type": "text", "text": prompt}}}, &res); err != nil {
+			"prompt": blocks}, &res); err != nil {
 			return fail("session/prompt", err)
 		}
 		var usage msg.Usage
@@ -366,6 +380,26 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		}
 		return r.finishCLITurn(t, mt, reply, 1, usage)
 	}
+}
+
+// acpImages are the images of the user message stored as h, as ACP's
+// image parts (ADR 0026).
+func (r *Runtime) acpImages(ctx context.Context, h string) ([]any, error) {
+	user, err := r.Store.Message(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	ms, err := r.withImages(ctx, []msg.Message{user})
+	if err != nil {
+		return nil, err
+	}
+	var out []any
+	for _, p := range ms[0].Parts {
+		if p.Type == msg.Image {
+			out = append(out, map[string]any{"type": "image", "mimeType": p.MediaType, "data": base64.StdEncoding.EncodeToString(p.Data)})
+		}
+	}
+	return out, nil
 }
 
 // withAgent starts engine's agent in a directory of its own, initializes

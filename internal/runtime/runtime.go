@@ -713,6 +713,9 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	if err != nil {
 		return workflows.ModelReply{}, err
 	}
+	if ms, err = r.withImages(t, ms); err != nil {
+		return workflows.ModelReply{}, err
+	}
 	// The text streams to those who watch the session (live output, not a
 	// record: the message is recorded once it is whole).
 	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: system, Tools: specs, Messages: ms,
@@ -810,6 +813,11 @@ func (r *Runtime) Send(ctx context.Context, session, text string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return r.sendMessage(ctx, session, h)
+}
+
+// sendMessage gives the session the user message stored as h.
+func (r *Runtime) sendMessage(ctx context.Context, session, h string) (int, error) {
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h})
 }
 

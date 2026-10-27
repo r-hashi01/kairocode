@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -263,7 +265,17 @@ func crashClaudeChild() {
 	if err != nil {
 		panic(err)
 	}
-	if _, err := r.Send(ctx, s, "count once"); err != nil {
+	send := r.Send
+	if path := os.Getenv("KC_CRASH_IMAGE"); path != "" { // the message has an image (ADR 0026)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		send = func(ctx context.Context, s, text string) (int, error) {
+			return r.SendImages(ctx, s, text, []Image{{MediaType: "image/png", Data: data}})
+		}
+	}
+	if _, err := send(ctx, s, "count once"); err != nil {
 		panic(err)
 	}
 	if os.Getenv("KC_ANSWER_HOOKS") == "" {
@@ -289,6 +301,27 @@ func TestCrashClaudeEngine(t *testing.T) {
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
+	crashClaudeEngine(t, nil)
+}
+
+// The same with an image in the message (ADR 0026): Claude Code is given
+// it once, by stream-json; resumed, it has the prompt, and is only told to
+// go on, with nothing on stdin.
+func TestCrashClaudeEngineImage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	red := testPNG(t, color.RGBA{255, 0, 0, 255})
+	st := crashClaudeEngine(t, red)
+	if len(st[0].Images) != 1 || st[0].Images[0] != "image/png:"+strconv.Itoa(len(red)) || len(st[1].Images) != 0 {
+		t.Fatalf("claude was given images %v, then %v", st[0].Images, st[1].Images)
+	}
+}
+
+// crashClaudeEngine kills the process while Claude Code's real tool call
+// is under way, resumes, and returns how claude was started.
+func crashClaudeEngine(t *testing.T, image []byte) []fakeClaudeStart {
+	t.Helper()
 	e := setupFakeClaude(t,
 		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "never"},
 		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "stopped"},
@@ -299,6 +332,13 @@ func TestCrashClaudeEngine(t *testing.T) {
 	ws := allowCount(t)
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), "KC_CRASH_CLAUDE_CHILD=1", "KC_DIR_ENV="+e.dir, "KC_DIR="+ws)
+	if image != nil {
+		path := filepath.Join(t.TempDir(), "image.png")
+		if err := os.WriteFile(path, image, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd.Env = append(cmd.Env, "KC_CRASH_IMAGE="+path)
+	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -342,6 +382,7 @@ func TestCrashClaudeEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitPending(t, r, SessionID("cc"), 0)
+	return st
 }
 
 // crashWrite runs an edit that appends a line in a child process, kills it

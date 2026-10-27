@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,10 @@ const ProtocolVersion = 1
 type Backend interface {
 	CreateSession(ctx context.Context, in workflows.SessionInput) (string, error)
 	Send(ctx context.Context, session, text string) (int, error)
+	// SendImages and ImageData: a message with images, and an image's
+	// bytes for a conversation shown again (ADR 0026).
+	SendImages(ctx context.Context, session, text string, images []runtime.Image) (int, error)
+	ImageData(ctx context.Context, ref string) ([]byte, error)
 	WaitTurn(ctx context.Context, session string, n int) (daemon.Turn, error)
 	Approve(ctx context.Context, key string, ok bool, reason string) error
 	// TryFlow tries the flow an approval would write first (ADR 0017).
@@ -394,7 +399,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			"agentCapabilities": map[string]any{
 				"loadSession":         true,
 				"sessionCapabilities": map[string]any{"list": map[string]any{}},
-				"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
+				"promptCapabilities":  map[string]any{"image": true, "audio": false, "embeddedContext": true},
 			},
 			"authMethods": []any{},
 			"agentInfo":   map[string]any{"name": "kairocode", "version": a.o.Version},
@@ -631,6 +636,8 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			Type     string `json:"type"`
 			Text     string `json:"text"`
 			URI      string `json:"uri"`
+			Data     string `json:"data"`     // an image's, in base64
+			MimeType string `json:"mimeType"` // an image's
 			Resource struct {
 				URI  string `json:"uri"`
 				Text string `json:"text"`
@@ -641,11 +648,18 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		return nil, invalid(err)
 	}
 	var text, files []string
+	var images []runtime.Image
 	dir := a.dirOf(p.SessionID)
 	for _, b := range p.Prompt {
 		switch b.Type {
 		case "text":
 			text = append(text, b.Text)
+		case "image":
+			data, err := base64.StdEncoding.DecodeString(b.Data)
+			if err != nil {
+				return nil, invalid(fmt.Errorf("image %d: not base64", len(images)+1))
+			}
+			images = append(images, runtime.Image{MediaType: b.MimeType, Data: data})
 		case "resource_link":
 			// A file of the session's folder is put in; anything else
 			// stays a link.
@@ -666,8 +680,11 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	} else {
 		text = append(text, files...)
 	}
-	if len(text) == 0 {
+	if len(text) == 0 && len(images) == 0 {
 		return nil, invalid(errors.New("the prompt has no text"))
+	}
+	if err := runtime.CheckImages(images); err != nil {
+		return nil, invalid(err)
 	}
 	// Watching before sending: no update of the turn is missed.
 	w, err := a.watch(p.SessionID)
@@ -681,6 +698,11 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	// whole when the turn ends.
 	quiet := false
 	name, args, _ := strings.Cut(strings.TrimSpace(prompt), " ")
+	if len(images) > 0 {
+		// With images it is a message, whatever its first word.
+		name = ""
+		start = func(ctx context.Context, s, text string) (int, error) { return a.b.SendImages(ctx, s, text, images) }
+	}
 	switch {
 	case name == "/undo":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Undo(ctx, s) }, true
@@ -980,6 +1002,13 @@ func (a *agent) replay(ctx context.Context, session string) error {
 			switch {
 			case p.Type == msg.Text && m.Role == msg.User:
 				a.update(session, map[string]any{"sessionUpdate": "user_message_chunk", "content": textBlock(p.Text)})
+			case p.Type == msg.Image:
+				data, err := a.b.ImageData(ctx, p.Ref)
+				if err != nil {
+					return err
+				}
+				a.update(session, map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{
+					"type": "image", "mimeType": p.MediaType, "data": base64.StdEncoding.EncodeToString(data)}})
 			case p.Type == msg.Text:
 				a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(p.Text)})
 			case p.Type == msg.ToolUse:

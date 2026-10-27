@@ -50,6 +50,31 @@ func TestAnthropicMessages(t *testing.T) {
 	}
 }
 
+// An image part goes as the API's image block, its bytes in base64; one
+// whose bytes were not filled in is an error, not an empty image (ADR 0026).
+func TestAnthropicImages(t *testing.T) {
+	ms := []msg.Message{{Role: msg.User, Parts: []msg.Part{
+		{Type: msg.Text, Text: "what colour?"},
+		{Type: msg.Image, MediaType: "image/png", Ref: "sha256:ab", Data: []byte("\x89PNG")},
+	}}}
+	out, err := anthropicMessages(ms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"data":"iVBORw==","media_type":"image/png","type":"base64"}`
+	if !strings.Contains(string(b), `"type":"image"`) || !strings.Contains(string(b), want) {
+		t.Fatalf("%s", b)
+	}
+	ms[0].Parts[1].Data = nil
+	if _, err := anthropicMessages(ms); err == nil {
+		t.Error("an image without its bytes was sent")
+	}
+}
+
 func TestFakeRepliesByConversation(t *testing.T) {
 	f := &Fake{HoldAt: -1, Script: []FakeReply{{Text: "first"}, {Tools: []FakeTool{{Name: "glob"}}}}}
 	r, err := f.Complete(t.Context(), Request{Messages: []msg.Message{{Role: msg.User}}})

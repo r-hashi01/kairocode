@@ -52,6 +52,12 @@ func (l *local) CreateSession(ctx context.Context, in workflows.SessionInput) (s
 }
 
 func (l *local) Send(ctx context.Context, s, text string) (int, error) { return l.r.Send(ctx, s, text) }
+func (l *local) SendImages(ctx context.Context, s, text string, images []runtime.Image) (int, error) {
+	return l.r.SendImages(ctx, s, text, images)
+}
+func (l *local) ImageData(ctx context.Context, ref string) ([]byte, error) {
+	return l.r.ImageData(ctx, ref)
+}
 
 func (l *local) WaitTurn(ctx context.Context, s string, n int) (daemon.Turn, error) {
 	out, err := l.r.WaitTurn(ctx, s, n)

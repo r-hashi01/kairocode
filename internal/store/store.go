@@ -29,6 +29,9 @@ const (
 	// KindReviewed is a flow_publish call and the draft it was decided
 	// on (ADR 0030): only that draft is published by it.
 	KindReviewed = "reviewed"
+	// KindImage is an image's bytes, a message's image part refers to by
+	// hash (ADR 0026).
+	KindImage = "image"
 )
 
 var ErrNotFound = errors.New("store: no such content")

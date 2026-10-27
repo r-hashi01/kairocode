@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,43 @@ type fakeClaudeStart struct {
 	// Sources is --setting-sources (nil: not given); System, --system-prompt.
 	Sources *string `json:"sources,omitempty"`
 	System  string  `json:"system,omitempty"`
+	// Images are the images of a stream-json input, "<type>:<bytes>".
+	Images []string `json:"images,omitempty"`
+}
+
+// fakeStreamInput reads the user message of a stream-json input, as
+// Claude Code does: its text, and its images.
+func fakeStreamInput() (string, []string) {
+	var in struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type   string `json:"type"`
+				Text   string `json:"text"`
+				Source struct {
+					Type      string `json:"type"`
+					MediaType string `json:"media_type"`
+					Data      []byte `json:"data"`
+				} `json:"source"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	b, _ := io.ReadAll(os.Stdin)
+	if json.Unmarshal(b, &in) != nil || in.Type != "user" || in.Message.Role != "user" {
+		return "", nil
+	}
+	var text string
+	var images []string
+	for _, c := range in.Message.Content {
+		switch {
+		case c.Type == "text":
+			text += c.Text
+		case c.Type == "image" && c.Source.Type == "base64":
+			images = append(images, fmt.Sprintf("%s:%d", c.Source.MediaType, len(c.Source.Data)))
+		}
+	}
+	return text, images
 }
 
 func fakeClaude() {
@@ -64,7 +102,14 @@ func fakeClaude() {
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "-p":
-			start.Prompt = args[i+1]
+			if !strings.HasPrefix(args[i+1], "--") {
+				start.Prompt = args[i+1]
+			}
+		case "--input-format":
+			// The prompt, and its images, as one stream-json line on stdin.
+			if args[i+1] == "stream-json" {
+				start.Prompt, start.Images = fakeStreamInput()
+			}
 		case "--session-id", "--resume":
 			start.Mode, start.Session = args[i], args[i+1]
 		case "--mcp-config":

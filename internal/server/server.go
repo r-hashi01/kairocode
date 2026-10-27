@@ -17,6 +17,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/agents"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -43,6 +44,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /questions", s.answer)
 	s.mux.HandleFunc("GET /sessions/{id}/events", s.events)
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
+	s.mux.HandleFunc("GET /images/{hash}", s.image)
 	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
 	s.mux.HandleFunc("GET /sessions/{id}/commands", s.commands)
 	s.mux.HandleFunc("GET /sessions/{id}/skills", s.skills)
@@ -125,17 +127,45 @@ func sessionOf(r *http.Request) string { return runtime.SessionID(r.PathValue("i
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Text string `json:"text"`
+		// Images (ADR 0026), their bytes in base64.
+		Images []struct {
+			MediaType string `json:"media_type"`
+			Data      []byte `json:"data"`
+		} `json:"images"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Text == "" {
-		fail(w, http.StatusBadRequest, errors.New(`want {"text": "..."}`))
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Text == "" && len(in.Images) == 0 {
+		fail(w, http.StatusBadRequest, errors.New(`want {"text": "...", "images": [{"media_type": "image/png", "data": "<base64>"}]}`))
 		return
 	}
-	n, err := s.rt.Send(r.Context(), sessionOf(r), in.Text)
+	var images []runtime.Image
+	for _, im := range in.Images {
+		images = append(images, runtime.Image{MediaType: im.MediaType, Data: im.Data})
+	}
+	n, err := s.rt.SendImages(r.Context(), sessionOf(r), in.Text, images)
+	if errors.Is(err, runtime.ErrBadImage) {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"turn": n})
+}
+
+// image is the bytes of an image of a message, by its hash (the part after
+// "sha256:"), in base64 (ADR 0026).
+func (s *Server) image(w http.ResponseWriter, r *http.Request) {
+	data, err := s.rt.ImageData(r.Context(), "sha256:"+r.PathValue("hash"))
+	if errors.Is(err, store.ErrNotFound) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]byte{"data": data})
 }
 
 // fork starts a session from a turn of this one (ADR 0021): {"turn": n}

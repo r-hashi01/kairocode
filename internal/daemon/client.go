@@ -335,11 +335,36 @@ func (c *Client) CreateSession(ctx context.Context, in workflows.SessionInput) (
 
 // Send gives the session a message and returns the turn that answers it.
 func (c *Client) Send(ctx context.Context, session, text string) (int, error) {
+	return c.SendImages(ctx, session, text, nil)
+}
+
+// SendImages is Send with images (ADR 0026).
+func (c *Client) SendImages(ctx context.Context, session, text string, images []runtime.Image) (int, error) {
 	var out struct {
 		Turn int `json:"turn"`
 	}
-	err := c.do(ctx, "POST", sessionPath(session)+"/messages", map[string]string{"text": text}, &out)
+	type image struct {
+		MediaType string `json:"media_type"`
+		Data      []byte `json:"data"`
+	}
+	in := struct {
+		Text   string  `json:"text"`
+		Images []image `json:"images,omitempty"`
+	}{Text: text}
+	for _, im := range images {
+		in.Images = append(in.Images, image{im.MediaType, im.Data})
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/messages", in, &out)
 	return out.Turn, err
+}
+
+// ImageData is the bytes of the image of a message stored as ref.
+func (c *Client) ImageData(ctx context.Context, ref string) ([]byte, error) {
+	var out struct {
+		Data []byte `json:"data"`
+	}
+	err := c.do(ctx, "GET", "/images/"+url.PathEscape(strings.TrimPrefix(ref, "sha256:")), nil, &out)
+	return out.Data, err
 }
 
 // Turn is a finished turn.

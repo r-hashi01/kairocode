@@ -76,13 +76,21 @@ func (r *Runtime) carried(ctx context.Context, head string) (string, error) {
 
 // cliPrompt is a turn's prompt for a CLI: the user's message and the
 // turn's mark; for a CLI session that starts, the agent's instructions
-// (these CLIs take none apart) and the conversation so far before it.
-func (r *Runtime) cliPrompt(ctx context.Context, in workflows.ClaudeTurnInput, starts bool) (string, error) {
+// (these CLIs take none apart) and the conversation so far before it. The
+// message's images are named as files, unless imageParts (the agent reads
+// images: they are given as parts).
+func (r *Runtime) cliPrompt(ctx context.Context, in workflows.ClaudeTurnInput, starts, imageParts bool) (string, error) {
 	user, err := r.Store.Message(ctx, in.Message)
 	if err != nil {
 		return "", err
 	}
-	prompt := user.Text() + "\n\n" + turnMark(in.Turn)
+	images := ""
+	if !imageParts {
+		if images, err = r.imageNote(ctx, user); err != nil {
+			return "", err
+		}
+	}
+	prompt := user.Text() + images + "\n\n" + turnMark(in.Turn)
 	if !starts {
 		return prompt, nil
 	}

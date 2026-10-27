@@ -2,10 +2,13 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -353,10 +356,14 @@ func contentText(raw json.RawMessage) string {
 		return ""
 	}
 	var block struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		MimeType string `json:"mimeType"`
 	}
 	if json.Unmarshal(raw, &block) == nil {
+		if block.Type == "image" { // shown as what it is, not its bytes
+			return "[image: " + block.MimeType + "]"
+		}
 		return block.Text
 	}
 	var list []struct {
@@ -508,6 +515,21 @@ func (cl *Client) Cancel(session string) error {
 	return cl.c.Notify("session/cancel", map[string]any{"sessionId": session})
 }
 
+// imageBlock is an image file as ACP's image block (ADR 0026), when it
+// is one: its kind read from its bytes. The agent refuses one too large.
+func imageBlock(path string) (map[string]any, bool) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+	default:
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return map[string]any{"type": "image", "mimeType": http.DetectContentType(data), "data": base64.StdEncoding.EncodeToString(data)}, true
+}
+
 // Prompt runs a turn, and returns why it stopped (ACP's stopReason). The
 // turn's updates have all been given to the handler when it returns.
 func (cl *Client) Prompt(ctx context.Context, session, text string, files ...string) (string, error) {
@@ -516,6 +538,10 @@ func (cl *Client) Prompt(ctx context.Context, session, text string, files ...str
 	}
 	blocks := []any{textBlock(text)}
 	for _, f := range files { // what @ pointed to: the agent puts it in
+		if b, ok := imageBlock(f); ok {
+			blocks = append(blocks, b)
+			continue
+		}
 		blocks = append(blocks, map[string]any{"type": "resource_link", "uri": (&url.URL{Scheme: "file", Path: f}).String(), "name": filepath.Base(f)})
 	}
 	err := cl.c.Call(ctx, "session/prompt", map[string]any{"sessionId": session, "prompt": blocks}, &out)

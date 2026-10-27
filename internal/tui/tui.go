@@ -601,6 +601,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.key(msg)
 	case tea.PasteMsg:
 		if m.state == stateReady && len(m.asks) == 0 {
+			if p := imagePath(msg.Content); p != "" {
+				// An image dropped on the terminal: sent with the message.
+				msg.Content = mentionOf(p) + " "
+			}
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return cmd

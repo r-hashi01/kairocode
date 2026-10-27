@@ -30,6 +30,9 @@ type Fake struct {
 	// text on one line, so a test can tell whose calls were made (the
 	// subagent given a prompt).
 	PromptLog string `json:"prompt_log,omitempty"`
+	// ImageLog, if set, gets one line per call: the images the request
+	// carries, "<media type>:<bytes>" each, "-" for none (ADR 0026).
+	ImageLog string `json:"image_log,omitempty"`
 	// HoldAt is the reply index at which the fake writes HoldFile and then
 	// waits until its context ends, so a test can kill the process mid-call.
 	// It applies only when HoldFile is set.
@@ -111,6 +114,22 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 	}
 	if f.PromptLog != "" {
 		if err := appendLine(f.PromptLog, strings.Join(strings.Fields(firstUserText(r.Messages)), " ")); err != nil {
+			return Response{}, err
+		}
+	}
+	if f.ImageLog != "" {
+		var seen []string
+		for _, m := range r.Messages {
+			for _, p := range m.Parts {
+				if p.Type == msg.Image {
+					seen = append(seen, fmt.Sprintf("%s:%d", p.MediaType, len(p.Data)))
+				}
+			}
+		}
+		if len(seen) == 0 {
+			seen = []string{"-"}
+		}
+		if err := appendLine(f.ImageLog, strings.Join(seen, " ")); err != nil {
 			return Response{}, err
 		}
 	}
