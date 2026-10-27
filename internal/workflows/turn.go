@@ -778,14 +778,19 @@ func hasHook(agent Agent, event string) bool {
 }
 
 // waitJob is bash_wait (ADR 0028): it waits for a command in the
-// background to end, as a signal, the process let go meanwhile, at most
-// the call's time; then answers with what the command wrote.
+// background to end, as a signal, the process let go meanwhile: until it
+// ends (its runner always tells), or at most the call's time if it gave
+// one; then answers with what the command wrote.
 func waitJob(ctx *kairo.Context, in ToolInput) (ToolOutput, error) {
 	w, err := kairo.Call[JobWatchOutput](ctx, ActJobWatch, JobWatchInput{Call: in, Waiter: ctx.ID()})
 	if err != nil || w.Done {
 		return w.Result, err
 	}
-	_, err = kairo.WaitFor[JobEnded](ctx, w.Signal, kairo.WaitTimeout(time.Duration(w.WaitMS)*time.Millisecond))
+	var opts []kairo.WaitOption
+	if w.WaitMS > 0 { // a timer only for a wait with a deadline
+		opts = append(opts, kairo.WaitTimeout(time.Duration(w.WaitMS)*time.Millisecond))
+	}
+	_, err = kairo.WaitFor[JobEnded](ctx, w.Signal, opts...)
 	timedOut := errors.Is(err, kairo.ErrTimedOut)
 	if err != nil && !timedOut {
 		return ToolOutput{}, err

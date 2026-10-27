@@ -139,17 +139,6 @@ func (m *jobManager) running(session string) int {
 	return n
 }
 
-// anyRunning says a command in the background runs.
-func (m *jobManager) anyRunning() bool {
-	entries, _ := os.ReadDir(m.dir)
-	for _, e := range entries {
-		if e.IsDir() && fileThere(m.path(e.Name(), jobFileSpec)) && !fileThere(m.path(e.Name(), jobFileStatus)) && m.alive(e.Name()) {
-			return true
-		}
-	}
-	return false
-}
-
 // runnerArgv is how the runner is started: KairoCode's own binary, unless
 // the runtime was given another (tests).
 func (m *jobManager) runnerArgv() ([]string, error) {
@@ -416,8 +405,31 @@ func (m *jobManager) recover() {
 		if !e.IsDir() || fileThere(m.path(id, jobFileNotified)) {
 			continue
 		}
-		go m.done(id) // one whose runner lives is left to it
+		if fileThere(m.path(id, jobFileStatus)) || !m.alive(id) {
+			go m.done(id)
+			continue
+		}
+		go m.outlive(id)
 	}
+}
+
+// outlive waits for the runner of a command this runtime did not start
+// to go (its lock, taken when the process ends however it ends: SIGKILL
+// too), then tells of its end. The runner tells of it itself as well;
+// this is for one that cannot (killed, or the daemon not reached). The
+// wait is the kernel's on the lock, not a poll; it ends with the runner,
+// which runs out of time at the latest.
+func (m *jobManager) outlive(id string) {
+	f, err := os.OpenFile(m.path(id, jobFileLock), os.O_RDWR, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	m.done(id)
 }
 
 // JobDone is told by a command's runner that it ended (the daemon's
@@ -573,12 +585,12 @@ func (r *Runtime) jobWatch(t *kairo.TaskContext, in workflows.JobWatchInput) (wo
 		out, err := r.jobResultOf(t, session, a.ID, in.Call.Call, false)
 		return workflows.JobWatchOutput{Done: true, Result: out}, err
 	}
-	wait := tools.JobDefaultWait
+	var wait time.Duration // until it ends: its runner tells, no timer is needed
 	if a.TimeoutMS > 0 {
 		wait = min(time.Duration(a.TimeoutMS)*time.Millisecond, tools.JobMaxTimeout)
 	}
-	if in.Call.Call == "" { // over MCP: its client waits for the answer
-		wait = min(wait, jobMCPWait)
+	if in.Call.Call == "" && (wait == 0 || wait > jobMCPWait) { // over MCP: its client waits for the answer
+		wait = jobMCPWait
 	}
 	return workflows.JobWatchOutput{ID: a.ID, Signal: signal, WaitMS: wait.Milliseconds()}, nil
 }

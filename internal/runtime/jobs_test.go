@@ -27,7 +27,7 @@ def main(input):
         return "not started: " + s.error
     id = s.output.split("started in the background: ")[1].split(" ")[0]
     seen = tool("bash_output", id = id)
-    w = tool("bash_wait", id = id, timeout_ms = 120000)
+    w = tool("bash_wait", id = id)
     return id + "\n" + seen.output + "\n---\n" + w.output
 `
 
@@ -382,28 +382,89 @@ func TestJobRunnerAlive(t *testing.T) {
 	}
 }
 
-// While a wait for a command has its deadline, and while the command
-// runs, the runtime is awaiting (the daemon stays up); once both are
-// over, it is not (ADR 0028).
+// A wait with no deadline arms no timer: the daemon may stop meanwhile,
+// and is started again by the command's runner when it ends. One with a
+// deadline has a timer: the daemon stays up while it waits (ADR 0028).
 func TestAwaitingWhileWaiting(t *testing.T) {
 	ws := repo(t)
-	putFiles(t, ws, map[string]string{".kairocode/workflows/long.star": waitFlow})
+	putFiles(t, ws, map[string]string{
+		".kairocode/workflows/long.star":  waitFlow,
+		".kairocode/workflows/timed.star": strings.Replace(waitFlow, `tool("bash_wait", id = id)`, `tool("bash_wait", id = id, timeout_ms = 120000)`, 1),
+	})
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if r.Awaiting(ctx) {
-		t.Fatal("awaiting with nothing to wait for")
+	for _, c := range []struct {
+		flow     string
+		awaiting bool
+	}{{"long", false}, {"timed", true}} {
+		os.Remove(filepath.Join(ws, "release"))
+		os.RemoveAll(r.jobs.dir)
+		done := make(chan string, 1)
+		go func() {
+			_, text, _ := flowTurn(t, r, ws, c.flow, "")
+			done <- text
+		}()
+		waitUntil(t, ctx, "the wait", func() bool { return waiting(ctx, r) })
+		if got := r.Awaiting(ctx); got != c.awaiting {
+			t.Fatalf("%s: awaiting %v while it waits", c.flow, got)
+		}
+		os.WriteFile(filepath.Join(ws, "release"), nil, 0o644)
+		if text := <-done; !strings.Contains(text, "ended: exit 3") {
+			t.Fatalf("%s: %s", c.flow, text)
+		}
+		waitUntil(t, ctx, "nothing awaited", func() bool { return !r.Awaiting(ctx) })
 	}
-	done := make(chan struct{})
-	go func() {
-		flowTurn(t, r, ws, "long", "")
-		close(done)
-	}()
-	waitedJob(t, r)
-	if !r.Awaiting(ctx) {
-		t.Fatal("not awaiting while a wait has its deadline")
+}
+
+// waiting says a run of r waits for a command's end (kairo's wait on it).
+func waiting(ctx context.Context, r *Runtime) bool {
+	var walk func(id string) bool
+	walk = func(id string) bool {
+		kids, _ := r.K.Children(ctx, id)
+		for _, k := range kids {
+			if strings.HasPrefix(k.Plan, "kairo.wait/"+workflows.SignalJobPrefix) && k.Status == "running" {
+				return true
+			}
+			if walk(k.RunID) {
+				return true
+			}
+		}
+		return false
 	}
-	os.WriteFile(filepath.Join(ws, "release"), nil, 0o644)
-	<-done
-	waitUntil(t, ctx, "nothing awaited", func() bool { return !r.Awaiting(ctx) })
+	runs, _ := r.Sessions(ctx, "", 100)
+	for _, s := range runs {
+		if walk(s.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+// A runtime that did not start a command's runner (the daemon replaced
+// meanwhile) still learns of its end when the runner is killed and cannot
+// tell it: its lock is let go with the process (ADR 0028).
+func TestRunnerKilledAfterRestart(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "k.db")
+	ws := repo(t)
+	r1 := open(t, db, &provider.Fake{HoldAt: -1})
+	id, err := (jobEnv{m: r1.jobs, session: "s/killed", dir: ws, key: "killed"}).Start(tools.JobSpec{Command: "sleep 30", Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waitUntil(t, ctx, "the runner", func() bool { return fileThere(r1.jobs.path(id, jobFilePID)) })
+	r1.Close()
+
+	r2 := open(t, db, &provider.Fake{HoldAt: -1})
+	b, _ := os.ReadFile(r2.jobs.path(id, jobFilePID))
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil { // the runner and its command
+		t.Fatal(err)
+	}
+	waitUntil(t, ctx, "its end told", func() bool { return fileThere(r2.jobs.path(id, jobFileNotified)) })
+	if v, _ := (jobEnv{m: r2.jobs, session: "s/killed"}).View(id, 0); v.Running || v.Status != jobStatusLost {
+		t.Fatalf("after the runner was killed: %+v", v)
+	}
 }

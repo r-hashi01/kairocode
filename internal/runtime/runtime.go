@@ -274,12 +274,11 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 
 // Awaiting says something here needs the process to stay up though
 // nothing runs (ADR 0028): a wait with a deadline or a sleep (kairo's
-// timers fire only in a process), or a command in the background.
+// timers fire only in a process). A command in the background does not: its runner
+// starts a daemon to tell of its end.
 func (r *Runtime) Awaiting(ctx context.Context) bool {
-	if ts, err := r.ks.DueTimers(ctx, math.MaxInt64, 1); err == nil && len(ts) > 0 {
-		return true
-	}
-	return r.jobs.anyRunning()
+	ts, err := r.ks.DueTimers(ctx, math.MaxInt64, 1)
+	return err == nil && len(ts) > 0
 }
 
 // closing says the runtime is closing (or closed).

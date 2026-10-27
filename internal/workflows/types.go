@@ -1043,7 +1043,8 @@ type JobWatchInput struct {
 }
 
 // JobWatchOutput: Done, the call's result (the command ended, or the call
-// was not one to wait on); else the command to wait for, at most WaitMS.
+// was not one to wait on); else the command to wait for, at most WaitMS
+// (0: until it ends).
 type JobWatchOutput struct {
 	Done   bool       `json:"done,omitempty"`
 	Result ToolOutput `json:"result,omitempty"`
