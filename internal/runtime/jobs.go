@@ -139,6 +139,17 @@ func (m *jobManager) running(session string) int {
 	return n
 }
 
+// anyRunning says a command in the background runs.
+func (m *jobManager) anyRunning() bool {
+	entries, _ := os.ReadDir(m.dir)
+	for _, e := range entries {
+		if e.IsDir() && fileThere(m.path(e.Name(), jobFileSpec)) && !fileThere(m.path(e.Name(), jobFileStatus)) && m.alive(e.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
 // runnerArgv is how the runner is started: KairoCode's own binary, unless
 // the runtime was given another (tests).
 func (m *jobManager) runnerArgv() ([]string, error) {

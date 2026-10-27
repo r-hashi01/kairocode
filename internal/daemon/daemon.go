@@ -195,6 +195,7 @@ func Serve(ctx context.Context, o Options) error {
 	if rt, err = o.Open(ctx, runtime.Config{DB: runtime.DBIn(o.Dir), Owner: Owner, Observe: idle.observe}); err != nil {
 		return err
 	}
+	idle.setAwaiting(func() bool { return rt.Awaiting(ctx) })
 	if sock, err = socketPath(o.Dir); err != nil {
 		return err
 	}
@@ -527,6 +528,10 @@ type idleTimer struct {
 	// onNoStep, if set, is called (on its own goroutine) each time the
 	// last step running finishes.
 	onNoStep func()
+	// awaiting, if set, says something waits here to be done though
+	// nothing runs (a wait's deadline, a command in the background): the
+	// daemon does not stop then (ADR 0028).
+	awaiting func() bool
 }
 
 func newIdleTimer(d time.Duration, stop func()) *idleTimer {
@@ -631,10 +636,30 @@ func (i *idleTimer) check() {
 func (i *idleTimer) fire(gen int) {
 	i.mu.Lock()
 	idle := i.t != nil && i.gen == gen && i.steps == 0 && i.conns == 0
+	awaiting := i.awaiting
 	i.mu.Unlock()
-	if idle {
-		i.stop()
+	if !idle {
+		return
 	}
+	if awaiting != nil && awaiting() {
+		// Kept up: looked at again after as long.
+		i.mu.Lock()
+		if i.t != nil && i.gen == gen {
+			i.gen++
+			next := i.gen
+			i.t = time.AfterFunc(i.d, func() { i.fire(next) })
+		}
+		i.mu.Unlock()
+		return
+	}
+	i.stop()
+}
+
+// setAwaiting sets awaiting.
+func (i *idleTimer) setAwaiting(f func() bool) {
+	i.mu.Lock()
+	i.awaiting = f
+	i.mu.Unlock()
 }
 
 func (i *idleTimer) close() {

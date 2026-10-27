@@ -381,3 +381,29 @@ func TestJobRunnerAlive(t *testing.T) {
 		t.Fatal("a runner holding its lock taken for gone")
 	}
 }
+
+// While a wait for a command has its deadline, and while the command
+// runs, the runtime is awaiting (the daemon stays up); once both are
+// over, it is not (ADR 0028).
+func TestAwaitingWhileWaiting(t *testing.T) {
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/long.star": waitFlow})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if r.Awaiting(ctx) {
+		t.Fatal("awaiting with nothing to wait for")
+	}
+	done := make(chan struct{})
+	go func() {
+		flowTurn(t, r, ws, "long", "")
+		close(done)
+	}()
+	waitedJob(t, r)
+	if !r.Awaiting(ctx) {
+		t.Fatal("not awaiting while a wait has its deadline")
+	}
+	os.WriteFile(filepath.Join(ws, "release"), nil, 0o644)
+	<-done
+	waitUntil(t, ctx, "nothing awaited", func() bool { return !r.Awaiting(ctx) })
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -982,5 +983,28 @@ func TestOnlyUnreachedIsSentAgain(t *testing.T) {
 		if got := unreached(err); got != want {
 			t.Errorf("%v: %v, want %v", err, got, want)
 		}
+	}
+}
+
+// An idle daemon with something awaited (a wait's deadline, a command in
+// the background) stays up; once nothing is, it stops (ADR 0028).
+func TestIdleDaemonStaysWhileAwaiting(t *testing.T) {
+	stopped := make(chan struct{})
+	i := newIdleTimer(20*time.Millisecond, func() { close(stopped) })
+	defer i.close()
+	var awaiting atomic.Bool
+	awaiting.Store(true)
+	i.setAwaiting(awaiting.Load)
+	i.check()
+	select {
+	case <-stopped:
+		t.Fatal("stopped while something was awaited")
+	case <-time.After(200 * time.Millisecond):
+	}
+	awaiting.Store(false)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("did not stop once nothing was awaited")
 	}
 }

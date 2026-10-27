@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -91,6 +92,7 @@ type Config struct {
 
 type Runtime struct {
 	K     *kairo.Kairo
+	ks    *kairo.SQLStore
 	Store *store.Store
 	db    *sql.DB
 	cfg   Config
@@ -244,6 +246,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return fail(err)
 	}
+	r.ks = ks
 	r.K, err = kairo.Open(ctx, kairo.Options{
 		Store:   ks,
 		Owner:   cfg.Owner,
@@ -267,6 +270,16 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 	r.jobs.recover()
 	return r, nil
+}
+
+// Awaiting says something here needs the process to stay up though
+// nothing runs (ADR 0028): a wait with a deadline or a sleep (kairo's
+// timers fire only in a process), or a command in the background.
+func (r *Runtime) Awaiting(ctx context.Context) bool {
+	if ts, err := r.ks.DueTimers(ctx, math.MaxInt64, 1); err == nil && len(ts) > 0 {
+		return true
+	}
+	return r.jobs.anyRunning()
 }
 
 // closing says the runtime is closing (or closed).
