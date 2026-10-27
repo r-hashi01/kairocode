@@ -17,6 +17,10 @@ import (
 // Dir is where a project's flows are: <name>.star.
 const Dir = ".kairocode/workflows"
 
+// DraftsDir is where flows are written before they are published (ADR
+// 0030): drafts run only as tries.
+const DraftsDir = Dir + "/drafts"
+
 // name is what a flow may be called: what /flow can type.
 var name = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 

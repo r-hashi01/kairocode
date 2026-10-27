@@ -1229,7 +1229,7 @@ func TestPermissionSections(t *testing.T) {
 // what the try did; allowed then, the flow is written.
 func TestACPTryFlow(t *testing.T) {
 	ws := t.TempDir()
-	if err := os.WriteFile(filepath.Join(ws, runtime.ConfigFile), []byte(`{"permission": {"flow_write": "ask"}}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ws, runtime.ConfigFile), []byte(`{"permission": {"flow_publish": "ask"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	src := "def main(input):\n    phase(\"draft\")\n    d = agent(\"plan\", \"draft a reply to \" + input[\"args\"])\n    return d.output\n"
@@ -1238,7 +1238,8 @@ func TestACPTryFlow(t *testing.T) {
 	defer cancel()
 	r, err := runtime.Open(ctx, runtime.Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "acp",
 		Provider: &provider.Fake{HoldAt: -1,
-			Script:  []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "written"}},
+			Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}},
+				{Tools: []provider.FakeTool{{Name: "flow_publish", Input: json.RawMessage(`{"name":"reply"}`)}}}, {Text: "written"}},
 			Replies: map[string]provider.FakeReply{"draft a reply to": {Text: "Dear customer"}}}})
 	if err != nil {
 		t.Fatal(err)

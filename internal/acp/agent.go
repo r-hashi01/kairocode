@@ -914,6 +914,10 @@ func (a *agent) listFlows(ctx context.Context, session string) (any, error) {
 	if len(fs) > 0 {
 		lines := []string{"Flows (/flow <name> [what to give it]):"}
 		for _, f := range fs {
+			if f.Draft {
+				lines = append(lines, "- "+f.Name+" (draft: /flow "+f.Name+" --draft tries it, --publish publishes it)"+describe(f.Description))
+				continue
+			}
 			lines = append(lines, "- "+f.Name+describe(f.Description))
 		}
 		text = strings.Join(lines, "\n")

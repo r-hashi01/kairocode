@@ -325,7 +325,7 @@ func TestApplyKeepsModeAndRefusesSymlinks(t *testing.T) {
 	}
 }
 
-// flow_write writes only a flow's script, and only one with nothing wrong:
+// flow_write writes only a flow's draft, and only one with nothing wrong:
 // a bad name or a script with problems is not written; a good one is,
 // new or over the old; and write still may not write .kairocode.
 func TestFlowWrite(t *testing.T) {
@@ -339,7 +339,7 @@ func TestFlowWrite(t *testing.T) {
 		}
 		return FlowWriteTool.Apply(context.Background(), e, p.Data)
 	}
-	path := filepath.Join(dir, ".kairocode", "workflows", "hello.star")
+	path := filepath.Join(dir, ".kairocode", "workflows", "drafts", "hello.star")
 	for _, c := range []struct{ name, src, want string }{
 		{"../x", "def main(input):\n    pass\n", "not a flow's name"},
 		{"new", "def main(input):\n    pass\n", "not a flow's name"},
@@ -387,6 +387,43 @@ func TestFlowWrite(t *testing.T) {
 	os.WriteFile(path, []byte("def main(input):\n    return \"someone else's\"\n"), 0o644)
 	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); !res.IsError || !strings.Contains(res.Output, "changed since") {
 		t.Fatalf("overwrote a change: %+v", res)
+	}
+}
+
+// flow_publish puts a flow's draft, as it is, where the flow runs from: not
+// one there is not, nor one with problems; done again, it does not write
+// twice (ADR 0030).
+func TestFlowPublish(t *testing.T) {
+	dir := t.TempDir()
+	e := env(t, dir)
+	publish := func(name string) Result {
+		b, _ := json.Marshal(map[string]string{"name": name})
+		p := FlowPublishTool.Plan(context.Background(), e, b)
+		if p.Fail != nil {
+			return *p.Fail
+		}
+		return FlowPublishTool.Apply(context.Background(), e, p.Data)
+	}
+	if res := publish("hello"); !res.IsError || !strings.Contains(res.Output, "no draft") {
+		t.Fatalf("published no draft: %+v", res)
+	}
+	drafts := filepath.Join(dir, ".kairocode", "workflows", "drafts")
+	os.MkdirAll(drafts, 0o755)
+	os.WriteFile(filepath.Join(drafts, "broken.star"), []byte("X = 1\n"), 0o644)
+	if res := publish("broken"); !res.IsError || !strings.Contains(res.Output, "main(input)") {
+		t.Fatalf("published a draft with problems: %+v", res)
+	}
+	src := "def main(input):\n    return \"hi\"\n"
+	os.WriteFile(filepath.Join(drafts, "hello.star"), []byte(src), 0o644)
+	b, _ := json.Marshal(map[string]string{"name": "hello"})
+	p := FlowPublishTool.Plan(context.Background(), e, b)
+	for range 2 { // done again: the same
+		if res := FlowPublishTool.Apply(context.Background(), e, p.Data); res.IsError || !strings.Contains(res.Output, "Published hello") {
+			t.Fatalf("%+v", res)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, ".kairocode", "workflows", "hello.star")); string(got) != src {
+		t.Fatalf("published %q", got)
 	}
 }
 

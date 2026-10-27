@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,8 +42,14 @@ func runFlowCheck(_ context.Context, env Env, input json.RawMessage) Result {
 		return failed("%v", err)
 	}
 	defer root.Close()
-	path := filepath.Join(flowchart.Dir, in.Name+".star")
+	// Its draft, if it has one (ADR 0030): what is being written; else the
+	// published flow.
+	path := filepath.Join(flowchart.DraftsDir, in.Name+".star")
 	src, err := root.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		path = filepath.Join(flowchart.Dir, in.Name+".star")
+		src, err = root.ReadFile(path)
+	}
 	if err != nil {
 		return failed("reading %s: %v", path, err)
 	}

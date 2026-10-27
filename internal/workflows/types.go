@@ -331,6 +331,9 @@ type TurnInput struct {
 type FlowCall struct {
 	Name string `json:"name"`
 	Args string `json:"args,omitempty"`
+	// Draft: the flow's draft, not its published script, run as a try
+	// (/flow <name> --draft, ADR 0030).
+	Draft bool `json:"draft,omitempty"`
 }
 
 // FlowInput is a flow's run, in the turn that runs it.
@@ -396,6 +399,9 @@ type FlowLoadInput struct {
 	// Script, if set, is the hash in the store of the script to run in
 	// place of the file's (a try, ADR 0017).
 	Script string `json:"script,omitempty"`
+	// Draft: the flow's draft is loaded, not its published script (ADR
+	// 0030).
+	Draft bool `json:"draft,omitempty"`
 }
 
 // FlowSource is a flow's script as it was when the flow started (recorded:

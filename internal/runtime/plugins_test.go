@@ -470,9 +470,9 @@ def main(input):
     made = tool("tracker_create_issue", title = "follow up")
     return "listed: %s; made: %s" % (issues.ok, made.ok)
 `})
-	ws := workspaceWith(t, `{"flow_write": "ask"}`)
+	ws := workspaceWith(t, `{"flow_publish": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
-		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "written"}}})
+		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Tools: []provider.FakeTool{{Name: "flow_publish", Input: publishOf(in)}}}, {Text: "written"}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	s, _ := r.CreateSession(ctx, "try-plugin", workflows.SessionInput{Dir: ws})

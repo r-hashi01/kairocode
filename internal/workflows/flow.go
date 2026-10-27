@@ -21,8 +21,11 @@ import (
 // runFlowTurn is a turn that runs a flow (/flow, ADR 0003): the flow is a
 // child run, and what it returns is the turn's reply.
 func runFlowTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
+	// A draft runs as a try (ADR 0030): what does more than read is not
+	// called. Dry is set only for one: other runs' input is as it was.
 	fo, err := kairo.Child[FlowOutput](ctx, Flow, FlowInput{
 		Session: in.Session, N: in.N, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, Call: *in.Flow,
+		Dry: in.Flow.Draft,
 	})
 	if err != nil {
 		return TurnOutput{}, err
@@ -81,7 +84,8 @@ func RunFlowV1(ctx *kairo.Context, in FlowInput) (FlowOutput, error) {
 }
 
 func runFlow(ctx *kairo.Context, in FlowInput, marks, steps bool) (FlowOutput, error) {
-	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name, Expect: in.Expect, Script: in.Script})
+	src, err := kairo.Call[FlowSource](ctx, ActFlowLoad, FlowLoadInput{Dir: in.Dir, Name: in.Call.Name, Expect: in.Expect, Script: in.Script,
+		Draft: in.Call.Draft})
 	if err != nil {
 		return FlowOutput{}, err
 	}

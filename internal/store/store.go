@@ -26,6 +26,9 @@ const (
 	KindContent = "content"
 	// KindPermissions is the permission rules as a turn started with them.
 	KindPermissions = "permissions"
+	// KindReviewed is a flow_publish call and the draft it was decided
+	// on (ADR 0030): only that draft is published by it.
+	KindReviewed = "reviewed"
 )
 
 var ErrNotFound = errors.New("store: no such content")

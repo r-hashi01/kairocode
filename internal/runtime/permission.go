@@ -45,6 +45,9 @@ var defaultRules = []permission.Rule{
 	{Tool: "skill", Action: permission.Allow},
 	// Checking a flow reads its script, and runs nothing.
 	{Tool: "flow_check", Action: permission.Allow},
+	// A flow's draft does not run (only as a try): publishing it is asked
+	// about, with its review (ADR 0030).
+	{Tool: "flow_write", Action: permission.Allow},
 	// The todo list only shows what the model plans (ADR 0022).
 	{Tool: "todo", Action: permission.Allow},
 	// A subagent's tools are checked as they run.
@@ -152,6 +155,17 @@ func (r *Runtime) permissionCheck(t *kairo.TaskContext, in workflows.PermissionI
 	if err == nil && in.Tool == workflows.HookTool {
 		return r.hookCheck(t, in, out)
 	}
+	if err == nil && in.Tool == tools.FlowPublishTool.Name {
+		// The draft this call is decided (and reviewed) on: it publishes
+		// that one only (ADR 0030).
+		args, err := r.toolArgs(t, in.Call)
+		if err != nil {
+			return workflows.PermissionOutput{}, err
+		}
+		if _, err := r.Store.Put(t, store.KindReviewed, []byte(reviewKey(in.Call, draftHash(in.Call.Dir, args)))); err != nil {
+			return workflows.PermissionOutput{}, err
+		}
+	}
 	if err == nil && out.Action == string(permission.Ask) {
 		out.Preview = r.preview(t, in)
 	}
@@ -195,7 +209,7 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	if in.Tool == tools.HTTPTool.Name {
 		return r.httpPreview(ctx, in)
 	}
-	if in.Tool != tools.FlowWriteTool.Name {
+	if in.Tool != tools.FlowWriteTool.Name && in.Tool != tools.FlowPublishTool.Name {
 		return ""
 	}
 	args, err := r.toolArgs(ctx, in.Call)
@@ -209,6 +223,18 @@ func (r *Runtime) preview(ctx context.Context, in workflows.PermissionInput) str
 	}
 	if json.Unmarshal(args, &a) != nil {
 		return ""
+	}
+	if in.Tool == tools.FlowPublishTool.Name { // what is published: the draft as it is (ADR 0030)
+		root, err := os.OpenRoot(in.Call.Dir)
+		if err != nil {
+			return ""
+		}
+		src, err := tools.DraftOf(tools.Env{Root: root, Dir: in.Call.Dir}, a.Name)
+		root.Close()
+		if err != nil {
+			return ""
+		}
+		a.Source = string(src)
 	}
 	c, err := flowchart.Build(a.Name, []byte(a.Source))
 	if err != nil {
@@ -1216,4 +1242,28 @@ func (r *Runtime) httpPreview(ctx context.Context, in workflows.PermissionInput)
 		b.WriteString("\n" + clip(a.Body, 2000))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// reviewKey names a flow_publish call and the draft it was decided on.
+func reviewKey(in workflows.ToolInput, draft string) string {
+	return strings.Join([]string{in.Dir, in.Message, in.Call, in.At, string(in.Args), draft}, "\x00")
+}
+
+// draftHash is the hash of the draft a flow_publish call (its args) names
+// in dir, as it is now ("absent" if there is none).
+func draftHash(dir string, args json.RawMessage) string {
+	var a struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(args, &a)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "absent"
+	}
+	defer root.Close()
+	src, err := tools.DraftOf(tools.Env{Root: root, Dir: dir}, a.Name)
+	if err != nil {
+		return "absent"
+	}
+	return tools.Hash(src)
 }

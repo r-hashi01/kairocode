@@ -641,6 +641,7 @@ func TestNewFlow(t *testing.T) {
 	}
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		write(bad), write(good), {Text: "Made hello."},
+		{Tools: []provider.FakeTool{{Name: "flow_publish", Input: json.RawMessage(`{"name":"hello"}`)}}}, {Text: "Published."},
 	}})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -652,31 +653,47 @@ func TestNewFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Each write is the user's to allow: .kairocode is not the model's.
-	for range 2 {
-		var p []Pending
-		waitUntil(t, ctx, "flow_write's approval", func() bool {
-			p, _ = r.Pending(ctx, s)
-			return len(p) == 1
-		})
-		if p[0].Tool != "flow_write" || p[0].Subject != "hello" {
-			t.Fatalf("pending %+v", p[0])
-		}
-		if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// A draft is written without asking: it does not run (ADR 0030).
 	if _, err := r.WaitTurn(ctx, s, n); err != nil {
 		t.Fatal(err)
 	}
 	conv := strings.Join(conversationOf(t, r, s, true), "\n")
-	for _, want := range []string{"greet whoever is named", "not written", "no f-strings", "Wrote .kairocode/workflows/hello.star: run it with /flow hello", "Made hello."} {
+	for _, want := range []string{"greet whoever is named", "not written", "no f-strings",
+		"Wrote the draft .kairocode/workflows/drafts/hello.star: try it with /flow hello --draft", "Made hello."} {
 		if !strings.Contains(conv, want) {
 			t.Errorf("no %q in\n%s", want, conv)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(ws, ".kairocode", "workflows", "hello.star")); err == nil {
+		t.Fatal("the draft was published")
+	}
+	if _, text, _ := flowTurn(t, r, ws, "hello", "world"); !strings.Contains(text, "there is no flow") {
+		t.Fatalf("the draft ran as the flow: %q", text)
+	}
+	if _, text, _ := flowTurn(t, r, ws, "hello", "--draft world"); text != "hello world" {
+		t.Fatalf("the draft tried: %q", text)
+	}
+	// Published: the user is asked, with the flow's review.
+	n, err = r.RunFlow(ctx, s, "hello", "--publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p []Pending
+	waitUntil(t, ctx, "flow_publish's approval", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if p[0].Tool != "flow_publish" || p[0].Subject != "hello" || p[0].Try == nil {
+		t.Fatalf("pending %+v", p[0])
+	}
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
 	if _, text, _ := flowTurn(t, r, ws, "hello", "world"); text != "hello world" {
-		t.Fatalf("the flow made: %q", text)
+		t.Fatalf("the flow published: %q", text)
 	}
 }
 
@@ -1199,5 +1216,46 @@ func TestToolAfterAndSessionStartHooks(t *testing.T) {
 	}
 	if other, err := r.FlowStats(ctx, t.TempDir()); err != nil || len(other) != 0 {
 		t.Fatalf("another folder's stats: %v %v", other, err)
+	}
+}
+
+// flow_publish publishes only the draft the user decided on (and
+// reviewed): one changed while the approval waits is not published (ADR
+// 0030).
+func TestPublishOnlyWhatWasReviewed(t *testing.T) {
+	ws := repo(t)
+	good, _ := json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    return \"hello\"\n"})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "flow_write", Input: good}}},
+		{Tools: []provider.FakeTool{{Name: "flow_publish", Input: json.RawMessage(`{"name":"hello"}`)}}},
+		{Text: "done"},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "publish", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "write hello and publish it")
+	var p []Pending
+	waitUntil(t, ctx, "flow_publish's approval", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if !strings.Contains(p[0].Preview, `return "hello"`) {
+		t.Fatalf("the review: %s", p[0].Preview)
+	}
+	draft := filepath.Join(ws, ".kairocode", "workflows", "drafts", "hello.star")
+	if err := os.WriteFile(draft, []byte("def main(input):\n    return \"not reviewed\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".kairocode", "workflows", "hello.star")); err == nil {
+		t.Fatalf("published a draft that changed after it was reviewed:\n%s", strings.Join(conversationOf(t, r, s, true), "\n"))
+	}
+	if conv := strings.Join(conversationOf(t, r, s, true), "\n"); !strings.Contains(conv, "the draft changed after it was reviewed") {
+		t.Fatalf("not told:\n%s", conv)
 	}
 }

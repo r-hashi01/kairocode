@@ -548,6 +548,18 @@ func (r *Runtime) planTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolI
 		return workflows.PlanOutput{Done: true, Result: out}, err
 	}
 	defer root.Close()
+	if d.Name == tools.FlowPublishTool.Name {
+		// Only the draft the user decided on (and reviewed) is published:
+		// one changed since is not (ADR 0030).
+		reviewed := store.Hash(store.KindReviewed, []byte(reviewKey(in, draftHash(in.Dir, args))))
+		if _, _, err := r.Store.Get(t, reviewed); errors.Is(err, store.ErrNotFound) {
+			out, err := r.toolResult(t, in.Call, tools.Result{IsError: true,
+				Output: "not published: the draft changed after it was reviewed (or the user decided on none). Publish it again with flow_publish: the user reviews it as it is now."})
+			return workflows.PlanOutput{Done: true, Result: out}, err
+		} else if err != nil {
+			return workflows.PlanOutput{}, err
+		}
+	}
 	p := d.Plan(t, tools.Env{Root: root, Dir: in.Dir}, args)
 	if p.Fail != nil {
 		out, err := r.toolResult(t, in.Call, *p.Fail)

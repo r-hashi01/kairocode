@@ -10,18 +10,19 @@ import (
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 )
 
-// FlowWriteTool writes a flow's script (ADR 0003): the one way into
-// .kairocode, which the other tools may not write (ADR 0005), as the git
-// tools are into .git. It writes only .kairocode/workflows/<name>.star,
-// and only a script that flowchart.Check finds nothing wrong with; the
-// write is planned and then made by comparing and replacing (design 3.1),
-// as write's is. The user's rules decide whether it may (by default, asked
-// each time).
+// FlowWriteTool writes a flow's draft (ADR 0003, 0030): with
+// flow_publish, the one way into .kairocode, which the other tools may
+// not write (ADR 0005), as the git tools are into .git. It writes only
+// .kairocode/workflows/drafts/<name>.star, and only a script that
+// flowchart.Check finds nothing wrong with; the write is planned and then
+// made by comparing and replacing (design 3.1), as write's is. A draft
+// runs only as a try: by default it is written without asking.
 var FlowWriteTool = Def{
 	Name: "flow_write",
-	Description: "Write a flow: the whole Starlark script of .kairocode/workflows/<name>.star, new or changed. " +
+	Description: "Write a flow's draft: the whole Starlark script of .kairocode/workflows/drafts/<name>.star, new or changed. " +
 		"It is checked first (parse errors, names that are not there, a missing main(input)); a script with problems is not " +
-		"written, and the problems come back to fix. It shows the flow's shape when it is written.",
+		"written, and the problems come back to fix. It shows the flow's shape when it is written. A draft does not run " +
+		"(only as a try: /flow <name> --draft); flow_publish makes it the flow that runs, once the user allows it.",
 	Schema: json.RawMessage(`{"properties":{
 		"name":{"type":"string","description":"The flow's name: lowercase letters, digits and - (not new, graph or runs)"},
 		"source":{"type":"string","description":"The flow's whole Starlark script"},
@@ -64,13 +65,14 @@ func planFlowWrite(_ context.Context, env Env, input json.RawMessage) Planned {
 	if err != nil {
 		return fail("not written: %v", err)
 	}
-	p := path.Join(flowchart.Dir, in.Name+".star")
+	p := path.Join(flowchart.DraftsDir, in.Name+".star")
 	before, err := current(env, p)
 	if err != nil {
 		return fail("%v", err)
 	}
 	data, err := json.Marshal(flowWrite{Path: p, Before: before, Content: in.Source,
-		Summary: "Wrote " + p + ": run it with /flow " + in.Name + ". Its shape:\n" + flowchart.Tree(c, nil)})
+		Summary: "Wrote the draft " + p + ": try it with /flow " + in.Name + " --draft; flow_publish makes it the flow that runs. Its shape:\n" +
+			flowchart.Tree(c, nil)})
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -82,15 +84,16 @@ func applyFlowWrite(_ context.Context, env Env, data json.RawMessage) Result {
 	if err := json.Unmarshal(data, &w); err != nil {
 		return failed("invalid plan: %v", err)
 	}
-	// The plan names a flow script and nothing else: what may be written
-	// in .kairocode.
-	name, ok := strings.CutSuffix(strings.TrimPrefix(w.Path, flowchart.Dir+"/"), ".star")
-	if !ok || !flowchart.ValidName(name) || w.Path != path.Join(flowchart.Dir, name+".star") {
+	// The plan names a flow's script or draft and nothing else: what may
+	// be written in .kairocode.
+	dir := path.Dir(w.Path)
+	name, ok := strings.CutSuffix(path.Base(w.Path), ".star")
+	if !ok || !flowchart.ValidName(name) || (dir != flowchart.Dir && dir != flowchart.DraftsDir) || w.Path != path.Join(dir, name+".star") {
 		return failed("%s is not a flow's script", w.Path)
 	}
 	// Each directory on the way is itself, not a link to somewhere else
 	// in the working directory (.git, say).
-	for _, dir := range []string{".kairocode", flowchart.Dir} {
+	for _, dir := range []string{".kairocode", flowchart.Dir, flowchart.DraftsDir} {
 		if st, err := env.Root.Lstat(dir); err == nil && st.Mode()&fs.ModeSymlink != 0 {
 			return failed("%s is a symbolic link: flows are not written through it", dir)
 		}

@@ -35,13 +35,13 @@ def main(input):
 func TestTryFlow(t *testing.T) {
 	in, _ := json.Marshal(map[string]any{"name": "reply", "source": triedFlow,
 		"asked": []map[string]string{{"need": "draft a reply", "phase": "draft"}, {"need": "save it", "phase": "save"}}})
-	ws := workspaceWith(t, `{"flow_write": "ask", "write": "allow", "read": "allow"}`)
+	ws := workspaceWith(t, `{"flow_publish": "ask", "write": "allow", "read": "allow"}`)
 	if err := os.WriteFile(filepath.Join(ws, "seed.txt"), []byte("SEED"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	hold, release := filepath.Join(t.TempDir(), "holding"), filepath.Join(t.TempDir(), "release")
 	fake := &provider.Fake{HoldAt: -1, HoldOn: "draft a reply to", HoldFile: hold, ReleaseFile: release,
-		Script:  []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "written"}},
+		Script:  []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Tools: []provider.FakeTool{{Name: "flow_publish", Input: publishOf(in)}}}, {Text: "written"}},
 		Replies: map[string]provider.FakeReply{"draft a reply to": {Text: "Dear customer, we refund it."}}}
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -134,7 +134,7 @@ func TestTryFlow(t *testing.T) {
 func tryFake(t *testing.T, path, hold string) string {
 	in, _ := json.Marshal(map[string]any{"name": "reply", "source": triedFlow})
 	f := provider.Fake{HoldAt: -1,
-		Script:  []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "written"}},
+		Script:  []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Tools: []provider.FakeTool{{Name: "flow_publish", Input: publishOf(in)}}}, {Text: "written"}},
 		Replies: map[string]provider.FakeReply{"draft a reply to": {Text: "Dear customer, we refund it."}}}
 	if hold != "" {
 		f.HoldOn, f.HoldFile = "draft a reply to", hold
@@ -191,7 +191,7 @@ func TestCrashTryFlow(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "k.db")
 	hold := filepath.Join(dir, "holding")
-	ws := workspaceWith(t, `{"flow_write": "ask", "write": "allow", "read": "allow"}`)
+	ws := workspaceWith(t, `{"flow_publish": "ask", "write": "allow", "read": "allow"}`)
 	if err := os.WriteFile(filepath.Join(ws, "seed.txt"), []byte("SEED"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -257,16 +257,17 @@ func TestCrashTryFlow(t *testing.T) {
 func TestTryFlowOnClaudeCode(t *testing.T) {
 	src := "def main(input):\n    a = agent(\"build\", \"count it\")\n    return a.output\n"
 	write := map[string]any{"name": "counter", "source": src}
+	publish := map[string]any{"name": "counter"}
 	e := setupFakeClaude(t,
-		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "flow_write", Args: write}}, Reply: "asked"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "flow_write", Args: write}, {Tool: "flow_publish", Args: publish}}, Reply: "asked"},
 		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 7}}}, Reply: "counted"},
-		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "flow_write", Args: write}}, Reply: "done"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "flow_write", Args: write}, {Tool: "flow_publish", Args: publish}}, Reply: "done"},
 	)
 	r := openClaude(t, e)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	ws := repo(t)
-	setPermission(t, ws, `{"flow_write": "ask", "count": "allow"}`)
+	setPermission(t, ws, `{"flow_publish": "ask", "count": "allow"}`)
 	s, _ := r.CreateSession(ctx, "cc-try", workflows.SessionInput{Dir: ws})
 	n, _ := r.Send(ctx, s, "make a counting flow")
 	p := waitPending(t, r, s, 1)
@@ -342,4 +343,16 @@ func TestReviewSections(t *testing.T) {
 	if strings.Contains(ch, "mcp__s__post") || !strings.Contains(ch, `~ agent plan  "new"`) || !strings.Contains(ch, `+ ask  "post?"`) || !strings.Contains(ch, "… 1 the same") {
 		t.Fatalf("changes:\n%s", ch)
 	}
+}
+
+// publishOf is flow_publish's input for the flow flow_write's input in
+// writes: its name, and what was asked (ADR 0030).
+func publishOf(in json.RawMessage) json.RawMessage {
+	var w struct {
+		Name  string          `json:"name"`
+		Asked json.RawMessage `json:"asked,omitempty"`
+	}
+	json.Unmarshal(in, &w)
+	b, _ := json.Marshal(w)
+	return b
 }

@@ -860,9 +860,9 @@ func TestFlowWriteAskShowsTheFlow(t *testing.T) {
 	src := "def main(input):\n    a = agent(agent = \"build\", prompt = \"draft an answer\")\n    return a\n"
 	in, _ := json.Marshal(map[string]any{"name": "inquiry-alert", "source": src,
 		"asked": []map[string]string{{"need": "draft an answer", "phase": "draft"}}})
-	ws := workspaceWith(t, `{"flow_write": "ask"}`)
+	ws := workspaceWith(t, `{"flow_publish": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
-		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Text: "done"}}})
+		Script: []provider.FakeReply{{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}}, {Tools: []provider.FakeTool{{Name: "flow_publish", Input: publishOf(in)}}}, {Text: "done"}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	// A flow of the name is there: what the new one changes is shown.

@@ -40,8 +40,15 @@ func flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (workflows.FlowS
 		return workflows.FlowSource{}, err
 	}
 	defer root.Close()
-	b, err := root.ReadFile(filepath.Join(FlowsDir, in.Name+".star"))
+	dir := FlowsDir
+	if in.Draft {
+		dir = flowchart.DraftsDir // a draft, run as a try (ADR 0030)
+	}
+	b, err := root.ReadFile(filepath.Join(dir, in.Name+".star"))
 	if errors.Is(err, fs.ErrNotExist) {
+		if in.Draft {
+			return workflows.FlowSource{Error: fmt.Sprintf("there is no draft of the flow %q (%s/%s.star)", in.Name, dir, in.Name)}, nil
+		}
 		return workflows.FlowSource{Error: fmt.Sprintf("there is no flow %q (%s/%s.star)", in.Name, FlowsDir, in.Name)}, nil
 	}
 	if err != nil {
@@ -121,21 +128,36 @@ func (r *Runtime) flowText(t *kairo.TaskContext, hash string) (string, error) {
 type FlowInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Draft: a draft, which runs only as a try (/flow <name> --draft, ADR
+	// 0030).
+	Draft bool `json:"draft,omitempty"`
 }
 
 // Flows are the flows of the session's project, by name, with their
-// DESCRIPTION.
+// DESCRIPTION; then their drafts.
 func (r *Runtime) Flows(ctx context.Context, session string) ([]FlowInfo, error) {
 	dir, err := r.sessionDir(ctx, session)
 	if err != nil {
 		return nil, err
 	}
-	return flowsIn(dir)
+	flows, err := flowsIn(dir)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := scripts(dir, flowchart.DraftsDir)
+	for i := range drafts {
+		drafts[i].Draft = true
+	}
+	return append(flows, drafts...), err
 }
 
-// flowsIn are the flows of the project in dir, by name.
-func flowsIn(dir string) ([]FlowInfo, error) {
-	entries, err := os.ReadDir(filepath.Join(dir, FlowsDir))
+// flowsIn are the flows of the project in dir, by name (published: not
+// their drafts).
+func flowsIn(dir string) ([]FlowInfo, error) { return scripts(dir, FlowsDir) }
+
+// scripts are the flows' scripts in sub of dir, by name.
+func scripts(dir, sub string) ([]FlowInfo, error) {
+	entries, err := os.ReadDir(filepath.Join(dir, sub))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -149,7 +171,7 @@ func flowsIn(dir string) ([]FlowInfo, error) {
 			continue
 		}
 		f := FlowInfo{Name: name}
-		if b, err := os.ReadFile(filepath.Join(dir, FlowsDir, e.Name())); err == nil {
+		if b, err := os.ReadFile(filepath.Join(dir, sub, e.Name())); err == nil {
 			f.Description = description(e.Name(), b)
 		}
 		out = append(out, f)
@@ -189,12 +211,22 @@ func (r *Runtime) RunFlow(ctx context.Context, session, name, args string) (int,
 		return 0, ErrNoFlowName
 	}
 	text := strings.TrimSpace("/flow " + name + " " + args)
+	// Its options (ADR 0030): --draft runs the draft as a try; --publish
+	// has the model publish the draft (the user reviews it then).
+	draft := false
+	switch opt, rest, _ := strings.Cut(strings.TrimSpace(args), " "); opt {
+	case "--draft":
+		draft, args = true, strings.TrimSpace(rest)
+	case "--publish":
+		return r.Send(ctx, session, text+"\n\nPublish the draft of the flow "+name+" ("+flowchart.DraftsDir+"/"+name+
+			".star) with flow_publish, giving what was asked for it as you took it. Do not change the draft first.")
+	}
 	h, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: text}}})
 	if err != nil {
 		return 0, err
 	}
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h,
-		Flow: &workflows.FlowCall{Name: name, Args: args}})
+		Flow: &workflows.FlowCall{Name: name, Args: args, Draft: draft}})
 }
 
 // flowStep answers whether the flow's Seq-th call is the one a run before

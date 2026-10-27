@@ -16,7 +16,7 @@ const flowNewPrompt = `Write a flow for this request:
 
 %s
 
-A flow is a Starlark script (Starlark is a small dialect of Python) at .kairocode/workflows/<name>.star. It runs with /flow <name> [words], survives restarts, and never redoes a step that finished. Write it with the flow_write tool (the only tool that writes flows): it checks the script first, and if it reports problems, fix them and write it again. To change a flow later, write it whole again with flow_write. Do not run the flow.
+A flow is a Starlark script (Starlark is a small dialect of Python). It runs with /flow <name> [words], survives restarts, and never redoes a step that finished. Write it as a draft with the flow_write tool (the only tool that writes flows; it goes to .kairocode/workflows/drafts/<name>.star): it checks the script first, and if it reports problems, fix them and write it again. To change it, write it whole again with flow_write. A draft does not run: the user tries it with /flow <name> --draft, and publishes it with /flow <name> --publish (or asks you to: then call flow_publish), reviewing it then. Do not run the flow, and do not publish it unless asked.
 
 The script:
 - DESCRIPTION = "one line saying what the flow does" at the top.
@@ -34,9 +34,9 @@ What it can call (each returns a value with ok, output, error and value, never r
 
 Starlark, not Python: no f-strings (use "%%s" %% x or "{}".format(x)), no try/except (check .ok), no import, no classes, no recursion; for and while loops, if, def, lists, dicts and comprehensions are there. Bound loops (for round in range(5)).
 
-With flow_write, give asked: what the user asked for, one thing at a time, as you took it, each with the phase that does it ({"need": "...", "phase": "..."}). The user reviews the flow against it before it is written. Write asked, DESCRIPTION, the questions of ask and the prompts in the language the user wrote the request in; phase names and the flow's name stay short lowercase words.
+With flow_write and flow_publish, give asked: what the user asked for, one thing at a time, as you took it, each with the phase that does it ({"need": "...", "phase": "..."}). The user reviews the flow against it before it is published. Write asked, DESCRIPTION, the questions of ask and the prompts in the language the user wrote the request in; phase names and the flow's name stay short lowercase words.
 
-Choose a short name (lowercase letters, digits and -; not new, graph or runs). When it is ready, say in one or two sentences what the flow does and how to run it.`
+Choose a short name (lowercase letters, digits and -; not new, graph or runs). When the draft is written, say in one or two sentences what the flow does, and how to try it (/flow <name> --draft) and publish it (/flow <name> --publish).`
 
 // ErrNoFlowRequest: /flow new was given nothing to make a flow of.
 var ErrNoFlowRequest = errors.New("/flow new needs what the flow is to do: /flow new <what it does>")
