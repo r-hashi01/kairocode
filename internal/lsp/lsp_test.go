@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 )
 
 // The fake language server is the test binary started again with
@@ -42,9 +42,7 @@ func fake(t *testing.T, log string, diags []Diagnostic, silent bool) Server {
 
 func workdir(t *testing.T) string {
 	t.Helper()
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

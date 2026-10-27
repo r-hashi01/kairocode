@@ -19,6 +19,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -896,6 +897,7 @@ func TestApprovalToManyClients(t *testing.T) {
 // the call waits for review; its answer settles it, and the turn ends
 // (issue #7).
 func TestCrashDaemonEventsAfterRestart(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a daemon")
 	}

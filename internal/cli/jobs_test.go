@@ -9,11 +9,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 )
 
 // kairocode jobs run <folder> runs the command its spec names, in the
 // sandbox, and writes what it wrote and how it ended (ADR 0028).
 func TestJobsRun(t *testing.T) {
+	sandboxtest.Require(t)
 	t.Setenv("KAIROCODE_JOB_DATA", "") // no daemon to tell
 	ws, folder := t.TempDir(), t.TempDir()
 	spec, _ := json.Marshal(map[string]any{"id": "bg_test", "session": "s/x", "dir": ws,

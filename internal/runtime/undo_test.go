@@ -13,7 +13,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -32,9 +32,7 @@ func needSnapshots(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 }
 
 // undoTurn asks for an undo (or a redo) and returns what the turn says.

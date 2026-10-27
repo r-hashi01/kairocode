@@ -18,7 +18,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/provider"
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -220,9 +220,7 @@ def main(input):
 // one of a turn (invariant 4): listed with the turn, and settled by the
 // answer; the flow goes on.
 func TestFlowCutOffCallIsReviewed(t *testing.T) {
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"bash": "allow"}`)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/slow.star": `
 def main(input):

@@ -14,6 +14,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -462,6 +463,7 @@ func TestCrashWriteConflict(t *testing.T) {
 // the call stops for review instead of running again; the user's answer
 // settles it and the turn goes on (invariant 4).
 func TestCrashBashNeedsReview(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -523,6 +525,7 @@ func TestCrashBashNeedsReview(t *testing.T) {
 // new commit, its result not recorded. Resumed, the commit is not made
 // again: HEAD is already the planned commit (design 3).
 func TestCrashGitCommitOnce(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -599,6 +602,7 @@ func TestCrashGitCommitOnce(t *testing.T) {
 // review, then that it was answered, the call's end and the turn's end
 // (issues #3, #7).
 func TestCrashEventsAfterRestart(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}

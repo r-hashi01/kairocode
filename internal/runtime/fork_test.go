@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -67,6 +68,7 @@ func TestForkFromATurn(t *testing.T) {
 // --files: the fork's first turn puts the working files back as they were
 // after the turn, and /undo there takes them back (ADR 0021).
 func TestForkWithFiles(t *testing.T) {
+	sandboxtest.Require(t)
 	write := func(content string) provider.FakeReply {
 		in, _ := json.Marshal(map[string]string{"path": "x.txt", "content": content})
 		return provider.FakeReply{Tools: []provider.FakeTool{{Name: "write", Input: in}}}
@@ -131,6 +133,7 @@ func TestForkOnClaudeCode(t *testing.T) {
 // --files from a turn that took no snapshot of its own (an undo): the
 // files it put back (ADR 0021).
 func TestForkFilesFromAnUndo(t *testing.T) {
+	sandboxtest.Require(t)
 	write := func(content string) provider.FakeReply {
 		in, _ := json.Marshal(map[string]string{"path": "x.txt", "content": content})
 		return provider.FakeReply{Tools: []provider.FakeTool{{Name: "write", Input: in}}}

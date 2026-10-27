@@ -28,6 +28,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -663,6 +664,7 @@ func crashChild() {
 // the answer is recorded as given, the turn goes on, and the command does not
 // run again (invariant 4, ADR 0002).
 func TestCrashACPReview(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -798,6 +800,7 @@ func crashReview(t *testing.T, option, recorded string) {
 // /undo and /redo are slash commands: offered on session/new, they put the
 // working files back and forth, and say what they did (design 7).
 func TestACPUndoRedo(t *testing.T) {
+	sandboxtest.Require(t)
 	b, ws := setup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

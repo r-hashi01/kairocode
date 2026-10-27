@@ -2,16 +2,38 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 )
 
-// Available says whether commands can be confined here.
+var (
+	availMu   sync.Mutex
+	availPath string // the sandbox-exec availErr is about
+	availErr  error
+)
+
+// Available says whether commands can be confined here: sandbox-exec is
+// there and can start one. It cannot inside another sandbox (an agent's,
+// or KairoCode's own: ADR 0031); then there is none, as where it is missing.
 func Available() error {
-	if _, err := os.Stat(seatbeltPath); err != nil {
-		return ErrUnavailable
+	availMu.Lock()
+	defer availMu.Unlock()
+	if availPath == seatbeltPath {
+		return availErr
 	}
-	return nil
+	availPath, availErr = seatbeltPath, nil
+	if _, err := os.Stat(seatbeltPath); err != nil {
+		availErr = ErrUnavailable
+		return availErr
+	}
+	probe := exec.Command(seatbeltPath, "-p", "(version 1)(allow default)", "/usr/bin/true")
+	if out, err := probe.CombinedOutput(); err != nil {
+		availErr = fmt.Errorf("%w: sandbox-exec cannot start one here (in another sandbox?): %v: %s", ErrUnavailable, err, strings.TrimSpace(string(out)))
+	}
+	return availErr
 }
 
 func platformCommand(ctx context.Context, p Policy, root string, argv []string) (*exec.Cmd, error) {

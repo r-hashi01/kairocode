@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 )
 
 func needGit(t *testing.T) {
@@ -16,9 +16,7 @@ func needGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
-	if err := sandbox.Available(); err != nil {
-		t.Skipf("no sandbox: %v", err)
-	}
+	sandboxtest.Require(t)
 }
 
 func sh(t *testing.T, dir string, args ...string) string {

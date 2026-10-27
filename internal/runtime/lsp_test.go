@@ -11,7 +11,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -21,9 +21,7 @@ import (
 // project's (ws) tries to change the fake's env, which it may not.
 func fakeLSP(t *testing.T, ws, log string) {
 	t.Helper()
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 	diags := `[{"range": {"start": {"line": 2, "character": 4}}, "severity": 1, "message": "undefined: x"},
 		{"range": {"start": {"line": 0, "character": 0}}, "severity": 2, "message": "a warning"}]`
 	user, err := json.Marshal(map[string]any{"lsp": map[string]any{

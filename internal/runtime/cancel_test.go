@@ -19,7 +19,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -262,9 +262,7 @@ func TestCrashCancel(t *testing.T) {
 // Stopped while a command runs: the command stops with the turn, and the
 // call cut off is not asked about (the user stopped it, ADR 0011).
 func TestCancelStopsARunningCommand(t *testing.T) {
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"bash": "allow"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo $$ > pid; sleep 30"}`)}}},

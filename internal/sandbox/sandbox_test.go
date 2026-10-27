@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -16,6 +17,9 @@ import (
 // The test binary runs as a helper inside the sandbox when KC_SANDBOX_DIAL
 // is set: it connects to that address and exits 0 if it could.
 func TestMain(m *testing.M) {
+	if role := os.Getenv("KC_SANDBOX_ROLE"); role != "" {
+		os.Exit(helper(role))
+	}
 	if addr := os.Getenv("KC_SANDBOX_DIAL"); addr != "" {
 		c, err := net.DialTimeout("tcp", addr, 3*time.Second)
 		if err != nil {
@@ -30,6 +34,13 @@ func TestMain(m *testing.M) {
 func needSandbox(t *testing.T) {
 	t.Helper()
 	if err := Available(); err != nil {
+		// As sandboxtest.Require, which this package cannot import.
+		if path := os.Getenv("KAIROCODE_SKIPPED"); path != "" {
+			if f, ferr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); ferr == nil {
+				fmt.Fprintln(f, t.Name())
+				f.Close()
+			}
+		}
 		t.Skipf("no sandbox here: %v", err)
 	}
 }

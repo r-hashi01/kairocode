@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -60,6 +60,7 @@ const hookSettings = `{"hooks": {
 // PostToolUse hook says goes with the result; a Stop hook that does not
 // pass sends the model back. Asked once: the next turn is not asked again.
 func TestClaudeHooksRunHere(t *testing.T) {
+	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"write": "allow", "read": "allow"}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
 	if err := os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), []byte(hookSettings), 0o644); err != nil {
@@ -120,6 +121,7 @@ func TestClaudeHooksRunHere(t *testing.T) {
 
 // A hook the user said not to run does not run.
 func TestClaudeHookNotRun(t *testing.T) {
+	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
 	os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), []byte(`{"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "touch \"$CLAUDE_PROJECT_DIR/ran\""}]}]}}`), 0o644)
@@ -158,6 +160,7 @@ func TestClaudeHookNotRun(t *testing.T) {
 // around it: a PreToolUse hook that blocks stops it (ADR 0018). Claude
 // Code itself runs no hooks of its own (--setting-sources "").
 func TestClaudeHooksOnClaudeCode(t *testing.T) {
+	sandboxtest.Require(t)
 	e := setupFakeClaude(t,
 		fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "done"},
 	)
@@ -217,6 +220,7 @@ func crashHookChild() {
 // again unasked: the user is asked whether it took effect, and the turn
 // goes on (ADR 0018, invariant 4).
 func TestCrashHookRun(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -293,6 +297,7 @@ func TestCrashHookRun(t *testing.T) {
 // has to say; the person is asked whether the hook took effect (ADR 0018,
 // invariant 4).
 func TestCrashHookOnMCPCall(t *testing.T) {
+	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -366,9 +371,7 @@ func TestCrashHookOnMCPCall(t *testing.T) {
 // A hook run in KairoCode's sandbox writes in the project and not outside
 // it; one the user let out of it (the "outside" answer) can (ADR 0018).
 func TestClaudeHookSandboxed(t *testing.T) {
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 	// Outside the project and the temporary directories, which the
 	// sandbox lets a command write.
 	outside, err := os.MkdirTemp(".", "hook-outside-")

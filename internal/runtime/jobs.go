@@ -58,14 +58,16 @@ const (
 
 // jobSpec is a command in the background, as its folder keeps it.
 type jobSpec struct {
-	ID      string        `json:"id"`
-	Session string        `json:"session"`
-	Dir     string        `json:"dir"` // the working directory
-	Command string        `json:"command"`
-	Cwd     string        `json:"cwd,omitempty"`
-	Escape  bool          `json:"escape,omitempty"`
-	Timeout time.Duration `json:"timeout"`
-	Started time.Time     `json:"started"`
+	ID      string `json:"id"`
+	Session string `json:"session"`
+	Dir     string `json:"dir"` // the working directory
+	Command string `json:"command"`
+	Cwd     string `json:"cwd,omitempty"`
+	Escape  bool   `json:"escape,omitempty"`
+	// Loopback: with this machine's network, in the sandbox (ADR 0031).
+	Loopback bool          `json:"loopback,omitempty"`
+	Timeout  time.Duration `json:"timeout"`
+	Started  time.Time     `json:"started"`
 }
 
 // jobManager keeps the commands in the background of this runtime's data
@@ -170,7 +172,7 @@ func (m *jobManager) start(session, id, dir string, js tools.JobSpec) error {
 	if err := os.MkdirAll(m.path(id), 0o700); err != nil {
 		return err
 	}
-	s := jobSpec{ID: id, Session: session, Dir: dir, Command: js.Command, Cwd: js.Cwd, Escape: js.Escape, Timeout: js.Timeout, Started: time.Now()}
+	s := jobSpec{ID: id, Session: session, Dir: dir, Command: js.Command, Cwd: js.Cwd, Escape: js.Escape, Loopback: js.Loopback, Timeout: js.Timeout, Started: time.Now()}
 	b, _ := json.Marshal(s)
 	if err := os.WriteFile(m.path(id, jobFileSpec), b, 0o600); err != nil {
 		return err
@@ -498,7 +500,18 @@ func RunJob(folder string) error {
 	if s.Escape {
 		mode = sandbox.FullAccess // approved by the user (escalate), as bash
 	}
-	cmd, err := sandbox.Command(ctx, sandbox.Policy{Mode: mode, Root: s.Dir}, s.Cwd, "/bin/sh", "-c", s.Command)
+	p := sandbox.Policy{Mode: mode, Root: s.Dir}
+	if s.Loopback && mode == sandbox.WorkspaceWrite {
+		// Its own TMPDIR, gone with the command (ADR 0031).
+		p.Loopback = true // without its directory, sandbox.Command refuses it
+		if dir, done, err := sandbox.SocketDir(); err == nil {
+			defer done()
+			p.SocketDir = dir
+		} else {
+			fmt.Fprintf(out, "%v\n", err)
+		}
+	}
+	cmd, err := sandbox.Command(ctx, p, s.Cwd, "/bin/sh", "-c", s.Command)
 	status := ""
 	if err != nil {
 		fmt.Fprintf(out, "not started: %v\n", err)

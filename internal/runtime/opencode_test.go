@@ -15,7 +15,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/provider"
-	"github.com/r-hashi01/kairocode/internal/sandbox"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -139,9 +139,7 @@ func TestOpencodeSkills(t *testing.T) {
 // expanded ($1, !`command` in the sandbox, @file) into the user's message,
 // for the agent it names.
 func TestOpencodeCommand(t *testing.T) {
-	if err := sandbox.Available(); err != nil {
-		t.Skip("no sandbox:", err)
-	}
+	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		".opencode/agents/reviewer.md":  "---\ndescription: Reviews\n---\nYou only review code.\n",

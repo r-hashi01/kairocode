@@ -115,6 +115,40 @@ func loadRules(dir string, agent []json.RawMessage) ([]permission.Rule, error) {
 	return rules, nil
 }
 
+// loopbackSetting is sandbox.loopback (ADR 0031): allow (the default: as
+// bash's rules say), ask or deny. The user's sets it; the project's, in the
+// repository, only makes it stricter: a repository one got cannot loosen
+// what the user chose.
+func loopbackSetting(dir string) permission.Action {
+	rank := map[permission.Action]int{permission.Allow: 0, permission.Ask: 1, permission.Deny: 2}
+	setting := permission.Allow
+	for i, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			Sandbox struct {
+				Loopback permission.Action `json:"loopback"`
+			} `json:"sandbox"`
+		}
+		if json.Unmarshal(b, &cfg) != nil {
+			continue
+		}
+		got := cfg.Sandbox.Loopback
+		if got == "" {
+			continue
+		}
+		if _, ok := rank[got]; !ok {
+			got = permission.Ask // a value it does not know: not looser than asking
+		}
+		if i == 0 || rank[got] > rank[setting] {
+			setting = got
+		}
+	}
+	return setting
+}
+
 // subject is what a call's patterns are matched against and what the user
 // is shown: its command, or else its path, or else its arguments as compact
 // JSON with sorted keys (a push's remote and branch, say). fetch's and
@@ -330,6 +364,16 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 		}
 		if err := sandbox.Available(); err != nil {
 			return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "no sandbox here: " + err.Error(), Subject: subj}, true, nil
+		}
+		if tools.Loopback(args) {
+			// This machine's network, in the sandbox (ADR 0031): as bash's
+			// rules say, unless sandbox.loopback says to ask or refuse.
+			switch loopbackSetting(in.Call.Dir) {
+			case permission.Deny:
+				return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "sandbox.loopback is \"deny\"", Subject: subj}, false, nil
+			case permission.Ask:
+				return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "uses this machine's network (sandbox.loopback is \"ask\")", Subject: subj}, true, nil
+			}
 		}
 	}
 	dec := permission.Decide(rules, in.Tool, subj)

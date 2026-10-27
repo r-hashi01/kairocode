@@ -53,6 +53,15 @@ type Policy struct {
 	Network bool
 	// AllowGit lets the command write .git (the git tools only: ADR 0005).
 	AllowGit bool
+	// Loopback allows, without Network, what stays on this machine (ADR
+	// 0031): TCP and UDP on localhost, and Unix sockets in SocketDir alone,
+	// which is the command's TMPDIR. Other Unix sockets (the daemon's,
+	// tmux's) stay out of reach: through them a command could approve its
+	// own calls or type into a terminal.
+	Loopback bool
+	// SocketDir is the Loopback command's own temporary directory, made by
+	// SocketDir().
+	SocketDir string
 }
 
 // protectedNames are the names a policy keeps out of reach.
@@ -110,6 +119,9 @@ func Command(ctx context.Context, p Policy, dir string, argv ...string) (*exec.C
 		}
 		dir = real
 	}
+	if p.Loopback && p.Mode == WorkspaceWrite && p.SocketDir == "" {
+		return nil, errors.New("sandbox: loopback without its own directory")
+	}
 	env := Env(p)
 	if p.Mode == FullAccess {
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -143,8 +155,15 @@ func writableRoots(p Policy, root string) []string {
 		out = append(out, real)
 	}
 	add(root)
-	add("/tmp")
-	add(os.TempDir())
+	if p.Loopback && p.SocketDir != "" {
+		// Its own directory alone, not the temporary directories: from
+		// there another's socket (the daemon's, tmux's) could be moved
+		// into it, and reached (ADR 0031).
+		add(p.SocketDir)
+	} else {
+		add("/tmp")
+		add(os.TempDir())
+	}
 	for _, d := range p.Writable {
 		add(d)
 	}
@@ -158,12 +177,15 @@ func Env(p Policy) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if secretName(name) || strings.HasPrefix(name, "KAIROCODE_SANDBOX") {
+		if secretName(name) || strings.HasPrefix(name, "KAIROCODE_SANDBOX") || (p.Loopback && p.Mode == WorkspaceWrite && name == "TMPDIR") {
 			continue
 		}
 		env = append(env, kv)
 	}
 	env = append(env, "KAIROCODE_SANDBOX="+p.Mode.String())
+	if p.Loopback && p.Mode == WorkspaceWrite {
+		env = append(env, "TMPDIR="+p.SocketDir, "KAIROCODE_SANDBOX_LOOPBACK=1")
+	}
 	if !p.Network && p.Mode != FullAccess {
 		env = append(env, "KAIROCODE_SANDBOX_NETWORK_DISABLED=1")
 	}
@@ -178,4 +200,19 @@ func secretName(name string) bool {
 		}
 	}
 	return false
+}
+
+// SocketDir makes a Loopback command's own temporary directory, under /tmp
+// (short: a Unix socket's path is cut at about 104 bytes), only this user's;
+// done removes it once the command has ended.
+func SocketDir() (dir string, done func(), err error) {
+	tmp, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		return "", nil, fmt.Errorf("sandbox: %w", err)
+	}
+	dir, err = os.MkdirTemp(tmp, "kc-")
+	if err != nil {
+		return "", nil, fmt.Errorf("sandbox: %w", err)
+	}
+	return dir, func() { os.RemoveAll(dir) }, nil
 }

@@ -35,10 +35,12 @@ type Jobs interface {
 
 // JobSpec is a command to run in the background.
 type JobSpec struct {
-	Command string        `json:"command"`
-	Cwd     string        `json:"cwd,omitempty"`
-	Escape  bool          `json:"escape,omitempty"` // outside the sandbox (approved: escalate)
-	Timeout time.Duration `json:"timeout"`
+	Command string `json:"command"`
+	Cwd     string `json:"cwd,omitempty"`
+	Escape  bool   `json:"escape,omitempty"` // outside the sandbox (approved: escalate)
+	// Loopback: in the sandbox, with this machine's network (ADR 0031).
+	Loopback bool          `json:"loopback,omitempty"`
+	Timeout  time.Duration `json:"timeout"`
 }
 
 // JobView is a command's state and output.

@@ -74,7 +74,7 @@ make check | quick | build
 
 - **完了の条件は `scripts/check.sh` が通ることです。** 通らない状態で終わるなら、何が失敗していて、なぜ直せないのかを明記してください。
 - **`scripts/check.sh` は、エージェントの sandbox の外で動かします。** テストは `127.0.0.1` と Unix ソケットで待ち受け（偽のサーバー、デーモン）、KairoCode の sandbox でコマンドを起動します。エージェントの sandbox の中ではそれができないので、検査はテストの前に `== env` で止まり、何ができないかを言います（合格にはしません）。
-  - KairoCode: `bash` を `sandbox: "escalate"`（利用者の承認で sandbox の外）で呼んで動かします。
+  - KairoCode: `bash` を `sandbox: "loopback"`（sandbox の中で、手元の通信だけを許す。ADR 0031）で呼んで動かします。承認は要りません（`bash` の規則に従う）。sandbox を起動するテストは、入れ子にできないので自分を飛ばし、検査は「一部」の合格（`partial: N skipped`）になります。全部を動かすときだけ、`sandbox: "escalate"`（利用者の承認で sandbox の外）を使います。`KAIROCODE_CHECK_FULL=1` なら、「一部」は合格にせず終了コード 3 で止まります。
   - Codex: `scripts/check.sh` は、sandbox の外での実行の許可（escalated）を求めて動かします。`network_access` を許すだけでは足りません（macOS は、sandbox の中で別の sandbox を始められない）。
   - `== env` で止まったときの終了コードは 3 です。Stop hook は、そのとき「直せ」ではなく「外で動かせ」と返します。外で通れば、`check.sh` が通ったこと（`.claude/.cache/last-green`）を書くので、ソースが変わるまで Stop hook は検査を繰り返しません。
   - 外で動かす許可が得られないなら、`== env` の出力を添えて、利用者に外で動かしてもらってください。
