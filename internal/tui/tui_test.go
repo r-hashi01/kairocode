@@ -133,6 +133,21 @@ type fakeAgent struct {
 	set      []string // settings set: id=value
 	plugins  acp.PluginsView
 	changes  []string // /plugin's changes asked for
+	runs     []runtime.FlowRun
+}
+
+func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
+	return a.runs, nil
+}
+
+func (a *fakeAgent) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
+	for _, f := range a.runs {
+		if f.ID == id {
+			f.Steps = []runtime.LogEntry{{At: f.Started, Kind: "tool", Name: "read", Status: "completed", Text: "main.go"}}
+			return f, nil
+		}
+	}
+	return runtime.FlowRun{}, runtime.ErrNoFlowRun
 }
 
 func (a *fakeAgent) Plugins(ctx context.Context, session string) (acp.PluginsView, error) {

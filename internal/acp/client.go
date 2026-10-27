@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
 // Client is the client side of ACP: what an editor does, for KairoCode's own
@@ -126,6 +127,23 @@ func (cl *Client) PluginChange(ctx context.Context, args ...string) (string, err
 	}
 	err := cl.c.Call(ctx, PluginRPC, map[string]any{"args": args}, &out)
 	return out.Text, err
+}
+
+// FlowRuns are the flows' runs of dir ("" any), of flow ("" any), the
+// latest first, at most n (only KairoCode's agent has this; ADR 0029).
+func (cl *Client) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
+	var out struct {
+		Runs []runtime.FlowRun `json:"runs"`
+	}
+	err := cl.c.Call(ctx, FlowRunsRPC, map[string]any{"dir": dir, "flow": flow, "n": n}, &out)
+	return out.Runs, err
+}
+
+// FlowRun is a flow's run, with its chart and steps.
+func (cl *Client) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
+	var f runtime.FlowRun
+	err := cl.c.Call(ctx, FlowRunRPC, map[string]any{"id": id}, &f)
+	return f, err
 }
 
 // InstallInfo is what installing a provider fetches.

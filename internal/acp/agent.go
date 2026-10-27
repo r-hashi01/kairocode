@@ -55,6 +55,10 @@ type Backend interface {
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
+	// FlowRuns and FlowRun are the flows' runs, kept once they end (ADR
+	// 0029).
+	FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error)
+	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
 	Answer(ctx context.Context, key, option string) error
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
 	NewFlow(ctx context.Context, session, request string) (int, error)
@@ -75,7 +79,7 @@ var builtinCommands = []map[string]any{
 	{"name": "redo", "description": "Put back what the last undo took away"},
 	{"name": "compact", "description": "Summarize the conversation and go on from the summary (the earlier messages are kept)"},
 	{"name": "fork", "description": "Start another session from a turn of this one (the last, unless named); --files puts the files back as they were after it", "input": map[string]any{"hint": "[turn] [--files]"}},
-	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them)", "input": map[string]any{"hint": "<name> [what to give it]"}},
+	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them; /flow runs, the runs to look back at)", "input": map[string]any{"hint": "<name> [what to give it]"}},
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
 	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
@@ -124,6 +128,11 @@ const (
 	// marketplace ({"args": [...]} → {"text"}). ADR 0027.
 	PluginsRPC = "_kairocode/plugins"
 	PluginRPC  = "_kairocode/plugin"
+	// FlowRunsRPC lists the flows' runs of a folder ({"dir", "flow", "n"}
+	// → {"runs"}); FlowRunRPC gives one, with its chart and steps
+	// ({"id"} → runtime.FlowRun). ADR 0029.
+	FlowRunsRPC = "_kairocode/flow_runs"
+	FlowRunRPC  = "_kairocode/flow_run"
 )
 
 // PluginsView is what the terminal's /plugin shows.
@@ -510,6 +519,35 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		v := PluginsView{Installed: list}
 		v.Catalog, v.Marketplaces, v.Errors = runtime.Catalog()
 		return v, nil
+	case FlowRunsRPC:
+		var p struct {
+			Dir  string `json:"dir"`
+			Flow string `json:"flow"`
+			N    int    `json:"n"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, invalid(err)
+		}
+		runs, err := a.b.FlowRuns(ctx, p.Dir, p.Flow, p.N)
+		if err != nil {
+			return nil, invalid(err)
+		}
+		if runs == nil {
+			runs = []runtime.FlowRun{}
+		}
+		return map[string]any{"runs": runs}, nil
+	case FlowRunRPC:
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
+			return nil, invalid(errors.New(`want {"id": "<run>"}`))
+		}
+		f, err := a.b.FlowRun(ctx, p.ID)
+		if err != nil {
+			return nil, invalid(err)
+		}
+		return f, nil
 	case PluginRPC:
 		var p struct {
 			Args []string `json:"args"`
@@ -724,6 +762,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		flow, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
 		if flow == "" { // the list, without a turn
 			return a.listFlows(ctx, p.SessionID)
+		}
+		if flow == "runs" { // the runs kept, without a turn (ADR 0029)
+			a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.flowRunsText(ctx, p.SessionID))})
+			return map[string]any{"stopReason": "end_turn"}, nil
 		}
 		if flow == "new" { // the model writes one from the words (ADR 0003)
 			start = func(ctx context.Context, s, _ string) (int, error) { return a.b.NewFlow(ctx, s, rest) }
@@ -1558,4 +1600,21 @@ func (a *agent) mcpText(ctx context.Context, session string) string {
 	}
 	b.WriteString("\nA tool declared read may run again after an interruption; any other is real, and asked about if cut off. Declare effects in kairocode.json's \"tools\".")
 	return b.String()
+}
+
+// flowRunsText is /flow runs' answer for a client with no screen for it:
+// the folder's flows' runs, the latest first (ADR 0029).
+func (a *agent) flowRunsText(ctx context.Context, session string) string {
+	runs, err := a.b.FlowRuns(ctx, a.dirOf(session), "", 30)
+	if err != nil {
+		return "The flows' runs could not be listed: " + err.Error()
+	}
+	if len(runs) == 0 {
+		return "No flow has run here (or none is kept)."
+	}
+	var b strings.Builder
+	for _, f := range runs {
+		fmt.Fprintf(&b, "%s\n    kairocode flow show %s\n", f.Line(), f.ID)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

@@ -20,9 +20,11 @@ const Dir = ".kairocode/workflows"
 // name is what a flow may be called: what /flow can type.
 var name = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-// ValidName reports whether n can be a flow's name. "new" and "graph" are
-// taken by /flow new and /flow graph.
-func ValidName(n string) bool { return name.MatchString(n) && n != "new" && n != "graph" }
+// ValidName reports whether n can be a flow's name. "new", "graph" and
+// "runs" are taken by /flow new, /flow graph and /flow runs (ADR 0029).
+func ValidName(n string) bool {
+	return name.MatchString(n) && n != "new" && n != "graph" && n != "runs"
+}
 
 // Kinds of Node.
 const (

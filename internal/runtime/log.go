@@ -305,6 +305,15 @@ func (l SessionLog) Text() string {
 		fmt.Fprintf(&b, ", forked from turn %d of %s", l.From.Turn, strings.TrimPrefix(l.From.Session, "s/"))
 	}
 	fmt.Fprintf(&b, "\nUsed: %s\n", usageText(l.Usage))
+	for _, t := range l.Turns {
+		b.WriteString("\n" + l.entriesText([]LogEntry{t}))
+	}
+	return b.String()
+}
+
+// entriesText is entries, and the runs in each, as lines to read.
+func (SessionLog) entriesText(es []LogEntry) string {
+	var b strings.Builder
 	var write func(es []LogEntry, depth int)
 	write = func(es []LogEntry, depth int) {
 		for _, e := range es {
@@ -320,10 +329,7 @@ func (l SessionLog) Text() string {
 			write(e.Runs, depth+1)
 		}
 	}
-	for _, t := range l.Turns {
-		b.WriteString("\n")
-		write([]LogEntry{t}, 0)
-	}
+	write(es, 0)
 	return b.String()
 }
 

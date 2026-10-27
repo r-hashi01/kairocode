@@ -571,3 +571,48 @@ func TestFlowShowFollow(t *testing.T) {
 		t.Fatalf("flow stats:\n%s", stats.String())
 	}
 }
+
+// A flow run by kairocode run (its session closed after) is listed by
+// kairocode flow runs, and kairocode flow show <run> draws it, with its
+// steps (ADR 0029).
+func TestFlowRunsAndShow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "hello.star"),
+		[]byte("DESCRIPTION = \"Say hello\"\ndef main(input):\n    phase(\"greet\")\n    return \"hello \" + input[\"args\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, t.TempDir()))
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var out, errs bytes.Buffer
+	if c := Main(ctx, []string{"run", "-dir", ws, "-data", data, "/flow hello world"}, &out, &errs); c != 0 {
+		t.Fatalf("run: exit %d: %s", c, errs.String())
+	}
+	var id string
+	until(t, ctx, "the run listed", func() bool {
+		out.Reset()
+		if Main(ctx, []string{"flow", "runs", "-dir", ws, "-data", data}, &out, &errs) != 0 {
+			return false
+		}
+		_, rest, ok := strings.Cut(out.String(), "kairocode flow show ")
+		id, _, _ = strings.Cut(rest, "\n")
+		return ok && strings.Contains(out.String(), "hello world  ok")
+	})
+	out.Reset()
+	if c := Main(ctx, []string{"flow", "show", "-data", data, id}, &out, &errs); c != 0 {
+		t.Fatalf("show: exit %d: %s", c, errs.String())
+	}
+	for _, want := range []string{"hello", "said: hello world", "Steps:"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("%q not in\n%s", want, out.String())
+		}
+	}
+}

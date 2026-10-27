@@ -23,7 +23,7 @@ var FlowWriteTool = Def{
 		"It is checked first (parse errors, names that are not there, a missing main(input)); a script with problems is not " +
 		"written, and the problems come back to fix. It shows the flow's shape when it is written.",
 	Schema: json.RawMessage(`{"properties":{
-		"name":{"type":"string","description":"The flow's name: lowercase letters, digits and - (not new or graph)"},
+		"name":{"type":"string","description":"The flow's name: lowercase letters, digits and - (not new, graph or runs)"},
 		"source":{"type":"string","description":"The flow's whole Starlark script"},
 		"asked":{"type":"array","description":"What the user asked for, one thing at a time, as you took it, each with the phase(\"name\") of the flow that does it: shown to the user to check against the flow",
 			"items":{"type":"object","properties":{"need":{"type":"string"},"phase":{"type":"string"}},"required":["need","phase"]}}},
@@ -55,7 +55,7 @@ func planFlowWrite(_ context.Context, env Env, input json.RawMessage) Planned {
 		return fail("invalid input: %v", err)
 	}
 	if !flowchart.ValidName(in.Name) {
-		return fail("%q is not a flow's name: lowercase letters, digits, - and _ (not new or graph)", in.Name)
+		return fail("%q is not a flow's name: lowercase letters, digits, - and _ (not new, graph or runs)", in.Name)
 	}
 	if problems := flowchart.Check(in.Name, []byte(in.Source)); len(problems) > 0 {
 		return fail("not written: the script has problems; fix them and write it again:\n%s", strings.Join(problems, "\n"))

@@ -36,7 +36,7 @@ Starlark, not Python: no f-strings (use "%%s" %% x or "{}".format(x)), no try/ex
 
 With flow_write, give asked: what the user asked for, one thing at a time, as you took it, each with the phase that does it ({"need": "...", "phase": "..."}). The user reviews the flow against it before it is written. Write asked, DESCRIPTION, the questions of ask and the prompts in the language the user wrote the request in; phase names and the flow's name stay short lowercase words.
 
-Choose a short name (lowercase letters, digits and -; not new or graph). When it is ready, say in one or two sentences what the flow does and how to run it.`
+Choose a short name (lowercase letters, digits and -; not new, graph or runs). When it is ready, say in one or two sentences what the flow does and how to run it.`
 
 // ErrNoFlowRequest: /flow new was given nothing to make a flow of.
 var ErrNoFlowRequest = errors.New("/flow new needs what the flow is to do: /flow new <what it does>")

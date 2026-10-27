@@ -3,6 +3,8 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -67,5 +69,43 @@ func TestPluginsRPC(t *testing.T) {
 	}
 	if i := slices.IndexFunc(v.Catalog, func(p runtime.CatalogPlugin) bool { return p.Name == "exa" }); i < 0 || !v.Catalog[i].Installed {
 		t.Fatalf("the catalog: %+v", v.Catalog)
+	}
+}
+
+// The terminal's /flow runs reads the folder's flows' runs by FlowRunsRPC,
+// and one by FlowRunRPC (ADR 0029).
+func TestFlowRunsRPC(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	b, ws := setup(t)
+	os.MkdirAll(filepath.Join(ws, ".kairocode", "workflows"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".kairocode", "workflows", "hello.star"), []byte("def main(input):\n    return \"hello\"\n"), 0o644)
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	n, err := b.r.RunFlow(ctx, s, "hello", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	var out struct{ Runs []runtime.FlowRun }
+	for {
+		if err := json.Unmarshal(c.call(FlowRunsRPC, map[string]any{"dir": ws}), &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Runs) == 1 && out.Runs[0].Status == runtime.FlowRunOK {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("not listed: %+v", out.Runs)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	var f runtime.FlowRun
+	if err := json.Unmarshal(c.call(FlowRunRPC, map[string]any{"id": out.Runs[0].ID}), &f); err != nil || f.Name != "hello" || f.View == nil {
+		t.Fatalf("%+v %v", f, err)
 	}
 }

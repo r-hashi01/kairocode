@@ -124,6 +124,12 @@ type Runtime struct {
 	closeOnce sync.Once
 	closeErr  error
 	closed    atomic.Bool
+	// bg: what the runtime does by itself (keeping flows' runs, ADR 0029),
+	// stopped and waited for as it closes.
+	bgMu     sync.Mutex
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bg       sync.WaitGroup
 
 	mu      sync.Mutex
 	changed chan struct{} // closed and replaced whenever a run starts or settles here
@@ -225,6 +231,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
 	r.ev = newEvents(r)
 	r.ext.logf = r.logf
+	r.bgCtx, r.bgCancel = context.WithCancel(context.Background())
 	r.jobs = newJobs(r)
 	if id := registryAgent(cfg.Engine); id != "" && cfg.Engine != workflows.EngineCodex && cfg.Engine != workflows.EngineCopilot &&
 		!r.knownAgent(ctx, id) {
@@ -234,6 +241,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("runtime: the engine %q: %w: %s", cfg.Engine, ErrNoProvider, id)
 	}
 	fail := func(err error) (*Runtime, error) {
+		r.bgCancel()
 		r.ev.close()
 		r.lsp.Close()
 		db.Close()
@@ -269,6 +277,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		return fail(err)
 	}
 	r.jobs.recover()
+	r.background(r.keepMissed) // the flows' runs a stopped process did not keep (ADR 0029)
 	return r, nil
 }
 
@@ -279,6 +288,21 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 func (r *Runtime) Awaiting(ctx context.Context) bool {
 	ts, err := r.ks.DueTimers(ctx, math.MaxInt64, 1)
 	return err == nil && len(ts) > 0
+}
+
+// background runs f on its own, stopped (its ctx) and waited for as the
+// runtime closes; not once it is closing.
+func (r *Runtime) background(f func(ctx context.Context)) {
+	r.bgMu.Lock()
+	defer r.bgMu.Unlock()
+	if r.closed.Load() || r.bgCtx == nil {
+		return
+	}
+	r.bg.Add(1)
+	go func() {
+		defer r.bg.Done()
+		f(r.bgCtx)
+	}()
 }
 
 // closing says the runtime is closing (or closed).
@@ -293,7 +317,13 @@ func (r *Runtime) Drain(ctx context.Context) error { return r.K.Drain(ctx) }
 // Close closes the runtime; closing it again does nothing.
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
+		r.bgMu.Lock()
 		r.closed.Store(true)
+		r.bgMu.Unlock()
+		if r.bgCancel != nil {
+			r.bgCancel()
+		}
+		r.bg.Wait()
 		r.ev.close()
 		err := r.mcp.close()
 		err = errors.Join(err, r.K.Close())
@@ -328,6 +358,10 @@ func (r *Runtime) observe(o kairo.Observation) {
 	}
 	if o.Kind == kairo.ObsRunSettled && o.Status == "blocked" && r.mcp != nil {
 		r.mcp.blocked(o.Parent)
+	}
+	if o.Kind == kairo.ObsRunSettled && o.Workflow == workflows.Flow && o.Status != "blocked" {
+		run := o.RunID // kept to be looked at later (ADR 0029); kairo's observer must not block
+		r.background(func(ctx context.Context) { r.keepSettled(ctx, run) })
 	}
 	r.mu.Lock()
 	close(r.changed)

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -77,6 +78,17 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			reason TEXT NOT NULL,
 			used_by TEXT,
 			PRIMARY KEY (turn, ask))`,
+		// Flows' runs, kept once they end (ADR 0029): kairo removes a
+		// finished tree's record after a while; this one stays.
+		`CREATE TABLE IF NOT EXISTS kc_flow_run (
+			id TEXT PRIMARY KEY,
+			dir TEXT NOT NULL,
+			name TEXT NOT NULL,
+			started INTEGER NOT NULL,
+			ended INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			body BLOB NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS kc_flow_run_dir ON kc_flow_run (dir, started)`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)
@@ -406,4 +418,100 @@ func (s *Store) MCPRuns(ctx context.Context, turn string) ([]string, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// FlowRunRow is a flow's run as it is kept (ADR 0029): its body is the
+// runtime's (JSON).
+type FlowRunRow struct {
+	ID, Dir, Name, Status string
+	Started, Ended        time.Time
+	Body                  []byte
+}
+
+// PutFlowRun keeps a flow's run; kept again, it is replaced.
+func (s *Store) PutFlowRun(ctx context.Context, r FlowRunRow) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_flow_run (id, dir, name, started, ended, status, body)
+		VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET
+		dir = excluded.dir, name = excluded.name, started = excluded.started, ended = excluded.ended,
+		status = excluded.status, body = excluded.body`,
+		r.ID, r.Dir, r.Name, r.Started.UnixNano(), r.Ended.UnixNano(), r.Status, r.Body)
+	if err != nil {
+		return fmt.Errorf("store: put flow run: %w", err)
+	}
+	return nil
+}
+
+// HasFlowRun says a flow's run is kept.
+func (s *Store) HasFlowRun(ctx context.Context, id string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM kc_flow_run WHERE id = ?`, id).Scan(&n)
+	return n > 0, err
+}
+
+// FlowRun is a kept flow's run.
+func (s *Store) FlowRun(ctx context.Context, id string) (FlowRunRow, error) {
+	rows, err := s.flowRuns(ctx, `WHERE id = ?`, id)
+	if err != nil {
+		return FlowRunRow{}, err
+	}
+	if len(rows) == 0 {
+		return FlowRunRow{}, ErrNotFound
+	}
+	return rows[0], nil
+}
+
+// FlowRuns are the kept runs of dir's flows ("" any dir), of flow name
+// ("" any), the latest first, at most limit (0: all), with their bodies.
+func (s *Store) FlowRuns(ctx context.Context, dir, name string, limit int) ([]FlowRunRow, error) {
+	where, args := `WHERE 1 = 1`, []any{}
+	if dir != "" {
+		where, args = where+` AND dir = ?`, append(args, dir)
+	}
+	if name != "" {
+		where, args = where+` AND name = ?`, append(args, name)
+	}
+	where += ` ORDER BY started DESC, id`
+	if limit > 0 {
+		where, args = where+` LIMIT ?`, append(args, limit)
+	}
+	return s.flowRuns(ctx, where, args...)
+}
+
+// FlowRunsSince counts dir's kept runs of flow name started after at.
+func (s *Store) FlowRunsSince(ctx context.Context, dir, name string, at time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM kc_flow_run WHERE dir = ? AND name = ? AND started > ?`,
+		dir, name, at.UnixNano()).Scan(&n)
+	return n, err
+}
+
+func (s *Store) flowRuns(ctx context.Context, where string, args ...any) ([]FlowRunRow, error) {
+	q, err := s.db.QueryContext(ctx, `SELECT id, dir, name, started, ended, status, body FROM kc_flow_run `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: flow runs: %w", err)
+	}
+	defer q.Close()
+	var out []FlowRunRow
+	for q.Next() {
+		var r FlowRunRow
+		var started, ended int64
+		if err := q.Scan(&r.ID, &r.Dir, &r.Name, &started, &ended, &r.Status, &r.Body); err != nil {
+			return nil, err
+		}
+		r.Started, r.Ended = time.Unix(0, started), time.Unix(0, ended)
+		out = append(out, r)
+	}
+	return out, q.Err()
+}
+
+// PruneFlowRuns removes dir's runs of flow name past the newest keep, or
+// started before before.
+func (s *Store) PruneFlowRuns(ctx context.Context, dir, name string, keep int, before time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM kc_flow_run WHERE dir = ? AND name = ? AND (started < ? OR id NOT IN
+		(SELECT id FROM kc_flow_run WHERE dir = ? AND name = ? ORDER BY started DESC, id LIMIT ?))`,
+		dir, name, before.UnixNano(), dir, name, keep)
+	if err != nil {
+		return fmt.Errorf("store: prune flow runs: %w", err)
+	}
+	return nil
 }

@@ -23,6 +23,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
 // Agent is what the UI needs of the ACP client.
@@ -50,6 +51,9 @@ type Agent interface {
 	// Plugins and PluginChange are /plugin's screen (ADR 0027).
 	Plugins(ctx context.Context, session string) (acp.PluginsView, error)
 	PluginChange(ctx context.Context, args ...string) (string, error)
+	// FlowRuns and FlowRun are /flow runs' screen (ADR 0029).
+	FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error)
+	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -225,8 +229,9 @@ type model struct {
 	// of them being chosen (/provider, /model).
 	config []acp.ConfigOption
 	pick   *pick
-	// plugins: /plugin's screen (ADR 0027).
+	// plugins: /plugin's screen (ADR 0027); runs, /flow runs' (ADR 0029).
 	plugins *browser
+	runs    *runsScreen
 	// history: what was sent, oldest first (↑ ↓); histAt, the one shown
 	// (len: none); draft, what was being typed before it.
 	history []string
@@ -364,7 +369,7 @@ func (m *model) start() tea.Cmd {
 // not redrawn, and stays there. Leaving one puts the conversation back as
 // it was, and what was to be written above it is written then.
 func (m *model) full() bool {
-	if m.plugins != nil {
+	if m.plugins != nil || m.runs != nil {
 		return true
 	}
 	return len(m.asks) > 0 && m.asks[0].review != nil && !m.asks[0].instead
@@ -443,6 +448,25 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case loginMsg:
 		return m.loginWays(msg)
+	case flowRunsMsg:
+		if s := m.runs; s != nil {
+			if msg.err != nil {
+				m.runs = nil
+				m.print(bad.Render("  ⎿  the flows' runs could not be read: " + shortError(msg.err.Error())))
+				return nil
+			}
+			s.runs, s.loaded = msg.runs, true
+		}
+		return nil
+	case flowRunMsg:
+		if m.runs != nil {
+			if msg.err != nil {
+				m.note = shortError(msg.err.Error())
+				return nil
+			}
+			m.showRun(msg.run)
+		}
+		return nil
 	case pluginsMsg:
 		if b := m.plugins; b != nil {
 			if msg.err != nil {
@@ -999,6 +1023,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.askKey(k)
 	case m.plugins != nil:
 		return m.pluginsKey(key)
+	case m.runs != nil:
+		return m.runsKey(key)
 	case m.pick != nil:
 		return m.pickKey(key)
 	case m.edit != nil:
@@ -1078,6 +1104,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		if (text == "/plugin" || text == "/plugins") && m.session != "" { // to browse (ADR 0027)
 			return m.openPlugins()
+		}
+		if text == "/flow runs" { // the flows' runs, to look back at (ADR 0029)
+			return m.openFlowRuns()
 		}
 		if text == "/resume" { // another session of the folder
 			if m.running {
@@ -1283,6 +1312,8 @@ func (m *model) View() tea.View {
 		b.WriteString(m.askView(w))
 	case m.plugins != nil:
 		b.WriteString(m.pluginsView(w))
+	case m.runs != nil:
+		b.WriteString(m.runsView(w))
 	case m.pick != nil:
 		b.WriteString(m.pickView(w))
 	case m.edit != nil:

@@ -33,7 +33,7 @@ func runFlowCheck(_ context.Context, env Env, input json.RawMessage) Result {
 		return failed("invalid input: %v", err)
 	}
 	if !flowchart.ValidName(in.Name) {
-		return failed("%q is not a flow's name: lowercase letters, digits, - and _ (not new or graph)", in.Name)
+		return failed("%q is not a flow's name: lowercase letters, digits, - and _ (not new, graph or runs)", in.Name)
 	}
 	root, err := os.OpenRoot(env.Dir)
 	if err != nil {

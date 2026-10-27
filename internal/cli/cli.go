@@ -47,6 +47,8 @@ const usage = `usage:
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
   kairocode flow graph [-dir DIR] [-width N] <name>   draw a flow of .kairocode/workflows (ADR 0003)
   kairocode flow show [-data DIR] [-follow] <session> the session's latest flow, as it has gone
+  kairocode flow runs [-data DIR] [-dir DIR] [-flow N] the flows' runs here, kept once they end (ADR 0029)
+  kairocode flow show [-data DIR] <run>              one of them: its chart, and its steps with their times
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
   kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
@@ -770,7 +772,7 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 // -follow drawn again as it goes on; kairocode flow stats, how often each
 // flow of the project ran, from where, and how it ended.
 func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session> | kairocode flow stats [-data DIR] [-dir DIR]")
+	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session or run> | kairocode flow runs [-data DIR] [-dir DIR] [-flow NAME] [-n N] [-json] | kairocode flow stats [-data DIR] [-dir DIR]")
 	if len(args) == 0 {
 		return usage
 	}
@@ -813,6 +815,17 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			return err
 		}
 		defer c.Close()
+		if strings.Count(s, "/") > 2 && !*follow { // a flow's run (kairocode flow runs gives its id)
+			f, err := c.FlowRun(ctx, s)
+			if err != nil {
+				return err
+			}
+			if f.View != nil {
+				lipgloss.Fprintln(stdout, tui.ChartOf(f.View, *width))
+			}
+			_, err = fmt.Fprint(stdout, "\n"+f.Text())
+			return err
+		}
 		var events <-chan runtime.Event
 		if *follow { // watched before it is looked at: nothing between is missed
 			if events, err = c.Events(ctx, s); err != nil {
@@ -837,6 +850,48 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			}
 		}
 		return ctx.Err()
+	case "runs":
+		fs := flag.NewFlagSet("flow runs", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+		dir := fs.String("dir", ".", "working directory (\"\": every folder's)")
+		flow := fs.String("flow", "", "only this flow's runs")
+		n := fs.Int("n", 30, "at most this many (0: all)")
+		asJSON := fs.Bool("json", false, "as JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return usage
+		}
+		abs := ""
+		if *dir != "" {
+			var err error
+			if abs, err = filepath.Abs(*dir); err != nil {
+				return err
+			}
+		}
+		c, err := connect(ctx, *data)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		runs, err := c.FlowRuns(ctx, abs, *flow, *n)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return json.NewEncoder(stdout).Encode(runs)
+		}
+		if len(runs) == 0 {
+			_, err := fmt.Fprintln(stdout, "no flow has run here (or none is kept)")
+			return err
+		}
+		for _, f := range runs {
+			fmt.Fprintln(stdout, f.Line())
+			fmt.Fprintln(stdout, "    kairocode flow show "+f.ID)
+		}
+		return nil
 	case "stats":
 		fs := flag.NewFlagSet("flow stats", flag.ContinueOnError)
 		fs.SetOutput(stderr)

@@ -713,6 +713,26 @@ func (c *Client) LastFlow(ctx context.Context, session string) (*flowchart.View,
 	return &v, err
 }
 
+// FlowRuns are the flows' runs of dir and flow ("" any), the latest
+// first, at most n (0: all) (ADR 0029).
+func (c *Client) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
+	var out []runtime.FlowRun
+	q := url.Values{"dir": {dir}, "flow": {flow}, "n": {strconv.Itoa(n)}}
+	err := c.do(ctx, "GET", "/flows/runs?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// FlowRun is a flow's run, with its chart and steps.
+func (c *Client) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
+	var f runtime.FlowRun
+	err := c.do(ctx, "GET", "/flows/run?id="+url.QueryEscape(id), nil, &f)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return f, runtime.ErrNoFlowRun
+	}
+	return f, err
+}
+
 // FlowStats are the flows the sessions in dir ran, and the project's
 // flows that none ran.
 func (c *Client) FlowStats(ctx context.Context, dir string) ([]runtime.FlowStat, error) {

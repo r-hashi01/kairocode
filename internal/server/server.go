@@ -63,6 +63,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/flows/new", s.newFlow)
 	s.mux.HandleFunc("GET /sessions/{id}/flow", s.lastFlow)
 	s.mux.HandleFunc("GET /flows/stats", s.flowStats)
+	s.mux.HandleFunc("GET /flows/runs", s.flowRuns)
+	s.mux.HandleFunc("GET /flows/run", s.flowRun)
 	s.mux.HandleFunc("GET /providers", s.providers)
 	s.mux.HandleFunc("GET /providers/{id}/models", s.models)
 	s.mux.HandleFunc("GET /providers/{id}/efforts", s.efforts)
@@ -721,6 +723,36 @@ func (s *Server) lastFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// flowRuns are the flows' runs (ADR 0029) of ?dir= and ?flow= (either
+// may be left out), the latest first, at most ?n=.
+func (s *Server) flowRuns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	n, _ := strconv.Atoi(q.Get("n"))
+	runs, err := s.rt.FlowRuns(r.Context(), q.Get("dir"), q.Get("flow"), n)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	if runs == nil {
+		runs = []runtime.FlowRun{}
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+// flowRun is a flow's run (?id=), with its chart and steps.
+func (s *Server) flowRun(w http.ResponseWriter, r *http.Request) {
+	f, err := s.rt.FlowRunByID(r.Context(), r.URL.Query().Get("id"))
+	if errors.Is(err, runtime.ErrNoFlowRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 // flowStats are the flows the sessions in ?dir= ran, and the project's
