@@ -358,6 +358,18 @@ func (m *model) start() tea.Cmd {
 	}
 }
 
+// full says the screen is one of its own (the terminal's alternate
+// screen): the flow's review, /plugin. They are as tall as the terminal;
+// drawn under the conversation, what they leave when they go or shrink is
+// not redrawn, and stays there. Leaving one puts the conversation back as
+// it was, and what was to be written above it is written then.
+func (m *model) full() bool {
+	if m.plugins != nil {
+		return true
+	}
+	return len(m.asks) > 0 && m.asks[0].review != nil && !m.asks[0].instead
+}
+
 // print queues lines to write above the screen.
 func (m *model) print(s string) { m.toPrint = append(m.toPrint, s) }
 
@@ -370,8 +382,8 @@ func (m *model) block(s string) {
 // flush writes what is queued, one batch at a time: commands run
 // concurrently, and the lines must keep their order.
 func (m *model) flush() tea.Cmd {
-	if m.printing || len(m.toPrint) == 0 {
-		return nil
+	if m.printing || len(m.toPrint) == 0 || m.full() {
+		return nil // on a screen of its own, nothing is written above: kept for after
 	}
 	text := strings.Join(m.toPrint, "\n")
 	m.toPrint, m.printing = nil, true
@@ -1313,7 +1325,7 @@ func (m *model) View() tea.View {
 	}
 	b.WriteString(m.status(w))
 	content := b.String()
-	if n := strings.Count(content, "\n") + 1; m.printing && n < m.shown {
+	if n := strings.Count(content, "\n") + 1; m.printing && n < m.shown && !m.full() {
 		pad := m.shown - n
 		content = strings.Repeat("\n", pad) + content
 		if cursor != nil {
@@ -1333,6 +1345,11 @@ func (m *model) View() tea.View {
 				}
 			}
 		}
+	}
+	if m.full() {
+		v := tea.NewView(content)
+		v.Cursor, v.AltScreen = cursor, true
+		return v // the conversation's screen keeps its height (shown)
 	}
 	m.shown = strings.Count(content, "\n") + 1
 	v := tea.NewView(content)

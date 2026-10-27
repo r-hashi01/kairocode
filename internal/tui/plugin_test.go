@@ -40,6 +40,9 @@ func TestPluginsScreen(t *testing.T) {
 		Marketplaces: []runtime.MarketInfo{{Name: "kairocode", BuiltIn: true, Plugins: 2}},
 	}
 	typed(d, "/plugin")
+	if !d.m.View().AltScreen {
+		t.Fatal("/plugin is not on a screen of its own")
+	}
 	v := d.view()
 	for _, want := range []string{"Discover (2)", "Installed (0)", "Marketplaces (1)", "○ github", "kairocode · GitHub: issues"} {
 		if !strings.Contains(v, want) {
@@ -87,7 +90,7 @@ func TestPluginsScreen(t *testing.T) {
 		t.Fatalf("asked: %v", a.changes)
 	}
 	d.send(key("esc"))
-	if d.m.plugins != nil || len(a.prompts) != 0 {
+	if d.m.plugins != nil || len(a.prompts) != 0 || d.m.View().AltScreen {
 		t.Fatalf("still open, or sent: %v", a.prompts)
 	}
 }

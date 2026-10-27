@@ -1108,6 +1108,38 @@ func TestFlowReview(t *testing.T) {
 	}
 }
 
+// The review is on a screen of its own: drawn under the conversation, a
+// screen as tall as the terminal leaves itself behind when it goes. What
+// is to be written above meanwhile waits, and is written once it is
+// answered, the conversation's screen back as it was.
+func TestFlowReviewOnItsOwnScreen(t *testing.T) {
+	d, _ := start(t, Options{})
+	req := acp.PermissionRequest{Title: "flow_write f", ToolKind: "edit",
+		Sections: []acp.Section{{Name: "Summary", Text: "What it does:\n  agent plan"}},
+		Options:  []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}
+	reply := make(chan string, 1)
+	d.send(askMsg{req: req, reply: reply})
+	if !d.m.View().AltScreen {
+		t.Fatal("the review is not on a screen of its own")
+	}
+	printed := len(d.printed)
+	d.m.print("a tool's result, meanwhile")
+	d.send(updateMsg{Session: d.m.session, Kind: "agent_message_chunk", Text: ""}) // anything: Update flushes
+	if len(d.printed) != printed {
+		t.Fatalf("written above the review: %q", d.printed[printed:])
+	}
+	d.send(key("a"))
+	if got := <-reply; got != "allow_once" {
+		t.Fatalf("answered %q", got)
+	}
+	if d.m.View().AltScreen {
+		t.Fatal("still on its own screen once answered")
+	}
+	if !strings.Contains(d.out(), "a tool's result, meanwhile") {
+		t.Fatalf("not written once answered:\n%s", d.out())
+	}
+}
+
 // The review keeps its height: moving between sections, opening a step,
 // typing a comment and having comments, the screen does not move.
 func TestFlowReviewKeepsItsHeight(t *testing.T) {
