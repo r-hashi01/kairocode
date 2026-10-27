@@ -509,9 +509,14 @@ def main(input):
 	if created.Load() != 0 || requests.Load() != before {
 		t.Fatalf("the try reached the server: %d created, %d requests (%d before)", created.Load(), requests.Load(), before)
 	}
-	// A try is not one of the flow's runs: it is not kept (ADR 0029).
+	// The try is kept as a try (ADR 0029): apart from the flow's runs.
 	r.keepMissed(ctx)
-	if rows, _ := r.Store.FlowRuns(ctx, "", "", 0); len(rows) != 0 {
-		t.Fatalf("the try kept as a run: %+v", rows[0].ID)
+	tries, _ := r.FlowRuns(ctx, ws, "", "tries", 0)
+	runs, _ := r.FlowRuns(ctx, ws, "", "runs", 0)
+	if len(tries) != 1 || !tries[0].Try || tries[0].Name != "triage" || len(runs) != 0 {
+		t.Fatalf("tries %+v, runs %+v", tries, runs)
+	}
+	if !strings.Contains(tries[0].Line(), "triage (try)") {
+		t.Fatalf("listed as %q", tries[0].Line())
 	}
 }

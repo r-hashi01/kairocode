@@ -93,8 +93,8 @@ func (l *local) Log(ctx context.Context, s string) (runtime.SessionLog, error) {
 func (l *local) Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error) {
 	return l.r.Sessions(ctx, dir, limit)
 }
-func (l *local) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
-	return l.r.FlowRuns(ctx, dir, flow, n)
+func (l *local) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
+	return l.r.FlowRuns(ctx, dir, flow, only, n)
 }
 func (l *local) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
 	return l.r.FlowRunByID(ctx, id)

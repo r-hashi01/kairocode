@@ -726,11 +726,11 @@ func (s *Server) lastFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 // flowRuns are the flows' runs (ADR 0029) of ?dir= and ?flow= (either
-// may be left out), the latest first, at most ?n=.
+// may be left out), the latest first, at most ?n=; ?only=tries or runs.
 func (s *Server) flowRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	n, _ := strconv.Atoi(q.Get("n"))
-	runs, err := s.rt.FlowRuns(r.Context(), q.Get("dir"), q.Get("flow"), n)
+	runs, err := s.rt.FlowRuns(r.Context(), q.Get("dir"), q.Get("flow"), q.Get("only"), n)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return

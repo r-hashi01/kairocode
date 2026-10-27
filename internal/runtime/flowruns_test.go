@@ -32,10 +32,10 @@ func TestFlowRunKept(t *testing.T) {
 	flowTurn(t, r, ws, "reader", "twice")
 	var runs []FlowRun
 	waitUntil(t, ctx, "the run kept", func() bool {
-		rows, _ := r.Store.FlowRuns(ctx, "", "", 0)
+		rows, _ := r.Store.FlowRuns(ctx, "", "", "", 0)
 		return len(rows) == 1
 	})
-	runs, err := r.FlowRuns(ctx, ws, "", 0)
+	runs, err := r.FlowRuns(ctx, ws, "", "", 0)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("%v %v", runs, err)
 	}
@@ -53,7 +53,7 @@ func TestFlowRunKept(t *testing.T) {
 			t.Fatalf("%q not in\n%s", want, text)
 		}
 	}
-	if other, _ := r.FlowRuns(ctx, t.TempDir(), "", 0); len(other) != 0 {
+	if other, _ := r.FlowRuns(ctx, t.TempDir(), "", "", 0); len(other) != 0 {
 		t.Fatalf("listed in another folder: %v", other)
 	}
 }
@@ -68,18 +68,18 @@ func TestFlowRunKeptAfterRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	flowTurn(t, r1, ws, "reader", "")
-	waitUntil(t, ctx, "the run kept", func() bool { rows, _ := r1.Store.FlowRuns(ctx, "", "", 0); return len(rows) == 1 })
+	waitUntil(t, ctx, "the run kept", func() bool { rows, _ := r1.Store.FlowRuns(ctx, "", "", "", 0); return len(rows) == 1 })
 	if _, err := r1.db.ExecContext(ctx, `DELETE FROM kc_flow_run`); err != nil { // as if it had stopped first
 		t.Fatal(err)
 	}
 	r1.Close()
 	r2 := open(t, db, &provider.Fake{HoldAt: -1})
-	waitUntil(t, ctx, "the run kept again", func() bool { rows, _ := r2.Store.FlowRuns(ctx, "", "", 0); return len(rows) == 1 })
-	rows, _ := r2.Store.FlowRuns(ctx, "", "", 0)
+	waitUntil(t, ctx, "the run kept again", func() bool { rows, _ := r2.Store.FlowRuns(ctx, "", "", "", 0); return len(rows) == 1 })
+	rows, _ := r2.Store.FlowRuns(ctx, "", "", "", 0)
 	if err := r2.keepFlowRun(ctx, rows[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if rows, _ := r2.Store.FlowRuns(ctx, "", "", 0); len(rows) != 1 {
+	if rows, _ := r2.Store.FlowRuns(ctx, "", "", "", 0); len(rows) != 1 {
 		t.Fatalf("%d rows: kept twice", len(rows))
 	}
 }
@@ -101,10 +101,10 @@ func TestFlowRunsPruned(t *testing.T) {
 	}
 	r.Store.PutFlowRun(ctx, store.FlowRunRow{ID: "s/y/other", Dir: "/w", Name: "g", Status: "ok", Started: now.Add(-40 * 24 * time.Hour), Body: []byte("{}")})
 	keep, days := flowHistory()
-	if err := r.Store.PruneFlowRuns(ctx, "/w", "f", keep, now.AddDate(0, 0, -days)); err != nil {
+	if err := r.Store.PruneFlowRuns(ctx, "/w", "f", false, keep, now.AddDate(0, 0, -days)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := r.Store.FlowRuns(ctx, "/w", "", 0)
+	rows, _ := r.Store.FlowRuns(ctx, "/w", "", "", 0)
 	var ids []string
 	for _, row := range rows {
 		ids = append(ids, row.ID)
@@ -127,14 +127,36 @@ func TestFlowRunsNotMadeAgain(t *testing.T) {
 	flowTurn(t, r1, ws, "reader", "first")
 	flowTurn(t, r1, ws, "reader", "second")
 	waitUntil(t, ctx, "the second kept", func() bool {
-		rows, _ := r1.Store.FlowRuns(ctx, "", "", 0)
+		rows, _ := r1.Store.FlowRuns(ctx, "", "", "", 0)
 		return len(rows) == 1 && strings.Contains(string(rows[0].Body), `"args":"second"`)
 	})
 	r1.Close()
 	r2 := open(t, db, &provider.Fake{HoldAt: -1})
 	r2.keepMissed(ctx) // as it does as it opens
-	rows, _ := r2.Store.FlowRuns(ctx, "", "", 0)
+	rows, _ := r2.Store.FlowRuns(ctx, "", "", "", 0)
 	if len(rows) != 1 || !strings.Contains(string(rows[0].Body), `"args":"second"`) {
 		t.Fatalf("%d runs kept after the restart", len(rows))
+	}
+}
+
+// Tries are counted apart from runs: trying a flow often does not push its
+// runs out (ADR 0029, 追記).
+func TestFlowTriesCountedApart(t *testing.T) {
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx := context.Background()
+	now := time.Now()
+	for i := range 4 {
+		r.Store.PutFlowRun(ctx, store.FlowRunRow{ID: "s/r/" + string(rune('a'+i)), Dir: "/w", Name: "f", Status: "ok",
+			Started: now.Add(-time.Duration(10+i) * time.Hour), Body: []byte("{}")})
+		r.Store.PutFlowRun(ctx, store.FlowRunRow{ID: "s/t/" + string(rune('a'+i)), Dir: "/w", Name: "f", Status: "ok", Try: true,
+			Started: now.Add(-time.Duration(i) * time.Hour), Body: []byte("{}")})
+	}
+	if err := r.Store.PruneFlowRuns(ctx, "/w", "f", true, 2, now.AddDate(0, 0, -90)); err != nil {
+		t.Fatal(err)
+	}
+	tries, _ := r.Store.FlowRuns(ctx, "/w", "f", "tries", 0)
+	runs, _ := r.Store.FlowRuns(ctx, "/w", "f", "runs", 0)
+	if len(tries) != 2 || len(runs) != 4 || !tries[0].Try || runs[0].Try {
+		t.Fatalf("%d tries, %d runs", len(tries), len(runs))
 	}
 }

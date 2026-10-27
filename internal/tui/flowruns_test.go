@@ -17,13 +17,14 @@ func TestFlowRunsScreen(t *testing.T) {
 	a.runs = []runtime.FlowRun{
 		{ID: "s/a/t.0/f.0", Name: "triage", Args: "repo", Status: runtime.FlowRunOK, From: runtime.FromCommand, Started: at, Ended: at.Add(90 * time.Second), Message: "commented on #13"},
 		{ID: "s/b/t.0/f.0", Name: "nightly", Status: runtime.FlowRunFailed, From: runtime.FromHook, Started: at.Add(-time.Hour), Ended: at.Add(-50 * time.Minute)},
+		{ID: "s/c/t.0/f.0", Name: "draft", Try: true, Status: runtime.FlowRunOK, From: runtime.FromAgent, Started: at.Add(-2 * time.Hour), Ended: at.Add(-119 * time.Minute)},
 	}
 	typed(d, "/flow runs")
 	if !d.m.View().AltScreen {
 		t.Fatal("not on a screen of its own")
 	}
 	v := d.view()
-	for _, want := range []string{"Flow runs", "triage repo  ok 1m30s  command", "commented on #13", "nightly  failed"} {
+	for _, want := range []string{"Flow runs", "triage repo  ok 1m30s  command", "commented on #13", "nightly  failed", "draft try"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("%q not in\n%s", want, v)
 		}

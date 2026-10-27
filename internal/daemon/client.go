@@ -714,10 +714,11 @@ func (c *Client) LastFlow(ctx context.Context, session string) (*flowchart.View,
 }
 
 // FlowRuns are the flows' runs of dir and flow ("" any), the latest
-// first, at most n (0: all) (ADR 0029).
-func (c *Client) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
+// first, at most n (0: all), only "tries" or "runs" or both ("") (ADR
+// 0029).
+func (c *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
 	var out []runtime.FlowRun
-	q := url.Values{"dir": {dir}, "flow": {flow}, "n": {strconv.Itoa(n)}}
+	q := url.Values{"dir": {dir}, "flow": {flow}, "only": {only}, "n": {strconv.Itoa(n)}}
 	err := c.do(ctx, "GET", "/flows/runs?"+q.Encode(), nil, &out)
 	return out, err
 }

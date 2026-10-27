@@ -57,7 +57,7 @@ type Backend interface {
 	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
 	// FlowRuns and FlowRun are the flows' runs, kept once they end (ADR
 	// 0029).
-	FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error)
+	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error)
 	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
 	Answer(ctx context.Context, key, option string) error
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
@@ -523,12 +523,13 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		var p struct {
 			Dir  string `json:"dir"`
 			Flow string `json:"flow"`
+			Only string `json:"only"`
 			N    int    `json:"n"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, invalid(err)
 		}
-		runs, err := a.b.FlowRuns(ctx, p.Dir, p.Flow, p.N)
+		runs, err := a.b.FlowRuns(ctx, p.Dir, p.Flow, p.Only, p.N)
 		if err != nil {
 			return nil, invalid(err)
 		}
@@ -1605,7 +1606,7 @@ func (a *agent) mcpText(ctx context.Context, session string) string {
 // flowRunsText is /flow runs' answer for a client with no screen for it:
 // the folder's flows' runs, the latest first (ADR 0029).
 func (a *agent) flowRunsText(ctx context.Context, session string) string {
-	runs, err := a.b.FlowRuns(ctx, a.dirOf(session), "", 30)
+	runs, err := a.b.FlowRuns(ctx, a.dirOf(session), "", "", 30)
 	if err != nil {
 		return "The flows' runs could not be listed: " + err.Error()
 	}

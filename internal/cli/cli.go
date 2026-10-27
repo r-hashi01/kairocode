@@ -772,7 +772,7 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 // -follow drawn again as it goes on; kairocode flow stats, how often each
 // flow of the project ran, from where, and how it ended.
 func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session or run> | kairocode flow runs [-data DIR] [-dir DIR] [-flow NAME] [-n N] [-json] | kairocode flow stats [-data DIR] [-dir DIR]")
+	usage := errors.New("kairocode flow graph [-dir DIR] [-width N] <name> | kairocode flow show [-data DIR] [-width N] [-follow] <session or run> | kairocode flow runs [-data DIR] [-dir DIR] [-flow NAME] [-tries | -no-tries] [-n N] [-json] | kairocode flow stats [-data DIR] [-dir DIR]")
 	if len(args) == 0 {
 		return usage
 	}
@@ -856,6 +856,8 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 		dir := fs.String("dir", ".", "working directory (\"\": every folder's)")
 		flow := fs.String("flow", "", "only this flow's runs")
+		tries := fs.Bool("tries", false, "only the tries of flows before they were written (ADR 0017)")
+		noTries := fs.Bool("no-tries", false, "without the tries")
 		n := fs.Int("n", 30, "at most this many (0: all)")
 		asJSON := fs.Bool("json", false, "as JSON")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -876,7 +878,14 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			return err
 		}
 		defer c.Close()
-		runs, err := c.FlowRuns(ctx, abs, *flow, *n)
+		only := ""
+		switch {
+		case *tries:
+			only = "tries"
+		case *noTries:
+			only = "runs"
+		}
+		runs, err := c.FlowRuns(ctx, abs, *flow, only, *n)
 		if err != nil {
 			return err
 		}

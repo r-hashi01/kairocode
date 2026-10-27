@@ -136,7 +136,7 @@ type fakeAgent struct {
 	runs     []runtime.FlowRun
 }
 
-func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
+func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
 	return a.runs, nil
 }
 

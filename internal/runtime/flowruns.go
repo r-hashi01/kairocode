@@ -44,13 +44,16 @@ const (
 // FlowRun is a flow's run: where it ran and from what, how it ended, its
 // chart with each step's state, and its steps with their times.
 type FlowRun struct {
-	ID      string    `json:"id"` // the flow's run (kairo's)
-	Session string    `json:"session"`
-	Turn    int       `json:"turn"`
-	Dir     string    `json:"dir"`
-	Name    string    `json:"name"`
-	Args    string    `json:"args,omitempty"`
-	From    string    `json:"from"`           // FromCommand, FromAgent, FromHook
+	ID      string `json:"id"` // the flow's run (kairo's)
+	Session string `json:"session"`
+	Turn    int    `json:"turn"`
+	Dir     string `json:"dir"`
+	Name    string `json:"name"`
+	Args    string `json:"args,omitempty"`
+	From    string `json:"from"` // FromCommand, FromAgent, FromHook
+	// Try: a try of the flow before it was written (ADR 0017): what it
+	// would have done, kept apart from its runs.
+	Try     bool      `json:"try,omitempty"`
 	Hook    string    `json:"hook,omitempty"` // the hook that ran it
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended,omitzero"`
@@ -63,11 +66,10 @@ type FlowRun struct {
 	Steps []LogEntry      `json:"steps,omitempty"`
 }
 
-// isTry says a flow's run is a try of a flow not written yet (ADR 0017):
-// not one of the flow's runs.
-func isTry(k kairo.RunInfo) bool {
+// unnamed says a flow's run has no flow's name to keep it by.
+func unnamed(k kairo.RunInfo) bool {
 	var fi workflows.FlowInput
-	return json.Unmarshal(input(k), &fi) != nil || fi.Dry || fi.Call.Name == ""
+	return json.Unmarshal(input(k), &fi) != nil || fi.Call.Name == ""
 }
 
 // flowRunOf is a flow's run as kairo has it.
@@ -75,7 +77,7 @@ func (r *Runtime) flowRunOf(ctx context.Context, k kairo.RunInfo, whole bool) (F
 	var fi workflows.FlowInput
 	_ = json.Unmarshal(input(k), &fi)
 	f := FlowRun{ID: k.RunID, Session: fi.Session, Turn: fi.N, Dir: sameDir(fi.Dir), Name: fi.Call.Name, Args: fi.Call.Args,
-		Hook: fi.Hook, Started: k.Created, Status: FlowRunRunning}
+		Hook: fi.Hook, Started: k.Created, Status: FlowRunRunning, Try: fi.Dry}
 	switch {
 	case fi.Hook != "":
 		f.From = FromHook
@@ -128,7 +130,7 @@ func (r *Runtime) keepFlowRun(ctx context.Context, run string) error {
 	if err != nil {
 		return err
 	}
-	if k.Workflow != workflows.Flow || !k.Finished() || isTry(k) {
+	if k.Workflow != workflows.Flow || !k.Finished() || unnamed(k) {
 		return nil
 	}
 	f, err := r.flowRunOf(ctx, k, true)
@@ -139,12 +141,12 @@ func (r *Runtime) keepFlowRun(ctx context.Context, run string) error {
 	if err != nil {
 		return err
 	}
-	if err := r.Store.PutFlowRun(ctx, store.FlowRunRow{ID: f.ID, Dir: f.Dir, Name: f.Name, Status: f.Status,
+	if err := r.Store.PutFlowRun(ctx, store.FlowRunRow{ID: f.ID, Dir: f.Dir, Name: f.Name, Status: f.Status, Try: f.Try,
 		Started: f.Started, Ended: f.Ended, Body: body}); err != nil {
 		return err
 	}
 	keep, days := flowHistory()
-	return r.Store.PruneFlowRuns(ctx, f.Dir, f.Name, keep, time.Now().AddDate(0, 0, -days))
+	return r.Store.PruneFlowRuns(ctx, f.Dir, f.Name, f.Try, keep, time.Now().AddDate(0, 0, -days))
 }
 
 // keepSettled keeps the flow's run kairo says settled here (observe).
@@ -192,7 +194,7 @@ func (r *Runtime) keepMissed(ctx context.Context) {
 	oldest := time.Now().AddDate(0, 0, -days)
 	for _, s := range sessions {
 		if !r.flowsUnder(ctx, s.RunID, false, func(k kairo.RunInfo) bool {
-			if !k.Finished() || isTry(k) || k.Created.Before(oldest) {
+			if !k.Finished() || unnamed(k) || k.Created.Before(oldest) {
 				return true
 			}
 			if kept, err := r.Store.HasFlowRun(ctx, k.RunID); err != nil || kept {
@@ -202,7 +204,7 @@ func (r *Runtime) keepMissed(ctx context.Context) {
 			if err != nil {
 				return true
 			}
-			if newer, err := r.Store.FlowRunsSince(ctx, f.Dir, f.Name, f.Started); err != nil || newer >= keep {
+			if newer, err := r.Store.FlowRunsSince(ctx, f.Dir, f.Name, f.Try, f.Started); err != nil || newer >= keep {
 				return err == nil
 			}
 			if err := r.keepFlowRun(ctx, k.RunID); err != nil && ctx.Err() == nil {
@@ -216,8 +218,8 @@ func (r *Runtime) keepMissed(ctx context.Context) {
 }
 
 // running are the flows' runs not ended, of dir ("" any), of flow name
-// ("" any).
-func (r *Runtime) running(ctx context.Context, dir, name string) ([]FlowRun, error) {
+// ("" any), only "tries" or "runs" of them or both ("").
+func (r *Runtime) running(ctx context.Context, dir, name, only string) ([]FlowRun, error) {
 	sessions, err := r.K.List(ctx, kairo.Filter{Workflow: workflows.Session})
 	if err != nil {
 		return nil, err
@@ -228,11 +230,12 @@ func (r *Runtime) running(ctx context.Context, dir, name string) ([]FlowRun, err
 			continue
 		}
 		r.flowsUnder(ctx, s.RunID, true, func(k kairo.RunInfo) bool {
-			if isTry(k) {
+			if unnamed(k) {
 				return true
 			}
 			f, err := r.flowRunOf(ctx, k, false)
-			if err == nil && (dir == "" || f.Dir == dir) && (name == "" || f.Name == name) {
+			if err == nil && (dir == "" || f.Dir == dir) && (name == "" || f.Name == name) &&
+				(only == "" || (only == "tries") == f.Try) {
 				out = append(out, f)
 			}
 			return true
@@ -242,17 +245,18 @@ func (r *Runtime) running(ctx context.Context, dir, name string) ([]FlowRun, err
 }
 
 // FlowRuns are the flows' runs of dir ("" any), of flow name ("" any), the
-// latest first, at most limit (0: all): those running, and those kept.
-// Each without its chart and steps (FlowRunByID gives them).
-func (r *Runtime) FlowRuns(ctx context.Context, dir, name string, limit int) ([]FlowRun, error) {
+// latest first, at most limit (0: all): those running, and those kept;
+// only "tries" or "runs" of them, or both (""). Each without its chart
+// and steps (FlowRunByID gives them).
+func (r *Runtime) FlowRuns(ctx context.Context, dir, name, only string, limit int) ([]FlowRun, error) {
 	if dir != "" {
 		dir = sameDir(dir)
 	}
-	out, err := r.running(ctx, dir, name)
+	out, err := r.running(ctx, dir, name, only)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.Store.FlowRuns(ctx, dir, name, limit)
+	rows, err := r.Store.FlowRuns(ctx, dir, name, only, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -339,8 +343,15 @@ func (f FlowRun) Line() string {
 	if f.Hook != "" {
 		from += " " + f.Hook
 	}
+	if f.Try {
+		from = "a try, before it was written"
+	}
+	name := f.Name
+	if f.Try {
+		name += " (try)"
+	}
 	return fmt.Sprintf("%s  %s%s  %s%s  (%s, session %s turn %d)", f.Started.Local().Format("2006-01-02 15:04"),
-		f.Name, args, f.Status, took, from, strings.TrimPrefix(f.Session, "s/"), f.Turn)
+		name, args, f.Status, took, from, strings.TrimPrefix(f.Session, "s/"), f.Turn)
 }
 
 // Text is the run's steps, with their times, as lines to read (its chart

@@ -41,7 +41,7 @@ func (m *model) openFlowRuns() tea.Cmd {
 	m.runs = &runsScreen{}
 	ctx, a, dir := m.ctx, m.a, m.o.Dir
 	return func() tea.Msg {
-		runs, err := a.FlowRuns(ctx, dir, "", 200)
+		runs, err := a.FlowRuns(ctx, dir, "", "", 200)
 		return flowRunsMsg{runs: runs, err: err}
 	}
 }
@@ -168,7 +168,11 @@ func (m *model) runsView(w int) string {
 	b.WriteString(accent.Render(strings.Repeat("─", w)) + "\n")
 	if s.run != nil {
 		f := s.run
-		b.WriteString(bold.Render("Flow run · "+f.Name) + "  " + runStatus(f.Status) + "\n")
+		head := "Flow run · " + f.Name
+		if f.Try {
+			head = "Try of the flow · " + f.Name + " (before it was written: what it would have done)"
+		}
+		b.WriteString(bold.Render(head) + "  " + runStatus(f.Status) + "\n")
 		to := min(s.scroll+m.runRoom(), len(s.lines))
 		for _, l := range s.lines[s.scroll:to] {
 			b.WriteString(l + "\n")
@@ -210,7 +214,11 @@ func (m *model) runsView(w int) string {
 		if !f.Ended.IsZero() {
 			took = " " + f.Ended.Sub(f.Started).Round(1e9).String()
 		}
-		line := faint.Render(f.Started.Local().Format("01-02 15:04")) + "  " + bold.Render(f.Name) + cut(args, 30) +
+		name := bold.Render(f.Name)
+		if f.Try {
+			name += warn.Render(" try")
+		}
+		line := faint.Render(f.Started.Local().Format("01-02 15:04")) + "  " + name + cut(args, 30) +
 			"  " + runStatus(f.Status) + faint.Render(took+"  "+f.From)
 		if f.Message != "" {
 			line += faint.Render("  · " + cut(strings.ReplaceAll(f.Message, "\n", " "), max(w-70, 20)))

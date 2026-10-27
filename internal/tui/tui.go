@@ -52,7 +52,7 @@ type Agent interface {
 	Plugins(ctx context.Context, session string) (acp.PluginsView, error)
 	PluginChange(ctx context.Context, args ...string) (string, error)
 	// FlowRuns and FlowRun are /flow runs' screen (ADR 0029).
-	FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error)
+	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error)
 	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
 }
 

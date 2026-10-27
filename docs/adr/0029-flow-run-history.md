@@ -36,6 +36,13 @@
 
 実装に現れるところ: `internal/store`（`kc_flow_run`）、`internal/runtime/flowruns.go`（保存、一覧、1 回、消す）、`internal/runtime/runtime.go`（`observe` から保存、起動時の保存）、`internal/server` と `internal/daemon`（API とクライアント）、`internal/cli`（`flow runs`、`flow show`）、`internal/acp`（拡張のメソッド）、`internal/tui`（`/flow runs`）。
 
+追記（2026-10-27、利用者の要望）: **試しも、試しとして残す。** 書く前の試し（ADR 0017）は、承認に答えると見る手段がなくなっていました。
+- 試しも `kc_flow_run` に保存し、`try` の列（と本文の `try`）で印を付けます。前の版で作ったテーブルには、開くときに列を足します。
+- 件数と日数の上限（`flowHistory`）は、試しと本物の実行で別々に数えます。試しを何度しても、本物の実行の履歴が押し出されないようにするためです。
+- `kairocode flow runs` は両方を並べ、試しを「名前 (try)」と出します。`-tries` で試しだけ、`-no-tries` で実行だけです。API と ACP の拡張のメソッドは `only`（`tries`、`runs`）で絞ります。
+- `kairocode flow show <ID>` と端末の `/flow runs` は、試しも同じく図と流れで見せます（端末では `try` の印と「書く前の試し」の見出し）。
+- テスト: `TestTryFlowWithPluginTools`（試しが試しとして残る）、`TestFlowTriesCountedApart`、`TestFlowRunsScreen`。
+
 ## 結果
 
 - `kairocode run` で動かしたフローも、終わった後に何日たっても、どう動いたかを見返せます。

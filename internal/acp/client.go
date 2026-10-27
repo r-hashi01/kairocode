@@ -131,11 +131,11 @@ func (cl *Client) PluginChange(ctx context.Context, args ...string) (string, err
 
 // FlowRuns are the flows' runs of dir ("" any), of flow ("" any), the
 // latest first, at most n (only KairoCode's agent has this; ADR 0029).
-func (cl *Client) FlowRuns(ctx context.Context, dir, flow string, n int) ([]runtime.FlowRun, error) {
+func (cl *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
 	var out struct {
 		Runs []runtime.FlowRun `json:"runs"`
 	}
-	err := cl.c.Call(ctx, FlowRunsRPC, map[string]any{"dir": dir, "flow": flow, "n": n}, &out)
+	err := cl.c.Call(ctx, FlowRunsRPC, map[string]any{"dir": dir, "flow": flow, "only": only, "n": n}, &out)
 	return out.Runs, err
 }
 
