@@ -4,6 +4,10 @@ KairoCode の側の設計判断の記録です。kairo の ADR 0000 と同じ運
 
 kairo の側の判断は、kairo の `docs/adr/` にあります。
 
+**読み方:** 今の KairoCode の形を決めているのは、状態が「承認」のものだけです。「提案」のものは、まだ決まっていない案で、実装もされていません（「保留」と書いたものは、見直す時期を待っています）。
+
+> Architecture Decision Records of KairoCode, in Japanese. Only those whose state (状態) is 承認 (approved) describe KairoCode as it is; 提案 (proposed) ones are undecided and not implemented. AGENTS.md lists the invariants they keep.
+
 | 番号 | 題 | 状態 |
 |---|---|---|
 | [0000](0000-record-decisions.md) | 設計判断を ADR として記録する | 承認（2026-10-09） |
