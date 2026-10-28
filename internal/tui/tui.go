@@ -374,6 +374,33 @@ func cut(s string, n int) string {
 	return string(r) + "…"
 }
 
+// askTitle is what a question is about (a command, say), all of it: each
+// of its lines wrapped to w, not cut, since it is what is decided on.
+func askTitle(title string, w int) string {
+	lines := strings.Split(strings.TrimRight(title, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = bold.Render(wrap(strings.ReplaceAll(l, "\t", "    "), w, "  "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// fitLines is what is drawn below the conversation made safe to draw:
+// no tab, no line wider than w. The terminal moves a tab to its next stop
+// and wraps a wider line, which the drawing does not count: it would lose
+// its place and leave lines of earlier screens behind. A line cut here is
+// one being written (a long line of code): it is written whole when it ends.
+func fitLines(s string, w int) string {
+	s = strings.ReplaceAll(s, "\t", "    ")
+	lines := strings.Split(s, "\n")
+	fit := lipgloss.NewStyle().MaxWidth(w)
+	for i, l := range lines {
+		if lipgloss.Width(l) > w {
+			lines[i] = fit.Render(l)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // maxCallsShown is how many running calls the screen shows (the latest).
 const maxCallsShown = 4
 
@@ -1506,7 +1533,7 @@ func (m *model) View() tea.View {
 		}
 	}
 	b.WriteString(m.status(w))
-	content := b.String()
+	content := fitLines(b.String(), w)
 	// Kept for the input's own screen: a question (taller) does not leave
 	// its height behind as blank lines.
 	plain := len(m.asks) == 0 && m.plugins == nil && m.runs == nil && m.pick == nil && m.edit == nil
@@ -1621,7 +1648,7 @@ func (m *model) askView(w int) string {
 	case !hasAllow(a.req.Options):
 		q = "It was cut off while it ran. Did it take effect?"
 	}
-	b.WriteString(rule + "\n" + warn.Bold(true).Render(q) + "\n\n" + bold.Render(cut(a.req.Title, w)) + "\n\n")
+	b.WriteString(rule + "\n" + warn.Bold(true).Render(q) + "\n\n" + askTitle(a.req.Title, w) + "\n\n")
 	if lines := m.askLines(w); len(lines) > 0 {
 		// What it would do (a flow's), all of it: a screen's worth at a
 		// time, scrolled with PgUp and PgDn.

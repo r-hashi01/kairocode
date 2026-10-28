@@ -1567,3 +1567,36 @@ func TestTitleLine(t *testing.T) {
 		t.Errorf("long: %q", got)
 	}
 }
+
+// What is drawn below the conversation has no tab and no line wider than
+// the terminal: the terminal moves a tab to its next stop and wraps a
+// wide line, which the drawing does not count, so it loses its place and
+// leaves lines of the screen before behind (an input shown twice).
+func TestScreenHasNoTabsOrWideLines(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.running = true
+	check := func(what string) {
+		t.Helper()
+		for _, l := range strings.Split(d.m.View().Content, "\n") {
+			if strings.Contains(l, "\t") {
+				t.Fatalf("%s: a tab in %q", what, l)
+			}
+			if w := lipgloss.Width(l); w > d.m.width {
+				t.Fatalf("%s: a line %d wide in a terminal of %d: %q", what, w, d.m.width, plain(l))
+			}
+		}
+	}
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "```go\n\tif x {\n\t\treturn " + strings.Repeat("y", 200)})
+	check("a long line of code being written")
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "\n```\nand some " + strings.Repeat("words ", 60)})
+	check("a long line of words being written")
+	d.send(updateMsg{Kind: "tool_call", ToolCallID: "c1", Title: "bash go test\t./... " + strings.Repeat("-v ", 60), Status: "in_progress"})
+	check("a call")
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{ToolCallID: "c2", Title: "bash python3 - <<'EOF'\n\tif x:\n\t\t" + strings.Repeat("z", 200) + "\nEOF", Options: []acp.PermissionOption{
+		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}}}, reply: reply})
+	check("a question")
+	if v := plain(d.m.View().Content); !strings.Contains(v, strings.Repeat("z", 40)) || strings.Count(v, "zzzz") < 2 {
+		t.Fatalf("the question's long line is not wrapped whole:\n%s", v)
+	}
+}
