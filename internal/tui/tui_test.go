@@ -366,7 +366,7 @@ func TestQueuedDuringATurn(t *testing.T) {
 		// written there twice, the second time when it is sent.
 		t.Fatalf("prompts %q\n%s", a.prompts, d.out())
 	}
-	if v := d.view(); !strings.Contains(v, "and then this") || !strings.Contains(v, "and this too") || !strings.Contains(v, "queued") {
+	if v := d.view(); !strings.Contains(v, "> and then this") || !strings.Contains(v, "> and this too … +1 lines") || !strings.Contains(v, "sent when this turn ends") {
 		t.Fatalf("the queued messages are not shown below:\n%s", v)
 	}
 	d.send(turnDoneMsg{stop: "end_turn"})
@@ -376,8 +376,8 @@ func TestQueuedDuringATurn(t *testing.T) {
 	if n := strings.Count(d.out(), "and then this"); n != 1 {
 		t.Fatalf("written %d times in the conversation:\n%s", n, d.out())
 	}
-	if v := d.view(); strings.Contains(v, "queued") {
-		t.Fatalf("still shown as queued:\n%s", v)
+	if v := d.view(); strings.Contains(v, "sent when this turn ends") {
+		t.Fatalf("still shown as waiting:\n%s", v)
 	}
 }
 
@@ -1626,7 +1626,7 @@ func TestTakeBackQueued(t *testing.T) {
 	if v := d.m.input.Value(); v != "first\nsecond\ntyped" {
 		t.Fatalf("the input: %q", v)
 	}
-	if len(d.m.queued) != 0 || strings.Contains(d.view(), "queued") {
+	if len(d.m.queued) != 0 || strings.Contains(d.view(), "sent when this turn ends") {
 		t.Fatalf("still queued: %q", d.m.queued)
 	}
 	d.send(turnDoneMsg{stop: "end_turn"})

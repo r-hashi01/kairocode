@@ -402,17 +402,20 @@ func fitLines(s string, w int) string {
 }
 
 // queuedView is the messages typed while a turn runs, sent when it ends:
-// each on one line, the first few.
+// each on one line, the first few, grey, as the user's lines are written
+// once sent.
 func (m *model) queuedView(w int) string {
 	var b strings.Builder
 	for i, q := range m.queued {
 		if i == 3 {
-			b.WriteString(faint.Render(fmt.Sprintf("  … %d more queued", len(m.queued)-i)) + "\n")
+			b.WriteString(faint.Render(fmt.Sprintf("  … and %d more", len(m.queued)-i)) + "\n")
 			break
 		}
-		b.WriteString(faint.Render("  queued ") + you.Render(titleLine(q, max(w-10, 10))) + "\n")
+		// As the conversation shows what the user said, but grey: it is
+		// not said yet.
+		b.WriteString(faint.Render("> "+titleLine(q, max(w-2, 10))) + "\n")
 	}
-	b.WriteString(faint.Render("  ↑ to change them") + "\n")
+	b.WriteString(faint.Italic(true).Render("  sent when this turn ends · ↑ to change") + "\n")
 	return b.String()
 }
 
@@ -1541,12 +1544,12 @@ func (m *model) View() tea.View {
 		for _, id := range calls {
 			b.WriteString("\n" + accent.Render("⏺ ") + bold.Render(titleLine(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
 		}
-		if len(m.queued) > 0 {
-			b.WriteString("\n" + m.queuedView(w))
-		}
 		if m.running {
 			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +
 				faint.Render(fmt.Sprintf(" (%ds · esc to stop)", int(time.Since(m.began).Seconds()))) + "\n")
+		}
+		if len(m.queued) > 0 { // after the turn under way, as they will be sent
+			b.WriteString("\n" + m.queuedView(w))
 		}
 		b.WriteString("\n")
 		box := m.inputBox(w) // before the cursor: it sets the input's styles
