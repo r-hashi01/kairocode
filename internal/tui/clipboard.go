@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -190,12 +191,12 @@ func (m *model) pastedDir() string {
 	return filepath.Join(m.o.Data, "pasted")
 }
 
-// pasted puts the image's @path in the input. With no image, the key that
+// pasted puts the image in the input. With no image, the key that
 // asked goes on to the input (it pastes the clipboard's text); a reason
 // other than "no image" is said in the status line.
 func (m *model) pasted(msg pastedMsg) tea.Cmd {
 	if msg.err == nil {
-		m.input.InsertString(mentionOf(msg.path) + " ")
+		m.attachImage(msg.path)
 		return nil
 	}
 	if !errors.Is(msg.err, errNoImage) {
@@ -207,4 +208,30 @@ func (m *model) pasted(msg pastedMsg) tea.Cmd {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(*msg.key)
 	return cmd
+}
+
+// imageLabel matches the label an image stands for in the input.
+var imageLabel = regexp.MustCompile(`\[Image #\d+\]`)
+
+// attachImage puts an image (its file) in the input, as a label that
+// stands for it there, as Claude Code does: [Image #n]. The label goes
+// with the message as written; the image, with it as an image.
+func (m *model) attachImage(path string) {
+	label := fmt.Sprintf("[Image #%d]", len(m.images)+1)
+	m.images[label] = path
+	m.input.InsertString(label + " ")
+}
+
+// imagesIn are the images whose labels text has, in the order they are
+// in it, each once.
+func (m *model) imagesIn(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, label := range imageLabel.FindAllString(text, -1) {
+		if p, ok := m.images[label]; ok && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }

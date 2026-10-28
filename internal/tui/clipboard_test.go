@@ -19,30 +19,55 @@ var pngBytes = append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), bytes.Repea
 func ctrlV() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl} }
 
 // The clipboard's image, pasted with Ctrl+V or an empty paste (Cmd+V with
-// only an image on it), is saved in the data directory and named in the
-// input as @path; the same image twice is one file (ADR 0026).
+// only an image on it), is saved in the data directory and stands in the
+// input as [Image #n], as in Claude Code; the same image twice is one
+// file. Sent, the message keeps the labels and has the images with it.
 func TestPasteImage(t *testing.T) {
 	data := t.TempDir()
-	d, _ := start(t, Options{Data: data})
+	d, a := start(t, Options{Data: data})
 	d.m.clip = func(context.Context) ([]byte, error) { return pngBytes, nil }
 	d.send(ctrlV())
-	v := d.m.input.Value()
-	if !strings.HasPrefix(v, "@"+filepath.Join(data, "pasted")+string(filepath.Separator)) || !strings.HasSuffix(v, ".png ") {
+	if v := d.m.input.Value(); v != "[Image #1] " {
 		t.Fatalf("the input after Ctrl+V: %q", v)
 	}
-	path := strings.TrimSuffix(strings.TrimPrefix(v, "@"), " ")
+	path := d.m.images["[Image #1]"]
+	if filepath.Dir(path) != filepath.Join(data, "pasted") || !IsImage(path) {
+		t.Fatalf("the image is kept as %q", path)
+	}
 	if b, err := os.ReadFile(path); err != nil || !bytes.Equal(b, pngBytes) {
 		t.Fatalf("the saved image: %v", err)
 	}
-	if !IsImage(path) {
-		t.Fatalf("%s is not taken as an image", path)
-	}
 	d.send(tea.PasteMsg{Content: ""})
-	if want := v + "@" + path + " "; d.m.input.Value() != want {
-		t.Fatalf("the input after an empty paste: %q, want %q", d.m.input.Value(), want)
+	if v := d.m.input.Value(); v != "[Image #1] [Image #2] " {
+		t.Fatalf("the input after an empty paste: %q", v)
 	}
 	if es, _ := os.ReadDir(filepath.Join(data, "pasted")); len(es) != 1 {
 		t.Fatalf("%d files for one image", len(es))
+	}
+	d.m.input.InsertString("what is this?")
+	d.send(key("enter"))
+	if len(a.prompts) != 1 || a.prompts[0] != "[Image #1] [Image #2] what is this?" {
+		t.Fatalf("sent %q", a.prompts)
+	}
+	if len(a.files) != 1 || a.files[0] != path {
+		t.Fatalf("sent with %q, want the image once", a.files)
+	}
+}
+
+// An image file dropped on the terminal (its path pasted) stands in the
+// input as a label too; a label typed by hand, of no image, sends none.
+func TestDroppedImage(t *testing.T) {
+	d, a := start(t, Options{Data: t.TempDir()})
+	img := filepath.Join(t.TempDir(), "shot one.png")
+	os.WriteFile(img, pngBytes, 0o600)
+	d.send(tea.PasteMsg{Content: "'" + img + "'"})
+	if v := d.m.input.Value(); v != "[Image #1] " {
+		t.Fatalf("the input after a dropped image: %q", v)
+	}
+	d.m.input.InsertString("and [Image #7]")
+	d.send(key("enter"))
+	if len(a.files) != 1 || a.files[0] != img {
+		t.Fatalf("sent with %q", a.files)
 	}
 }
 

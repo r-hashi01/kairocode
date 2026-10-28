@@ -189,6 +189,9 @@ func rejectID(options []acp.PermissionOption) string {
 type model struct {
 	// clip reads the clipboard's image (clipboardImage; tests put theirs).
 	clip func(context.Context) ([]byte, error)
+	// images: the images put in the input, by the label that stands for
+	// them there ([Image #1]), for as long as the UI runs.
+	images map[string]string
 	// tried: reviews of flows being tried (ADR 0017), by their call, to
 	// go on with when the review comes back.
 	tried map[string]*review
@@ -291,7 +294,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
 	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
-		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage}
+		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage, images: map[string]string{}}
 	m.restyle()
 	return m
 }
@@ -620,7 +623,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 			if p := imagePath(msg.Content); p != "" {
 				// An image dropped on the terminal: sent with the message.
-				msg.Content = mentionOf(p) + " "
+				m.attachImage(p)
+				return nil
 			}
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -1010,7 +1014,7 @@ func (m *model) submit(text string) tea.Cmd {
 		m.flowsBefore = readFlows(m.o.Dir)
 	}
 	ctx, a, s := m.ctx, m.a, m.session
-	files := Mentioned(m.o.Dir, text)
+	files := append(Mentioned(m.o.Dir, text), m.imagesIn(text)...)
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		stop, err := a.Prompt(ctx, s, text, files...)
 		return turnDoneMsg{stop: stop, err: err}
