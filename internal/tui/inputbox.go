@@ -50,6 +50,7 @@ func (m *model) promptStyle() lipgloss.Style {
 // inputBox is the input as drawn, w columns wide: the line above it, its
 // lines, the line below. The input's first line is the box's second.
 func (m *model) inputBox(w int) string {
+	m.input.Placeholder = placeholder(w)
 	st := m.input.Styles()
 	ground, ok := panelColor(m.bg)
 	if !ok {
@@ -76,4 +77,17 @@ func (m *model) inputBox(w int) string {
 	}
 	edge := lipgloss.NewStyle().Foreground(ground)
 	return edge.Render(strings.Repeat("▄", w)) + "\n" + strings.Join(lines, "\n") + "\n" + edge.Render(strings.Repeat("▀", w))
+}
+
+// placeholder is what the empty input says: what can be typed, as much as
+// w columns hold. In the input itself, so that it takes no line of its own
+// (the screen would change height as one types).
+func placeholder(w int) string {
+	hints := []string{"Ask anything", "/ commands", "@ files", "⇧⏎ newline", "^V image"}
+	for n := len(hints); n > 1; n-- {
+		if s := strings.Join(hints[:n], " · "); lipgloss.Width(s)+4 < w {
+			return s
+		}
+	}
+	return hints[0]
 }

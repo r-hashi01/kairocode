@@ -80,3 +80,17 @@ func TestPromptColour(t *testing.T) {
 		t.Fatal("the prompt is not grey while a turn runs")
 	}
 }
+
+// The empty input says what can be typed, as much as the width holds.
+func TestPlaceholder(t *testing.T) {
+	if p := placeholder(120); !strings.Contains(p, "/ commands") || !strings.Contains(p, "^V image") {
+		t.Fatalf("wide: %q", p)
+	}
+	if p := placeholder(30); lipgloss.Width(p)+4 >= 30 && p != "Ask anything" {
+		t.Fatalf("narrow: %q", p)
+	}
+	d, _ := start(t, Options{})
+	if v := d.view(); !strings.Contains(v, "Ask anything") {
+		t.Fatalf("the empty input:\n%s", v)
+	}
+}

@@ -308,7 +308,7 @@ type model struct {
 
 func newModel(ctx context.Context, a Agent, o Options) *model {
 	in := textarea.New()
-	in.Placeholder = `Try "fix the failing test"`
+	in.Placeholder = placeholder(80)
 	in.ShowLineNumbers = false
 	in.Prompt = "> "
 	in.DynamicHeight = true
