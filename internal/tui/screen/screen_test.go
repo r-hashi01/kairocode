@@ -1,0 +1,190 @@
+package screen
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/r-hashi01/kairocode/internal/tui/screen/vtest"
+)
+
+// newTest is a screen on a vt of w × h, the area placed at row top.
+func newTest(w, h, top int) (*Screen, *vtest.VT) {
+	t := vtest.New(w, h)
+	s := New(t, w, h)
+	s.Plain()
+	t.Y = top
+	s.Place(top)
+	return s, t
+}
+
+func area(n int, last string) []string {
+	out := make([]string, 0, n)
+	for i := range n - 1 {
+		out = append(out, fmt.Sprint("area ", i))
+	}
+	return append(out, last)
+}
+
+// The conversation, in order: what the vt has, the area's lines left out.
+func conversation(t *vtest.VT, s *Screen) []string {
+	var out []string
+	all := t.Lines()
+	shown := len(t.Scrollback)
+	for i, l := range all {
+		if i >= shown+s.top && i < shown+s.top+len(s.lines) {
+			continue
+		}
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// A terminal just started: the area is drawn where the cursor was, and the
+// conversation's lines push it down, until it reaches the bottom.
+func TestAreaGoesDownToTheBottom(t *testing.T) {
+	s, vt := newTest(20, 10, 2)
+	s.Draw(area(3, "> input"), nil)
+	if got := vt.Rows()[2:5]; !slices.Equal(got, []string{"area 0", "area 1", "> input"}) {
+		t.Fatalf("drawn at %q", vt.Rows())
+	}
+	s.Insert([]string{"one", "two"})
+	if got := vt.Rows(); got[2] != "one" || got[3] != "two" || got[6] != "> input" {
+		t.Fatalf("after two lines: %q", got)
+	}
+	for i := range 20 {
+		s.Insert([]string{fmt.Sprint("line ", i)})
+	}
+	rows := vt.Rows()
+	if rows[9] != "> input" || rows[6] != "line 19" {
+		t.Fatalf("full: %q", rows)
+	}
+	want := []string{"one", "two"}
+	for i := range 20 {
+		want = append(want, fmt.Sprint("line ", i))
+	}
+	if got := conversation(vt, s); !slices.Equal(got, want) {
+		t.Fatalf("the conversation:\n%q\nwant\n%q", got, want)
+	}
+}
+
+// Once the terminal is full, the input stays at its bottom: the area
+// getting taller scrolls the conversation up; getting shorter, the next
+// lines written push it back down. The conversation keeps its order and
+// nothing of it is drawn over.
+func TestInputStaysAtTheBottom(t *testing.T) {
+	s, vt := newTest(30, 12, 0)
+	s.Draw(area(3, "> input"), nil)
+	var want []string
+	write := func(n int) {
+		for range n {
+			l := fmt.Sprint("line ", len(want))
+			want = append(want, l)
+			s.Insert([]string{l})
+		}
+	}
+	write(15)
+	bottom := func(what string) {
+		t.Helper()
+		if rows := vt.Rows(); rows[11] != "> input" {
+			t.Fatalf("%s: the input is not at the bottom:\n%s", what, strings.Join(rows, "\n"))
+		}
+		if got := conversation(vt, s); !slices.Equal(got, want) {
+			t.Fatalf("%s: the conversation:\n%q\nwant\n%q", what, got, want)
+		}
+	}
+	bottom("full")
+	s.Draw(area(7, "> input"), nil) // calls under way, a question
+	bottom("taller")
+	write(2)
+	bottom("taller, lines written")
+	s.Draw(area(2, "> input"), nil) // the turn ended: five rows shorter
+	bottom("shorter")
+	write(1)
+	bottom("shorter, a line written")
+	s.Draw(area(6, "> input"), nil)
+	s.Draw(area(3, "> input"), nil)
+	write(3)
+	bottom("taller and shorter, lines written")
+	s.Insert([]string{"a", "b", "c"})
+	want = append(want, "a", "b", "c")
+	bottom("three lines at once")
+}
+
+// A frame draws only the lines that changed; the cursor goes where it is
+// shown in the area.
+func TestDrawsWhatChanged(t *testing.T) {
+	var out strings.Builder
+	s := New(&out, 20, 10)
+	s.Plain()
+	s.Place(5)
+	s.Draw([]string{"a", "b", "c"}, &Cursor{X: 2, Y: 1})
+	out.Reset()
+	s.Draw([]string{"a", "B", "c"}, &Cursor{X: 2, Y: 1})
+	got := out.String()
+	if !strings.Contains(got, "\x1b[7;1HB") || strings.Contains(got, "a\x1b[K") || strings.Contains(got, "c\x1b[K") {
+		t.Fatalf("drew %q", got)
+	}
+	if !strings.Contains(got, "\x1b[7;3H\x1b[?25h") {
+		t.Fatalf("the cursor: %q", got)
+	}
+	if !strings.HasPrefix(got, syncStart) || !strings.HasSuffix(got, syncEnd) {
+		t.Fatalf("not one frame: %q", got)
+	}
+}
+
+// A line wider than the terminal takes the rows it wraps to: the area is
+// pushed down by as many, and is not written over.
+func TestWideLinesTakeTheirRows(t *testing.T) {
+	s, vt := newTest(10, 8, 0)
+	s.Draw(area(2, "> in"), nil)
+	s.Insert([]string{strings.Repeat("x", 25)}) // three rows
+	rows := vt.Rows()
+	if rows[0] != strings.Repeat("x", 10) || rows[2] != "xxxxx" || rows[4] != "> in" {
+		t.Fatalf("%q", rows)
+	}
+}
+
+// An area taller than the terminal keeps its last lines, a row above it
+// left for the conversation; a screen of its own is drawn apart, and the
+// area comes back as it was.
+func TestTallAreaAndAScreenOfItsOwn(t *testing.T) {
+	s, vt := newTest(20, 6, 3)
+	s.Draw(area(9, "> input"), &Cursor{X: 2, Y: 8})
+	if rows := vt.Rows(); rows[5] != "> input" || rows[0] == "area 0" {
+		t.Fatalf("%q", rows)
+	}
+	s.Insert([]string{"said"})
+	if rows := vt.Rows(); rows[5] != "> input" {
+		t.Fatalf("after a line: %q", rows)
+	}
+	var out strings.Builder
+	s.out = &out
+	s.DrawAlt([]string{"review"}, nil)
+	if !strings.Contains(out.String(), "\x1b[?1049h") {
+		t.Fatalf("not the alternate screen: %q", out.String())
+	}
+	out.Reset()
+	s.Draw(area(2, "> input"), nil)
+	if !strings.Contains(out.String(), "\x1b[?1049l") || !strings.Contains(out.String(), "> input") {
+		t.Fatalf("not back: %q", out.String())
+	}
+}
+
+// The terminal's new size: the area is drawn again whole at its bottom.
+func TestResize(t *testing.T) {
+	s, vt := newTest(20, 10, 0)
+	s.Draw(area(3, "> input"), nil)
+	for i := range 12 {
+		s.Insert([]string{fmt.Sprint("line ", i)})
+	}
+	*vt = *vtest.New(20, 14)
+	s.Resize(20, 14)
+	s.Draw(area(3, "> input"), nil)
+	if rows := vt.Rows(); rows[13] != "> input" {
+		t.Fatalf("%q", rows)
+	}
+}

@@ -18,6 +18,8 @@ import (
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/tui/screen"
+	"github.com/r-hashi01/kairocode/internal/tui/screen/vtest"
 )
 
 // driver runs a model as the program would, one message at a time and the
@@ -623,21 +625,6 @@ func TestFlowGraphCommand(t *testing.T) {
 	}
 }
 
-// While lines are written above it, the screen keeps its height: Bubble
-// Tea places them by the height it drew, and a screen shrunk at that moment
-// leaves lines of the old one behind.
-func TestScreenKeepsItsHeightWhilePrinting(t *testing.T) {
-	d, _ := start(t, Options{})
-	d.m.printing, d.m.shown = true, 20 // of the terminal's 24
-	if n := strings.Count(d.m.View().Content, "\n") + 1; n != 20 {
-		t.Fatalf("%d lines while printing, want 20", n)
-	}
-	d.m.printing = false
-	if n := strings.Count(d.m.View().Content, "\n") + 1; n >= 20 {
-		t.Fatalf("%d lines once printed: it did not shrink", n)
-	}
-}
-
 // The screen is never taller than the terminal: what would go above its
 // top could not be redrawn, and would stay as a copy of a screen before.
 // The input, the cursor in it and the status line stay at the bottom.
@@ -656,10 +643,6 @@ func TestScreenNeverTallerThanTheTerminal(t *testing.T) {
 	}
 	if v.Cursor == nil || v.Cursor.Y < 0 || v.Cursor.Y >= len(lines) || !strings.HasPrefix(plain(lines[v.Cursor.Y]), ">") {
 		t.Fatalf("the cursor is not in the input: %+v\n%s", v.Cursor, plain(v.Content))
-	}
-	d.m.printing, d.m.shown = true, 40 // drawn before the terminal shrank
-	if n := strings.Count(d.m.View().Content, "\n") + 1; n > 23 {
-		t.Fatalf("%d lines while printing", n)
 	}
 }
 
@@ -1354,8 +1337,8 @@ func TestResume(t *testing.T) {
 	if a.loaded != "s/aaaa" || d.m.session != "s/aaaa" {
 		t.Fatalf("loaded %q, on %q", a.loaded, d.m.session)
 	}
-	d.send(updateMsg{Session: "s/0123456789abcdef", Kind: "agent_message_chunk", Text: "from the one left"})
-	d.send(updateMsg{Session: "s/aaaa", Kind: "agent_message_chunk", Text: "from the one taken up"})
+	d.send(updateMsg{Session: "s/0123456789abcdef", Kind: "agent_message_chunk", Text: "from the one left\n"})
+	d.send(updateMsg{Session: "s/aaaa", Kind: "agent_message_chunk", Text: "from the one taken up\n"})
 	if v := d.view() + d.out(); strings.Contains(v, "from the one left") || !strings.Contains(v, "from the one taken up") {
 		t.Fatalf("shown\n%s", v)
 	}
@@ -1620,60 +1603,86 @@ func TestQueuedShowsTheMessage(t *testing.T) {
 	}
 }
 
-// The input does not move up, whatever the screen below the conversation
-// shows: that screen does not get shorter (up to half the terminal). Lines
-// written above it do not push it down: the terminal scrolls up to make
-// room for them, and it stays where it was (bubbletea's insertAbove). One
-// rule for every screen (a reply streaming, calls, a question and its
-// answer, a turn's end, messages waiting, lines typed and taken away).
-func TestTheInputNeverMovesUp(t *testing.T) {
+// The line being written is not drawn below (ADR 0033): its rows go up as
+// they will not change, a long one's as it wraps, the last when it ends;
+// written so, the reply is as it would be written whole.
+func TestReplyGoesUpAsItWraps(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.running = true
+	words := strings.Repeat("word ", 40) // three rows or so at 80 columns
+	for _, w := range strings.Fields(words) {
+		d.send(updateMsg{Kind: "agent_message_chunk", Text: w + " "})
+		if strings.Contains(d.view(), "word") {
+			t.Fatalf("the line being written is drawn:\n%s", d.view())
+		}
+	}
+	if !strings.Contains(d.out(), "⏺ word word") {
+		t.Fatalf("its first rows did not go up as it wrapped:\n%s", d.out())
+	}
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "end.\n"})
+	whole := plain(reply(strings.TrimSpace(words)+" end.", d.m.width, true))
+	if out := d.out(); !strings.HasSuffix(out, whole) {
+		t.Fatalf("written as it wrapped:\n%s\nwhole:\n%s", out, whole)
+	}
+}
+
+// Drawn on a terminal (internal/tui/screen, ADR 0033): once the terminal is
+// full, the status line stays on its last row and the input just above it,
+// whatever the area shows (a reply streaming, calls, a question and its
+// answer, messages waiting, a turn's end); the conversation is above, in
+// order.
+func TestOnATerminalTheInputStaysDown(t *testing.T) {
 	d, a := start(t, Options{})
-	height := func() int { return strings.Count(d.m.View().Content, "\n") + 1 }
-	last := height()
+	term := vtest.New(80, 24)
+	d.m.scr = screen.New(term, 80, 24)
+	d.m.scr.Plain()
+	d.m.scr.Place(0)
+	full := false
 	step := func(what string, msg tea.Msg) {
 		t.Helper()
 		if msg != nil {
 			d.send(msg)
+		} else {
+			d.send(updateMsg{Kind: "plan"}) // anything: drawn again
 		}
-		h := height()
-		if limit := max(d.m.height/2, 8); h < min(last, limit) {
-			t.Fatalf("%s: the screen went from %d lines to %d: the input moved up\n%s",
-				what, last, h, d.m.View().Content)
+		rows := term.Rows()
+		if full && !strings.Contains(rows[23], "session") {
+			t.Fatalf("%s: the status line left the bottom:\n%s", what, strings.Join(rows, "\n"))
 		}
-		last = h
+		full = full || strings.Contains(rows[23], "session")
 	}
 	allow := []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}
-
-	d.m.input.SetValue("one\ntwo\nthree")
-	step("lines typed", nil)
-	d.m.input.SetValue("one")
-	step("lines taken away", nil)
-	d.m.input.Reset()
 	d.m.running = true
-	step("a turn starts", nil)
-	for i := range 3 {
-		step("a part of a line", updateMsg{Kind: "agent_message_chunk", Text: fmt.Sprintf("line %d, a long one that", i)})
-		step("its end", updateMsg{Kind: "agent_message_chunk", Text: " ends here.\n"})
-		step("a call", updateMsg{Kind: "tool_call", ToolCallID: fmt.Sprint("r", i), Title: "read x", Status: "in_progress"})
-		step("its end", updateMsg{Kind: "tool_call_update", ToolCallID: fmt.Sprint("r", i), Status: "completed"})
+	for i := range 30 {
+		step("a line", updateMsg{Kind: "agent_message_chunk", Text: fmt.Sprintf("line %02d of the reply\n", i)})
+		if i%7 == 3 {
+			id := fmt.Sprint("c", i)
+			step("a call", updateMsg{Kind: "tool_call", ToolCallID: id, Title: "bash make test", Status: "in_progress"})
+			step("its end", updateMsg{Kind: "tool_call_update", ToolCallID: id, Status: "completed", Text: "ok"})
+		}
 	}
-	step("a call", updateMsg{Kind: "tool_call", ToolCallID: "c1", Title: "bash make test", Status: "in_progress"})
+	if !full {
+		t.Fatalf("the terminal did not fill:\n%s", strings.Join(term.Rows(), "\n"))
+	}
 	reply := make(chan string, 1)
-	step("a question", askMsg{req: acp.PermissionRequest{ToolCallID: "c1", Title: "bash make test", Options: allow}, reply: reply})
+	step("a question", askMsg{req: acp.PermissionRequest{ToolCallID: "q", Title: "write notes.txt", Options: allow}, reply: reply})
 	step("its answer", key("enter"))
 	<-reply
-	step("the call's end", updateMsg{Kind: "tool_call_update", ToolCallID: "c1", Status: "completed", Text: "ok"})
-	for _, q := range []string{"and then this", "and this", "and this too"} {
-		d.m.input.SetValue(q)
-		step("a message typed", key("enter"))
-	}
-	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "Done."}}
-	a.onPrompt = func() { step("a waiting message sent", nil) } // each turn they go on into
-	step("the turn's end, the waiting messages sent", turnDoneMsg{stop: "end_turn"})
-	a.onPrompt = nil
+	d.m.input.SetValue("and then this")
+	step("a message waiting", key("enter"))
+	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "Done.\n"}}
+	step("the turn's end", turnDoneMsg{stop: "end_turn"})
 	step("all ended", nil)
-	reply = make(chan string, 1)
-	step("a question with no turn", askMsg{req: acp.PermissionRequest{ToolCallID: "c2", Title: "write notes.txt", Options: allow}, reply: reply})
-	step("its answer", key("down"))
-	step("its answer", key("enter"))
+	var said []string
+	for _, l := range term.Lines() {
+		if strings.Contains(l, "of the reply") {
+			said = append(said, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "⏺")))
+		}
+	}
+	if len(said) != 30 || said[0] != "line 00 of the reply" || said[29] != "line 29 of the reply" {
+		t.Fatalf("the conversation: %q", said)
+	}
+	if !slices.IsSorted(said) {
+		t.Fatalf("out of order: %q", said)
+	}
 }

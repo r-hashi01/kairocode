@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/tui/screen"
 )
 
 // Agent is what the UI needs of the ACP client.
@@ -83,16 +85,25 @@ type Options struct {
 
 // UI is a running terminal UI.
 type UI struct {
-	p *tea.Program
-	m *model
+	p   *tea.Program
+	m   *model
+	in  io.Reader
+	out io.Writer
 }
 
 // New makes the UI. Its Update and Permission are the ACP client's handler;
 // Run gives it the client.
 func New(ctx context.Context, in io.Reader, out io.Writer, o Options) *UI {
 	m := newModel(ctx, nil, o)
-	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out))
-	return &UI{p: p, m: m}
+	opts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out),
+		tea.WithoutRenderer()} // drawn through internal/tui/screen (ADR 0033)
+	if f, ok := out.(*os.File); ok {
+		if w, h, err := screen.Size(f); err == nil {
+			opts = append(opts, tea.WithWindowSize(w, h))
+		}
+	}
+	p := tea.NewProgram(m, opts...)
+	return &UI{p: p, m: m, in: in, out: out}
 }
 
 // Update gives the UI an ACP update.
@@ -121,7 +132,13 @@ const reasonSep = "\x00"
 // ("" if none was started).
 func (u *UI) Run(a Agent) (string, error) {
 	u.m.a = a
-	_, err := u.p.Run()
+	scr, stop, err := startScreen(u.in, u.out, u.p.Send)
+	if err != nil {
+		return "", err
+	}
+	u.m.scr = scr
+	_, err = u.p.Run()
+	stop()
 	return u.m.session, err
 }
 
@@ -295,13 +312,13 @@ type model struct {
 	// The lines to write, in order: one batch is out at a time.
 	toPrint  []string
 	printing bool
-	// shown: the height of the screen drawn last. While lines are being
-	// written above it, it does not shrink: Bubble Tea places the lines by
-	// the height it drew, and a screen that shrinks at that moment leaves
-	// lines of the old one behind.
-	shown int
-	// held: the height the screen below the conversation keeps (steady).
-	held int
+	// scr draws the screen (ADR 0033); nil in the tests. placing: the
+	// terminal was asked where its cursor is (where the area begins).
+	scr     *screen.Screen
+	placing bool
+	// liveRows: the rows of the line being written already written above
+	// (a long line, wrapped: its rows but the last do not change).
+	liveRows int
 }
 
 func newModel(ctx context.Context, a Agent, o Options) *model {
@@ -444,26 +461,6 @@ func queuedLines(text string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
-// steady says how many blank lines to draw above the screen below the
-// conversation, n lines high, so that the input does not move up.
-//
-// That screen stays where it is on the terminal: lines written above it do
-// not push it down (the terminal scrolls up to make room for them:
-// bubbletea's insertAbove), and drawn shorter, its bottom (the input, the
-// status line) moves up. So it does not get shorter: what it would lose is
-// blank lines at its top. One rule for every screen (a reply streaming,
-// calls, a question and its answer, a turn's end, lines typed and taken
-// away). It keeps at most half the terminal: a gap higher than that would
-// be worse than the move; a new size of the terminal starts it again.
-func (m *model) steady(n int) int {
-	m.held = max(n, min(m.held, max(m.height/2, 8)))
-	low := m.held
-	if m.printing { // lines are placed by the height drawn: not shrunk under them
-		low = max(low, m.shown)
-	}
-	return low - n
-}
-
 // maxCallsShown is how many running calls the screen shows (the latest).
 const maxCallsShown = 4
 
@@ -533,6 +530,15 @@ func (m *model) block(s string) {
 // flush writes what is queued, one batch at a time: commands run
 // concurrently, and the lines must keep their order.
 func (m *model) flush() tea.Cmd {
+	if m.scr != nil {
+		// Written above the area at once, in order (ADR 0033); kept while a
+		// screen of its own is shown, or before the area has its place.
+		if len(m.toPrint) > 0 && !m.full() && m.scr.Placed() {
+			m.scr.Insert(strings.Split(strings.Join(m.toPrint, "\n"), "\n"))
+			m.toPrint = nil
+		}
+		return nil
+	}
 	if m.printing || len(m.toPrint) == 0 || m.full() {
 		return nil // on a screen of its own, nothing is written above: kept for after
 	}
@@ -543,7 +549,23 @@ func (m *model) flush() tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.update(msg)
-	return m, tea.Batch(cmd, m.flush())
+	// The area first, as it now is, then what is written above it, which
+	// pushes it down into what it left (as Codex draws); then the cursor.
+	m.paint()
+	cmd = tea.Batch(cmd, m.flush(), m.place())
+	m.paint()
+	return m, cmd
+}
+
+// place asks the terminal where its cursor is, where the area is to begin
+// (ADR 0033), once, and gives it a while to tell.
+func (m *model) place() tea.Cmd {
+	if m.scr == nil || m.scr.Placed() || m.placing {
+		return nil
+	}
+	m.placing = true
+	return tea.Batch(tea.RequestCursorPosition,
+		tea.Tick(placeWait, func(time.Time) tea.Msg { return placeTimeoutMsg{} }))
 }
 
 func (m *model) update(msg tea.Msg) tea.Cmd {
@@ -551,13 +573,28 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case printedMsg:
 		m.printing = false
 		return nil
+	case tea.CursorPositionMsg:
+		if m.scr != nil && m.placing {
+			m.scr.Place(msg.Y)
+			m.placing = false
+		}
+		return nil
+	case placeTimeoutMsg:
+		if m.scr != nil && !m.scr.Placed() { // not told: from the bottom
+			_, h := m.scr.Size()
+			m.scr.Place(h - 1)
+			m.placing = false
+		}
+		return nil
 	case tea.WindowSizeMsg:
 		if msg.Width > 0 { // a terminal that says its size
 			m.width = msg.Width
 			m.input.SetWidth(max(msg.Width-2, 10))
-			m.held = 0 // drawn again whole: it starts again
 		}
 		m.height = msg.Height
+		if m.scr != nil {
+			m.scr.Resize(msg.Width, msg.Height)
+		}
 		return nil
 	case tea.BackgroundColorMsg:
 		m.isDark, m.bg = msg.IsDark(), msg.Color
@@ -824,6 +861,7 @@ func (m *model) take(u acp.Update) {
 			m.streamReply(m.live[:i])
 			m.live = m.live[i+1:]
 		}
+		m.streamPartial()
 	case "user_message_chunk": // a session taken up again: what was said
 		m.flushLive()
 		m.block(userLine(u.Text))
@@ -1027,7 +1065,7 @@ func (m *model) noteCall(id, note string) {
 // flushLive moves the reply being written into the scrollback.
 func (m *model) flushLive() {
 	m.streamReply(m.live)
-	m.live, m.fence, m.blanks = "", false, 0
+	m.live, m.fence, m.blanks, m.liveRows = "", false, 0, 0
 }
 
 // streamReply writes whole lines of the reply above the screen, rendered
@@ -1053,8 +1091,19 @@ func (m *model) streamReply(text string) {
 		if m.replyHead == "" && !m.fence {
 			m.replyHead = strings.TrimSpace(line)
 		}
-		out = append(out, m.replyLine(line, !m.inReply && len(out) == 0))
+		rows := strings.Split(m.replyLine(line, !m.inReply && len(out) == 0), "\n")
+		if m.liveRows > 0 { // its first rows were written as it was being written
+			rows = rows[min(m.liveRows, len(rows)):]
+			m.liveRows = 0
+		}
+		out = append(out, rows...)
 	}
+	m.emitReply(out)
+}
+
+// emitReply writes rows of the reply above the screen: the first ones as a
+// block of its own (the reply's mark on its first row).
+func (m *model) emitReply(out []string) {
 	if len(out) == 0 {
 		return
 	}
@@ -1064,6 +1113,33 @@ func (m *model) streamReply(text string) {
 	}
 	m.block(strings.Join(out, "\n"))
 	m.inReply = true
+}
+
+// streamPartial writes the rows of the line being written that will not
+// change: wrapped, all of its rows but the last (greedy wrapping does not
+// move a word back). The line being written is not drawn (ADR 0033): a long
+// one is seen as it wraps, as Codex shows its reply.
+func (m *model) streamPartial() {
+	l := m.live
+	if strings.TrimSpace(l) == "" {
+		return
+	}
+	rows := strings.Split(m.replyLine(l, !m.inReply), "\n")
+	if len(rows)-1 <= m.liveRows {
+		return
+	}
+	var out []string
+	if m.liveRows == 0 {
+		for ; m.blanks > 0; m.blanks-- {
+			out = append(out, "")
+		}
+		if m.replyHead == "" && !m.fence {
+			m.replyHead = strings.TrimSpace(l)
+		}
+	}
+	out = append(out, rows[m.liveRows:len(rows)-1]...)
+	m.liveRows = len(rows) - 1
+	m.emitReply(out)
 }
 
 // replyLine is one line of the reply, rendered (wrapped, it may be more),
@@ -1552,15 +1628,6 @@ func (m *model) View() tea.View {
 	var b strings.Builder
 	w := max(m.width-1, 20) // a line as wide as the terminal throws its count of lines off
 	// While a flow runs, what its agents write is shown in their boxes.
-	if live := m.live; strings.TrimSpace(live) != "" && m.flow == nil && !strings.HasPrefix(strings.TrimSpace(live), "```") {
-		if !m.inReply {
-			b.WriteString("\n")
-		}
-		if m.fence {
-			live = "```\n" + live
-		}
-		b.WriteString(reply(live, w, !m.inReply) + "\n")
-	}
 	var cursor *tea.Cursor
 	if m.flow != nil {
 		b.WriteString("\n" + m.flowView(w) + "\n")
@@ -1617,14 +1684,6 @@ func (m *model) View() tea.View {
 	}
 	b.WriteString(m.status(w))
 	content := fitLines(b.String(), w)
-	if !m.full() {
-		if pad := m.steady(strings.Count(content, "\n") + 1); pad > 0 {
-			content = strings.Repeat("\n", pad) + content
-			if cursor != nil {
-				cursor.Y += pad
-			}
-		}
-	}
 	// Never taller than the terminal: what goes above its top cannot be
 	// redrawn, and stays there as copies of screens before (a review, say).
 	// The top goes; the input and the status line, at the bottom, stay.
@@ -1644,7 +1703,6 @@ func (m *model) View() tea.View {
 		v.Cursor, v.AltScreen, v.ReportFocus = cursor, true, true
 		return v // the conversation's screen keeps its height (shown)
 	}
-	m.shown = strings.Count(content, "\n") + 1
 	v := tea.NewView(content)
 	v.Cursor, v.ReportFocus = cursor, true
 	return v

@@ -39,7 +39,7 @@ type pluginDoneMsg struct {
 func (m *model) pluginConnect(verb, name string) tea.Cmd {
 	argv := append(slices.Clip(m.o.Plugin), verb, name)
 	cmd := exec.Command(argv[0], argv[1:]...)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg { return pluginDoneMsg{verb: verb, name: name, err: err} })
+	return m.run(cmd, func(err error) tea.Msg { return pluginDoneMsg{verb: verb, name: name, err: err} })
 }
 
 // loginMsg: the ways to sign in to provider, read for /login.
@@ -103,7 +103,7 @@ func (m *model) signIn(provider string, w acp.LoginMethod) tea.Cmd {
 	case len(w.Command) > 0:
 		m.print(faint.Render(fmt.Sprintf("  ⎿  %s: running %v", provider, w.Command)))
 		cmd := exec.Command(w.Command[0], w.Command[1:]...)
-		return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return m.run(cmd, func(err error) tea.Msg {
 			if err == nil {
 				err = a.Login(ctx, provider, w.ID, true)
 			}

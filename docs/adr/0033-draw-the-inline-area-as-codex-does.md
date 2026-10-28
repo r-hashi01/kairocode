@@ -1,6 +1,6 @@
 # 0033 端末の画面の下の領域を、Codex と同じ仕組みで自前で描く
 
-- 状態: 提案
+- 状態: 承認（2026-10-28）
 - 日付: 2026-10-28
 - 関連: ADR 0010（端末の画面、Bubble Tea v2）、0032（端末の通知）
 
@@ -61,3 +61,15 @@ Codex の仕組み（`insert_history.rs` の全体と、`tui.rs` の `draw` を�
 - **Bubble Tea の描画の外から、スクロール範囲の制御を直接送る（`tea.Raw`）:** Bubble Tea の描画は、カーソルの位置を自分の覚えている値からの相対で動かすので、外から動かすとずれて壊れる。
 - **全画面方式（代替画面）にする:** 入力欄は固定できるが、会話を端末の履歴に残せず、スクロールや検索を自前で作ることになる。
 - **端末の模擬にライブラリ（`charmbracelet/x/vt` など）を使う:** 依存が増える。テストに要る動きは限られるので、テストのコードの中に書く。
+
+## 実装（2026-10-28）
+
+- `internal/tui/screen`: 下の領域の位置（上端の行と、描いた行）を持ち、`Draw`（行ごとの差分、カーソル、同期描画）、`Insert`（会話の行。下の領域が画面の下に無ければ逆スクロールで押し下げてから、上の領域だけをスクロール範囲にして書く）、`DrawAlt`（代替画面）、`Resize`、`Clear` を行う。色は `lipgloss.Fprint` で端末に合わせる（24 ビットの色を扱えない Terminal.app など）。
+- 端末の設定（`term_unix.go`）: Bubble Tea は描画を外すと、生モードにせず、端末の大きさも変わったことも知らせない（`initTerminal` が何もしない。ソースで確かめた）。生モードは標準ライブラリの `syscall`（`Termios`、`ioctl`）で行い、依存は足さない。Bubble Tea の描画が頼んでいた設定（ブラケット貼り付け、焦点、`modifyOtherKeys`、kitty のキーの規約）も同じく頼み、終わるときに戻す。大きさは `TIOCGWINSZ` と `SIGWINCH` で読み、`tea.WindowSizeMsg` として渡す。
+- 下の領域の始まりは、起動のときにカーソルの位置を端末に問い合わせて（`tea.RequestCursorPosition`）決める。1 秒答えが無ければ画面の一番下から。外のコマンドを端末で動かす（`/login`、`/plugin connect`）ときは、端末を戻してから動かし、取り直して位置を問い合わせ直す（`tea.ExecProcess` は描画を外すと端末を戻さないため、`tea.Exec` で包む）。
+- 1 回の更新では、下の領域を今の形で描いてから会話の行を書く（Codex の順）。行は、下の領域が縮んで空いたところを埋める。
+- **Codex から 1 点だけ変えた（利用者の判断、2026-10-28）:** Codex は、下の領域が縮むと、書かれる行で押し下げられるまで下が浮く。KairoCode は、画面の下にあった領域が縮んだら、その分だけ上の会話を逆スクロールで下げて、領域を下に保つ。空く行は画面の一番上に来て、次に書かれる行で埋まる。画面の下に届いていない（始めたばかりの）領域は、Codex と同じく上端を保つ。
+- 書きかけの返事は下の領域に描かない。1 行が画面の幅を超えて折り返したら、最後の行を除いて会話の側へ出す（貪欲な折り返しでは、前の行は後の語で変わらない）。行が終わると残りを出す。
+- `18ac90d` の「縮めない」手当て（`steady`）と、Bubble Tea の描画のための手当て（書いている間の高さ）は外した。
+- テスト: `internal/tui/screen` の `TestAreaGoesDownToTheBottom`、`TestInputStaysAtTheBottom`、`TestDrawsWhatChanged`、`TestWideLinesTakeTheirRows`、`TestTallAreaAndAScreenOfItsOwn`、`TestResize`。模擬の端末は `internal/tui/screen/vtest`（テストのための小さな端末。依存は足さない）。画面と合わせて `TestOnATerminalTheInputStaysDown`（返事、呼び出し、承認と答え、送信待ち、ターンの終わりで、状態の行が画面の一番下にあり、会話が順に並ぶ）、`TestReplyGoesUpAsItWraps`。
+- 本物の端末での確かめは残り（iTerm2、Terminal.app、Ghostty、tmux の中、Ctrl+Z）。
