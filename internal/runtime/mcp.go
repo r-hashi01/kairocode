@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -161,6 +162,28 @@ func (s *mcpServer) acknowledge(ctx context.Context, t *mcpTurn) error {
 	return nil
 }
 
+// kindRunEnded is what the store keeps of a claude run that ended with a
+// result (its token): what it was handed is in its saved session.
+const kindRunEnded = "mcp-run-ended"
+
+// ended records that t's run ended with a result: every result it was
+// handed reached it and is in the session Claude Code saved, so a call it
+// made is not lost to the runs after it.
+func (s *mcpServer) ended(ctx context.Context, t *mcpTurn) error {
+	if err := s.acknowledge(ctx, t); err != nil {
+		return err
+	}
+	_, err := s.rt.Store.Put(ctx, kindRunEnded, []byte(t.proc))
+	return err
+}
+
+// runEnded says whether the claude run proc ended with a result. Not known
+// (not recorded, or the store fails) counts as cut off: asked about.
+func (s *mcpServer) runEnded(ctx context.Context, proc string) bool {
+	_, _, err := s.rt.Store.Get(ctx, store.Hash(kindRunEnded, []byte(proc)))
+	return err == nil
+}
+
 // takeAsks are the calls of the run that wait for the user, each once.
 // addAsk records a question for the user that the run's round ends on.
 func (t *mcpTurn) addAsk(a workflows.AskRequest) {
@@ -291,9 +314,10 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 //     reached Claude Code and that no other handler waits on: the call is
 //     that one, made again after an interruption;
 //   - else a new run, started here. If the content's last run was a real
-//     tool's, from an earlier claude run, the new one asks the user first:
-//     Claude Code may be making again a call whose result it lost (ADR
-//     0007, invariant 4).
+//     tool's, from an earlier claude run that was cut off, the new one asks
+//     the user first: Claude Code may be making again a call whose result
+//     it lost (ADR 0007, invariant 4). An earlier run that ended with a
+//     result kept every result in its session: the call is a new one.
 //
 // blocked says the run it met stopped for review.
 func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, args json.RawMessage) (id string, blocked bool, err error) {
@@ -321,7 +345,7 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	}
 	n := len(calls)
 	repeat := false
-	if n > 0 && t.tools[tool].Effect == tools.Real && calls[n-1].Proc != t.proc {
+	if n > 0 && t.tools[tool].Effect == tools.Real && calls[n-1].Proc != t.proc && !s.runEnded(ctx, calls[n-1].Proc) {
 		repeat = true
 	}
 	id = fmt.Sprintf("%s/mcp/%s.%d", t.turn, key, n)

@@ -292,7 +292,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(fmt.Errorf("claude: %v: %s", errors.Join(waitErr, sc.Err()), tail(stderr.String(), 200)))
 	}
 	// The run ended with a result: every tool result it was handed reached it.
-	if err := r.mcp.acknowledge(t, mt); err != nil {
+	if err := r.mcp.ended(t, mt); err != nil {
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
 	text := result.Result

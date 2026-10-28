@@ -469,7 +469,7 @@ func (r *Runtime) withAgent(ctx context.Context, engine string, fn func(context.
 // records.
 func (r *Runtime) finishCLITurn(t *kairo.TaskContext, mt *mcpTurn, text string, turns int, usage msg.Usage) (workflows.ClaudeTurnOutput, error) {
 	// The turn ended with a reply: every tool result it was handed reached it.
-	if err := r.mcp.acknowledge(t, mt); err != nil {
+	if err := r.mcp.ended(t, mt); err != nil {
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
 	}
 	h, err := r.Store.PutMessage(t, msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.Text, Text: text}}})

@@ -732,3 +732,40 @@ func TestClaudeEngineApprovedCallIsToldWhereItWasAsked(t *testing.T) {
 		})
 	}
 }
+
+// A call made again in the next claude run of the turn, after the run
+// before it ended with a result (it ended to wait for an approval), is a
+// new call: it runs, not asked about as one made again after an
+// interruption. The run before kept its result in its session.
+func TestClaudeEngineSameCallAfterARunThatEnded(t *testing.T) {
+	e := setupFakeClaude(t,
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 1}},
+			{Tool: "count", Args: map[string]any{"n": 9}},
+		}, Reply: "asked"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 9}},
+			{Tool: "count", Args: map[string]any{"n": 1}},
+		}, Reply: "done"},
+	)
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ws := repo(t)
+	os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"count": {"*": "allow", "{\"n\":9}": "ask"}}}`), 0o644)
+	s, _ := r.CreateSession(ctx, "again", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "count")
+	p := waitPending(t, r, s, 1)
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+	defer wcancel()
+	if _, err := r.WaitTurn(wctx, s, n); err != nil {
+		ps, _ := r.Pending(ctx, s)
+		t.Fatalf("the turn did not end (%v); pending %+v", err, ps)
+	}
+	if got := countRuns(t, e); got != 3 {
+		t.Fatalf("the tool ran %d times, want 3 (n=1 twice, n=9 once)", got)
+	}
+}
