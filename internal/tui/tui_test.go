@@ -1472,3 +1472,52 @@ func TestGoOnFromAFailedSession(t *testing.T) {
 		t.Fatal("still running after the turn in the new session")
 	}
 }
+
+// While a turn runs, the screen below the conversation does not get
+// shorter: a line being written that goes up into the scrollback, a tool
+// call that ends, would pull the input up, and the next push it down again
+// (it flickers). The turn ended, it may.
+func TestTurnKeepsTheInputStill(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.running = true
+	last := strings.Count(d.view(), "\n")
+	step := func(what string, u updateMsg) {
+		t.Helper()
+		d.send(u)
+		h := strings.Count(d.view(), "\n")
+		if h < last {
+			t.Fatalf("after %s the screen went from %d lines to %d:\n%s", what, last, h, d.view())
+		}
+		last = h
+	}
+	for i := range 3 {
+		step("a part of a line", updateMsg{Kind: "agent_message_chunk", Text: fmt.Sprintf("line %d, a long one that", i)})
+		step("its end", updateMsg{Kind: "agent_message_chunk", Text: " ends here.\n"})
+		step("a call", updateMsg{Kind: "tool_call", ToolCallID: fmt.Sprint("c", i), Title: "bash make test", Status: "in_progress"})
+		step("its end", updateMsg{Kind: "tool_call_update", ToolCallID: fmt.Sprint("c", i), Status: "completed"})
+	}
+	d.send(turnDoneMsg{stop: "end_turn"})
+	if h := strings.Count(d.view(), "\n"); h >= last {
+		t.Fatalf("the turn ended and the screen kept its %d lines", h)
+	}
+}
+
+// A question in the turn, taller than the input's screen, does not leave
+// its height behind once answered.
+func TestQuestionLeavesNoGap(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.running = true
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "Looking.\n"})
+	before := strings.Count(d.view(), "\n")
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{ToolCallID: "c1", Title: "bash make test", Options: []acp.PermissionOption{
+		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
+	if h := strings.Count(d.view(), "\n"); h <= before {
+		t.Fatalf("the question is not taller (%d, %d)", h, before)
+	}
+	d.send(key("enter"))
+	<-reply
+	if h := strings.Count(d.view(), "\n"); h > before+3 {
+		t.Fatalf("after the question the screen is %d lines, from %d:\n%s", h, before, d.view())
+	}
+}
