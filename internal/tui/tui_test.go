@@ -1634,3 +1634,27 @@ func TestTakeBackQueued(t *testing.T) {
 		t.Fatalf("sent %q", a.prompts)
 	}
 }
+
+// A turn that ends with messages waiting goes on into the next: the screen
+// below keeps its height then, not pulling the input up at each message
+// sent. Only when nothing more waits may it get shorter.
+func TestQueuedTurnsKeepTheInputStill(t *testing.T) {
+	d, a := start(t, Options{})
+	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "done"}}
+	d.m.running = true
+	for _, q := range []string{"one", "two", "three"} {
+		typed(d, q)
+	}
+	last := strings.Count(d.view(), "\n")
+	a.onPrompt = func() {
+		d.m.printing = false // what was written has been written, as it soon is
+		if h := strings.Count(d.view(), "\n"); h < last && len(d.m.queued) > 0 {
+			t.Errorf("the screen went from %d lines to %d with %d still waiting:\n%s", last, h, len(d.m.queued), d.view())
+		}
+		last = max(last, strings.Count(d.view(), "\n"))
+	}
+	d.send(turnDoneMsg{stop: "end_turn"})
+	if len(a.prompts) != 3 {
+		t.Fatalf("sent %q", a.prompts)
+	}
+}

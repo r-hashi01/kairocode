@@ -683,7 +683,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			m.print(faint.Render("  ⎿  Going on in a new session from its last finished turn…"))
 			return m.goOn(msg)
 		}
-		m.running, m.floor = false, 0
+		m.running = false
+		if len(m.queued) == 0 { // the last: the screen may get shorter now
+			m.floor = 0
+		}
 		m.flushLive()
 		m.endFlow()
 		m.inReply = false
@@ -1133,7 +1136,7 @@ func (m *model) recall(by int) bool {
 func (m *model) submit(text string) tea.Cmd {
 	m.remember(text)
 	m.block(userLine(text))
-	m.running, m.replyHead, m.floor = true, "", 0
+	m.running, m.replyHead = true, ""
 	m.began = time.Now()
 	if m.o.Dir != "" {
 		m.flowsBefore = readFlows(m.o.Dir)
