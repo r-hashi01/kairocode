@@ -413,10 +413,37 @@ func (m *model) queuedView(w int) string {
 		}
 		// As the conversation shows what the user said, but grey: it is
 		// not said yet.
-		b.WriteString(faint.Render("> "+titleLine(q, max(w-2, 10))) + "\n")
+		b.WriteString(queuedLines(q, w) + "\n")
 	}
 	b.WriteString(faint.Italic(true).Render("  sent when this turn ends · ↑ to change") + "\n")
 	return b.String()
+}
+
+// queuedShown is how many lines of a waiting message are shown.
+const queuedShown = 4
+
+// queuedLines is a waiting message as the user wrote it, wrapped to w,
+// grey: its first lines, and how many more it has.
+func queuedLines(text string, w int) string {
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(text), "\n") {
+		lines = append(lines, strings.Split(wrap(l, max(w-2, 10), ""), "\n")...)
+	}
+	more := 0
+	if len(lines) > queuedShown {
+		more, lines = len(lines)-queuedShown, lines[:queuedShown]
+	}
+	for i, l := range lines {
+		lead := "  "
+		if i == 0 {
+			lead = "> "
+		}
+		lines[i] = faint.Render(lead + l)
+	}
+	if more > 0 {
+		lines = append(lines, faint.Render(fmt.Sprintf("  … +%d lines", more)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // maxCallsShown is how many running calls the screen shows (the latest).

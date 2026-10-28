@@ -366,7 +366,7 @@ func TestQueuedDuringATurn(t *testing.T) {
 		// written there twice, the second time when it is sent.
 		t.Fatalf("prompts %q\n%s", a.prompts, d.out())
 	}
-	if v := d.view(); !strings.Contains(v, "> and then this") || !strings.Contains(v, "> and this too … +1 lines") || !strings.Contains(v, "sent when this turn ends") {
+	if v := d.view(); !strings.Contains(v, "> and then this") || !strings.Contains(v, "> and this too\n  over two lines") || !strings.Contains(v, "sent when this turn ends") {
 		t.Fatalf("the queued messages are not shown below:\n%s", v)
 	}
 	d.send(turnDoneMsg{stop: "end_turn"})
@@ -1674,5 +1674,21 @@ func TestLateEndOfAReply(t *testing.T) {
 	h, i, j, k := strings.Index(out, "The last"), strings.Index(out, "words."), strings.Index(out, "go on"), strings.Index(out, "Next reply.")
 	if h < 0 || i < 0 || j < 0 || k < 0 || !(h < i && i < j && j < k) || strings.Contains(out, "words.Next") {
 		t.Fatalf("out of order:\n%s", out)
+	}
+}
+
+// A waiting message is shown as it was written, not its first line only
+// (an image's label alone says nothing); a long one, its first lines.
+func TestQueuedShowsTheMessage(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.running = true
+	typed(d, "[Image #1] \nwhat is wrong on this screen?")
+	typed(d, strings.Repeat("line\n", 9)+"end")
+	v := d.view()
+	if !strings.Contains(v, "> [Image #1]\n  what is wrong on this screen?") {
+		t.Fatalf("the message is not shown:\n%s", v)
+	}
+	if !strings.Contains(v, "… +6 lines") || strings.Contains(v, "  end\n") {
+		t.Fatalf("the long message:\n%s", v)
 	}
 }
