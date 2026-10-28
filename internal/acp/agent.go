@@ -138,6 +138,13 @@ const (
 	// ({"id"} → runtime.FlowRun). ADR 0029.
 	FlowRunsRPC = "_kairocode/flow_runs"
 	FlowRunRPC  = "_kairocode/flow_run"
+	// GoOnRPC goes on from a session that failed, in a new session forked
+	// from its last finished turn, the working files as they are
+	// ({"sessionId"} → {"sessionId", "turn"}). ADR 0021.
+	GoOnRPC = "_kairocode/go_on"
+	// CodeSessionFailed answers a prompt to a session that failed and
+	// takes no more (ADR 0021).
+	CodeSessionFailed = -32010
 )
 
 // PluginsView is what the terminal's /plugin shows.
@@ -542,6 +549,28 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			runs = []runtime.FlowRun{}
 		}
 		return map[string]any{"runs": runs}, nil
+	case GoOnRPC:
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" {
+			return nil, invalid(errors.New(`want {"sessionId": "<session>"}`))
+		}
+		dir := a.dirOf(p.SessionID)
+		if dir == "" {
+			return nil, invalid(errors.New("no such session here: " + p.SessionID))
+		}
+		s, turn, err := a.b.Fork(ctx, p.SessionID, -1, false)
+		if err != nil {
+			return nil, err
+		}
+		a.setDir(s, dir)
+		w, err := a.watch(s)
+		if err != nil {
+			return nil, err
+		}
+		a.offerCommands(ctx, s)
+		return then{Result: map[string]any{"sessionId": s, "turn": turn}, After: w.release}, nil
 	case FlowRunRPC:
 		var p struct {
 			ID string `json:"id"`
@@ -818,6 +847,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		}
 	}
 	n, err := start(ctx, p.SessionID, prompt)
+	if errors.Is(err, runtime.ErrSessionFailed) {
+		return nil, &rpcError{Code: CodeSessionFailed, Message: err.Error() +
+			". Go on from its last turn with /fork, or start a new session."}
+	}
 	if err != nil {
 		return nil, err
 	}

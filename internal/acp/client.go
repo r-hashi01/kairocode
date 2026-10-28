@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/jsonrpc"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
@@ -545,5 +547,20 @@ func (cl *Client) Prompt(ctx context.Context, session, text string, files ...str
 		blocks = append(blocks, map[string]any{"type": "resource_link", "uri": (&url.URL{Scheme: "file", Path: f}).String(), "name": filepath.Base(f)})
 	}
 	err := cl.c.Call(ctx, "session/prompt", map[string]any{"sessionId": session, "prompt": blocks}, &out)
+	var re *jsonrpc.Error
+	if errors.As(err, &re) && re.Code == CodeSessionFailed {
+		return "", fmt.Errorf("%w%s", runtime.ErrSessionFailed, strings.TrimPrefix(re.Message, runtime.ErrSessionFailed.Error()))
+	}
 	return out.StopReason, err
+}
+
+// GoOn goes on from a session that failed, in a new session forked from
+// its last finished turn (ADR 0021): the new session and that turn.
+func (cl *Client) GoOn(ctx context.Context, session string) (string, int, error) {
+	var out struct {
+		SessionID string `json:"sessionId"`
+		Turn      int    `json:"turn"`
+	}
+	err := cl.c.Call(ctx, GoOnRPC, map[string]any{"sessionId": session}, &out)
+	return out.SessionID, out.Turn, err
 }

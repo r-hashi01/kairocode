@@ -879,6 +879,11 @@ func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
 func (r *Runtime) signal(ctx context.Context, session string, ev workflows.SessionEvent) (int, error) {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
+	// A session that failed takes nothing more (kairo-gap #16): said so,
+	// not sent to be lost (ADR 0021, 追記 2026-10-28).
+	if err := r.failed(ctx, session); err != nil {
+		return 0, err
+	}
 	n, err := r.sent(ctx, session)
 	if err != nil {
 		return 0, err
@@ -896,6 +901,34 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 		return 0, err
 	}
 	return n, nil
+}
+
+// ErrSessionFailed: the session stopped on an error (a store's, say:
+// kairo-gap #16) and takes no more messages. It goes on in a session forked
+// from its last finished turn (ADR 0021).
+var ErrSessionFailed = errors.New("this session stopped on an error and takes no more messages")
+
+// FailedNote is put before the first message of a session forked from one
+// that failed (ADR 0021): the turn cut short may have changed files.
+const FailedNote = "[The session this one goes on from stopped on an error during a turn. That turn may have changed the working files; look before going on.]"
+
+// failed returns ErrSessionFailed, with why, if the session ended on an
+// error: a finished run that Await says failed (kairo records a code
+// workflow's failure as its end with ok false).
+func (r *Runtime) failed(ctx context.Context, session string) error {
+	info, err := r.K.Get(ctx, session)
+	if err != nil {
+		return err
+	}
+	if !info.Finished() || info.Status == "cancelled" {
+		return nil
+	}
+	_, err = kairo.Await[json.RawMessage](ctx, r.K, session)
+	var we *kairo.WorkflowError
+	if errors.As(err, &we) {
+		return fmt.Errorf("%w (%s)", ErrSessionFailed, we.Message)
+	}
+	return nil
 }
 
 // stoppedNote is what the conversation says of a turn the user stopped

@@ -77,3 +77,8 @@ kairo-gap #16 の手当てです。ワークフローの中で `Child` や `Call
 - 検討した代替案:
   - **セッションの失敗を記録しないで、後でやり直す（kairo の側で直す）:** 本来の直し方です。kairo の ADR の案として出します（#16）。それまでの間、行き止まりにしないための手当てがこの追記です。
   - **ACP でも黙って分岐して、内部のセッションを差し替える:** クライアントの ID と内部の ID がずれ、`session/load` と記録の閲覧が分かりにくくなります。
+- **実装（2026-10-28）:**
+  - 失敗の見分け方: kairo は、コードで書くワークフローの失敗を「`completed` で、`done` が `ok: false`」として記録します（`Status` は `failed` にならない）。そのため、終わったセッションに `kairo.Await` を呼び、`WorkflowError` が返るかで見分けます（`Runtime.failed`）。セッションへの出来事（`Send`、画像つき、`/compact`、`/undo`・`/redo`）はすべて `signal` を通るので、そこで確かめます。
+  - デーモンの API は 410 を返し、クライアントは `runtime.ErrSessionFailed` に戻します。ACP は誤りの符号 `-32010`（`CodeSessionFailed`）で返し、ACP のクライアントも `ErrSessionFailed` に戻します。続けるための拡張のメソッド `_kairocode/go_on`（分岐し、新しいセッションを ACP のエージェントに覚えさせる）を足しました。TUI はこれを呼んで、新しいセッションに切り替え、書き添え（`runtime.FailedNote`）を付けて同じメッセージを送ります。
+  - CLI: `kairocode run` はいつも新しいセッションを作るので、失敗したセッションに送ることはありません（`-session` は無かった）。
+  - テスト: `TestSendToAFailedSession`（失敗で終わる試しのワークフローで、送れずに理由が返る）、`TestPromptToAFailedSession`（ACP）、`TestGoOnFromAFailedSession`（TUI）。本物の保存先の誤りで失敗したセッションからの分岐は、テストでは作れていません（分岐そのものは ADR 0021 のテストで確かめている）。

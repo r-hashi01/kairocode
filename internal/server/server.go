@@ -103,6 +103,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func fail(w http.ResponseWriter, code int, err error) {
+	if errors.Is(err, runtime.ErrSessionFailed) {
+		code = http.StatusGone // it takes no more (ADR 0021)
+	}
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 

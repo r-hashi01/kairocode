@@ -310,6 +310,9 @@ func (c *Client) doOnce(ctx context.Context, method, path string, b []byte, hasB
 		if json.Unmarshal(b, &e) == nil && e.Error != "" {
 			msg = e.Error
 		}
+		if resp.StatusCode == http.StatusGone { // the session failed (ADR 0021)
+			return fmt.Errorf("%w%s", runtime.ErrSessionFailed, strings.TrimPrefix(msg, runtime.ErrSessionFailed.Error()))
+		}
 		return &statusError{code: resp.StatusCode, msg: msg}
 	}
 	if out == nil {

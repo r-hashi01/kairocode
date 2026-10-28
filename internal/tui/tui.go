@@ -8,6 +8,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -54,6 +55,9 @@ type Agent interface {
 	// FlowRuns and FlowRun are /flow runs' screen (ADR 0029).
 	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error)
 	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
+	// GoOn goes on from a session that failed, in a new one forked from its
+	// last finished turn (ADR 0021).
+	GoOn(ctx context.Context, session string) (string, int, error)
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -135,6 +139,17 @@ type (
 	turnDoneMsg struct {
 		stop string
 		err  error
+		// text and files: what was sent, to send again in a new session
+		// if the session had failed (ADR 0021).
+		text  string
+		files []string
+	}
+	goneOnMsg struct {
+		session string
+		turn    int
+		text    string
+		files   []string
+		err     error
 	}
 	usageMsg   int64
 	printedMsg struct{}
@@ -579,7 +594,26 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 		}
 		return nil
+	case goneOnMsg:
+		if msg.err != nil {
+			m.running = false
+			m.print(bad.Render("  ⎿  Could not go on in a new session: " + shortError(msg.err.Error())))
+			return nil
+		}
+		old := m.session
+		m.session = msg.session
+		m.print(faint.Render(fmt.Sprintf("  ⎿  Now in session %s, from turn %d of %s, which is kept (kairocode log %s).",
+			short(msg.session), msg.turn, short(old), strings.TrimPrefix(old, "s/"))))
+		m.running, m.began = true, time.Now()
+		return m.send(runtime.FailedNote+"\n\n"+msg.text, msg.files)
 	case turnDoneMsg:
+		if errors.Is(msg.err, runtime.ErrSessionFailed) && m.ctx.Err() == nil && msg.text != "" {
+			// It took nothing: the message goes on in a new session.
+			m.flushLive()
+			m.print(warn.Render("  ⎿  " + shortError(msg.err.Error())))
+			m.print(faint.Render("  ⎿  Going on in a new session from its last finished turn…"))
+			return m.goOn(msg)
+		}
 		m.running = false
 		m.flushLive()
 		m.endFlow()
@@ -1032,12 +1066,27 @@ func (m *model) submit(text string) tea.Cmd {
 	if m.o.Dir != "" {
 		m.flowsBefore = readFlows(m.o.Dir)
 	}
-	ctx, a, s := m.ctx, m.a, m.session
 	files := append(Mentioned(m.o.Dir, text), m.imagesIn(text)...)
+	return m.send(text, files)
+}
+
+// send gives the agent a message: text, with files.
+func (m *model) send(text string, files []string) tea.Cmd {
+	ctx, a, s := m.ctx, m.a, m.session
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		stop, err := a.Prompt(ctx, s, text, files...)
-		return turnDoneMsg{stop: stop, err: err}
+		return turnDoneMsg{stop: stop, err: err, text: text, files: files}
 	})
+}
+
+// goOn goes on from a session that failed (ADR 0021): the message is
+// sent again in a session forked from its last finished turn.
+func (m *model) goOn(done turnDoneMsg) tea.Cmd {
+	ctx, a, s := m.ctx, m.a, m.session
+	return func() tea.Msg {
+		ns, turn, err := a.GoOn(ctx, s)
+		return goneOnMsg{session: ns, turn: turn, text: done.text, files: done.files, err: err}
+	}
 }
 
 func (m *model) usage() tea.Cmd {

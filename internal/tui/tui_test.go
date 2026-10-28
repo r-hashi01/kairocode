@@ -134,6 +134,14 @@ type fakeAgent struct {
 	plugins  acp.PluginsView
 	changes  []string // /plugin's changes asked for
 	runs     []runtime.FlowRun
+	failed   bool     // the session failed: the next prompt is refused (ADR 0021)
+	goneOn   []string // the sessions gone on from
+}
+
+func (a *fakeAgent) GoOn(ctx context.Context, session string) (string, int, error) {
+	a.goneOn = append(a.goneOn, session)
+	a.failed = false
+	return "s/forked0123456789", 3, nil
 }
 
 func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
@@ -231,6 +239,9 @@ func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error 
 }
 
 func (a *fakeAgent) Prompt(ctx context.Context, session, text string, files ...string) (string, error) {
+	if a.failed {
+		return "", fmt.Errorf("%w (database is locked)", runtime.ErrSessionFailed)
+	}
 	a.prompts = append(a.prompts, text)
 	a.files = append(a.files, files...)
 	if a.onPrompt != nil {
@@ -1430,5 +1441,34 @@ func TestStreamingKeepsTheScreenStill(t *testing.T) {
 	d.m.fence = true
 	if got, want := d.m.replyLine("x := 1", false), reply("```\nx := 1", d.m.width, false); got != want {
 		t.Fatalf("a code line: %q, want %q", got, want)
+	}
+}
+
+// A message to a session that failed goes on in a session forked from its
+// last finished turn, with a note that the turn cut short may have changed
+// files; the UI is in the new session from then on (ADR 0021).
+func TestGoOnFromAFailedSession(t *testing.T) {
+	d, a := start(t, Options{})
+	old := d.m.session
+	a.failed = true
+	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "Going on."}}
+	typed(d, "fix the test")
+	if len(a.goneOn) != 1 || a.goneOn[0] != old {
+		t.Fatalf("gone on from %q, want %q", a.goneOn, old)
+	}
+	if d.m.session != "s/forked0123456789" {
+		t.Fatalf("the UI is in %q", d.m.session)
+	}
+	if len(a.prompts) != 1 || a.prompts[0] != runtime.FailedNote+"\n\nfix the test" {
+		t.Fatalf("sent %q", a.prompts)
+	}
+	out := d.out()
+	for _, want := range []string{"database is locked", "Now in session", "Going on."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	if d.m.running {
+		t.Fatal("still running after the turn in the new session")
 	}
 }
