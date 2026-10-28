@@ -1521,3 +1521,49 @@ func TestQuestionLeavesNoGap(t *testing.T) {
 		t.Fatalf("after the question the screen is %d lines, from %d:\n%s", h, before, d.view())
 	}
 }
+
+// A call whose title is a command of many lines (a heredoc) is one line on
+// the screen while it runs and when it ends; many calls at once show the
+// latest. The screen below the conversation stays well under the
+// terminal's height, and keeps no gap as high as it.
+func TestLongCallsKeepTheScreenSmall(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.running = true
+	cmd := "bash python3 - <<'EOF'\n" + strings.Repeat("s = s.replace(old, new)\n", 40) + "EOF"
+	d.send(updateMsg{Kind: "tool_call", ToolCallID: "c1", Title: cmd, Status: "in_progress"})
+	v := d.view()
+	if !strings.Contains(v, "bash python3 - <<'EOF' … +41 lines") || strings.Contains(v, "s.replace") {
+		t.Fatalf("the running call:\n%s", v)
+	}
+	for i := 2; i <= 9; i++ {
+		d.send(updateMsg{Kind: "tool_call", ToolCallID: fmt.Sprint("c", i), Title: fmt.Sprint("read file", i), Status: "in_progress"})
+	}
+	v = d.view()
+	if !strings.Contains(v, "5 more calls running") || !strings.Contains(v, "read file9") || strings.Contains(v, "read file5\n") {
+		t.Fatalf("many calls:\n%s", v)
+	}
+	if h := strings.Count(v, "\n") + 1; h > d.m.height-1 {
+		t.Fatalf("the screen is %d lines in a terminal of %d", h, d.m.height)
+	}
+	for i := 1; i <= 9; i++ {
+		d.send(updateMsg{Kind: "tool_call_update", ToolCallID: fmt.Sprint("c", i), Status: "completed"})
+	}
+	if out := d.out(); !strings.Contains(out, "… +41 lines") || strings.Contains(out, "s.replace") {
+		t.Fatalf("the ended call:\n%s", out)
+	}
+	if h := strings.Count(d.view(), "\n") + 1; h > d.m.height/2+1 {
+		t.Fatalf("after the calls the screen keeps %d lines of a terminal of %d", h, d.m.height)
+	}
+}
+
+func TestTitleLine(t *testing.T) {
+	if got := titleLine("bash ls", 40); got != "bash ls" {
+		t.Errorf("one line: %q", got)
+	}
+	if got := titleLine("bash a\nb\nc", 40); got != "bash a … +2 lines" {
+		t.Errorf("three lines: %q", got)
+	}
+	if got := titleLine("bash "+strings.Repeat("x", 80)+"\ny", 30); lipgloss.Width(got) > 30 || !strings.HasSuffix(got, "+1 lines") {
+		t.Errorf("long: %q", got)
+	}
+}

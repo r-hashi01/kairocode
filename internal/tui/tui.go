@@ -374,6 +374,21 @@ func cut(s string, n int) string {
 	return string(r) + "…"
 }
 
+// maxCallsShown is how many running calls the screen shows (the latest).
+const maxCallsShown = 4
+
+// titleLine is a call's title on one line of at most n columns: its first
+// line, saying how many more it has (a command written over many lines).
+func titleLine(s string, n int) string {
+	s = strings.TrimSpace(s)
+	first, rest, many := strings.Cut(s, "\n")
+	if !many {
+		return cut(s, n)
+	}
+	more := fmt.Sprintf(" … +%d lines", strings.Count(rest, "\n")+1)
+	return cut(strings.TrimRight(first, " "), max(n-lipgloss.Width(more), 10)) + more
+}
+
 // cutLeft is s in at most n columns, cut at its start (a path's end is
 // what tells it apart).
 func cutLeft(s string, n int) string {
@@ -894,7 +909,7 @@ func (m *model) endCall(id string, failed bool, output string) {
 	if failed {
 		dot, out = bad.Render("⏺ "), bad
 	}
-	lines := []string{dot + bold.Render(cut(title, m.width-3))}
+	lines := []string{dot + bold.Render(titleLine(title, m.width-3))}
 	for _, n := range m.notes[id] {
 		lines = append(lines, faint.Render("  ⎿  "+n))
 	}
@@ -1419,7 +1434,7 @@ func (m *model) answer() tea.Cmd {
 	m.asks = m.asks[1:]
 	o := a.req.Options[a.sel]
 	a.reply <- o.ID
-	m.noteCall(a.req.ToolCallID, a.req.Title+": "+o.Name)
+	m.noteCall(a.req.ToolCallID, titleLine(a.req.Title, max(m.width-20, 20))+": "+o.Name)
 	return nil
 }
 
@@ -1464,8 +1479,13 @@ func (m *model) View() tea.View {
 			b.WriteString(m.input.View() + "\n" + line + "\n")
 		}
 	default:
-		for _, id := range m.calls {
-			b.WriteString("\n" + accent.Render("⏺ ") + bold.Render(cut(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
+		calls := m.calls
+		if len(calls) > maxCallsShown { // the latest: the screen stays small
+			b.WriteString("\n" + faint.Render(fmt.Sprintf("  … %d more calls running", len(calls)-maxCallsShown)) + "\n")
+			calls = calls[len(calls)-maxCallsShown:]
+		}
+		for _, id := range calls {
+			b.WriteString("\n" + accent.Render("⏺ ") + bold.Render(titleLine(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
 		}
 		if m.running {
 			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +
@@ -1526,7 +1546,9 @@ func (m *model) View() tea.View {
 	}
 	m.shown = strings.Count(content, "\n") + 1
 	if m.running && plain {
-		m.floor = max(m.floor, m.shown)
+		// Kept up to half the screen: what was taller (many lines typed)
+		// may shrink, not leave a gap as high as the screen.
+		m.floor = max(m.floor, min(m.shown, max(m.height/2, 8)))
 	}
 	v := tea.NewView(content)
 	v.Cursor, v.ReportFocus = cursor, true
