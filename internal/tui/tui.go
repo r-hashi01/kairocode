@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"io"
 	"regexp"
 	"slices"
@@ -209,7 +210,9 @@ type model struct {
 	images map[string]string
 	// notif tells the terminal when the UI waits and when a turn ends
 	// (ADR 0032); replyHead: the first line of the turn's reply, for it.
-	notif     notifier
+	notif notifier
+	// bg: the terminal's background, as it told it (nil before).
+	bg        color.Color
 	replyHead string
 	// tried: reviews of flows being tried (ADR 0017), by their call, to
 	// go on with when the review comes back.
@@ -449,7 +452,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.height = msg.Height
 		return nil
 	case tea.BackgroundColorMsg:
-		m.isDark = msg.IsDark()
+		m.isDark, m.bg = msg.IsDark(), msg.Color
 		setTheme(m.isDark)
 		m.restyle()
 		m.writeHeader()
@@ -1463,17 +1466,13 @@ func (m *model) View() tea.View {
 			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +
 				faint.Render(fmt.Sprintf(" (%ds · esc to stop)", int(time.Since(m.began).Seconds()))) + "\n")
 		}
-		edge := accent
-		if m.running {
-			edge = faint
-		}
-		line := edge.Render(strings.Repeat("─", w))
-		b.WriteString("\n" + line + "\n")
+		b.WriteString("\n")
+		box := m.inputBox(w) // before the cursor: it sets the input's styles
 		if c := m.input.Cursor(); c != nil {
-			c.Y += strings.Count(b.String(), "\n")
+			c.Y += strings.Count(b.String(), "\n") + 1 // the line above the input
 			cursor = c
 		}
-		b.WriteString(m.input.View() + "\n" + line + "\n")
+		b.WriteString(box + "\n")
 		for i, c := range m.completions() {
 			if i == m.compSel {
 				b.WriteString(accent.Render(fmt.Sprintf("  %-14s %s", c.label, c.desc)) + "\n")
