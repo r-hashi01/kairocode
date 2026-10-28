@@ -1265,6 +1265,9 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		toolCall["content"] = content
 	case p.Preview != "": // what it would do: a flow's shape
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
+	case !question && p.Kind != "review" && !strings.Contains(title, p.Rule):
+		// The reason, cut short in the title: all of it, to decide on.
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Rule)}}
 	}
 	params := map[string]any{
 		"sessionId": session,

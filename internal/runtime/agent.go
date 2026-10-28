@@ -24,6 +24,14 @@ const basePrompt = `You are KairoCode, a coding agent working in a user's reposi
 Use the tools to look at the code before you answer, and answer with what you found.
 Paths are relative to the working directory. Be concise.`
 
+// approvalPrompt is how the agent speaks of what the user is asked to
+// approve: given to every agent, its own prompt or not, since the asking
+// is KairoCode's. The user answers what they understand, and is told what
+// their answer let run.
+const approvalPrompt = `Do what the user asked. Work they did not ask for, propose it and wait: do not start it.
+When a call needs the user's approval (a justification, say), write the reason for the user, in their language and in plain words: what it does, what it reads or changes, and why the task needs it.
+After a call the user approved has run, say in your reply what it was for, what it did, its result, and what it changed (or that it changed nothing).`
+
 // instructionFiles are read from the working directory into the system
 // prompt (FR-23), in this order: after the user's own (userInstructions).
 var instructionFiles = []string{"AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"}
@@ -257,6 +265,7 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	} else {
 		b.WriteString(basePrompt)
 	}
+	b.WriteString("\n\n" + approvalPrompt)
 	fmt.Fprintf(&b, "\n\nWorking directory: %s\n", in.Dir)
 	// What the engine's agent reads by itself it is not given again; the
 	// rest KairoCode gives it (ADR 0018).

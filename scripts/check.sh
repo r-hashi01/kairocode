@@ -17,6 +17,14 @@ cd "$(dirname "$0")/.."
 quick=false
 [ "${1:-}" = --quick ] && quick=true
 
+# The sources as they are now, before the checks: the pass is noted for
+# them, not for what another agent changed while the tests ran.
+hash=""
+if [ -f .claude/hooks/lib.sh ]; then
+  . .claude/hooks/lib.sh
+  hash=$(source_hash)
+fi
+
 if [ -n "${KAIROCODE_SANDBOX:-}" ] && [ "$KAIROCODE_SANDBOX" != full-access ]; then
   # The shared build cache is not written from a sandbox: what is put there
   # would be used by builds outside it.
@@ -60,11 +68,9 @@ fi
 step adr
 scripts/adr-lint.sh
 
-# A note for the Stop hook only: where .claude cannot be written (in a
-# sandbox), the checks still passed.
-if [ -f .claude/hooks/lib.sh ]; then
-  . .claude/hooks/lib.sh
-  hash=$(source_hash)
+# A note for the Stop hook only: where .claude cannot be written, the
+# checks still passed.
+if [ -n "$hash" ]; then
   { mkdir -p .claude/.cache && echo "$hash" > .claude/.cache/last-green; } 2>/dev/null || true
   if [ "$skipped" -gt 0 ]; then
     { echo "$hash" > .claude/.cache/last-green-partial; } 2>/dev/null || true

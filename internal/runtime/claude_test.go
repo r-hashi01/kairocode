@@ -671,3 +671,64 @@ func TestClaudeEngineReadsNoSettingsOfItsOwn(t *testing.T) {
 		t.Fatalf("the user's CLAUDE.md is not in the system prompt once:\n%s", st[0].System)
 	}
 }
+
+// The user sees what an approval let run, where they were asked: the call
+// Claude Code makes again after the approval is told under the approval's
+// own call (its start, its result); declined, that call is told it did not
+// run. The first call, which only asked, is not told as a failure.
+func TestClaudeEngineApprovedCallIsToldWhereItWasAsked(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(fmt.Sprint("approve=", approve), func(t *testing.T) {
+			e := setupFakeClaude(t,
+				fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "asked"},
+				fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "done"},
+			)
+			r := openClaude(t, e)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			ws := repo(t)
+			os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"count": "ask"}}`), 0o644)
+			s, _ := r.CreateSession(ctx, "told", workflows.SessionInput{Dir: ws})
+			events, _ := r.Events(ctx, s)
+			n, _ := r.Send(ctx, s, "count once")
+			var key string
+			var asked []Event // the tool ends before the approval was asked
+			for key == "" {
+				switch ev := next(t, ctx, events); ev.Type {
+				case EventApprovalRequested:
+					key = ev.Pending.Key
+				case EventToolEnd:
+					asked = append(asked, ev)
+				}
+			}
+			if len(asked) != 1 || asked[0].IsError || !strings.Contains(asked[0].Output, "approval") {
+				t.Fatalf("the call that asked was told as %+v", asked)
+			}
+			if err := r.Approve(ctx, key, approve, ""); err != nil {
+				t.Fatal(err)
+			}
+			var started bool
+			var end *Event
+			for end == nil {
+				switch ev := next(t, ctx, events); {
+				case ev.Type == EventToolStart && ev.Call == key:
+					started = true
+				case ev.Type == EventToolEnd && ev.Call == key:
+					end = &ev
+				case ev.Type == EventTurnEnd:
+					t.Fatal("the turn ended before the approved call was told under its approval")
+				}
+			}
+			if approve {
+				if !started || end.IsError || end.Output != "counted" {
+					t.Fatalf("approved: started %v, end %+v", started, *end)
+				}
+			} else if started || !end.IsError || !strings.Contains(end.Output, "declined") {
+				t.Fatalf("declined: started %v, end %+v", started, *end)
+			}
+			if _, err := r.WaitTurn(ctx, s, n); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

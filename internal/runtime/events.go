@@ -110,11 +110,17 @@ type events struct {
 	// held: a review's resolved event, by its call's run, kept until the
 	// call's end is told (the call ends, then it is resolved, in that
 	// order); ended: calls under review whose end was told first.
-	held   map[string]map[string]Event
-	ended  map[string]map[string]bool
-	queue  []item
-	wake   chan struct{}
-	closed bool
+	held  map[string]map[string]Event
+	ended map[string]map[string]bool
+	// allowed: the MCP calls approved and not yet made again, by session
+	// and <turn>/mcp/<call key>: the approval's key; linked: an approved
+	// call made again, by its run: the approval's key. The call is told
+	// under the approval's key, where the user was asked.
+	allowed map[string]map[string]string
+	linked  map[string]map[string]string
+	queue   []item
+	wake    chan struct{}
+	closed  bool
 
 	ctx  context.Context
 	stop context.CancelFunc
@@ -146,6 +152,7 @@ func newEvents(r *Runtime) *events {
 		pending: map[string]map[string]Pending{}, answers: map[string]map[string]bool{}, calls: map[string]map[string]string{}, tokens: map[string]*tokens{},
 		flows: map[string]map[string]string{}, charts: map[string]*flowchart.Chart{},
 		held: map[string]map[string]Event{}, ended: map[string]map[string]bool{},
+		allowed: map[string]map[string]string{}, linked: map[string]map[string]string{},
 		wake: make(chan struct{}, 1), ctx: ctx, stop: stop, done: make(chan struct{})}
 	go e.run()
 	return e
@@ -240,6 +247,8 @@ func (e *events) drop(w *watcher) {
 		delete(e.flows, w.session)
 		delete(e.held, w.session)
 		delete(e.ended, w.session)
+		delete(e.allowed, w.session)
+		delete(e.linked, w.session)
 		if t := e.tokens[w.session]; t != nil {
 			t.stop()
 			delete(e.tokens, w.session)
@@ -517,12 +526,74 @@ func (e *events) refresh(session string) bool {
 			e.held[session][run] = ev
 		}
 		delete(e.ended[session], run)
+		declined := e.approvedMCP(session, k, ev.OK)
 		e.mu.Unlock()
 		if !hold {
 			e.emit(session, ev)
 		}
+		if declined {
+			// Where the user was asked: it did not run, and will not.
+			e.emit(session, Event{Type: EventToolEnd, Turn: p.Turn, Call: k, Tool: p.Tool, IsError: true,
+				Output: "not run: you declined it"})
+		}
 	}
 	return true
+}
+
+// approvedMCP keeps an MCP call's approval (key), answered ok, until
+// Claude Code makes the call again (e.mu held). It reports whether the call
+// was declined. An answer not known here (given elsewhere) is taken as
+// approved: a declined call is not made again.
+func (e *events) approvedMCP(session, key string, ok *bool) (declined bool) {
+	turn, call, found := strings.Cut(key, "#"+workflows.MCPCallPrefix)
+	if !found {
+		return false
+	}
+	if ok != nil && !*ok {
+		return true
+	}
+	if slices.Contains(slices.Collect(maps.Values(e.linked[session])), key) {
+		return false // made again already, before it was seen answered
+	}
+	if i := strings.LastIndex(call, "."); i > 0 {
+		if e.allowed[session] == nil {
+			e.allowed[session] = map[string]string{}
+		}
+		e.allowed[session][turn+"/mcp/"+call[:i]] = key
+	}
+	return false
+}
+
+// approvalOf is the approval an MCP call's run (<turn>/mcp/<key>.<n>) was
+// made on, if it was made again after one; it is linked to the run (e.mu
+// held). An approval still listed counts: the run is seen before the
+// answer is.
+func (e *events) approvalOf(session, run string) string {
+	i, j := strings.LastIndex(run, "/mcp/"), strings.LastIndex(run, ".")
+	if i < 0 || j < i {
+		return ""
+	}
+	call := run[:j]
+	key, ok := e.allowed[session][call]
+	if ok {
+		delete(e.allowed[session], call)
+	} else {
+		prefix := run[:i] + "#" + workflows.MCPCallPrefix + run[i+len("/mcp/"):j] + "."
+		for _, k := range slices.Sorted(maps.Keys(e.pending[session])) {
+			if strings.HasPrefix(k, prefix) {
+				key, ok = k, true
+				break
+			}
+		}
+	}
+	if !ok {
+		return ""
+	}
+	if e.linked[session] == nil {
+		e.linked[session] = map[string]string{}
+	}
+	e.linked[session][run] = key
+	return key
 }
 
 // callEnded: the end of the call run has been told. A review of it that
@@ -778,15 +849,34 @@ func (e *events) mcpCall(session, run string, started bool) {
 	if json.Unmarshal(input(info), &in) != nil {
 		return
 	}
+	// Made again on an approval: told under it, where the user was asked.
+	e.mu.Lock()
+	call := e.linked[session][run]
 	if started {
-		e.emit(session, Event{Type: EventToolStart, Turn: turnOf(run), Call: run, Tool: in.Tool, Input: in.Args})
+		if call == "" {
+			call = e.approvalOf(session, run)
+		}
+	} else {
+		delete(e.linked[session], run)
+	}
+	e.mu.Unlock()
+	if call == "" {
+		call = run
+	}
+	if started {
+		e.emit(session, Event{Type: EventToolStart, Turn: turnOf(run), Call: call, Tool: in.Tool, Input: in.Args})
 		return
 	}
-	ev := Event{Type: EventToolEnd, Turn: turnOf(run), Call: run, Tool: in.Tool}
+	ev := Event{Type: EventToolEnd, Turn: turnOf(run), Call: call, Tool: in.Tool}
 	out, err := kairo.Await[workflows.ToolOutput](e.ctx, e.r.K, run)
-	if err != nil {
+	switch {
+	case err != nil:
 		ev.IsError, ev.Output = true, err.Error()
-	} else {
+	case out.Ask != nil:
+		// It did not run: it waits for the user. What the model was told
+		// (to end its turn) is not for them.
+		ev.Output = "waits for your approval"
+	default:
 		ev.IsError = out.IsError
 		if m, err := e.r.Store.Message(e.ctx, out.Message); err == nil && len(m.Parts) > 0 {
 			ev.Output = m.Parts[0].Text

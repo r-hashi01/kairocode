@@ -35,7 +35,7 @@ var BashTool = Def{
 		"timeout_ms":{"type":"integer","description":"Stop the command after this long (default 120000, at most 600000; in the background: default 7200000, at most 86400000)"},
 		"background":{"type":"boolean","description":"Start it in the background and return at once with its id"},
 		"sandbox":{"type":"string","enum":["default","loopback","escalate"],"description":"loopback: in the sandbox, with localhost and Unix sockets in its own TMPDIR; escalate: run outside the sandbox, if the user approves"},
-		"justification":{"type":"string","description":"Why escalation is needed (shown to the user)"}},
+		"justification":{"type":"string","description":"Shown to the user, who decides: in their language and plain words, what the command does, what it reads or changes, and why the task needs it"}},
 		"required":["command"]}`),
 	Effect: Real,
 	Run:    runBash,
