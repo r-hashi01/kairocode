@@ -67,8 +67,14 @@ kairocode sessions                   # このフォルダのセッション
 - `/flow`: フロー（下を参照）
 - `/plugin`、`/skills`、`/mcp`: プラグイン、スキル、MCP サーバー
 - `/log`、`/resume`、`/review`
-- Shift+Tab: 承認のモード（manual・auto・plan）を切り替える
+- Shift+Tab: 承認のモード（manual・auto・plan）を切り替える。入力欄の `>` の色がモードの色になります
 - Esc: 今のターンを止める。Ctrl-C を 2 回で抜ける
+- `@パス`: ファイルを添える。Shift+Enter で改行
+- 画像: Ctrl+V（クリップボードの画像。画像だけなら Cmd+V でも）、または端末に画像のファイルを落とすと、入力欄に `[Image #1]` と入り、メッセージと一緒に送られます。Linux では `wl-paste` か `xclip` が要ります
+- 大きな貼り付け（10 行か 1000 文字を超えるもの）は、入力欄では `[Pasted text #1 +42 lines]` と畳まれ、送るときに元の文に戻ります
+- ターン中に打ったメッセージは、ターンが終わってから送られます
+- 通知: 端末を見ていない（焦点が外れている）ときに、承認や質問で待つとき、ターンが終わったときに、端末の通知（iTerm2・WezTerm・Ghostty・kitty）かベルで知らせます。`~/.config/kairocode/kairocode.json` の `"notify"` で `"unfocused"`（既定）・`"always"`・`"never"` を選べます
+- セッションが保存先の誤りで止まったときは、最後に終わったターンから新しいセッションで自動で続けます（元のセッションの記録は残ります）
 
 ### エディタから使う（ACP）
 

@@ -1469,14 +1469,13 @@ func (m *model) View() tea.View {
 		b.WriteString(m.pickView(w))
 	case m.edit != nil:
 		b.WriteString("\n" + m.editView(w) + "\n")
-		if m.edit.words {
-			line := accent.Render(strings.Repeat("─", w))
-			b.WriteString(line + "\n")
+		if m.edit.words { // the change asked in words: the same input as the conversation's
+			box := m.inputBox(w)
 			if c := m.input.Cursor(); c != nil {
-				c.Y += strings.Count(b.String(), "\n")
+				c.Y += strings.Count(b.String(), "\n") + 1 // the line above the input
 				cursor = c
 			}
-			b.WriteString(m.input.View() + "\n" + line + "\n")
+			b.WriteString(box + "\n")
 		}
 	default:
 		calls := m.calls
