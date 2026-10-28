@@ -1135,6 +1135,9 @@ func (m *model) recall(by int) bool {
 // submit sends text as the next turn.
 func (m *model) submit(text string) tea.Cmd {
 	m.remember(text)
+	// What is left of the last reply is written first, in its place: not
+	// after the message, nor run on into the next reply.
+	m.flushLive()
 	m.block(userLine(text))
 	m.running, m.replyHead = true, ""
 	m.began = time.Now()

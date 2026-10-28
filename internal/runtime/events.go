@@ -118,9 +118,19 @@ type events struct {
 	// under the approval's key, where the user was asked.
 	allowed map[string]map[string]string
 	linked  map[string]map[string]string
-	queue   []item
-	wake    chan struct{}
-	closed  bool
+	// said: by session and turn, the reply's text told since the turn's
+	// last tool call; told: the turns whose reply was told whole at their
+	// end. A turn's tokens come apart from its end (kairo's stream of
+	// chunks, not its observations) and may come after it: what is left
+	// is told before the end, and tokens after it are not told again.
+	said map[string]map[string]string
+	told map[string]map[string]bool
+	// streamed: the turns that told tokens (a flow's or an undo's turn
+	// tells its reply whole, apart).
+	streamed map[string]map[string]bool
+	queue    []item
+	wake     chan struct{}
+	closed   bool
 
 	ctx  context.Context
 	stop context.CancelFunc
@@ -153,6 +163,7 @@ func newEvents(r *Runtime) *events {
 		flows: map[string]map[string]string{}, charts: map[string]*flowchart.Chart{},
 		held: map[string]map[string]Event{}, ended: map[string]map[string]bool{},
 		allowed: map[string]map[string]string{}, linked: map[string]map[string]string{},
+		said: map[string]map[string]string{}, told: map[string]map[string]bool{}, streamed: map[string]map[string]bool{},
 		wake: make(chan struct{}, 1), ctx: ctx, stop: stop, done: make(chan struct{})}
 	go e.run()
 	return e
@@ -249,6 +260,9 @@ func (e *events) drop(w *watcher) {
 		delete(e.ended, w.session)
 		delete(e.allowed, w.session)
 		delete(e.linked, w.session)
+		delete(e.said, w.session)
+		delete(e.told, w.session)
+		delete(e.streamed, w.session)
 		if t := e.tokens[w.session]; t != nil {
 			t.stop()
 			delete(e.tokens, w.session)
@@ -342,6 +356,20 @@ func (e *events) emit(session string, ev Event) {
 	defer e.mu.Unlock()
 	e.seq[session]++
 	ev.Seq = e.seq[session]
+	switch {
+	case ev.Turn == "":
+	case ev.Type == EventToken:
+		if e.said[session] == nil {
+			e.said[session] = map[string]string{}
+		}
+		e.said[session][ev.Turn] += ev.Text
+		if e.streamed[session] == nil {
+			e.streamed[session] = map[string]bool{}
+		}
+		e.streamed[session][ev.Turn] = true
+	case ev.Type == EventToolStart || ev.Type == EventToolEnd:
+		delete(e.said[session], ev.Turn) // the reply is what follows the last call
+	}
 	for w := range e.watchers[session] {
 		if !w.ready {
 			continue
@@ -364,7 +392,13 @@ func (e *events) make(it item) {
 		// not of an agent a flow runs further down (ADR 0003), whose words
 		// are the flow's to use.
 		if strings.Count(it.chunk.RunID, "/") == 3 {
-			e.emit(it.session, Event{Type: EventToken, Turn: turnOf(it.chunk.RunID), Text: string(it.chunk.Data)})
+			turn := turnOf(it.chunk.RunID)
+			e.mu.Lock()
+			told := e.told[it.session][turn]
+			e.mu.Unlock()
+			if !told { // told whole at the turn's end already
+				e.emit(it.session, Event{Type: EventToken, Turn: turn, Text: string(it.chunk.Data)})
+			}
 		}
 	case it.obs != nil:
 		e.observed(it.session, *it.obs)
@@ -744,7 +778,31 @@ func (e *events) turn(session, run string, started bool) {
 			}
 		}
 	}
+	e.tellRest(session, run, ev.Reply)
 	e.emit(session, ev)
+}
+
+// tellRest tells, before the turn's end, what of its reply its tokens have
+// not told yet (they may come after the end), and has the tokens that come
+// after not told. Where what was told is not the reply's start, or the
+// turn told no token (it tells its reply apart), nothing is held back.
+func (e *events) tellRest(session, run, reply string) {
+	e.mu.Lock()
+	said := e.said[session][run]
+	streamed := e.streamed[session][run]
+	delete(e.said[session], run)
+	delete(e.streamed[session], run)
+	whole := streamed && reply != "" && strings.HasPrefix(reply, said)
+	if whole {
+		if e.told[session] == nil {
+			e.told[session] = map[string]bool{}
+		}
+		e.told[session][run] = true
+	}
+	e.mu.Unlock()
+	if whole && len(reply) > len(said) {
+		e.emit(session, Event{Type: EventToken, Turn: run, Text: reply[len(said):]})
+	}
 }
 
 // modelReply: the model's tool calls start.

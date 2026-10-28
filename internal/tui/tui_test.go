@@ -1658,3 +1658,21 @@ func TestQueuedTurnsKeepTheInputStill(t *testing.T) {
 		t.Fatalf("sent %q", a.prompts)
 	}
 }
+
+// The end of a reply that came after its turn ended is written before the
+// next message, as the end of that reply: not after the message, run on
+// into the next reply.
+func TestLateEndOfAReply(t *testing.T) {
+	d, a := start(t, Options{})
+	d.m.running = true
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "First line.\nThe last"})
+	d.send(turnDoneMsg{stop: "end_turn"})
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: " words."})
+	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "Next reply."}}
+	typed(d, "go on")
+	out := d.out()
+	h, i, j, k := strings.Index(out, "The last"), strings.Index(out, "words."), strings.Index(out, "go on"), strings.Index(out, "Next reply.")
+	if h < 0 || i < 0 || j < 0 || k < 0 || !(h < i && i < j && j < k) || strings.Contains(out, "words.Next") {
+		t.Fatalf("out of order:\n%s", out)
+	}
+}
