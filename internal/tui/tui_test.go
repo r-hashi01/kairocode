@@ -360,12 +360,24 @@ func TestQueuedDuringATurn(t *testing.T) {
 	d, a := start(t, Options{})
 	d.m.running = true // a turn under way
 	typed(d, "and then this")
-	if len(a.prompts) != 0 || !strings.Contains(d.out(), "(sent when this turn ends) and then this") {
+	typed(d, "and this too\nover two lines")
+	if len(a.prompts) != 0 || strings.Contains(d.out(), "and then this") {
+		// Not written in the conversation while it waits: it would be
+		// written there twice, the second time when it is sent.
 		t.Fatalf("prompts %q\n%s", a.prompts, d.out())
 	}
+	if v := d.view(); !strings.Contains(v, "and then this") || !strings.Contains(v, "and this too") || !strings.Contains(v, "queued") {
+		t.Fatalf("the queued messages are not shown below:\n%s", v)
+	}
 	d.send(turnDoneMsg{stop: "end_turn"})
-	if len(a.prompts) != 1 || a.prompts[0] != "and then this" {
+	if len(a.prompts) != 2 || a.prompts[0] != "and then this" {
 		t.Fatalf("prompts %q", a.prompts)
+	}
+	if n := strings.Count(d.out(), "and then this"); n != 1 {
+		t.Fatalf("written %d times in the conversation:\n%s", n, d.out())
+	}
+	if v := d.view(); strings.Contains(v, "queued") {
+		t.Fatalf("still shown as queued:\n%s", v)
 	}
 }
 

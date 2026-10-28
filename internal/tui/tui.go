@@ -401,6 +401,20 @@ func fitLines(s string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
+// queuedView is the messages typed while a turn runs, sent when it ends:
+// each on one line, the first few.
+func (m *model) queuedView(w int) string {
+	var b strings.Builder
+	for i, q := range m.queued {
+		if i == 3 {
+			b.WriteString(faint.Render(fmt.Sprintf("  … %d more queued", len(m.queued)-i)) + "\n")
+			break
+		}
+		b.WriteString(faint.Render("  queued ") + you.Render(titleLine(q, max(w-10, 10))) + "\n")
+	}
+	return b.String()
+}
+
 // maxCallsShown is how many running calls the screen shows (the latest).
 const maxCallsShown = 4
 
@@ -1318,8 +1332,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if m.running {
+			// Shown below until it is sent, then written once, as it is
+			// sent: written now too, it would be in the conversation twice.
 			m.queued = append(m.queued, text)
-			m.print(faint.Render("  (sent when this turn ends) ") + you.Render(text))
 			return nil
 		}
 		return m.submit(text)
@@ -1512,6 +1527,9 @@ func (m *model) View() tea.View {
 		}
 		for _, id := range calls {
 			b.WriteString("\n" + accent.Render("⏺ ") + bold.Render(titleLine(m.tools[id], w-3)) + "\n" + faint.Render("  ⎿  running…") + "\n")
+		}
+		if len(m.queued) > 0 {
+			b.WriteString("\n" + m.queuedView(w))
 		}
 		if m.running {
 			b.WriteString("\n" + m.spin.View() + accent.Render(" Working…") +
