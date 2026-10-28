@@ -265,3 +265,61 @@ func TestSandboxEscalatedRunsOutside(t *testing.T) {
 		t.Skip("no sh")
 	}
 }
+
+// A writable directory inside a protected name (a hook's .claude/.cache,
+// ADR 0018) is writable, and only it: the rest of .claude is not, and
+// without it .claude/.cache is not either. Its own protected names stay so.
+func TestSandboxWritableInsideProtected(t *testing.T) {
+	needSandbox(t)
+	root := workspace(t)
+	cache := filepath.Join(root, ".claude", ".cache")
+	if err := os.MkdirAll(filepath.Join(root, ".claude", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bare := Policy{Mode: WorkspaceWrite, Root: root}
+	if _, ok := run(t, bare, "", "echo x > .claude/.cache/last"); ok {
+		t.Error(".claude/.cache was written with no leave")
+	}
+	for _, p := range []Policy{
+		{Mode: WorkspaceWrite, Root: root, Writable: []string{cache}},
+		{Mode: WorkspaceWrite, Root: root, Writable: []string{cache}, Loopback: true, SocketDir: socketDir(t)},
+	} {
+		if out, ok := run(t, p, "", "mkdir -p .claude/.cache/state && echo x > .claude/.cache/state/last"); !ok {
+			t.Errorf("loopback %v: .claude/.cache not written: %s", p.Loopback, out)
+		}
+		scripts := []string{
+			`echo '{"hooks": {}}' > .claude/settings.json`,
+			"echo x > .claude/hooks/stop.sh",
+			"mv .claude/.cache .claude/moved",
+		}
+		if runtime.GOOS != "linux" {
+			// A protected name that does not exist yet: kept out on macOS
+			// alone (ADR 0005).
+			scripts = append(scripts, "mkdir .claude/.cache/.git")
+		}
+		for _, script := range scripts {
+			if _, ok := run(t, p, "", script); ok {
+				t.Errorf("loopback %v: %q went through", p.Loopback, script)
+			}
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, ".claude", "settings.json")); string(b) != "{}" {
+		t.Errorf(".claude/settings.json changed: %q", b)
+	}
+}
+
+func socketDir(t *testing.T) string {
+	t.Helper()
+	dir, done, err := SocketDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(done)
+	return dir
+}

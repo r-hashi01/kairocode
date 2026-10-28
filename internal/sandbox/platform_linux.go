@@ -101,6 +101,15 @@ func platformCommand(ctx context.Context, p Policy, root string, argv []string) 
 		args = append(args, "--bind", w, w)
 	}
 	args = append(args, protect(p, bound)...)
+	// A writable root inside another's protected name (a hook's
+	// .claude/.cache, ADR 0018) is made writable again after it, and its
+	// own protected names kept.
+	for _, w := range bound {
+		if underProtected(p, w, bound) {
+			args = append(args, "--bind", w, w)
+			args = append(args, protect(p, []string{w})...)
+		}
+	}
 	// A writable root binds back what is under it: what is hidden there is
 	// hidden again after it (and after its protected names), and the
 	// command's own directory bound last.
@@ -136,6 +145,22 @@ func protect(p Policy, roots []string) []string {
 		}
 	}
 	return args
+}
+
+// underProtected says whether the writable root w lies in a protected name
+// of another of roots.
+func underProtected(p Policy, w string, roots []string) bool {
+	for _, r := range roots {
+		if r == w {
+			continue
+		}
+		for _, name := range protectedNames(p) {
+			if pp := filepath.Join(r, name); w == pp || strings.HasPrefix(w, pp+"/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // within says whether d is under one of dirs.

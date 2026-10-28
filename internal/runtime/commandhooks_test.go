@@ -469,3 +469,57 @@ func TestHookRepeat(t *testing.T) {
 		}
 	}
 }
+
+// A Claude Code hook in KairoCode's sandbox has this machine's network and
+// .claude/.cache to keep its state in, and no more of .claude (ADR 0018,
+// 8): a check it runs can listen on localhost and note that it passed.
+func TestClaudeHookLoopbackAndCache(t *testing.T) {
+	sandboxtest.Require(t)
+	ws := workspaceWith(t, `{}`)
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	hook := `d="$CLAUDE_PROJECT_DIR/.claude"; echo "loopback=$KAIROCODE_SANDBOX_LOOPBACK" > "$d/.cache/hook"; ` +
+		`if echo '{}' > "$d/settings.local.json"; then touch "$CLAUDE_PROJECT_DIR/escaped"; fi; exit 0`
+	settings, _ := json.Marshal(map[string]any{"hooks": map[string]any{"UserPromptSubmit": []any{
+		map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hook}}}}}})
+	os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), settings, 0o644)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "ok"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "cache", workflows.SessionInput{Dir: ws})
+	n, err := r.Send(ctx, s, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := answerHooks(t, ctx, r, s, n, "Run it in KairoCode's sandbox"); got != 1 {
+		t.Fatalf("asked %d", got)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, ".claude", ".cache", "hook")); err != nil || strings.TrimSpace(string(b)) != "loopback=1" {
+		t.Fatalf("the hook's note: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "escaped")); err == nil {
+		t.Fatal("the hook wrote .claude/settings.local.json")
+	}
+}
+
+func TestHookCache(t *testing.T) {
+	ws := t.TempDir()
+	if _, ok := hookCache(ws); ok {
+		t.Fatal("a cache where there is no .claude")
+	}
+	os.Mkdir(filepath.Join(ws, ".claude"), 0o755)
+	if c, ok := hookCache(ws); !ok || c != filepath.Join(ws, ".claude", ".cache") {
+		t.Fatalf("hookCache = %q %v", c, ok)
+	}
+	// A link, which could lead the hook's writes elsewhere, is not used.
+	other := t.TempDir()
+	linked := t.TempDir()
+	os.Symlink(other, filepath.Join(linked, ".claude"))
+	if _, ok := hookCache(linked); ok {
+		t.Fatal("a .claude that is a link was used")
+	}
+	os.RemoveAll(filepath.Join(ws, ".claude", ".cache"))
+	os.Symlink(other, filepath.Join(ws, ".claude", ".cache"))
+	if _, ok := hookCache(ws); ok {
+		t.Fatal("a .claude/.cache that is a link was used")
+	}
+}

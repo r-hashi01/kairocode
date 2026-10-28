@@ -188,11 +188,24 @@ func (r *Runtime) hookCommandAction(t *kairo.TaskContext, in workflows.HookRunIn
 	}
 	ctx, cancel := context.WithTimeout(t, limit)
 	defer cancel()
-	// In the sandbox; outside it (full access, as bash's escalation) only
-	// where the user said so.
+	// In the sandbox, with this machine's network and, for Claude Code's
+	// hooks, .claude/.cache to keep their state in (ADR 0018, 8); outside
+	// it (full access, as bash's escalation) only where the user said so.
 	policy := sandbox.Policy{Mode: sandbox.WorkspaceWrite, Root: in.Dir}
 	if in.Hook.Mode == workflows.HookOutside {
 		policy = sandbox.Policy{Mode: sandbox.FullAccess, Root: in.Dir}
+	} else {
+		dir, done, err := sandbox.SocketDir()
+		if err != nil {
+			return workflows.HookRunOutput{}, kairo.Retryable(err) // nothing ran
+		}
+		defer done()
+		policy.Loopback, policy.SocketDir = true, dir
+		if in.Hook.Claude != "" {
+			if c, ok := hookCache(in.Dir); ok {
+				policy.Writable = []string{c}
+			}
+		}
 	}
 	cmd, err := sandbox.Command(ctx, policy, in.Dir, "sh", "-c", in.Hook.Command)
 	if err != nil {
@@ -222,6 +235,24 @@ func (r *Runtime) hookCommandAction(t *kairo.TaskContext, in workflows.HookRunIn
 		return workflows.HookRunOutput{}, kairo.Unknown(err) // it ran: what it did is not known
 	}
 	return out, nil
+}
+
+// hookCache is dir's .claude/.cache, where Claude Code's hooks keep their
+// state, made if .claude is there: a hook alone may write it (ADR 0018, 8).
+// Not where either is a link, which could lead the write elsewhere.
+func hookCache(dir string) (string, bool) {
+	claude := filepath.Join(dir, ".claude")
+	if st, err := os.Lstat(claude); err != nil || !st.IsDir() {
+		return "", false
+	}
+	cache := filepath.Join(claude, ".cache")
+	if err := os.Mkdir(cache, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", false
+	}
+	if st, err := os.Lstat(cache); err != nil || !st.IsDir() {
+		return "", false
+	}
+	return cache, true
 }
 
 // hookRepeat is how many runs of the same hook, with the same input, the
