@@ -414,3 +414,58 @@ func TestClaudeHookSandboxed(t *testing.T) {
 		})
 	}
 }
+
+// A Stop hook is told, as Claude Code tells it, whether the turn goes on
+// because a Stop hook stopped it before (stop_hook_active): false the first
+// time, true after. A hook that lets the turn end then is run twice, not
+// until the rounds run out. Outside the sandbox, so as to run in one too.
+func TestStopHookActive(t *testing.T) {
+	ws := workspaceWith(t, `{}`)
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	hook := `in=$(cat); echo "$in" >> "$CLAUDE_PROJECT_DIR/stop.log"; case "$in" in *'"stop_hook_active":true'*) exit 0;; esac; echo 'check first' >&2; exit 2`
+	settings, _ := json.Marshal(map[string]any{"hooks": map[string]any{"Stop": []any{
+		map[string]any{"hooks": []any{map[string]any{"type": "command", "command": hook}}}}}})
+	os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), settings, 0o644)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Text: "done"}, {Text: "checked"}, {Text: "third"}, {Text: "fourth"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "stop", workflows.SessionInput{Dir: ws})
+	n, err := r.Send(ctx, s, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := answerHooks(t, ctx, r, s, n, "Run it outside the sandbox"); got != 1 {
+		t.Fatalf("asked %d", got)
+	}
+	b, err := os.ReadFile(filepath.Join(ws, "stop.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active []bool
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var in struct {
+			Active *bool `json:"stop_hook_active"`
+		}
+		if err := json.Unmarshal([]byte(line), &in); err != nil || in.Active == nil {
+			t.Fatalf("the hook was given %s (%v)", line, err)
+		}
+		active = append(active, *in.Active)
+	}
+	if len(active) != 2 || active[0] || !active[1] {
+		t.Fatalf("stop_hook_active by round: %v, want [false true]", active)
+	}
+	if conv := strings.Join(conversationOf(t, r, s, true), "\n"); !strings.Contains(conv, "checked") || strings.Contains(conv, "third") {
+		t.Fatalf("the turn did not end on the second round:\n%s", conv)
+	}
+}
+
+func TestHookRepeat(t *testing.T) {
+	for run, want := range map[string]int{
+		"s/a/b/0123abcd.0": 0, "s/a/b/0123abcd.2": 2, "s/a.b/c": 0, "s/a/b/x.y": 0, "": 0,
+	} {
+		if got := hookRepeat(run); got != want {
+			t.Errorf("hookRepeat(%q) = %d, want %d", run, got, want)
+		}
+	}
+}

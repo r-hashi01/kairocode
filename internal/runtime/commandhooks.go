@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,6 +173,11 @@ func (r *Runtime) hookCommandAction(t *kairo.TaskContext, in workflows.HookRunIn
 			stdin["prompt"] = m.Text()
 		}
 	}
+	if in.Hook.Claude == "Stop" {
+		// As Claude Code says it: the turn goes on because a Stop hook
+		// stopped it before, and a hook that sees so lets it end.
+		stdin["stop_hook_active"] = hookRepeat(t.RunID) > 0
+	}
 	data, err := json.Marshal(stdin)
 	if err != nil {
 		return workflows.HookRunOutput{}, err
@@ -216,6 +222,24 @@ func (r *Runtime) hookCommandAction(t *kairo.TaskContext, in workflows.HookRunIn
 		return workflows.HookRunOutput{}, kairo.Unknown(err) // it ran: what it did is not known
 	}
 	return out, nil
+}
+
+// hookRepeat is how many runs of the same hook, with the same input, the
+// turn made before this one: the n of the run's id, <turn>/<hash>.<n>,
+// which the SDK counts by input within a workflow (invariant 8). A turn.end
+// hook's input is the same each round, so this is the round, recorded with
+// the turn and the same on resume, with no input of its own to change the
+// turn's calls.
+func hookRepeat(run string) int {
+	i := strings.LastIndexByte(run, '.')
+	if i < 0 || i < strings.LastIndexByte(run, '/') {
+		return 0
+	}
+	n, err := strconv.Atoi(run[i+1:])
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // hookNoteAction is a tool call's result with what a hook that ran after
