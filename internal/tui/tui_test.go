@@ -1485,55 +1485,6 @@ func TestGoOnFromAFailedSession(t *testing.T) {
 	}
 }
 
-// While a turn runs, the screen below the conversation does not get
-// shorter: a line being written that goes up into the scrollback, a tool
-// call that ends, would pull the input up, and the next push it down again
-// (it flickers). The turn ended, it may.
-func TestTurnKeepsTheInputStill(t *testing.T) {
-	d, _ := start(t, Options{})
-	d.m.running = true
-	last := strings.Count(d.view(), "\n")
-	step := func(what string, u updateMsg) {
-		t.Helper()
-		d.send(u)
-		h := strings.Count(d.view(), "\n")
-		if h < last {
-			t.Fatalf("after %s the screen went from %d lines to %d:\n%s", what, last, h, d.view())
-		}
-		last = h
-	}
-	for i := range 3 {
-		step("a part of a line", updateMsg{Kind: "agent_message_chunk", Text: fmt.Sprintf("line %d, a long one that", i)})
-		step("its end", updateMsg{Kind: "agent_message_chunk", Text: " ends here.\n"})
-		step("a call", updateMsg{Kind: "tool_call", ToolCallID: fmt.Sprint("c", i), Title: "bash make test", Status: "in_progress"})
-		step("its end", updateMsg{Kind: "tool_call_update", ToolCallID: fmt.Sprint("c", i), Status: "completed"})
-	}
-	d.send(turnDoneMsg{stop: "end_turn"})
-	if h := strings.Count(d.view(), "\n"); h >= last {
-		t.Fatalf("the turn ended and the screen kept its %d lines", h)
-	}
-}
-
-// A question in the turn, taller than the input's screen, does not leave
-// its height behind once answered.
-func TestQuestionLeavesNoGap(t *testing.T) {
-	d, _ := start(t, Options{})
-	d.m.running = true
-	d.send(updateMsg{Kind: "agent_message_chunk", Text: "Looking.\n"})
-	before := strings.Count(d.view(), "\n")
-	reply := make(chan string, 1)
-	d.send(askMsg{req: acp.PermissionRequest{ToolCallID: "c1", Title: "bash make test", Options: []acp.PermissionOption{
-		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
-	if h := strings.Count(d.view(), "\n"); h <= before {
-		t.Fatalf("the question is not taller (%d, %d)", h, before)
-	}
-	d.send(key("enter"))
-	<-reply
-	if h := strings.Count(d.view(), "\n"); h > before+3 {
-		t.Fatalf("after the question the screen is %d lines, from %d:\n%s", h, before, d.view())
-	}
-}
-
 // A call whose title is a command of many lines (a heredoc) is one line on
 // the screen while it runs and when it ends; many calls at once show the
 // latest. The screen below the conversation stays well under the
@@ -1635,30 +1586,6 @@ func TestTakeBackQueued(t *testing.T) {
 	}
 }
 
-// A turn that ends with messages waiting goes on into the next: the screen
-// below keeps its height then, not pulling the input up at each message
-// sent. Only when nothing more waits may it get shorter.
-func TestQueuedTurnsKeepTheInputStill(t *testing.T) {
-	d, a := start(t, Options{})
-	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "done"}}
-	d.m.running = true
-	for _, q := range []string{"one", "two", "three"} {
-		typed(d, q)
-	}
-	last := strings.Count(d.view(), "\n")
-	a.onPrompt = func() {
-		d.m.printing = false // what was written has been written, as it soon is
-		if h := strings.Count(d.view(), "\n"); h < last && len(d.m.queued) > 0 {
-			t.Errorf("the screen went from %d lines to %d with %d still waiting:\n%s", last, h, len(d.m.queued), d.view())
-		}
-		last = max(last, strings.Count(d.view(), "\n"))
-	}
-	d.send(turnDoneMsg{stop: "end_turn"})
-	if len(a.prompts) != 3 {
-		t.Fatalf("sent %q", a.prompts)
-	}
-}
-
 // The end of a reply that came after its turn ended is written before the
 // next message, as the end of that reply: not after the message, run on
 // into the next reply.
@@ -1691,4 +1618,68 @@ func TestQueuedShowsTheMessage(t *testing.T) {
 	if !strings.Contains(v, "… +6 lines") || strings.Contains(v, "  end\n") {
 		t.Fatalf("the long message:\n%s", v)
 	}
+}
+
+// The input does not move up, whatever the screen below the conversation
+// shows: it gets shorter only by the lines written above it meanwhile
+// (which push it down as much), and at most to half the terminal. One rule
+// for every screen (a reply streaming, calls, a question and its answer,
+// a turn's end, messages waiting, lines typed and taken away).
+func TestTheInputNeverMovesUp(t *testing.T) {
+	d, a := start(t, Options{})
+	printed := func() int {
+		n := 0
+		for _, p := range d.printed {
+			n += strings.Count(p, "\n") + 1
+		}
+		return n
+	}
+	height := func() int { return strings.Count(d.m.View().Content, "\n") + 1 }
+	last, lastPrinted := height(), printed()
+	step := func(what string, msg tea.Msg) {
+		t.Helper()
+		if msg != nil {
+			d.send(msg)
+		}
+		h, p := height(), printed()
+		if limit := max(d.m.height/2, 8); h+(p-lastPrinted) < min(last, limit) {
+			t.Fatalf("%s: the screen went from %d lines to %d with %d written above: the input moved up\n%s",
+				what, last, h, p-lastPrinted, d.m.View().Content)
+		}
+		last, lastPrinted = h, p
+	}
+	allow := []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}
+
+	d.m.input.SetValue("one\ntwo\nthree")
+	step("lines typed", nil)
+	d.m.input.SetValue("one")
+	step("lines taken away", nil)
+	d.m.input.Reset()
+	d.m.running = true
+	step("a turn starts", nil)
+	for i := range 3 {
+		step("a part of a line", updateMsg{Kind: "agent_message_chunk", Text: fmt.Sprintf("line %d, a long one that", i)})
+		step("its end", updateMsg{Kind: "agent_message_chunk", Text: " ends here.\n"})
+		step("a call", updateMsg{Kind: "tool_call", ToolCallID: fmt.Sprint("r", i), Title: "read x", Status: "in_progress"})
+		step("its end", updateMsg{Kind: "tool_call_update", ToolCallID: fmt.Sprint("r", i), Status: "completed"})
+	}
+	step("a call", updateMsg{Kind: "tool_call", ToolCallID: "c1", Title: "bash make test", Status: "in_progress"})
+	reply := make(chan string, 1)
+	step("a question", askMsg{req: acp.PermissionRequest{ToolCallID: "c1", Title: "bash make test", Options: allow}, reply: reply})
+	step("its answer", key("enter"))
+	<-reply
+	step("the call's end", updateMsg{Kind: "tool_call_update", ToolCallID: "c1", Status: "completed", Text: "ok"})
+	for _, q := range []string{"and then this", "and this", "and this too"} {
+		d.m.input.SetValue(q)
+		step("a message typed", key("enter"))
+	}
+	a.turn = []acp.Update{{Kind: "agent_message_chunk", Text: "Done."}}
+	a.onPrompt = func() { step("a waiting message sent", nil) } // each turn they go on into
+	step("the turn's end, the waiting messages sent", turnDoneMsg{stop: "end_turn"})
+	a.onPrompt = nil
+	step("all ended", nil)
+	reply = make(chan string, 1)
+	step("a question with no turn", askMsg{req: acp.PermissionRequest{ToolCallID: "c2", Title: "write notes.txt", Options: allow}, reply: reply})
+	step("its answer", key("down"))
+	step("its answer", key("enter"))
 }

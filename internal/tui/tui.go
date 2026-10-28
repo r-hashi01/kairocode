@@ -300,10 +300,9 @@ type model struct {
 	// the height it drew, and a screen that shrinks at that moment leaves
 	// lines of the old one behind.
 	shown int
-	// floor: the tallest the screen below the conversation has been in the
-	// turn under way. It does not get shorter while the turn runs: the
-	// input would move up and down as lines go up and calls end (flicker).
-	floor int
+	// held: the height the screen below the conversation keeps; absorbed:
+	// the lines written above it since it was last drawn (see steady).
+	held, absorbed int
 }
 
 func newModel(ctx context.Context, a Agent, o Options) *model {
@@ -446,6 +445,27 @@ func queuedLines(text string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
+// steady says how many blank lines to draw above the screen below the
+// conversation, n lines high, so that the input does not move up.
+//
+// That screen is drawn from a fixed top: drawn shorter, all of it moves up,
+// the input with it (as lines go up into the conversation, calls end, a
+// question is answered, lines typed are taken away). So it gets shorter
+// only by the lines written above it meanwhile, which push it down as much;
+// the rest is blank lines at its top, taken up by the lines written next.
+// One rule for every screen. It keeps at most half the terminal: a gap
+// higher than that would be worse than the move.
+func (m *model) steady(n int) int {
+	m.held = max(n, m.held-m.absorbed)
+	m.absorbed = 0
+	m.held = max(n, min(m.held, max(m.height/2, 8)))
+	low := m.held
+	if m.printing { // what is written has not pushed it down yet
+		low = max(low, m.shown)
+	}
+	return max(low-n, 0)
+}
+
 // maxCallsShown is how many running calls the screen shows (the latest).
 const maxCallsShown = 4
 
@@ -520,6 +540,7 @@ func (m *model) flush() tea.Cmd {
 	}
 	text := strings.Join(m.toPrint, "\n")
 	m.toPrint, m.printing = nil, true
+	m.absorbed += strings.Count(text, "\n") + 1
 	return tea.Sequence(tea.Println(text), func() tea.Msg { return printedMsg{} })
 }
 
@@ -692,7 +713,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case goneOnMsg:
 		if msg.err != nil {
-			m.running, m.floor = false, 0
+			m.running = false
 			m.print(bad.Render("  ⎿  Could not go on in a new session: " + shortError(msg.err.Error())))
 			return nil
 		}
@@ -711,9 +732,6 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			return m.goOn(msg)
 		}
 		m.running = false
-		if len(m.queued) == 0 { // the last: the screen may get shorter now
-			m.floor = 0
-		}
 		m.flushLive()
 		m.endFlow()
 		m.inReply = false
@@ -1601,21 +1619,12 @@ func (m *model) View() tea.View {
 	}
 	b.WriteString(m.status(w))
 	content := fitLines(b.String(), w)
-	// Kept for the input's own screen: a question (taller) does not leave
-	// its height behind as blank lines.
-	plain := len(m.asks) == 0 && m.plugins == nil && m.runs == nil && m.pick == nil && m.edit == nil
-	low := 0
-	if plain {
-		low = m.floor
-	}
-	if m.printing {
-		low = max(low, m.shown)
-	}
-	if n := strings.Count(content, "\n") + 1; n < low && !m.full() {
-		pad := low - n
-		content = strings.Repeat("\n", pad) + content
-		if cursor != nil {
-			cursor.Y += pad
+	if !m.full() {
+		if pad := m.steady(strings.Count(content, "\n") + 1); pad > 0 {
+			content = strings.Repeat("\n", pad) + content
+			if cursor != nil {
+				cursor.Y += pad
+			}
 		}
 	}
 	// Never taller than the terminal: what goes above its top cannot be
@@ -1638,11 +1647,6 @@ func (m *model) View() tea.View {
 		return v // the conversation's screen keeps its height (shown)
 	}
 	m.shown = strings.Count(content, "\n") + 1
-	if m.running && plain {
-		// Kept up to half the screen: what was taller (many lines typed)
-		// may shrink, not leave a gap as high as the screen.
-		m.floor = max(m.floor, min(m.shown, max(m.height/2, 8)))
-	}
 	v := tea.NewView(content)
 	v.Cursor, v.ReportFocus = cursor, true
 	return v
