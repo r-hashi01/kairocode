@@ -300,9 +300,8 @@ type model struct {
 	// the height it drew, and a screen that shrinks at that moment leaves
 	// lines of the old one behind.
 	shown int
-	// held: the height the screen below the conversation keeps; absorbed:
-	// the lines written above it since it was last drawn (see steady).
-	held, absorbed int
+	// held: the height the screen below the conversation keeps (steady).
+	held int
 }
 
 func newModel(ctx context.Context, a Agent, o Options) *model {
@@ -448,22 +447,21 @@ func queuedLines(text string, w int) string {
 // steady says how many blank lines to draw above the screen below the
 // conversation, n lines high, so that the input does not move up.
 //
-// That screen is drawn from a fixed top: drawn shorter, all of it moves up,
-// the input with it (as lines go up into the conversation, calls end, a
-// question is answered, lines typed are taken away). So it gets shorter
-// only by the lines written above it meanwhile, which push it down as much;
-// the rest is blank lines at its top, taken up by the lines written next.
-// One rule for every screen. It keeps at most half the terminal: a gap
-// higher than that would be worse than the move.
+// That screen stays where it is on the terminal: lines written above it do
+// not push it down (the terminal scrolls up to make room for them:
+// bubbletea's insertAbove), and drawn shorter, its bottom (the input, the
+// status line) moves up. So it does not get shorter: what it would lose is
+// blank lines at its top. One rule for every screen (a reply streaming,
+// calls, a question and its answer, a turn's end, lines typed and taken
+// away). It keeps at most half the terminal: a gap higher than that would
+// be worse than the move; a new size of the terminal starts it again.
 func (m *model) steady(n int) int {
-	m.held = max(n, m.held-m.absorbed)
-	m.absorbed = 0
 	m.held = max(n, min(m.held, max(m.height/2, 8)))
 	low := m.held
-	if m.printing { // what is written has not pushed it down yet
+	if m.printing { // lines are placed by the height drawn: not shrunk under them
 		low = max(low, m.shown)
 	}
-	return max(low-n, 0)
+	return low - n
 }
 
 // maxCallsShown is how many running calls the screen shows (the latest).
@@ -540,7 +538,6 @@ func (m *model) flush() tea.Cmd {
 	}
 	text := strings.Join(m.toPrint, "\n")
 	m.toPrint, m.printing = nil, true
-	m.absorbed += strings.Count(text, "\n") + 1
 	return tea.Sequence(tea.Println(text), func() tea.Msg { return printedMsg{} })
 }
 
@@ -558,6 +555,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		if msg.Width > 0 { // a terminal that says its size
 			m.width = msg.Width
 			m.input.SetWidth(max(msg.Width-2, 10))
+			m.held = 0 // drawn again whole: it starts again
 		}
 		m.height = msg.Height
 		return nil

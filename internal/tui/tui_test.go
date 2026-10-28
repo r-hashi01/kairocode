@@ -1621,32 +1621,26 @@ func TestQueuedShowsTheMessage(t *testing.T) {
 }
 
 // The input does not move up, whatever the screen below the conversation
-// shows: it gets shorter only by the lines written above it meanwhile
-// (which push it down as much), and at most to half the terminal. One rule
-// for every screen (a reply streaming, calls, a question and its answer,
-// a turn's end, messages waiting, lines typed and taken away).
+// shows: that screen does not get shorter (up to half the terminal). Lines
+// written above it do not push it down: the terminal scrolls up to make
+// room for them, and it stays where it was (bubbletea's insertAbove). One
+// rule for every screen (a reply streaming, calls, a question and its
+// answer, a turn's end, messages waiting, lines typed and taken away).
 func TestTheInputNeverMovesUp(t *testing.T) {
 	d, a := start(t, Options{})
-	printed := func() int {
-		n := 0
-		for _, p := range d.printed {
-			n += strings.Count(p, "\n") + 1
-		}
-		return n
-	}
 	height := func() int { return strings.Count(d.m.View().Content, "\n") + 1 }
-	last, lastPrinted := height(), printed()
+	last := height()
 	step := func(what string, msg tea.Msg) {
 		t.Helper()
 		if msg != nil {
 			d.send(msg)
 		}
-		h, p := height(), printed()
-		if limit := max(d.m.height/2, 8); h+(p-lastPrinted) < min(last, limit) {
-			t.Fatalf("%s: the screen went from %d lines to %d with %d written above: the input moved up\n%s",
-				what, last, h, p-lastPrinted, d.m.View().Content)
+		h := height()
+		if limit := max(d.m.height/2, 8); h < min(last, limit) {
+			t.Fatalf("%s: the screen went from %d lines to %d: the input moved up\n%s",
+				what, last, h, d.m.View().Content)
 		}
-		last, lastPrinted = h, p
+		last = h
 	}
 	allow := []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}
 
