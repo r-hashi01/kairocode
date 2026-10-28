@@ -54,6 +54,10 @@ type fakeClaudeStart struct {
 	System  string  `json:"system,omitempty"`
 	// Images are the images of a stream-json input, "<type>:<bytes>".
 	Images []string `json:"images,omitempty"`
+	// ToolTimeout is MCP_TOOL_TIMEOUT; ServerTimeout, KairoCode's server's
+	// timeout in --mcp-config (ms).
+	ToolTimeout   string `json:"tool_timeout,omitempty"`
+	ServerTimeout int64  `json:"server_timeout,omitempty"`
 }
 
 // fakeStreamInput reads the user message of a stream-json input, as
@@ -131,6 +135,13 @@ func fakeClaude() {
 		p, _ := json.Marshal(map[string]any{"type": "user", "prompt": start.Prompt})
 		tf.Write(append(p, '\n'))
 		tf.Close()
+	}
+	start.ToolTimeout = os.Getenv("MCP_TOOL_TIMEOUT")
+	var timeouts struct {
+		MCPServers map[string]struct{ Timeout int64 } `json:"mcpServers"`
+	}
+	if json.Unmarshal([]byte(mcpConfig), &timeouts) == nil {
+		start.ServerTimeout = timeouts.MCPServers[MCPServerName].Timeout
 	}
 	logPath := os.Getenv("KC_FAKE_CLAUDE_LOG")
 	prev, _ := os.ReadFile(logPath)
@@ -767,5 +778,28 @@ func TestClaudeEngineSameCallAfterARunThatEnded(t *testing.T) {
 	}
 	if got := countRuns(t, e); got != 3 {
 		t.Fatalf("the tool ran %d times, want 3 (n=1 twice, n=9 once)", got)
+	}
+}
+
+// Claude Code waits for a call of KairoCode's tools as long as the tool
+// may run (bash_wait: a day), not its own default of a minute, after which
+// it gave up on a long command whose result then never reached the model.
+func TestClaudeWaitsForLongCalls(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Reply: "ok"})
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "long", workflows.SessionInput{Dir: repo(t)})
+	n, _ := r.Send(ctx, s, "hi")
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	st := e.starts(t)
+	want := claudeToolTimeout.Milliseconds()
+	if len(st) != 1 || st[0].ToolTimeout != fmt.Sprint(want) || st[0].ServerTimeout != want {
+		t.Fatalf("claude was started as %+v, want timeouts of %d ms", st, want)
+	}
+	if want < tools.JobMaxTimeout.Milliseconds() {
+		t.Fatalf("Claude Code waits %d ms, less than bash_wait may (%v)", want, tools.JobMaxTimeout)
 	}
 }

@@ -17,11 +17,13 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/store"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -58,6 +60,24 @@ func claudeEnv() []string {
 		env = append(env, kv)
 	}
 	return env
+}
+
+// claudeToolTimeout is how long Claude Code waits for a call of
+// KairoCode's tools: as long as one may run (bash_wait waits up to a day,
+// ADR 0028), and a minute more. Its own default is a minute, after which
+// it gave up on the call and the model never had its result.
+const claudeToolTimeout = tools.JobMaxTimeout + time.Minute
+
+// claudeTurnEnv is the environment of a turn's claude process: claudeEnv,
+// and how long it waits for KairoCode's tools (MCP_TOOL_TIMEOUT, unless the
+// user set it longer).
+func claudeTurnEnv() []string {
+	env := claudeEnv()
+	want := claudeToolTimeout.Milliseconds()
+	if v, err := strconv.ParseInt(os.Getenv("MCP_TOOL_TIMEOUT"), 10, 64); err == nil && v >= want {
+		return env
+	}
+	return append(env, fmt.Sprintf("MCP_TOOL_TIMEOUT=%d", want))
 }
 
 // claudeTranscript is where Claude Code keeps session sid, or "" if it has no
@@ -212,7 +232,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	}
 	defer closeMCP()
 	mcpConfig, err := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		MCPServerName: map[string]any{"type": "http", "url": url},
+		MCPServerName: map[string]any{"type": "http", "url": url, "timeout": claudeToolTimeout.Milliseconds()},
 	}})
 	if err != nil {
 		return workflows.ClaudeTurnOutput{}, err
@@ -247,7 +267,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	}
 	cmd := exec.CommandContext(t, r.cfg.ClaudePath, args...)
 	cmd.Dir = in.Dir
-	cmd.Env = claudeEnv()
+	cmd.Env = claudeTurnEnv()
 	cmd.Stdin = nil // /dev/null: claude -p otherwise waits for input
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input) // one message; the end of it ends the input

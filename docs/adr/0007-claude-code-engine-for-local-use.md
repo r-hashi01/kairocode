@@ -139,3 +139,9 @@ Anthropic の文書には、次のように書かれています（2026-10-09 �
 - 前は、別の実行であれば必ず聞いていました。KairoCode で動かす Claude Code は、承認に答えるたびに新しい実行になるので、同じターンの中で同じコマンドをもう一度呼ぶと、落ちていないのに聞かれていました（利用者の指摘、2026-10-28）。
 - 結果を返して終えた実行の印（その実行の token）を、`kc_message` の種類 `mcp-run-ended` に 1 度だけ書きます（フックの答えと同じ書き方。保存の形式は変えない）。書く前に落ちたら印は無く、今までどおり聞きます。
 - テスト: `TestClaudeEngineSameCallAfterARunThatEnded`。`TestClaudeEngineRepeatAfterInterruptionAsks`、`TestClaudeEngineApprovalServesOneRun`（途切れた後は聞く）はそのまま通ります。
+
+## 追記（2026-10-28、Claude Code が KairoCode のツールを待つ時間）
+
+- Claude Code は、KairoCode の MCP の呼び出しを既定で 1 分しか待たず、それを過ぎると「The operation timed out.」で諦めていました（2026-10-28 に、`sleep 58` は通り `sleep 70` は切れることで確かめた）。KairoCode の側ではコマンドは動き続けますが、結果はモデルに届きません。長いテスト、`bash_wait`（ADR 0028。最大 1 日待つ）が、Claude Code のエンジンでは使えていませんでした。
+- ターンの `claude` を起動するとき、待つ時間を `bash_wait` の上限（1 日）と 1 分にします。`--mcp-config` の KairoCode のサーバーの `timeout` と、環境変数 `MCP_TOOL_TIMEOUT` の両方で渡します（利用者がもっと長く設定していれば、そのまま）。サーバーの `timeout` は、何も返さない間の待ち（既定 5 分）も同じだけ延ばします。
+- テスト: `TestClaudeWaitsForLongCalls`（偽の `claude` が受け取った値）。本物の `claude` での確かめは、デーモンが新しいビルドに入れ替わった後。
