@@ -48,7 +48,12 @@ func of(l string) string {
 }
 
 // configured is "language" in the user's kairocode.json ("" if none).
-func configured() string {
+func configured() string { return UserSetting("language") }
+
+// UserSetting is the string setting name in the user's kairocode.json
+// ($XDG_CONFIG_HOME/kairocode, else ~/.config/kairocode); "" if none.
+// Only the user's: a project does not set what is the reader's.
+func UserSetting(name string) string {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -61,13 +66,15 @@ func configured() string {
 	if err != nil {
 		return ""
 	}
-	var c struct {
-		Language string `json:"language"`
-	}
+	var c map[string]json.RawMessage
 	if json.Unmarshal(b, &c) != nil {
 		return ""
 	}
-	return c.Language
+	var v string
+	if json.Unmarshal(c[name], &v) != nil {
+		return ""
+	}
+	return v
 }
 
 // phrase is a phrase of a review and what it is in a language.

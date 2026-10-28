@@ -192,6 +192,10 @@ type model struct {
 	// images: the images put in the input, by the label that stands for
 	// them there ([Image #1]), for as long as the UI runs.
 	images map[string]string
+	// notif tells the terminal when the UI waits and when a turn ends
+	// (ADR 0032); replyHead: the first line of the turn's reply, for it.
+	notif     notifier
+	replyHead string
 	// tried: reviews of flows being tried (ADR 0017), by their call, to
 	// go on with when the review comes back.
 	tried map[string]*review
@@ -294,7 +298,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
 	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
-		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage, images: map[string]string{}}
+		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage, images: map[string]string{}, notif: newNotifier()}
 	m.restyle()
 	return m
 }
@@ -556,6 +560,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 		}
 		m.asks = append(m.asks, a)
+		return m.notif.tell(waitingText(msg.req.Title), true)
+	case tea.FocusMsg:
+		m.notif.focus, m.notif.known = true, true
+		return nil
+	case tea.BlurMsg:
+		m.notif.focus, m.notif.known = false, true
 		return nil
 	case withdrawnMsg:
 		for i, a := range m.asks {
@@ -598,6 +608,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			next := m.queued[0]
 			m.queued = m.queued[1:]
 			cmds = append(cmds, m.submit(next))
+		} else if m.ctx.Err() == nil { // the last: the user is told (ADR 0032)
+			what, failed := m.replyHead, msg.err != nil
+			if failed {
+				what = shortError(msg.err.Error())
+			}
+			cmds = append(cmds, m.notif.tell(doneText(what, failed), time.Since(m.began) > notifyAfter))
 		}
 		return tea.Batch(cmds...)
 	case usageMsg:
@@ -882,6 +898,9 @@ func (m *model) streamReply(text string) {
 		for ; m.blanks > 0; m.blanks-- {
 			out = append(out, "")
 		}
+		if m.replyHead == "" && !m.fence {
+			m.replyHead = strings.TrimSpace(line)
+		}
 		out = append(out, m.replyLine(line, !m.inReply && len(out) == 0))
 	}
 	if len(out) == 0 {
@@ -1008,7 +1027,7 @@ func (m *model) recall(by int) bool {
 func (m *model) submit(text string) tea.Cmd {
 	m.remember(text)
 	m.block(userLine(text))
-	m.running = true
+	m.running, m.replyHead = true, ""
 	m.began = time.Now()
 	if m.o.Dir != "" {
 		m.flowsBefore = readFlows(m.o.Dir)
@@ -1435,12 +1454,12 @@ func (m *model) View() tea.View {
 	}
 	if m.full() {
 		v := tea.NewView(content)
-		v.Cursor, v.AltScreen = cursor, true
+		v.Cursor, v.AltScreen, v.ReportFocus = cursor, true, true
 		return v // the conversation's screen keeps its height (shown)
 	}
 	m.shown = strings.Count(content, "\n") + 1
 	v := tea.NewView(content)
-	v.Cursor = cursor
+	v.Cursor, v.ReportFocus = cursor, true
 	return v
 }
 
