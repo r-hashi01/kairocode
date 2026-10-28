@@ -71,6 +71,9 @@ type Options struct {
 	// Plugin is how to run kairocode plugin (its argv up to the verb), for
 	// /plugin connect and disconnect, which ask for credentials here.
 	Plugin []string
+	// Data is the data directory: images pasted from the clipboard are
+	// kept in its pasted/ until sent (ADR 0026).
+	Data string
 }
 
 // UI is a running terminal UI.
@@ -184,6 +187,8 @@ func rejectID(options []acp.PermissionOption) string {
 }
 
 type model struct {
+	// clip reads the clipboard's image (clipboardImage; tests put theirs).
+	clip func(context.Context) ([]byte, error)
 	// tried: reviews of flows being tried (ADR 0017), by their call, to
 	// go on with when the review comes back.
 	tried map[string]*review
@@ -281,7 +286,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
 	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
-		tried: map[string]*review{}, flowTop: -1}
+		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage}
 	m.restyle()
 	return m
 }
@@ -599,8 +604,15 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return cmd
 	case tea.KeyPressMsg:
 		return m.key(msg)
+	case pastedMsg:
+		return m.pasted(msg)
 	case tea.PasteMsg:
 		if m.state == stateReady && len(m.asks) == 0 {
+			if msg.Content == "" {
+				// Cmd+V with only an image on the clipboard: the terminal
+				// sends nothing, so the image is read from it (ADR 0026).
+				return m.pasteImage(nil)
+			}
 			if p := imagePath(msg.Content); p != "" {
 				// An image dropped on the terminal: sent with the message.
 				msg.Content = mentionOf(p) + " "
@@ -1063,6 +1075,10 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.nextMode()
 	case "ctrl+e": // the next effort
 		return m.nextEffort()
+	case "ctrl+v": // the clipboard's image, else its text (ADR 0026)
+		if m.state == stateReady && m.clip != nil && m.pastedDir() != "" {
+			return m.pasteImage(&k)
+		}
 	case "tab":
 		if c := m.completions(); len(c) > 0 {
 			m.input.SetValue(c[min(m.compSel, len(c)-1)].value)
