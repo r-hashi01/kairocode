@@ -1394,3 +1394,41 @@ func TestMentions(t *testing.T) {
 		t.Fatalf("prompts %q, files %q", a.prompts, a.files)
 	}
 }
+
+// A reply is written above the screen line by line as it streams, a code
+// block too: the screen keeps its height while a long reply is written,
+// so its lines do not move at each word (they flicker). Blank lines are
+// kept between lines, not before or after the reply; the code keeps its
+// colour across the lines written apart.
+func TestStreamingKeepsTheScreenStill(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "\n\nHere:\n\n```go\n"})
+	height := strings.Count(d.view(), "\n")
+	var src strings.Builder
+	for i := range 60 {
+		line := fmt.Sprintf("fmt.Println(%d)\n", i)
+		src.WriteString(line)
+		for _, part := range []string{line[:5], line[5:]} { // a line in two chunks
+			d.send(updateMsg{Kind: "agent_message_chunk", Text: part})
+			if h := strings.Count(d.view(), "\n"); h > height+1 {
+				t.Fatalf("at line %d the screen is %d lines, from %d:\n%s", i, h, height, d.view())
+			}
+		}
+	}
+	if !strings.Contains(d.out(), "fmt.Println(58)") {
+		t.Fatalf("the code's lines were not written as they ended:\n%s", d.out())
+	}
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: "```\n\nDone.\n\n"})
+	d.m.flushLive()
+	d.send(updateMsg{Kind: "agent_message_chunk", Text: ""}) // Update flushes
+	out := d.out()
+	whole := plain(reply("Here:\n\n```go\n"+src.String()+"```\n\nDone.", d.m.width, true))
+	if !strings.HasSuffix(out, "\n\n"+whole) {
+		t.Fatalf("written line by line, it differs from the whole:\n%s\nwant\n%s", out, whole)
+	}
+	// In colour, a line of the code is as the whole renders it.
+	d.m.fence = true
+	if got, want := d.m.replyLine("x := 1", false), reply("```\nx := 1", d.m.width, false); got != want {
+		t.Fatalf("a code line: %q, want %q", got, want)
+	}
+}

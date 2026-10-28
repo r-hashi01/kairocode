@@ -217,9 +217,14 @@ type model struct {
 	input textarea.Model
 	spin  spinner.Model
 	width int
-	live  string // the reply being written
-	asks  []*ask
-	tools map[string]string // tool call id: title
+	live  string // the reply's line being written
+	// fence: the reply's lines written so far leave a code block open;
+	// blanks: blank lines of the reply not written yet (a blank line is
+	// written only before what follows it).
+	fence  bool
+	blanks int
+	asks   []*ask
+	tools  map[string]string // tool call id: title
 	// running tool calls, in order, written when they end (their colour
 	// tells how); notes: what was answered about one meanwhile.
 	calls   []string
@@ -639,14 +644,13 @@ func (m *model) take(u acp.Update) {
 			m.flowText = tail(m.flowText+u.Text, 400)
 		}
 		m.live += u.Text
-		// Whole paragraphs go into the scrollback as they end (not inside
-		// a fenced block: it is rendered whole).
-		for i := strings.LastIndex(m.live, "\n\n"); i >= 0; i = strings.LastIndex(m.live[:i], "\n\n") {
-			if done := m.live[:i]; strings.Count(done, "```")%2 == 0 {
-				m.live = m.live[i+2:]
-				m.printReply(done)
-				break
-			}
+		// Each line goes into the scrollback as it ends; only the line
+		// being written is drawn below. Drawn, a reply that grows (a long
+		// code block, say) would move every line of the screen at each
+		// word, and flicker.
+		if i := strings.LastIndexByte(m.live, '\n'); i >= 0 {
+			m.streamReply(m.live[:i])
+			m.live = m.live[i+1:]
 		}
 	case "user_message_chunk": // a session taken up again: what was said
 		m.flushLive()
@@ -850,25 +854,50 @@ func (m *model) noteCall(id, note string) {
 
 // flushLive moves the reply being written into the scrollback.
 func (m *model) flushLive() {
-	if strings.TrimSpace(m.live) != "" {
-		m.printReply(m.live)
-	}
-	m.live = ""
+	m.streamReply(m.live)
+	m.live, m.fence, m.blanks = "", false, 0
 }
 
-// printReply writes a part of the reply: the first with the mark, as a
-// block of its own; the next ones under it.
-func (m *model) printReply(text string) {
-	text = strings.Trim(text, "\n")
-	if strings.TrimSpace(text) == "" {
+// streamReply writes whole lines of the reply above the screen, rendered
+// as the code block they are in (or not) says: the first with the mark, as
+// a block of its own. Blank lines are kept until a line follows them, so a
+// reply neither begins nor ends with one.
+func (m *model) streamReply(text string) {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			m.fence = !m.fence
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			if m.inReply || len(out) > 0 {
+				m.blanks++
+			}
+			continue
+		}
+		for ; m.blanks > 0; m.blanks-- {
+			out = append(out, "")
+		}
+		out = append(out, m.replyLine(line, !m.inReply && len(out) == 0))
+	}
+	if len(out) == 0 {
 		return
 	}
 	if m.inReply {
-		m.print("\n" + reply(text, m.width, false))
+		m.print(strings.Join(out, "\n"))
 		return
 	}
-	m.block(reply(text, m.width, true))
+	m.block(strings.Join(out, "\n"))
 	m.inReply = true
+}
+
+// replyLine is one line of the reply, rendered (wrapped, it may be more),
+// in the code block the lines before it left open or not.
+func (m *model) replyLine(line string, first bool) string {
+	if m.fence {
+		line = "```\n" + line
+	}
+	return reply(line, m.width, first)
 }
 
 // reply is the model's text, rendered, and marked as claude marks it when
@@ -1317,9 +1346,12 @@ func (m *model) View() tea.View {
 	var b strings.Builder
 	w := max(m.width-1, 20) // a line as wide as the terminal throws its count of lines off
 	// While a flow runs, what its agents write is shown in their boxes.
-	if live := strings.Trim(m.live, "\n"); live != "" && m.flow == nil {
+	if live := m.live; strings.TrimSpace(live) != "" && m.flow == nil && !strings.HasPrefix(strings.TrimSpace(live), "```") {
 		if !m.inReply {
 			b.WriteString("\n")
+		}
+		if m.fence {
+			live = "```\n" + live
 		}
 		b.WriteString(reply(live, w, !m.inReply) + "\n")
 	}
