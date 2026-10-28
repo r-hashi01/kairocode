@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -80,8 +81,15 @@ func (m *model) paint() {
 	v := m.View()
 	lines := strings.Split(v.Content, "\n")
 	var cur *screen.Cursor
-	if v.Cursor != nil {
-		cur = &screen.Cursor{X: v.Cursor.X, Y: v.Cursor.Y}
+	if c := v.Cursor; c != nil {
+		cur = &screen.Cursor{X: c.X, Y: c.Y, Style: int(c.Shape)*2 + 1}
+		if !c.Blink { // DECSCUSR, as Bubble Tea's renderer encodes it
+			cur.Style++
+		}
+		if c.Color != nil {
+			r, g, b, _ := c.Color.RGBA()
+			cur.Color = fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
+		}
 	}
 	if v.AltScreen {
 		m.scr.DrawAlt(lines, cur)

@@ -32,8 +32,14 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Cursor is where the cursor is shown, in the area (nil: hidden).
-type Cursor struct{ X, Y int }
+// Cursor is where the cursor is shown, in the area (nil: hidden), its
+// colour ("#rrggbb", "" the terminal's) and its style (DECSCUSR: 1 a
+// blinking block, 2 a steady one, ..., 0 the terminal's).
+type Cursor struct {
+	X, Y  int
+	Color string
+	Style int
+}
 
 // Screen draws on a terminal of Width × Height cells.
 type Screen struct {
@@ -54,6 +60,9 @@ type Screen struct {
 	// Term is the terminal taken (raw mode, modes), given back to a command
 	// the UI runs in it and taken again (Retake).
 	Term *Terminal
+	// color and style: the cursor's, as last set.
+	color string
+	style int
 }
 
 // New is a screen writing to out, a terminal of w × h cells.
@@ -287,16 +296,37 @@ func (s *Screen) Clear() {
 	if s.known {
 		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[J", s.top+1)
 	}
+	if s.color != "" { // the terminal's cursor again
+		b.WriteString("\x1b]112\x07")
+		s.color = ""
+	}
+	if s.style != 0 {
+		b.WriteString("\x1b[0 q")
+		s.style = 0
+	}
 	b.WriteString("\x1b[?25h")
 	s.lines = nil
 	s.write(b.String())
 }
 
-// cursor places the cursor (b) at cur in what begins at row top, or hides it.
+// cursor places the cursor (b) at cur in what begins at row top, in its
+// colour and style, or hides it.
 func (s *Screen) cursor(b *strings.Builder, cur *Cursor, top int) {
 	if cur == nil {
 		b.WriteString("\x1b[?25l")
 		return
+	}
+	if cur.Color != s.color {
+		if cur.Color == "" {
+			b.WriteString("\x1b]112\x07")
+		} else {
+			b.WriteString("\x1b]12;" + cur.Color + "\x07")
+		}
+		s.color = cur.Color
+	}
+	if cur.Style != s.style {
+		fmt.Fprintf(b, "\x1b[%d q", cur.Style)
+		s.style = cur.Style
 	}
 	fmt.Fprintf(b, "\x1b[%d;%dH\x1b[?25h", top+cur.Y+1, cur.X+1)
 }

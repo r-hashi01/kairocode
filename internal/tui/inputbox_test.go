@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/r-hashi01/kairocode/internal/acp"
 )
 
 // The input is on a ground of its own once the terminal tells its
@@ -92,5 +94,29 @@ func TestPlaceholder(t *testing.T) {
 	d, _ := start(t, Options{})
 	if v := d.view(); !strings.Contains(v, "Ask anything") {
 		t.Fatalf("the empty input:\n%s", v)
+	}
+}
+
+// While a question is answered, the input stays in its place, grey, with
+// the status line under it: only typing in it waits.
+func TestInputStaysWhileAsked(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.m.input.SetValue("half typed")
+	reply := make(chan string, 1)
+	d.send(askMsg{req: acp.PermissionRequest{ToolCallID: "c", Title: "git_push", Options: []acp.PermissionOption{
+		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
+	v := d.view()
+	q, in, st := strings.Index(v, "Allow this?"), strings.Index(v, "> half typed"), strings.Index(v, "session")
+	if q < 0 || in < 0 || st < 0 || !(q < in && in < st) {
+		t.Fatalf("the question, the input, the status line:\n%s", v)
+	}
+	d.send(key("x")) // the question's key: not typed
+	if d.m.input.Value() != "half typed" {
+		t.Fatalf("typed while asked: %q", d.m.input.Value())
+	}
+	d.send(key("enter"))
+	<-reply
+	if v := d.view(); !strings.Contains(v, "> half typed") {
+		t.Fatalf("after the answer:\n%s", v)
 	}
 }

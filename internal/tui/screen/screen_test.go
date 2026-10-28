@@ -188,3 +188,27 @@ func TestResize(t *testing.T) {
 		t.Fatalf("%q", rows)
 	}
 }
+
+// The cursor has the colour and style it is given (as Bubble Tea's
+// renderer gave them), set once, and the terminal's own back at the end.
+func TestCursorColourAndStyle(t *testing.T) {
+	var out strings.Builder
+	s := New(&out, 20, 10)
+	s.Plain()
+	s.Place(0)
+	cur := &Cursor{X: 1, Y: 0, Color: "#ffd43b", Style: 2}
+	s.Draw([]string{"> a"}, cur)
+	if got := out.String(); !strings.Contains(got, "\x1b]12;#ffd43b\x07") || !strings.Contains(got, "\x1b[2 q") {
+		t.Fatalf("drew %q", got)
+	}
+	out.Reset()
+	s.Draw([]string{"> ab"}, &Cursor{X: 2, Y: 0, Color: "#ffd43b", Style: 2})
+	if got := out.String(); strings.Contains(got, "]12;") || strings.Contains(got, " q") {
+		t.Fatalf("set again: %q", got)
+	}
+	out.Reset()
+	s.Clear()
+	if got := out.String(); !strings.Contains(got, "\x1b]112\x07") || !strings.Contains(got, "\x1b[0 q") {
+		t.Fatalf("not given back: %q", got)
+	}
+}

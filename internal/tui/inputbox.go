@@ -50,15 +50,32 @@ func (m *model) promptStyle() lipgloss.Style {
 // inputBox is the input as drawn, w columns wide: the line above it, its
 // lines, the line below. The input's first line is the box's second.
 func (m *model) inputBox(w int) string {
+	return m.drawInput(w, false)
+}
+
+// inputBoxPaused is the input as drawn while a question is answered: in its
+// place, grey, with no cursor.
+func (m *model) inputBoxPaused(w int) string {
+	return m.drawInput(w, true)
+}
+
+func (m *model) drawInput(w int, paused bool) string {
 	m.input.Placeholder = placeholder(w)
+	if paused {
+		m.input.Placeholder = "Answer the question above first"
+	}
+	prompt := m.promptStyle()
+	if paused {
+		prompt = faint
+	}
 	st := m.input.Styles()
 	ground, ok := panelColor(m.bg)
 	if !ok {
 		st.Focused.Base, st.Focused.Text, st.Focused.CursorLine, st.Focused.EndOfBuffer = lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle()
-		st.Focused.Prompt, st.Focused.Placeholder = m.promptStyle(), faint
+		st.Focused.Prompt, st.Focused.Placeholder = prompt, faint
 		m.input.SetStyles(st)
 		edge := accent
-		if m.running {
+		if m.running || paused {
 			edge = faint
 		}
 		line := edge.Render(strings.Repeat("─", w))
@@ -67,7 +84,7 @@ func (m *model) inputBox(w int) string {
 	on := func(s lipgloss.Style) lipgloss.Style { return s.Background(ground) }
 	plainOn := on(lipgloss.NewStyle())
 	st.Focused.Base, st.Focused.Text, st.Focused.CursorLine, st.Focused.EndOfBuffer = plainOn, plainOn, plainOn, plainOn
-	st.Focused.Prompt, st.Focused.Placeholder = on(m.promptStyle()), on(faint)
+	st.Focused.Prompt, st.Focused.Placeholder = on(prompt), on(faint)
 	m.input.SetStyles(st)
 	lines := strings.Split(m.input.View(), "\n")
 	for i, l := range lines {

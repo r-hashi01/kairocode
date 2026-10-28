@@ -1635,6 +1635,11 @@ func (m *model) View() tea.View {
 	switch {
 	case len(m.asks) > 0:
 		b.WriteString(m.askView(w))
+		if a := m.asks[0]; !m.full() && !a.instead && !(a.review != nil && a.review.commenting) {
+			// The input stays where it is, paused while the question is
+			// answered (the keys are the question's).
+			b.WriteString("\n" + m.inputBoxPaused(w) + "\n")
+		}
 	case m.plugins != nil:
 		b.WriteString(m.pluginsView(w))
 	case m.runs != nil:
