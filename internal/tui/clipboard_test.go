@@ -141,3 +141,23 @@ func TestSavePasted(t *testing.T) {
 		t.Fatalf("%d files, want 2", len(es))
 	}
 }
+
+// A large paste stands in the input as a label, and goes with the message
+// in its place; the conversation shows the label. A small one is pasted.
+func TestLargePaste(t *testing.T) {
+	d, a := start(t, Options{})
+	big := strings.Repeat("log line\n", 41) + "end"
+	d.send(tea.PasteMsg{Content: "small"})
+	d.send(tea.PasteMsg{Content: big})
+	if v := d.m.input.Value(); v != "small[Pasted text #1 +42 lines] " {
+		t.Fatalf("the input: %q", v)
+	}
+	d.m.input.InsertString("why?")
+	d.send(key("enter"))
+	if len(a.prompts) != 1 || a.prompts[0] != "small"+big+" why?" {
+		t.Fatalf("sent %q", a.prompts)
+	}
+	if out := d.out(); !strings.Contains(out, "[Pasted text #1 +42 lines]") || strings.Contains(out, "log line") {
+		t.Fatalf("the conversation shows\n%s", out)
+	}
+}

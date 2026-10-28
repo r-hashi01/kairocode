@@ -208,6 +208,8 @@ type model struct {
 	// images: the images put in the input, by the label that stands for
 	// them there ([Image #1]), for as long as the UI runs.
 	images map[string]string
+	// pastes: large pastes, by the label that stands for them in the input.
+	pastes map[string]string
 	// notif tells the terminal when the UI waits and when a turn ends
 	// (ADR 0032); replyHead: the first line of the turn's reply, for it.
 	notif notifier
@@ -683,6 +685,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 				m.attachImage(p)
 				return nil
 			}
+			if m.pasteText(msg.Content) {
+				return nil
+			}
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return cmd
@@ -1074,7 +1079,7 @@ func (m *model) submit(text string) tea.Cmd {
 		m.flowsBefore = readFlows(m.o.Dir)
 	}
 	files := append(Mentioned(m.o.Dir, text), m.imagesIn(text)...)
-	return m.send(text, files)
+	return m.send(m.expandPastes(text), files)
 }
 
 // send gives the agent a message: text, with files.
