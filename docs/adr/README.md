@@ -43,3 +43,4 @@ kairo の側の判断は、kairo の `docs/adr/` にあります。
 | [0030](0030-flow-drafts-and-publishing.md) | フローの下書きと公開: 書くことと使えるようにすることを分ける | 承認（2026-10-27） |
 | [0031](0031-loopback-sandbox.md) | 手元の通信だけを許す sandbox: 検査を sandbox の外に出さずに動かす | 承認（2026-10-27） |
 | [0032](0032-terminal-notifications.md) | 端末の通知: 人を待つときとターンの終わりを、画面を見ていない利用者に知らせる | 承認（2026-10-28） |
+| [0033](0033-draw-the-inline-area-as-codex-does.md) | 端末の画面の下の領域を、Codex と同じ仕組みで自前で描く | 提案 |
