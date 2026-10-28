@@ -412,6 +412,7 @@ func (m *model) queuedView(w int) string {
 		}
 		b.WriteString(faint.Render("  queued ") + you.Render(titleLine(q, max(w-10, 10))) + "\n")
 	}
+	b.WriteString(faint.Render("  ↑ to change them") + "\n")
 	return b.String()
 }
 
@@ -1261,6 +1262,18 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			} else {
 				m.compSel = (m.compSel + 1) % len(c)
 			}
+			return nil
+		}
+		// The messages queued for the turn's end, taken back into the
+		// input to change (up from its first line), ahead of what is typed.
+		if key == "up" && m.input.Line() == 0 && len(m.queued) > 0 {
+			text := strings.Join(m.queued, "\n")
+			if v := m.input.Value(); v != "" {
+				text += "\n" + v
+			}
+			m.queued = nil
+			m.input.SetValue(text)
+			m.input.CursorEnd()
 			return nil
 		}
 		// What was sent before: up from the input's first line, down from

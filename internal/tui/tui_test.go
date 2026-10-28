@@ -1612,3 +1612,25 @@ func TestScreenHasNoTabsOrWideLines(t *testing.T) {
 		t.Fatalf("the question's long line is not wrapped whole:\n%s", v)
 	}
 }
+
+// Up from the input's first line takes the queued messages back into the
+// input, ahead of what is typed, to change: they are not sent then.
+func TestTakeBackQueued(t *testing.T) {
+	d, a := start(t, Options{})
+	d.m.running = true
+	typed(d, "first")
+	typed(d, "second")
+	d.m.input.SetValue("typed")
+	d.m.input.CursorStart()
+	d.send(key("up"))
+	if v := d.m.input.Value(); v != "first\nsecond\ntyped" {
+		t.Fatalf("the input: %q", v)
+	}
+	if len(d.m.queued) != 0 || strings.Contains(d.view(), "queued") {
+		t.Fatalf("still queued: %q", d.m.queued)
+	}
+	d.send(turnDoneMsg{stop: "end_turn"})
+	if len(a.prompts) != 0 {
+		t.Fatalf("sent %q", a.prompts)
+	}
+}
