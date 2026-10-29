@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
@@ -543,7 +544,7 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 	_ = json.Unmarshal(args, &a)
 	ctx, cancel := context.WithTimeout(ctx, extLimit)
 	defer cancel()
-	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: d.Tool, Arguments: a})
+	res, err := r.ext.callTool(ctx, cs, d.Tool, a)
 	if err != nil && (errors.Is(err, errNotSent) || errors.Is(err, errNotConnected)) {
 		// Its token could not be had (or was disconnected): the request
 		// was not sent.
@@ -687,6 +688,8 @@ type extConn struct {
 	timer  *time.Timer
 	used   time.Time // last handed out
 	plugin string
+	// listed: the server's tools were listed on this session (callTool).
+	listed bool
 }
 
 func extKey(dir string, s extServer, mode string) string {
@@ -795,6 +798,67 @@ func (e *extServers) idle(key string, c *extConn) {
 	delete(e.conns, key)
 	e.mu.Unlock()
 	c.close()
+}
+
+// callTool calls a tool of the server on cs.
+//
+// A server on MCP 2026-07-28 may mark arguments to be sent as HTTP headers
+// too (x-mcp-header: Mcp-Param-<name>), and refuses a call without them
+// (HeaderMismatch, -32020). The SDK sends them for a tool it has listed on
+// that session; the turn listed the tools at its start, maybe on another
+// session (one stopped while idle, another daemon's). So a session not yet
+// listed on lists them first; refused for the headers all the same (the
+// tool changed), it lists them again and calls once more, as the spec says
+// to: the refusal comes before the tool runs, so it does not run twice
+// (invariant 4).
+func (e *extServers) callTool(ctx context.Context, cs *mcp.ClientSession, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	if err := e.listTools(ctx, cs, false); err != nil {
+		return nil, err
+	}
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	if err != nil && headerMismatch(err) {
+		if lerr := e.listTools(ctx, cs, true); lerr == nil {
+			res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+		}
+	}
+	return res, err
+}
+
+// listTools lists the server's tools on cs, all their pages, once (again).
+func (e *extServers) listTools(ctx context.Context, cs *mcp.ClientSession, again bool) error {
+	e.mu.Lock()
+	var conn *extConn
+	for _, c := range e.conns {
+		if c.cs == cs {
+			conn = c
+		}
+	}
+	listed := conn != nil && conn.listed
+	e.mu.Unlock()
+	if listed && !again {
+		return nil
+	}
+	for _, err := range cs.Tools(ctx, nil) {
+		if err != nil {
+			return err
+		}
+	}
+	if conn != nil {
+		e.mu.Lock()
+		conn.listed = true
+		e.mu.Unlock()
+	}
+	return nil
+}
+
+// headerMismatch says err is a server's refusal of a call for its headers
+// (MCP 2026-07-28: HeaderMismatch, -32020).
+func headerMismatch(err error) bool {
+	var je *jsonrpc.Error
+	if errors.As(err, &je) && je.Code == mcp.CodeHeaderMismatch {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "header mismatch")
 }
 
 // dropSession stops the server's session if it is still cs: a call on it
