@@ -103,6 +103,16 @@ func (t *VT) escape(s []rune, i int) int {
 		return i
 	}
 	switch s[i] {
+	case ']': // an operating system command (a colour): to BEL or ST
+		for j := i + 1; j < len(s); j++ {
+			if s[j] == 0x07 {
+				return j
+			}
+			if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
+				return j + 1
+			}
+		}
+		return len(s)
 	case 'M': // reverse index
 		if t.Y == t.top {
 			t.scrollDown()
@@ -124,11 +134,18 @@ func (t *VT) escape(s []rune, i int) int {
 	for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == ';') {
 		j++
 	}
+	end := j
+	for j < len(s) && s[j] >= 0x20 && s[j] <= 0x2f { // intermediates ("2 q")
+		j++
+	}
 	if j >= len(s) {
 		return j
 	}
+	if j > end { // a sequence with intermediates: nothing to show
+		return j
+	}
 	var args []int
-	for _, a := range strings.Split(string(s[start:j]), ";") {
+	for _, a := range strings.Split(string(s[start:end]), ";") {
 		n, _ := strconv.Atoi(a)
 		args = append(args, n)
 	}

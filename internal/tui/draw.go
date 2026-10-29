@@ -47,6 +47,13 @@ func startScreen(in io.Reader, out io.Writer, send func(tea.Msg)) (*screen.Scree
 		w, h = 80, 24
 	}
 	scr := screen.New(fout, w, h)
+	var trace *os.File
+	if path := os.Getenv("KAIROCODE_TUI_TRACE"); path != "" { // what the terminal is sent (ADR 0033)
+		if trace, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
+			fmt.Fprintf(trace, "# %dx%d, TERM=%s TERM_PROGRAM=%s LANG=%s\n", w, h, os.Getenv("TERM"), os.Getenv("TERM_PROGRAM"), os.Getenv("LANG"))
+			scr.Trace = trace
+		}
+	}
 	// The terminal's new sizes, as Bubble Tea's renderer would tell them.
 	resized := make(chan os.Signal, 1)
 	signal.Notify(resized, syscall.SIGWINCH)
@@ -68,6 +75,9 @@ func startScreen(in io.Reader, out io.Writer, send func(tea.Msg)) (*screen.Scree
 		close(done)
 		scr.Clear()
 		_ = term.Restore()
+		if trace != nil {
+			trace.Close()
+		}
 	}
 	scr.Term = term
 	return scr, stop, nil

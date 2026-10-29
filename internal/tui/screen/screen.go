@@ -63,6 +63,10 @@ type Screen struct {
 	// color and style: the cursor's, as last set.
 	color string
 	style int
+	// Trace, if set, is given each write and the area's place after it
+	// (KAIROCODE_TUI_TRACE: what the terminal was sent, to find out what it
+	// did otherwise than the tests' terminal).
+	Trace io.Writer
 }
 
 // New is a screen writing to out, a terminal of w × h cells.
@@ -338,7 +342,11 @@ const (
 )
 
 func (s *Screen) write(str string) {
-	if str != "" {
-		s.fit(s.out, str)
+	if str == "" {
+		return
+	}
+	s.fit(s.out, str)
+	if s.Trace != nil {
+		fmt.Fprintf(s.Trace, "%q\n# top %d, %d lines, %dx%d, known %v, alt %v\n", str, s.top, len(s.lines), s.w, s.h, s.known, s.alt)
 	}
 }

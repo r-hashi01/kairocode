@@ -1649,6 +1649,9 @@ func TestOnATerminalTheInputStaysDown(t *testing.T) {
 		if full && !strings.Contains(rows[23], "session") {
 			t.Fatalf("%s: the status line left the bottom:\n%s", what, strings.Join(rows, "\n"))
 		}
+		if n := strings.Count(strings.Join(rows, "\n"), "session 0123"); n > 1 {
+			t.Fatalf("%s: the status line is shown %d times (an old screen left):\n%s", what, n, strings.Join(rows, "\n"))
+		}
 		full = full || strings.Contains(rows[23], "session")
 	}
 	allow := []acp.PermissionOption{{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}
