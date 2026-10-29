@@ -579,6 +579,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			m.placing = false
 		}
 		return nil
+	case continuedMsg: // drawn again once its place is told (place)
+		return nil
 	case placeTimeoutMsg:
 		if m.scr != nil && !m.scr.Placed() { // not told: from the bottom
 			_, h := m.scr.Size()
@@ -1373,6 +1375,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.nextMode()
 	case "ctrl+e": // the next effort
 		return m.nextEffort()
+	case "ctrl+z": // stopped, as a shell's Ctrl+Z stops a program (fg goes on)
+		return m.stop()
 	case "ctrl+v": // the clipboard's image, else its text (ADR 0026)
 		if m.state == stateReady && m.clip != nil && m.pastedDir() != "" {
 			return m.pasteImage(&k)

@@ -72,4 +72,7 @@ Codex の仕組み（`insert_history.rs` の全体と、`tui.rs` の `draw` を�
 - 書きかけの返事は下の領域に描かない。1 行が画面の幅を超えて折り返したら、最後の行を除いて会話の側へ出す（貪欲な折り返しでは、前の行は後の語で変わらない）。行が終わると残りを出す。
 - `18ac90d` の「縮めない」手当て（`steady`）と、Bubble Tea の描画のための手当て（書いている間の高さ）は外した。
 - テスト: `internal/tui/screen` の `TestAreaGoesDownToTheBottom`、`TestInputStaysAtTheBottom`、`TestDrawsWhatChanged`、`TestWideLinesTakeTheirRows`、`TestTallAreaAndAScreenOfItsOwn`、`TestResize`。模擬の端末は `internal/tui/screen/vtest`（テストのための小さな端末。依存は足さない）。画面と合わせて `TestOnATerminalTheInputStaysDown`（返事、呼び出し、承認と答え、送信待ち、ターンの終わりで、状態の行が画面の一番下にあり、会話が順に並ぶ）、`TestReplyGoesUpAsItWraps`。
-- 本物の端末での確かめは残り（iTerm2、Terminal.app、Ghostty、tmux の中、Ctrl+Z）。
+- **Ctrl+Z（2026-10-29）:** 生モードでは Ctrl+Z がキーとして届く（前の Bubble Tea の描画のときも、止まっていなかった）。下の領域を消し、端末を戻して、プロセスのグループを `SIGTSTP` で止める。`fg` で続いたら端末を取り直し、カーソルの位置を問い合わせ直して描く。テスト: `TestStop`。
+- **Zellij（2026-10-29）:** 環境変数 `ZELLIJ` があれば、スクロール範囲を使わない。Codex の `FullScreen` の書き方と同じく、下の領域のあったところから会話の行を書き、領域の行の数だけ改行で進んで（端末の下に届けばスクロールする）、その下に領域を描き直す。縮んだときは上端を保つ。テスト: `TestNoRegions`。
+- **記録（2026-10-29）:** 本物の端末で、下の領域が 2 組描かれ、古い組が残ったことがあった（模擬の端末では再現しない）。`KAIROCODE_TUI_TRACE=<ファイル>` で、端末に送ったものと領域の位置を書き出し、`TestReplayTrace`（`KAIROCODE_TUI_REPLAY=<ファイル>`）で模擬の端末に流して、食い違いを探す。原因は未確定（幅のあいまいな文字を端末が 2 桁で描く、などを疑っている）。
+- 本物の端末での確かめは残り（iTerm2、Terminal.app、Ghostty、tmux・Zellij の中、Ctrl+Z）。

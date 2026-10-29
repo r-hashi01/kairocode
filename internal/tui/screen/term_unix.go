@@ -77,3 +77,11 @@ func Size(out *os.File) (w, h int, err error) {
 	}
 	return int(ws.Col), int(ws.Row), nil
 }
+
+// Stop stops the process (its group), as the shell's Ctrl+Z does, until it
+// is continued (fg): the terminal is given back first, taken again after.
+func (t *Terminal) Stop() {
+	_ = t.Restore()
+	_ = syscall.Kill(0, syscall.SIGTSTP)
+	t.Retake()
+}

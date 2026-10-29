@@ -212,3 +212,51 @@ func TestCursorColourAndStyle(t *testing.T) {
 		t.Fatalf("not given back: %q", got)
 	}
 }
+
+// Stopped (Ctrl+Z), the area is taken away and its place forgotten: drawn
+// again only once the terminal tells where its cursor is (after fg).
+func TestStop(t *testing.T) {
+	s, vt := newTest(20, 8, 2)
+	s.Draw(area(3, "> input"), nil)
+	s.Stop()
+	if strings.Contains(strings.Join(vt.Rows(), "\n"), "> input") {
+		t.Fatalf("the area is left: %q", vt.Rows())
+	}
+	if s.Placed() {
+		t.Fatal("its place is still taken as known")
+	}
+	s.Draw(area(3, "> input"), nil)
+	if strings.Contains(strings.Join(vt.Rows(), "\n"), "> input") {
+		t.Fatal("drawn before its place was told")
+	}
+	s.Place(4)
+	s.Draw(area(3, "> input"), nil)
+	if vt.Rows()[6] != "> input" {
+		t.Fatalf("%q", vt.Rows())
+	}
+}
+
+// With no scroll regions (Zellij), the conversation is written where the
+// area is and the area drawn again under it: in order, and the input at the
+// bottom once the terminal is full.
+func TestNoRegions(t *testing.T) {
+	s, vt := newTest(30, 10, 1)
+	s.NoRegions = true
+	s.Draw(area(3, "> input"), nil)
+	var want []string
+	for i := range 15 {
+		l := fmt.Sprint("line ", i)
+		want = append(want, l)
+		s.Insert([]string{l})
+		s.Draw(area(3, "> input"), nil)
+	}
+	if rows := vt.Rows(); rows[9] != "> input" {
+		t.Fatalf("the input is not at the bottom:\n%s", strings.Join(rows, "\n"))
+	}
+	if got := conversation(vt, s); !slices.Equal(got, want) {
+		t.Fatalf("the conversation:\n%q\nwant\n%q", got, want)
+	}
+	if n := strings.Count(strings.Join(vt.Lines(), "\n"), "> input"); n != 1 {
+		t.Fatalf("the area is drawn %d times", n)
+	}
+}

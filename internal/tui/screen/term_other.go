@@ -16,3 +16,5 @@ func Take(in, out *os.File) (*Terminal, error) { return nil, errNotDone }
 func (t *Terminal) Retake()                    {}
 func (t *Terminal) Restore() error             { return nil }
 func Size(out *os.File) (w, h int, err error)  { return 0, 0, errNotDone }
+
+func (t *Terminal) Stop() {}

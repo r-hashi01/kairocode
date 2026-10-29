@@ -47,6 +47,9 @@ func startScreen(in io.Reader, out io.Writer, send func(tea.Msg)) (*screen.Scree
 		w, h = 80, 24
 	}
 	scr := screen.New(fout, w, h)
+	// Zellij's scroll regions are not to be relied on: lines are written as
+	// Codex writes them there (ADR 0033).
+	scr.NoRegions = os.Getenv("ZELLIJ") != ""
 	var trace *os.File
 	if path := os.Getenv("KAIROCODE_TUI_TRACE"); path != "" { // what the terminal is sent (ADR 0033)
 		if trace, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
@@ -133,4 +136,26 @@ func (h handOver) SetStderr(w io.Writer) { h.cmd.Stderr = w }
 // run hands the terminal to cmd, and has fn say how it went.
 func (m *model) run(cmd *exec.Cmd, fn func(error) tea.Msg) tea.Cmd {
 	return tea.Exec(handOver{cmd: cmd, scr: m.scr}, fn)
+}
+
+// stopper stops the UI (Ctrl+Z) while Bubble Tea waits, as for a command
+// run in the terminal: its input is not read meanwhile.
+type stopper struct{ scr *screen.Screen }
+
+func (s stopper) Run() error          { s.scr.Stop(); return nil }
+func (s stopper) SetStdin(io.Reader)  {}
+func (s stopper) SetStdout(io.Writer) {}
+func (s stopper) SetStderr(io.Writer) {}
+
+// continuedMsg: the UI was continued after Ctrl+Z; it is drawn again where
+// the terminal says its cursor is.
+type continuedMsg struct{}
+
+// stop stops the UI as the shell's Ctrl+Z does (ADR 0033: Bubble Tea, run
+// without its renderer, does not).
+func (m *model) stop() tea.Cmd {
+	if m.scr == nil {
+		return nil
+	}
+	return tea.Exec(stopper{m.scr}, func(error) tea.Msg { return continuedMsg{} })
 }

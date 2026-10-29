@@ -63,6 +63,10 @@ type Screen struct {
 	// color and style: the cursor's, as last set.
 	color string
 	style int
+	// NoRegions: the terminal's scroll regions are not to be relied on
+	// (Zellij): lines are written where the area is, and it is drawn again
+	// under them, as Codex writes there.
+	NoRegions bool
 	// Trace, if set, is given each write and the area's place after it
 	// (KAIROCODE_TUI_TRACE: what the terminal was sent, to find out what it
 	// did otherwise than the tests' terminal).
@@ -92,6 +96,19 @@ func (s *Screen) Place(row int) {
 func (s *Screen) Retake() {
 	if s.Term != nil {
 		s.Term.Retake()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.known, s.lines = false, nil
+}
+
+// Stop stops the UI's process as the shell's Ctrl+Z does: the area taken
+// away and the terminal given back, until it is continued (fg); then the
+// terminal is taken again, and the area's place asked again.
+func (s *Screen) Stop() {
+	s.Clear()
+	if s.Term != nil {
+		s.Term.Stop()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,6 +180,26 @@ func (s *Screen) Insert(lines []string) {
 	var b strings.Builder
 	b.WriteString(syncStart)
 	area := max(len(s.lines), 1)
+	if s.NoRegions {
+		// Written where the area is (cleared first), then as many rows as
+		// it has gone through, which scrolls the terminal where they reach
+		// its bottom; the area is drawn again under the lines.
+		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[J", s.top+1)
+		for i, l := range lines {
+			if i > 0 {
+				b.WriteString("\r\n")
+			}
+			b.WriteString(l + "\x1b[K")
+		}
+		for range area {
+			b.WriteString("\r\n\x1b[K")
+		}
+		s.top = min(s.top+n, s.h-area)
+		s.lines = nil
+		b.WriteString(syncEnd)
+		s.write(b.String())
+		return
+	}
 	// The lines are written from just above where the area was: what it
 	// is pushed down by is theirs first.
 	from := s.top - 1
@@ -231,7 +268,7 @@ func (s *Screen) Draw(lines []string, cur *Cursor) {
 		s.top -= up
 		s.lines = nil
 	}
-	if old := len(s.lines); n < old && s.top+old == s.h {
+	if old := len(s.lines); n < old && s.top+old == s.h && !s.NoRegions {
 		// Shorter, at the bottom: it stays at the bottom. What is above it
 		// moves down as much (reverse scrolls in a region from the
 		// terminal's top to its new top); the rows that leaves at the
