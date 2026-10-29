@@ -43,34 +43,36 @@ func TestReplyToldWholeBeforeTheTurnEnds(t *testing.T) {
 			}
 		}
 	}
-	late := func(turn, text string) {
-		r.ev.make(item{session: s, chunk: &kairo.Chunk{RunID: turn + "/call", Data: []byte(text)}})
+	chunk := func(call, text string) { // a token of call (<turn>/<call>)
+		r.ev.make(item{session: s, chunk: &kairo.Chunk{RunID: call, Data: []byte(text)}})
 	}
 
 	turn := s + "/t1"
-	r.ev.emit(s, Event{Type: EventToken, Turn: turn, Text: "Hello, "})
+	chunk(turn+"/m1", "Hello, ")
 	r.ev.tellRest(s, turn, "Hello, world.")
-	late(turn, "world.")
+	chunk(turn+"/m1", "world.") // late: after the turn's end
 	if got := tokens(); got != "Hello, |world.|" {
 		t.Fatalf("the reply's end came after it: %q", got)
 	}
 
-	// What came before the turn's last call is not the reply's start.
+	// The reply is the last call's words; the tool calls' events come in
+	// no set order with the tokens (here after the next call's).
 	turn = s + "/t2"
-	r.ev.emit(s, Event{Type: EventToken, Turn: turn, Text: "Let me look."})
-	r.ev.emit(s, Event{Type: EventToolStart, Turn: turn, Call: "c1", Tool: "read"})
-	r.ev.emit(s, Event{Type: EventToken, Turn: turn, Text: "Done"})
+	chunk(turn+"/m1", "Let me look.")
+	chunk(turn+"/m2", "Done")
+	r.ev.emit(s, Event{Type: EventToolEnd, Turn: turn, Call: "c1", Tool: "read"})
 	r.ev.tellRest(s, turn, "Done.")
-	late(turn, ".")
+	chunk(turn+"/m2", ".")
 	if got := tokens(); got != "Let me look.|Done|.|" {
 		t.Fatalf("after a call: %q", got)
 	}
 
-	// Told otherwise than the reply begins: nothing held back.
+	// Told otherwise than the reply begins (Claude Code's turn tells all
+	// its words in one call): nothing held back.
 	turn = s + "/t3"
-	r.ev.emit(s, Event{Type: EventToken, Turn: turn, Text: "Something else"})
+	chunk(turn+"/claude", "Something else")
 	r.ev.tellRest(s, turn, "The reply.")
-	late(turn, " and more")
+	chunk(turn+"/claude", " and more")
 	if got := tokens(); got != "Something else| and more|" {
 		t.Fatalf("not the reply's start: %q", got)
 	}

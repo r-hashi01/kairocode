@@ -557,6 +557,12 @@ func (r *Runtime) callMCP(ctx context.Context, d extDef, dir string, args json.R
 		r.ext.dropSession(dir, servers[i], d.Mode, cs)
 		return tools.Result{Output: fmt.Sprintf("the call to %s was refused, and it did not run: %s (the user can run kairocode plugin connect %s)", d.Name, answer, servers[i].Plugin), IsError: true}
 	}
+	if err != nil && (errors.Is(err, errNotListed) || headerMismatch(err)) {
+		// Not sent (its tools could not be listed first), or refused for
+		// its headers before it ran (HeaderMismatch): it did not run.
+		r.ext.dropSession(dir, servers[i], d.Mode, cs)
+		return tools.Result{Output: fmt.Sprintf("the call to %s did not run: %s", d.Name, serverErr(servers[i], err)), IsError: true}
+	}
 	if err != nil {
 		r.ext.dropSession(dir, servers[i], d.Mode, cs) // started again at the next call
 		return tools.Result{Output: fmt.Sprintf("the call to %s may have reached the server, and no answer came: %s", d.Name, serverErr(servers[i], err)), Unknown: true}
@@ -813,7 +819,7 @@ func (e *extServers) idle(key string, c *extConn) {
 // (invariant 4).
 func (e *extServers) callTool(ctx context.Context, cs *mcp.ClientSession, tool string, args map[string]any) (*mcp.CallToolResult, error) {
 	if err := e.listTools(ctx, cs, false); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: listing its tools: %w", errNotListed, err)
 	}
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil && headerMismatch(err) {
@@ -850,6 +856,10 @@ func (e *extServers) listTools(ctx context.Context, cs *mcp.ClientSession, again
 	}
 	return nil
 }
+
+// errNotListed: the server's tools could not be listed before a call, which
+// was not sent then.
+var errNotListed = errors.New("not listed")
 
 // headerMismatch says err is a server's refusal of a call for its headers
 // (MCP 2026-07-28: HeaderMismatch, -32020).
