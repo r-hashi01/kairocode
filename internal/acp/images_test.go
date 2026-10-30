@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +95,28 @@ func TestACPImages(t *testing.T) {
 	}
 	if !seen {
 		t.Fatalf("the image was not shown again: %d updates", len(replayed))
+	}
+}
+
+// A call no rule allows is asked about by default: said so in words, in
+// the title, and not as the rule's own text ("*: ask"). Not answered here,
+// it does not run (nothing reaches the network).
+func TestACPDefaultRuleInWords(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := runtime.Open(ctx, runtime.Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "acp",
+		Provider: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+			{Tools: []provider.FakeTool{{Name: "fetch", Input: json.RawMessage(`{"url": "https://example.com/"}`)}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	c := start(t, ctx, &local{r: r})
+	initialize(c)
+	s := newSession(c, t.TempDir())
+	prompt(c, s, "read the page")
+	req, _ := c.until(isMethod("session/request_permission"))
+	if p := string(req.Params); !strings.Contains(p, "asked by default: no rule allows it") || strings.Contains(p, "*: ask") {
+		t.Fatalf("request %s", p)
 	}
 }

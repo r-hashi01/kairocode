@@ -1246,6 +1246,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	}
 	answers := map[string]bool{"allow_once": true, "reject_once": false}
 	title := strings.TrimSpace(p.Tool + " " + p.Subject)
+	ruleText := p.Rule // the rule, as the title says it
 	question := p.Kind == runtime.KindQuestion
 	kind := toolKind(p.Tool)
 	if question {
@@ -1280,10 +1281,10 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		if p.Try != nil { // a flow: it can be tried first (ADR 0017)
 			options = append(options, map[string]any{"optionId": TryOption, "name": "Try it first", "kind": "reject_once"})
 		}
-		rule, _, _ := strings.Cut(p.Rule, "\n") // one line: the title is not a page
-		if rule == "*: ask" {                   // the catch-all, as said to a person
-			rule = "asked by default: no rule allows it"
+		if p.Rule == "*: ask" { // the catch-all, as said to a person
+			ruleText = "asked by default: no rule allows it"
 		}
+		rule, _, _ := strings.Cut(ruleText, "\n") // one line: the title is not a page
 		if len([]rune(rule)) > 120 {
 			rule = string([]rune(rule)[:120]) + "…"
 		}
@@ -1330,9 +1331,9 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			text += hookScripts(p.Subject, a.dirOf(session))
 		}
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(text)}}
-	case !question && p.Kind != "review" && !strings.Contains(title, p.Rule):
+	case !question && p.Kind != "review" && !strings.Contains(title, ruleText):
 		// The reason, cut short in the title: all of it, to decide on.
-		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Rule)}}
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(ruleText)}}
 	}
 	params := map[string]any{
 		"sessionId": session,
