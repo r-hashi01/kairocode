@@ -1482,13 +1482,16 @@ func TestACPPromptWithFile(t *testing.T) {
 
 // A hook's question (ADR 0018) reaches the client as one to answer: its
 // first line the title (a title is cut), the question whole its content,
-// not a thought; the sandbox, its first option, of an allow kind, the
-// others not.
+// not a thought, with the script the command runs; no option is of an
+// allow kind (nothing runs before the user chose).
 func TestACPHookQuestion(t *testing.T) {
 	b, ws := setup(t)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	if err := os.WriteFile(filepath.Join(ws, ".claude", "state.sh"), []byte("#!/bin/sh\necho what this hook does\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(ws, ".claude", "settings.json"),
-		[]byte(`{"hooks": {"SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "true"}]}]}}`), 0o644); err != nil {
+		[]byte(`{"hooks": {"SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "sh '.claude/state.sh' session"}]}]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1515,10 +1518,18 @@ func TestACPHookQuestion(t *testing.T) {
 	if !strings.HasPrefix(p.ToolCall.Title, "A hook of ") || strings.Contains(p.ToolCall.Title, "\n") || p.ToolCall.Kind != "other" {
 		t.Fatalf("the question: %s", req.Params)
 	}
-	if !strings.Contains(string(p.ToolCall.Content), "    true") || !strings.Contains(string(p.ToolCall.Content), "In KairoCode's sandbox") {
+	if !strings.Contains(string(p.ToolCall.Content), "    sh '.claude/state.sh' session") || !strings.Contains(string(p.ToolCall.Content), "In KairoCode's sandbox") {
 		t.Fatalf("the question whole is not its content: %s", req.Params)
 	}
-	if len(p.Options) != 3 || p.Options[0].Kind != "allow_once" || p.Options[1].Kind != "reject_once" || p.Options[2].Kind != "reject_once" {
+	if !strings.Contains(string(p.ToolCall.Content), "echo what this hook does") {
+		t.Fatalf("the script is not shown: %s", req.Params)
+	}
+	if len(p.Options) != 3 {
 		t.Fatalf("options %s", req.Params)
+	}
+	for _, o := range p.Options {
+		if o.Kind != "reject_once" {
+			t.Fatalf("option %q is of kind %s", o.Name, o.Kind)
+		}
 	}
 }

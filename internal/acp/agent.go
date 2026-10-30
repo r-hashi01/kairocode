@@ -1251,19 +1251,13 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	if question {
 		// A flow's question (ADR 0003): its options, each of a reject kind
 		// for the reason a review's are (a client that allows by itself
-		// must not answer for the user). A hook's (ADR 0018) has its first,
-		// the sandbox, of an allow kind: what KairoCode does by itself is
-		// no harm, and a client shows it as the one to take. Its first line
-		// is the title, the question whole its content (a title is cut).
-		hook := strings.Contains(p.Key, "#hook_")
+		// must not answer for the user: a hook's too, nothing is run before
+		// the user chose). Its first line is the title, the question whole
+		// its content (a title is cut); a hook's has the script it runs.
 		options, answers = nil, nil
 		for i, o := range p.Options {
 			id := fmt.Sprintf("answer_%d", i)
-			kind := "reject_once"
-			if hook && i == 0 {
-				kind = "allow_once"
-			}
-			options = append(options, map[string]any{"optionId": id, "name": o, "kind": kind})
+			options = append(options, map[string]any{"optionId": id, "name": o, "kind": "reject_once"})
 		}
 		first, _, _ := strings.Cut(strings.TrimSpace(p.Subject), "\n")
 		if h, err := os.UserHomeDir(); err == nil && h != "" {
@@ -1327,8 +1321,12 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		toolCall["content"] = content
 	case p.Preview != "": // what it would do: a flow's shape
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
-	case question: // the question whole
-		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Subject)}}
+	case question: // the question whole; a hook's, with what it runs
+		text := p.Subject
+		if strings.Contains(p.Key, "#hook_") {
+			text += hookScripts(p.Subject, a.dirOf(session))
+		}
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(text)}}
 	case !question && p.Kind != "review" && !strings.Contains(title, p.Rule):
 		// The reason, cut short in the title: all of it, to decide on.
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Rule)}}
