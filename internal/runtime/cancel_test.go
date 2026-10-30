@@ -107,6 +107,11 @@ func TestCancelTurn(t *testing.T) {
 	if _, err := r.Cancel(ctx, s); !errors.Is(err, ErrNoTurnToCancel) {
 		t.Fatalf("cancelling it again: %v", err)
 	}
+	// Shown again before any turn after it: what was asked, and the note
+	// (the session keeps them once the turn's end is taken).
+	waitUntil(t, ctx, "the stopped turn is in the conversation", func() bool {
+		return strings.Join(conversation(t, r, s), "\n") == "user: first request\nassistant: "+stoppedNote
+	})
 	if out := turn(t, r, s, "again"); out.Stopped != "" {
 		t.Fatalf("the next turn: %+v", out)
 	}

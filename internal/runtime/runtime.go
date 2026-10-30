@@ -1172,24 +1172,40 @@ func (r *Runtime) History(ctx context.Context, session string) ([]msg.Message, e
 	if err != nil {
 		return nil, err
 	}
-	last, run := -1, ""
+	// The conversation's last link: of the last turn completed, or of a
+	// turn the user stopped after it (its message and note kept by
+	// history.cancelled, ADR 0011), whichever came last.
+	var last kairo.RunInfo
 	for _, t := range runs {
-		if t.Workflow != workflows.Turn || t.Status != "completed" {
+		turn := t.Workflow == workflows.Turn && t.Status == "completed"
+		stopped := t.Plan == "kairo.call/"+workflows.ActHistoryCancelled && t.Status == "completed"
+		if !turn && !stopped {
 			continue
 		}
-		var in workflows.TurnInput
-		if json.Unmarshal(input(t), &in) == nil && in.N > last {
-			last, run = in.N, t.RunID
+		if turn {
+			var in workflows.TurnInput
+			if json.Unmarshal(input(t), &in) != nil || in.Sub {
+				continue
+			}
+		}
+		if last.RunID == "" || t.Created.After(last.Created) {
+			last = t
 		}
 	}
-	if run == "" {
+	if last.RunID == "" {
 		return nil, nil
 	}
-	out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, run)
-	if err != nil {
-		return nil, err
+	var head string
+	if last.Workflow == workflows.Turn {
+		out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, last.RunID)
+		if err != nil {
+			return nil, err
+		}
+		head = out.Head
+	} else if err := json.Unmarshal(last.Output, &head); err != nil {
+		return nil, fmt.Errorf("history.cancelled's link: %w", err)
 	}
-	hashes, err := r.Store.Conversation(ctx, out.Head)
+	hashes, err := r.Store.Conversation(ctx, head)
 	if err != nil {
 		return nil, err
 	}
