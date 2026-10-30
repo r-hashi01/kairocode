@@ -5,12 +5,16 @@ package vtest
 import (
 	"strconv"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
 // VT is a small terminal for the tests: what the screen writes does to it
 // what it does to a terminal (cursor moves, erasing, scroll regions,
-// reverse scrolls, autowrap), with its scrollback. Cells hold one rune;
-// colours are not kept (the tests write none).
+// reverse scrolls, autowrap), with its scrollback. Cells hold one rune; a
+// wide one (CJK) takes two, the second held by wideTail, and goes to the
+// next row whole where only the last column is left, as terminals do.
+// Colours are not kept (the tests write none).
 type VT struct {
 	w, h       int
 	cells      [][]rune
@@ -18,10 +22,13 @@ type VT struct {
 	top, bot   int // the scroll region, 0-based, inclusive
 	Scrollback []string
 	wrapNext   bool
+	// wrapped: the row goes on in the next (autowrap), one line with it;
+	// a resize wraps such lines again (Resize).
+	wrapped []bool
 }
 
 func New(w, h int) *VT {
-	t := &VT{w: w, h: h, bot: h - 1}
+	t := &VT{w: w, h: h, bot: h - 1, wrapped: make([]bool, h)}
 	t.cells = make([][]rune, h)
 	for i := range t.cells {
 		t.cells[i] = t.blank()
@@ -29,10 +36,15 @@ func New(w, h int) *VT {
 	return t
 }
 
+// wideTail is the second cell of a wide rune.
+const wideTail = rune(0)
+
 func (t *VT) blank() []rune { return []rune(strings.Repeat(" ", t.w)) }
 
 // Row is what row i shows, its trailing blanks cut.
-func (t *VT) Row(i int) string { return strings.TrimRight(string(t.cells[i]), " ") }
+func (t *VT) Row(i int) string {
+	return strings.TrimRight(strings.ReplaceAll(string(t.cells[i]), string(wideTail), ""), " ")
+}
 
 // Rows are what the terminal shows.
 func (t *VT) Rows() []string {
@@ -53,13 +65,15 @@ func (t *VT) scrollUp() {
 		t.Scrollback = append(t.Scrollback, t.Row(0))
 	}
 	copy(t.cells[t.top:t.bot], t.cells[t.top+1:t.bot+1])
-	t.cells[t.bot] = t.blank()
+	copy(t.wrapped[t.top:t.bot], t.wrapped[t.top+1:t.bot+1])
+	t.cells[t.bot], t.wrapped[t.bot] = t.blank(), false
 }
 
 // scrollDown scrolls the region down a row: a blank row at its top.
 func (t *VT) scrollDown() {
 	copy(t.cells[t.top+1:t.bot+1], t.cells[t.top:t.bot])
-	t.cells[t.top] = t.blank()
+	copy(t.wrapped[t.top+1:t.bot+1], t.wrapped[t.top:t.bot])
+	t.cells[t.top], t.wrapped[t.top] = t.blank(), false
 }
 
 func (t *VT) lineFeed() {
@@ -82,11 +96,17 @@ func (t *VT) Write(p []byte) (int, error) {
 		case 0x1b:
 			i = t.escape(s, i+1)
 		default:
-			if t.wrapNext {
+			wide := lipgloss.Width(string(r)) == 2 && t.w > 1
+			if t.wrapNext || wide && t.X == t.w-1 {
+				t.wrapped[t.Y] = true
 				t.X = 0
 				t.lineFeed()
 			}
 			t.cells[t.Y][t.X] = r
+			if wide {
+				t.X++
+				t.cells[t.Y][t.X] = wideTail
+			}
 			if t.X == t.w-1 {
 				t.wrapNext = true
 			} else {
@@ -173,7 +193,7 @@ func (t *VT) escape(s []rune, i int) int {
 	case 'J':
 		if arg(0, 0) == 2 {
 			for y := range t.cells {
-				t.cells[y] = t.blank()
+				t.cells[y], t.wrapped[y] = t.blank(), false
 			}
 			break
 		}
@@ -181,11 +201,104 @@ func (t *VT) escape(s []rune, i int) int {
 			t.cells[t.Y][x] = ' '
 		}
 		for y := t.Y + 1; y < t.h; y++ {
-			t.cells[y] = t.blank()
+			t.cells[y], t.wrapped[y] = t.blank(), false
 		}
 	case 'r':
 		t.top, t.bot = arg(0, 1)-1, min(arg(1, t.h), t.h)-1
 		t.X, t.Y = 0, 0
 	}
 	return j
+}
+
+// Resize makes the terminal w × h as most terminals do (tmux, iTerm2,
+// Ghostty): the lines it shows (rows joined where they wrapped) are wrapped
+// again at w, the cursor kept on what it was on; what no longer fits goes
+// up into the scrollback, and taller, lines come back from it. The scroll
+// region is the whole terminal again.
+func (t *VT) Resize(w, h int) {
+	type cell struct {
+		r      rune
+		cursor bool
+	}
+	var lines [][]cell
+	var line []cell
+	last := 0 // the last line with something, or the cursor
+	for y := range t.h {
+		row := t.cells[y]
+		end := len(row)
+		if !t.wrapped[y] {
+			for end > 0 && row[end-1] == ' ' && !(y == t.Y && end-1 == t.X) {
+				end--
+			}
+		}
+		for x := range end {
+			line = append(line, cell{row[x], y == t.Y && x == t.X})
+		}
+		if y == t.Y && t.X >= end { // the cursor past the row's end: blanks to it
+			for x := end; x < t.X; x++ {
+				line = append(line, cell{' ', false})
+			}
+			line = append(line, cell{' ', true})
+		}
+		if t.wrapped[y] {
+			continue
+		}
+		lines = append(lines, line)
+		if len(line) > 0 {
+			last = len(lines) - 1
+		}
+		line = nil
+	}
+	lines = lines[:last+1]
+	var rows [][]rune
+	var wraps []bool
+	cy, cx := 0, 0
+	for _, l := range lines {
+		row := []rune(strings.Repeat(" ", w))
+		x := 0
+		for _, c := range l {
+			wide := c.r != wideTail && lipgloss.Width(string(c.r)) == 2
+			if c.r == wideTail {
+				continue
+			}
+			if x == w || wide && x == w-1 {
+				rows, wraps = append(rows, row), append(wraps, true)
+				row, x = []rune(strings.Repeat(" ", w)), 0
+			}
+			if c.cursor {
+				cy, cx = len(rows), x
+			}
+			row[x] = c.r
+			if wide && x+1 < w {
+				row[x+1] = wideTail
+				x++
+			}
+			x++
+		}
+		rows, wraps = append(rows, row), append(wraps, false)
+	}
+	// Taller: lines come back from the scrollback above what it shows.
+	for len(rows) < h && len(t.Scrollback) > 0 {
+		l := t.Scrollback[len(t.Scrollback)-1]
+		t.Scrollback = t.Scrollback[:len(t.Scrollback)-1]
+		row := []rune(strings.Repeat(" ", w))
+		copy(row, []rune(l))
+		rows, wraps = append([][]rune{row}, rows...), append([]bool{false}, wraps...)
+		cy++
+	}
+	if drop := len(rows) - h; drop > 0 {
+		for _, r := range rows[:drop] {
+			t.Scrollback = append(t.Scrollback, strings.TrimRight(strings.ReplaceAll(string(r), string(wideTail), ""), " "))
+		}
+		rows, wraps, cy = rows[drop:], wraps[drop:], cy-drop
+	}
+	t.w, t.h, t.top, t.bot, t.wrapNext = w, h, 0, h-1, false
+	t.cells, t.wrapped = make([][]rune, h), make([]bool, h)
+	for y := range h {
+		t.cells[y] = t.blank()
+		if y < len(rows) {
+			t.cells[y], t.wrapped[y] = rows[y], wraps[y]
+		}
+	}
+	t.Y, t.X = max(cy, 0), min(cx, w-1)
 }

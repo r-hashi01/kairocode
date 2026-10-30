@@ -1397,6 +1397,11 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.nextMode()
 	case "ctrl+e": // the next effort
 		return m.nextEffort()
+	case "ctrl+o": // the pastes opened in the input, to change them
+		if m.hasPaste() {
+			m.openPastes()
+			return nil
+		}
 	case "ctrl+z": // stopped, as a shell's Ctrl+Z stops a program (fg goes on)
 		return m.stop()
 	case "ctrl+v": // the clipboard's image, else its text (ADR 0026)
@@ -1745,6 +1750,9 @@ func (m *model) status(w int) string {
 		left = warn.Render(m.note)
 	}
 	var right []string
+	if m.hasPaste() {
+		right = append(right, faint.Render("^O open paste"))
+	}
 	if n := len(m.asks); n > 0 {
 		right = append(right, warn.Render(fmt.Sprintf("%d waiting for you", n)))
 	}
