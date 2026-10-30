@@ -158,6 +158,7 @@ M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
 - [x] `kairocode version` が、ビルドのときに埋めた版とコミットを出す（埋めていなければ Go のビルド情報から。`TestVersionLine`、`TestVersionCommand`）。
 - [x] CI（GitHub Actions、macOS と Linux）で `scripts/check.sh` が通る（2026-10-28、PR #12 の `341af18`。sandbox を起動するテストも含めて、両方で通った）。
 - [ ] タグからリリースのバイナリ（macOS と Linux、amd64 と arm64）ができ、`go install` と Homebrew の tap で入る。 → 公開まで保留（利用者の判断、2026-10-27）。
+  - 2026-10-30: 仕組みは用意した。`v*` のタグで、検査を通してから 4 つのバイナリ・チェックサム・Homebrew の formula を下書きのリリースに載せる（`.github/workflows/release.yml`、`scripts/release-build.sh`）。公開の手順は `docs/release.md`。実際のタグと tap は公開のときに。
 - [ ] 利用者向けの README（入れ方、最初の設定、`kairo` の使い方、`/flow`、sandbox、対応 OS は macOS と Linux、第三者のライセンス）。 → 下書きは書いた（`README.md`、2026-10-27）。公開の前に、手での確認（下の関門）の結果に合わせて直す。
 - [ ] 公開の前の関門: Zed と TUI で、普段の作業（バグの修正、機能の追加、リファクタリング）を手でこなす（M2 の残り）。出た不具合を直してから公開する。
   - 2026-10-28、TUI で使って出た不具合を直した: 画面のチラつき（返事を 1 行ずつ上に書く）、同じコマンドの 2 回目を「中断の後」と聞く（ADR 0007 の追記）、終わるときの検査が sandbox の中で通らず質問を押し流す（ADR 0018 の 7・8 節）。足したもの: クリップボードの画像（ADR 0026 の追記）、端末の通知（ADR 0032）、失敗したセッションから続ける（ADR 0021 の追記）。
