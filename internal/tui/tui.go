@@ -308,6 +308,10 @@ type model struct {
 	// header: the header is written (once the width is known); inReply: a
 	// reply has begun (its first paragraph has the mark).
 	header, inReply bool
+	// around is what goes on in the folder, under the header; said: the
+	// user has sent something (then it is not shown).
+	around string
+	said   bool
 
 	// The lines to write, in order: one batch is out at a time.
 	toPrint  []string
@@ -343,7 +347,11 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.start(), listFiles(m.o.Dir))
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, m.start(), listFiles(m.o.Dir)}
+	if m.o.Session == "" && !m.o.Resume {
+		cmds = append(cmds, m.lookAround())
+	}
+	return tea.Batch(cmds...)
 }
 
 // restyle gives the parts that keep a style the colours now in use.
@@ -363,6 +371,9 @@ func (m *model) writeHeader() {
 	}
 	m.header = true
 	m.print(m.headerBox())
+	if m.around != "" {
+		m.print(m.around)
+	}
 }
 
 // The provider, model, effort and mode are in the status line only.
@@ -603,6 +614,16 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		setTheme(m.isDark)
 		m.restyle()
 		m.writeHeader()
+		return nil
+	case aroundMsg:
+		// Under the header, before anything is said: else it is not shown.
+		if m.said {
+			return nil
+		}
+		m.around = m.aroundText(msg)
+		if m.header && m.around != "" {
+			m.print(m.around)
+		}
 		return nil
 	case startedMsg:
 		m.writeHeader()
@@ -1255,6 +1276,7 @@ func (m *model) recall(by int) bool {
 
 // submit sends text as the next turn.
 func (m *model) submit(text string) tea.Cmd {
+	m.said = true
 	m.remember(text)
 	// What is left of the last reply is written first, in its place: not
 	// after the message, nor run on into the next reply.

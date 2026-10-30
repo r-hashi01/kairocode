@@ -126,19 +126,24 @@ func (m *jobManager) spec(session, id string) (jobSpec, error) {
 
 // running counts session's commands not ended.
 func (m *jobManager) running(session string) int {
+	return m.runningBySession()[session]
+}
+
+// runningBySession counts the commands not ended, by session.
+func (m *jobManager) runningBySession() map[string]int {
 	entries, _ := os.ReadDir(m.dir)
-	n := 0
+	out := map[string]int{}
 	for _, e := range entries {
 		var s jobSpec
 		b, err := os.ReadFile(m.path(e.Name(), jobFileSpec))
-		if err != nil || json.Unmarshal(b, &s) != nil || s.Session != session {
+		if err != nil || json.Unmarshal(b, &s) != nil {
 			continue
 		}
 		if !fileThere(m.path(e.Name(), jobFileStatus)) {
-			n++
+			out[s.Session]++
 		}
 	}
-	return n
+	return out
 }
 
 // runnerArgv is how the runner is started: KairoCode's own binary, unless

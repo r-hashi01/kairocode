@@ -1550,7 +1550,7 @@ func (a *agent) listSessions(ctx context.Context, cwd, cursor string) (any, erro
 	for _, s := range list[min(from, len(list)):min(from+sessionsPage, len(list))] {
 		sessions = append(sessions, map[string]any{"sessionId": s.ID, "cwd": s.Dir, "title": s.Title,
 			"updatedAt": s.Updated.UTC().Format(time.RFC3339),
-			"_meta":     map[string]any{"kairocode": map[string]any{"turns": s.Turns, "closed": s.Closed}}})
+			"_meta":     map[string]any{"kairocode": map[string]any{"turns": s.Turns, "closed": s.Closed, "waiting": s.Waiting, "jobs": s.Jobs}}})
 	}
 	out := map[string]any{"sessions": sessions}
 	if end := from + sessionsPage; end < len(list) {

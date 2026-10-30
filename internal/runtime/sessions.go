@@ -25,6 +25,11 @@ type SessionInfo struct {
 	Updated time.Time `json:"updated"` // its last turn's last change
 	Closed  bool      `json:"closed,omitempty"`
 	From    string    `json:"from,omitempty"` // forked from (s/<id>)
+	// Waiting is what its turns under way wait for from a person
+	// (approvals, questions); Jobs, its commands in the background not
+	// ended (ADR 0028). What a client shows as going on.
+	Waiting int `json:"waiting,omitempty"`
+	Jobs    int `json:"jobs,omitempty"`
 }
 
 // Sessions lists the sessions of dir ("" any), the latest used first, at
@@ -37,6 +42,13 @@ func (r *Runtime) Sessions(ctx context.Context, dir string, limit int) ([]Sessio
 	if err != nil {
 		return nil, err
 	}
+	// Read once for all: the turns that may hold a call to review, and the
+	// commands in the background.
+	mcpTurns, err := r.Store.MCPTurns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	jobs := r.jobs.runningBySession()
 	var out []SessionInfo
 	dirs := map[string]string{} // sameDir of each folder, once
 	for _, s := range runs {
@@ -58,8 +70,11 @@ func (r *Runtime) Sessions(ctx context.Context, dir string, limit int) ([]Sessio
 		if in.From != nil {
 			si.From = in.From.Session
 		}
-		if err := r.sessionTurns(ctx, &si); err != nil {
+		if err := r.sessionTurns(ctx, &si, mcpTurns); err != nil {
 			return nil, err
+		}
+		if !si.Closed {
+			si.Jobs = jobs[si.ID]
 		}
 		if si.Title == "" && in.From != nil {
 			si.Title = fmt.Sprintf("(forked from %s at turn %d)", strings.TrimPrefix(in.From.Session, "s/"), in.From.Turn)
@@ -81,9 +96,10 @@ func (r *Runtime) Sessions(ctx context.Context, dir string, limit int) ([]Sessio
 	return out, nil
 }
 
-// sessionTurns counts si's turns, and takes its title and its last change
-// from them.
-func (r *Runtime) sessionTurns(ctx context.Context, si *SessionInfo) error {
+// sessionTurns counts si's turns, and what waits in them for a person (a
+// turn under way, or one of mcpTurns: a call cut off, to be reviewed, under
+// a turn that finished), and takes its title and its last change from them.
+func (r *Runtime) sessionTurns(ctx context.Context, si *SessionInfo, mcpTurns map[string]bool) error {
 	turns, err := r.K.Children(ctx, si.ID)
 	if err != nil {
 		return err
@@ -99,6 +115,13 @@ func (r *Runtime) sessionTurns(ctx context.Context, si *SessionInfo) error {
 			continue
 		}
 		si.Turns++
+		if !t.Finished() || mcpTurns[t.RunID] {
+			p, err := r.pendingIn(ctx, t, t.RunID)
+			if err != nil {
+				return err
+			}
+			si.Waiting += len(p)
+		}
 		if t.Updated.After(si.Updated) {
 			si.Updated = t.Updated
 		}

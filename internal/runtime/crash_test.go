@@ -378,10 +378,17 @@ func crashClaudeEngine(t *testing.T, image []byte) []fakeClaudeStart {
 	if p[0].Kind != "review" || p[0].Tool != "count" {
 		t.Fatalf("pending %+v", p[0])
 	}
+	// The turn has finished; the session listed still has it waiting.
+	if list, err := r.Sessions(ctx, ws, 0); err != nil || len(list) != 1 || list[0].Waiting != 1 {
+		t.Fatalf("listed: %+v %v", list, err)
+	}
 	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	waitPending(t, r, SessionID("cc"), 0)
+	if list, _ := r.Sessions(ctx, ws, 0); len(list) != 1 || list[0].Waiting != 0 {
+		t.Fatalf("listed after the review: %+v", list)
+	}
 	return st
 }
 
