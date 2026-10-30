@@ -92,3 +92,150 @@ KairoCode の設定は KairoCode の置き場（`kairocode.json`、`.kairocode/`
 - **自前の TUI を作る:** 画面の作り込みに時間がかかります。ACP のクライアントの表示より良くなる見込みは薄いです。
 - **opencode を fork する:** TypeScript なので、ADR 0001 と逆の方向です。
 - **ACP のクライアントの `fs/*` と `terminal/*` に、ファイルと端末の操作を任せる:** v2 で無くなります。作用が kairo の記録と sandbox の外で起きます。
+
+## 実装（2026-10-19、M2）
+
+- **Go の ACP は自分で作りました。** JSON-RPC と stdio だけなので、依存（コミュニティの SDK）は足していません。`internal/acp` にあります。
+- **固定した版:** ACP の schema の v1（`schema-v1.26.0`）を、`internal/acp/testdata/acp-schema-v1.26.0/` に置きました（Apache-2.0。LICENSE も置いた）。テストのクライアントは、エージェントから受け取るすべてのメッセージを、この schema で確かめます。検査器は、ACP の schema が使うキーワードだけを持つ、テストの中の小さなものです（`TestSchemaChecker` で、通すものと落とすものを確かめる）。
+- **ACP のプロセスはデーモンのクライアントです**（ADR 0008。上の「ランタイムを埋め込む」を置き換える）。エディタが `kairocode acp` を閉じても、セッションと承認の待ちはデーモン（kairo）に残ります。
+- 実装したメソッドは `initialize`、`session/new`、`session/load`、`session/prompt`、`session/update`（`agent_message_chunk`、`tool_call`、`tool_call_update`、`user_message_chunk`）、`session/request_permission`、`$/cancel_request` です。
+  - ほかのクライアントが先に承認に答えると、出していた `request_permission` を `$/cancel_request` で取り下げます（`TestACPPermissionAnsweredElsewhere`）。
+  - `session/load` は、最後に終わったターンまでの会話を送り直し、待っている承認と要確認をもう一度聞きます（`TestACPApprovalSurvivesRestart`）。
+- **要確認の選択肢は、どちらも `reject_once` の種類にしました。** ACP の選択肢の種類は表示の手がかりですが、ツールを自動で許すクライアントがあります。「効いた」を `allow_once` にすると、人が答えずに要確認が決着し得ます（不変条件 4）。選択肢の ID は `did_not_take_effect` と `took_effect` です。提示していない ID の答えは受け取らず、待ちは kairo に残ります（`TestCrashACPReview`）。
+- 要確認と、Claude Code のエンジンの承認には、まだクライアントに伝えた `tool_call` がありません。そのため、`request_permission` の前に、同じ ID の `tool_call` を送ります。
+- `session/prompt` の応答は、そのターンの更新をすべて送ってから返します。見張りは、`Send` の前に始めます。
+- **端末の対話（`kairo`、`kairocode chat`）を、自分の ACP のクライアントとして作りました**（2026-10-19。上の「端末で使う画面」）。
+  - 利用者の求め（claude と同じく、引数の無い `kairo` で対話が始まる）に合わせました。`kairo` は同じバイナリへのリンクです（`make build`）。
+  - 同じプロセスの中で ACP のエージェントを動かし、パイプでつなぎます。エディタと同じ経路を通るので、承認、要確認、`session/load` による再開、スラッシュのコマンドが、エディタと同じに動きます。
+  - 行単位で、TUI のライブラリは使いません（依存は足していない）。返答は届いたそばから書きます。
+  - 権限の確認は、選択肢の番号で答えます。許すものと断るものが 1 つずつあるときは y と n も使えます。要確認は選択肢がどちらも `reject_once` なので、番号だけで答えます。
+  - 抜けても、セッションはデーモンに残ります。`kairo -session <ID>` で、会話を表示し直してから続けます。
+  - ACP の通知は、受け取った順に、続く応答より前に処理するようにしました（`TestClientKeepsTheOrderOfUpdates`）。
+  - テストは `TestChat`、`TestChatAsks`、`TestNoCommandIsTheChat`、`TestClientPermission` です。
+- まだ入れていないもの:
+  - `allow_always`（規則として記録する）
+  - `plan`
+  - 差分の表示（`tool_call` の `diff`）
+
+### opencode のエージェント・コマンド・スキル（2026-10-19、M2）
+
+opencode v1.19.3 のソースを読んで、同じ意味で読むようにしました（`internal/opencode`）。
+
+- **置き場所:** 利用者の `~/.config/opencode` と、リポジトリの根から作業ディレクトリまでの各 `.opencode` を読みます。後のものほど優先です。
+  - opencode のコードでは、上の階層の `.opencode` が近いものに勝ちます。ここでは、設定ファイル（`opencode.json`）と同じく近いものを勝たせます。
+- **エージェント**（`agent/` と `agents/`、入れ子の名前は `team/review`）
+  - 本文は、既定のシステムプロンプトの代わりになります。
+  - `model` は `anthropic/...` だけを受け付けます。セッションで指定したモデルが先です。
+  - `steps`（`maxSteps`）を受け付けます。
+  - `tools` と `permission` は、プロジェクトの規則の後に重ねます（後に一致した規則が勝つ）。opencode の `edit` は、ここの `edit` と `write` の両方に写します。
+  - `mode: subagent` のエージェントでセッションを動かすことはできません（サブエージェントは M3）。
+  - 定義は `agent.load` で記録します（不変条件 2）。
+- **コマンド**（`command/` と `commands/`）
+  - 展開の順番は opencode と同じです：`$1`…（最も大きい番号が残りを取る）→ `$ARGUMENTS` → 引数の付け足し → `` !`…` `` → 前後の空白の除去 → `@file`。
+  - `` !`…` `` は、sandbox の中で、読み取り専用・ネットワーク無しで動かします。
+  - `@file` は作業ディレクトリの中のファイルだけを、本文の後に付けます。
+  - 展開はデーモンで行い、展開した文をメッセージとして記録します。再開しても、もう一度は展開しません。
+  - コマンドの `agent` と `model` は、そのターンだけに効きます（`SessionEvent` の `Agent`、`Model`。セッションの版 4）。
+  - `subtask` は、M3 までは普通のターンとして動かします。
+  - ACP では、スラッシュのコマンドとして見せます。
+- **スキル**（`.claude/skills`、`.agents/skills`、設定の置き場所の `skill/` と `skills/` の下の `SKILL.md`、どの深さでも）
+  - frontmatter の `name` で名付けます。
+  - 一覧は、opencode と同じ形でシステムプロンプトに入れます。
+  - 中身は `skill` ツール（作用の型は Read）で渡します。本文、置き場所、ほかのファイル 10 個までです。
+  - スキルが無ければ、`skill` ツールは見せません。
+- **記録と権限:** コマンドの `` !`…` `` の出力と `@file` の中身は、利用者のメッセージとして記録され、モデルに送られます。bash や read のツールの結果と同じ扱いです。そのため、プロジェクトの権限の規則で deny されたコマンドは動かさず（コマンドがエラーになる）、deny されたファイルは付けません。`` !`…` `` は 30 秒で打ち切ります。環境変数の秘密は、sandbox が消します（ADR 0005）。
+- **読めない定義:** frontmatter を開いて閉じていない定義は、エラーにします（opencode は読み飛ばしますが、権限の規則が黙って消えないようにする）。リポジトリの外では、作業ディレクトリの上の階層の `.opencode` は読みません。
+- **YAML:** frontmatter は、opencode の定義が実際に使う範囲だけを、小さな自前のパーサーで読みます。範囲は、入れ子の map（順序を保つ）、引用符、ブロックスカラー、コメント、コロンを含む説明です。リスト、フロー、アンカーは読み違えずに断ります。依存は足していません。
+
+
+## 追記: スキルの置き場所・名前の規則・/<skill>・codex（2026-10-21、利用者の要望「skills 対応させましょう」）
+
+利用者が選んだのは、次の 3 つです。`allowed-tools` は選ばれなかったので入れていません。
+
+- `/<skill>` で呼べるようにする
+- 置き場所と名前の規則
+- codex の自前のスキルを止める
+
+- **置き場所**（`opencode.SkillDirs`）: 決定 48 行の `.kairocode/skills/` を入れました。利用者のもの（`~/.config/kairocode/skills`）と、リポジトリの根から作業ディレクトリまでの `.kairocode/skills` です。順番は最後なので、同じ名前なら KairoCode のものが勝ちます。
+- **名前の規則**（`opencode.CheckedSkills`）
+  - 名前は opencode と同じく、英小文字と数字の語を `-` でつないだ、64 文字までのものです。SKILL.md のあるディレクトリの名前とも一致させます。
+  - 規則に合わないもの、frontmatter が読めないもの、名前の無いものは取らず、理由を残します。
+  - 同じ名前の後のものに置き換えられたものも、どれに置き換えられたかを残します。
+- **`/<skill>`**
+  - スキルは、同じ名前のコマンド（`commands/*.md`）が無ければ、`/名前` のコマンドとして出します（`opencode.Command.Skill`、ACP では説明の頭に `(skill)`）。
+  - 打つと、スキルの本文（skill ツールが返すものと同じ）と「What the user asks of it: <引数>」を、利用者の発言としてターンを始めます（`Runtime.runSkill`）。
+  - 送った文はメッセージとして記録するので、再開してもスキルを読み直しません（不変条件 2）。
+- **`/skills`:** ターンを始めずに、スキルの一覧（`/名前 — 説明` と場所）と、取らなかった SKILL.md とその理由を出します。デーモンの API は `GET /sessions/{id}/skills` です。
+- **codex の自前のスキル**
+  - codex は、`.agents/skills`、`~/.agents/skills`、`/etc/codex/skills`、同梱のスキル、プラグインのスキルを、自分のモデルに並べます。
+  - KairoCode は自分のスキルの一覧を渡しているので、二重になり、KairoCode の外のスキルも混ざります。
+  - そのため、codex-acp を起動するときに `CODEX_CONFIG` で `skills.include_instructions = false` を渡し、codex がスキルの一覧をモデルに出さないようにします。利用者自身の `CODEX_CONFIG` があれば、それに足します。
+  - 確かめ方: 手元の codex 0.163 で `codex debug prompt-input -c skills.include_instructions=false` を実行すると、「Available skills」の節が消えることを確かめました。
+    - ただし、確かめたのは codex 本体の設定（`-c`）としてです。codex-acp が `CODEX_CONFIG` を session の設定に足して codex に渡すことは、README（「JSON object merged into the Codex session config」）とコードでしか確かめていません。本物の codex でターンを動かして確かめるのは、まだです。
+    - 利用者の `CODEX_CONFIG` が JSON でなければ、手を付けずにそのまま渡します。codex は動きますが、自前のスキルは隠れません（ログに残す）。
+  - Claude Code は、すでに自前のスキルを止めています（`--setting-sources ""`）。
+- **名前の規則の出どころ:** Agent Skills の仕様では、name は SKILL.md の親ディレクトリの名前と一致しなければなりません。その仕様に合わせました。これまで名前の違うディレクトリで読めていたスキルは、読まれなくなります。読まれなかったものは、`/skills` に理由が出ます。
+- **組み込みのコマンドと同じ名前のスキル**（`skills`、`model`、`undo` など）は、組み込みのほうが先です。`/` では呼べませんが、モデルは skill ツールで使えます。
+- **テスト:** `TestSkillRules`、`TestSkills`、`TestSkillCommands`、`TestCodexOwnSkillsOff`（JSON でない設定はそのまま）、`TestACPSkills`。
+
+## 追記: .claude と .agents の定義も読む（2026-10-21、利用者の要望「.claude とか .agent のディレクトリも読みましょう」）
+
+- **エージェントとコマンドを読む場所**（`opencode.DefinitionDirs`）
+  - 後のものが勝つ順で、まず利用者の `~/.claude`、`~/.agents`、opencode の利用者の設定です。
+  - 続けて、リポジトリの根から作業ディレクトリまでの各階層の `.claude`、`.agents`、`.opencode` を読みます。
+  - 読むのは、それぞれの `agents/`・`commands/`（と単数形）の `.md` です。
+  - 同じ名前なら `.opencode` が勝ちます。opencode のものだけを読む場所（`Dirs`）は、そのまま残しました。
+- **Claude Code のエージェント**（`.claude/agents/*.md`）
+  - 名前は frontmatter の `name` で決め、`mode` が無ければサブエージェントにします（Claude Code のエージェントは、どれもサブエージェント）。
+  - `tools: Read, Grep`（や、リストの形）は、そのエージェントに渡すツールを絞ります（`Agent.Only`）。
+    - 名前は KairoCode のツールに直します（Read→read、Edit/MultiEdit→edit、LS→list、`Bash(git:*)`→bash など）。知らない名前（MCP のツールなど）は、そのまま使います。`*` などのグロブを含む名前は捨てます。
+    - リストに無いツールは、エージェントに見せず、断る規則も足します（`agent.load` で記録）。
+    - リストにあるツールを許すことはしません。許すか聞くかは、利用者と project の規則のままです。Claude Code の `tools` も、使えるツールを絞るだけです。
+    - opencode の定義の `tools` は、これまでどおり map だけを受けます。
+  - `model` の `sonnet`・`opus`・`haiku` は、最新の Claude のモデルに直します。`inherit` はモデルを指定しません。`color` などは読みません。
+- **Claude Code のコマンド**（`.claude/commands/*.md`）: opencode のコマンドと同じく展開します（`$ARGUMENTS`、`!` のコマンドなど）。`argument-hint` は、ACP のコマンドの入力の案内（hint）にします。
+- **読めない定義は外します。** `.claude` と `.agents` のファイルは別の道具のものなので、読めないものは外し、ほかを止めません。形が違う、本文が無い、`mode` などの値が受け取れない、が当たります。`.opencode` のものは、これまでどおり誤りとして止めます。
+  - どれが別の道具のものかは、定義を読むディレクトリ（`.claude`・`.agents`）で決めます。パスの途中に `/.claude/` があっても（Claude Code の worktree、`…/.claude/worktrees/x`）、その project の `.opencode` は opencode のものです。
+  - 別の道具のファイルは、KairoCode の組み込みのエージェント（`build`、`plan`）を変えられません。
+- **Claude Code のコマンドの `!`:** `allowed-tools` が Bash を許していなければ実行せず、「(not run: …)」に置き換えます。Claude Code と同じ扱いです。
+- **モデルの名前:** `sonnet` などを Claude のモデルに直すのは、API と Claude Code のエンジンのときだけです。codex などでは、そのエンジンの既定のモデルにします。
+- **frontmatter の読み方**
+  - スカラーのリスト（`- Read` の行、または 1 行の `[a, b]`）を、1 つのスカラーとして読むようにしました。行の形は項目を「, 」でつなぎ、1 行の形は括弧ごとそのまま読みます。
+  - Claude Code の `tools` と `argument-hint: [env]` が、これで読めます。map の flow（`{}`）、アンカー、タグは、これまでどおり受けません。
+- **指示のファイル:** `AGENTS.md`・`CLAUDE.md` に加えて、`.claude/CLAUDE.md`、`CLAUDE.local.md`、利用者の `~/.claude/CLAUDE.md` を読みます。利用者のものが最初です。
+- **サブエージェントの一覧:** task ツールを出すときは、渡せるエージェント（primary でなく、隠し・無効でなく、説明のあるもの）を、システムの指示に `<available_agents>` として並べます。Claude Code のエージェントも、モデルから見えるようになります。
+- **信頼の確認の文:** 読む場所（.kairocode、.opencode、.claude、.agents、AGENTS.md、CLAUDE.md）を書き足しました。
+- **durability-reviewer の指摘で直したこと**
+  - 最初の形では、ツールのリストを「リストのものを許す」層にしていました。そのため、利用者の「聞く」「断る」の規則を上書きし、`*` を書けばすべて許すことになっていました。今は、絞るだけで、許しません。
+  - あわせて直したこと（上に書いた分）:
+    - worktree の中の誤判定
+    - 組み込みのエージェントの上書き
+    - 受け取れない値の扱い
+    - `!` の扱い
+    - モデルの名前
+    - リストの中のコメントと括弧の中のカンマ
+- **テスト:** `TestClaudeDefinitions`、`TestToolList`、`TestDefinitionsInAClaudeWorktree`、`TestParseLists`、`TestClaudeCodeDefinitions`、`TestClaudeAgentToolsList`（リストが利用者の「聞く」を上書きしない。許す層の形に戻すと落ちる）、`TestAgentsRefuseBadDefinitions`。
+
+## 追記: CLI のエージェントに、指示を二重に渡さない（2026-10-21、確かめた結果）
+
+KairoCode は、`AGENTS.md`・`CLAUDE.md` などの指示とスキルの一覧を、自分のシステムの指示に入れてエージェントに渡します。CLI のエージェントが自分でも同じものを読むと、モデルに二重に入ります。それぞれ、モデルを呼ばずに確かめました。
+
+| エージェント | KairoCode が渡す形 | 自分で読むもの | 止め方 |
+|---|---|---|---|
+| Claude Code 2.1.305 | `--setting-sources ""` | 読まない | もとから止まっている |
+| codex 0.163 | `CODEX_CONFIG` | project の `AGENTS.md` | `project_doc_max_bytes = 0` を足した |
+| copilot 1.0.98 | 起動の引数 | project の `AGENTS.md`・`CLAUDE.md`（`copilot instruction list`） | `--no-custom-instructions` を足した |
+
+- **Claude Code**
+  - 確かめ方: 手元の 127.0.0.1 に、要求を記録して 400 を返すだけのサーバーを立て、`ANTHROPIC_BASE_URL` をそこに向けて動かしました。Anthropic には何も送っていません。
+  - KairoCode と同じ引数（`--setting-sources ""`）では、`~/.claude/CLAUDE.md`、`CLAUDE.md`、`.claude/CLAUDE.md`、`CLAUDE.local.md` のどれも要求に入りませんでした。モデルへの指示は、KairoCode のシステムの指示だけです。
+  - 比べるために `--setting-sources` を外すと、4 つとも 1 度ずつ入りました。
+  - 守らせるテスト: `TestClaudeEngineReadsNoSettingsOfItsOwn`（`--setting-sources ""` を渡すこと、利用者の CLAUDE.md がシステムの指示にちょうど 1 度入ること）。
+- **codex**
+  - 確かめ方: `codex debug prompt-input` で、project の `AGENTS.md` が codex 自身の指示に入ることを見ました。
+  - `-c project_doc_max_bytes=0` で入らなくなることも確かめたので、`CODEX_CONFIG` に足しました。codex 自身の `~/.codex/AGENTS.md` は、KairoCode が読まないので、codex に任せます。
+- **copilot**
+  - 確かめ方: `copilot instruction list` で、project の `AGENTS.md` と `CLAUDE.md` を読むことを見ました。
+  - `--no-custom-instructions`（「AGENTS.md などから custom instructions を読まない」）を ACP の起動に足しました。ACP で起動してこの旗を受けることは確かめました。
+  - ただし、旗を付けた session がそれらを本当に読まないかは、モデルを呼ばずには確かめられません。そのため、copilot の説明の文言に拠っています。
+- **テスト:** `TestCodexOwnSkillsOff`（codex の `project_doc_max_bytes`、copilot の旗）。

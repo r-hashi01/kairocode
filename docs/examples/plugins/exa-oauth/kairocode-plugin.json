@@ -1,0 +1,13 @@
+{
+  "name": "exa",
+  "description": "Exa の web 検索（OAuth でサインイン）",
+  "mcp": {
+    "type": "remote",
+    "url": "https://mcp.exa.ai/mcp?login"
+  },
+  "auth": { "type": "oauth" },
+  "tools": {
+    "web_search_exa": { "effect": "read" },
+    "web_fetch_exa": { "effect": "read" }
+  }
+}

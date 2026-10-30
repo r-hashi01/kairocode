@@ -6,5 +6,6 @@ quick:            ## what the hooks run
 	scripts/check.sh --quick
 build:
 	go build -o bin/kairocode ./cmd/kairocode
+	ln -sf kairocode bin/kairo        # the same command, as `kairo`
 fmt:
 	gofmt -w .

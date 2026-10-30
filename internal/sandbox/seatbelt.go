@@ -57,6 +57,20 @@ func seatbeltPolicy(p Policy, root string) (string, []string) {
 		// The writable directory itself is not removed or renamed away.
 		fmt.Fprintf(&b, "(deny file-write-unlink (require-all (literal (param %q)) (vnode-type DIRECTORY)))\n", r)
 	}
+	if p.Loopback && !p.Network && p.SocketDir != "" {
+		// What stays on this machine (ADR 0031): localhost, and Unix sockets
+		// in the command's own directory alone.
+		d := param("SOCKET_DIR", p.SocketDir)
+		b.WriteString("\n; loopback\n")
+		b.WriteString("(allow network-bind (local ip \"localhost:*\"))\n")
+		b.WriteString("(allow network-inbound (local ip \"localhost:*\"))\n")
+		b.WriteString("(allow network-outbound (remote ip \"localhost:*\"))\n")
+		fmt.Fprintf(&b, "(allow network-bind (local unix-socket (subpath (param %q))))\n", d)
+		fmt.Fprintf(&b, "(allow network-outbound (remote unix-socket (subpath (param %q))))\n", d)
+		// No socket elsewhere is moved (into its directory, to be reached)
+		// or removed.
+		fmt.Fprintf(&b, "(deny file-write* (require-all (vnode-type SOCKET) (require-not (subpath (param %q)))))\n", d)
+	}
 	if p.Network {
 		b.WriteString("\n; network\n")
 		b.WriteString(seatbeltNetwork)

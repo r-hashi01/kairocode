@@ -3,20 +3,27 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 	_ "modernc.org/sqlite"
 
+	"github.com/r-hashi01/kairocode/internal/agents"
+	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -34,10 +41,26 @@ type Config struct {
 	Engine string
 	// Provider is the model provider of the API engine.
 	Provider provider.Provider
-	// ClaudePath is the claude command of the Claude Code engine.
-	ClaudePath string
+	// ClaudePath is the claude command of the Claude Code engine;
+	// CodexPath and CopilotPath, the codex and copilot commands of theirs
+	// (ADR 0014).
+	ClaudePath  string
+	CodexPath   string // the ACP agent: codex-acp
+	CopilotPath string // copilot, run with --acp
+	// CopilotHome is copilot's settings directory, where KairoCode turns
+	// copilot's own hooks off (ADR 0018; default: $COPILOT_HOME, else
+	// ~/.copilot; with NoCLIs, none: nothing is written).
+	CopilotHome string
+	// AgentsDir keeps the ACP agents installed from the registry (ADR
+	// 0015; default: agents beside DB); AgentRegistry is the registry's
+	// URL (agents.RegistryURL for ACP's; "" reads none).
+	AgentsDir     string
+	AgentRegistry string
 	// ExtraTools are offered besides the built-in ones (tests).
 	ExtraTools []tools.Def
+	// JobRunner runs a command in the background, given its folder
+	// (ADR 0028; default: this binary's kairocode jobs run).
+	JobRunner []string
 	// Model is the model an agent uses unless it names one.
 	Model    string
 	MaxSteps int
@@ -54,26 +77,68 @@ type Config struct {
 	// Now is kairo's clock (tests; the real clock when nil).
 	Now func() time.Time
 
-	// onlyV2 declares the session and the turn at version 2 only, as a
-	// build before version 3 did (tests).
-	onlyV2 bool
+	// turn, in tests, stands in for the turn's function.
+	turn func(*kairo.Context, workflows.TurnInput) (workflows.TurnOutput, error)
+	// onlyVersion, in tests, declares the session and the turn at that old
+	// version only ("2", "3" or "4"), as a build of that version did.
+	onlyVersion string
+	// onlyFlowVersion, in tests, declares the flow at that old version
+	// only ("1").
+	onlyFlowVersion string
+	// flowFunc, in tests, runs the flows of the current version in place
+	// of workflows.RunFlow: code that changed under the same version.
+	flowFunc func(*kairo.Context, workflows.FlowInput) (workflows.FlowOutput, error)
 }
 
 type Runtime struct {
 	K     *kairo.Kairo
+	ks    *kairo.SQLStore
 	Store *store.Store
 	db    *sql.DB
 	cfg   Config
 	mcp   *mcpServer
+	ev    *events
+	// lsp keeps the language servers whose errors are added to a write's
+	// result (ADR 0009).
+	lsp *lsp.Manager
+	// agents are the ACP agents of the registry (ADR 0015); auth, what is
+	// known of each provider's sign-in.
+	agents *agents.Manager
+	// ext keeps the MCP servers' sessions (ADR 0022).
+	ext extServers
+	// jobs are the commands in the background (ADR 0028).
+	jobs *jobManager
+	// copilotHooks: one change of copilot's settings at a time.
+	copilotHooksMu sync.Mutex
+	auth           auths
 
 	sendMu sync.Mutex
 
+	approveMu sync.Mutex // serializes answers (Approve)
+
+	// switches are the switches of provider and model (ADR 0014) that wait
+	// for their session's next event.
+	switchMu sync.Mutex
+	switches map[string]*workflows.Switch
+
 	closeOnce sync.Once
 	closeErr  error
+	closed    atomic.Bool
+	// bg: what the runtime does by itself (keeping flows' runs, ADR 0029),
+	// stopped and waited for as it closes.
+	bgMu     sync.Mutex
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bg       sync.WaitGroup
 
 	mu      sync.Mutex
 	changed chan struct{} // closed and replaced whenever a run starts or settles here
 }
+
+// NoCLIs is the environment variable that, set to "1", keeps the runtime
+// from finding the user's claude, codex and copilot by name (tests: they
+// never run the real ones, invariant 9).
+const NoCLIs = "KAIROCODE_NO_CLIS"
 
 // DefaultDataDir is where a user's sessions live, and where their daemon
 // runs (ADR 0008).
@@ -92,6 +157,13 @@ func DBIn(dir string) string { return filepath.Join(dir, "kairo.db") }
 func DefaultDB() string { return DBIn(DefaultDataDir()) }
 
 func Open(ctx context.Context, cfg Config) (*Runtime, error) {
+	if cfg.Engine != "" {
+		e, ok := engineOf(cfg.Engine) // a provider's name: its engine's
+		if !ok {
+			return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+		}
+		cfg.Engine = e
+	}
 	switch cfg.Engine {
 	case "", workflows.EngineAPI:
 		cfg.Engine = workflows.EngineAPI
@@ -101,19 +173,47 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		if cfg.Model == "" {
 			cfg.Model = provider.DefaultModel
 		}
-	case workflows.EngineClaudeCode:
-		// The model is Claude Code's own default unless one is named.
+	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
+		// The model is the CLI's own default unless one is named.
 	default:
-		return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+		if !strings.HasPrefix(cfg.Engine, workflows.EngineACP) {
+			return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
+		}
 	}
-	if cfg.ClaudePath == "" { // a session may ask for Claude Code whatever the default
+	// A session may ask for any engine whatever the default. With NoCLIs
+	// (tests), the user's own CLIs are not found unless named.
+	if os.Getenv(NoCLIs) == "1" {
+		none := filepath.Join(os.TempDir(), "kairocode-no-cli")
+		for _, p := range []*string{&cfg.ClaudePath, &cfg.CodexPath, &cfg.CopilotPath} {
+			if *p == "" {
+				*p = none
+			}
+		}
+	}
+	if cfg.ClaudePath == "" {
 		cfg.ClaudePath = "claude"
+	}
+	if cfg.CodexPath == "" {
+		cfg.CodexPath = "codex-acp"
+	}
+	if cfg.CopilotPath == "" {
+		cfg.CopilotPath = "copilot"
 	}
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = 50
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.CopilotHome == "" && os.Getenv(NoCLIs) != "1" {
+		cfg.CopilotHome = os.Getenv("COPILOT_HOME")
+		if cfg.CopilotHome == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				cfg.CopilotHome = filepath.Join(home, ".copilot")
+			} else {
+				cfg.Logger.Warn("copilot's settings cannot be found, so its own hooks are not turned off (ADR 0018)", "err", err)
+			}
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.DB), 0o700); err != nil {
 		return nil, err
@@ -124,9 +224,27 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{})}
+	if cfg.AgentsDir == "" {
+		cfg.AgentsDir = filepath.Join(filepath.Dir(cfg.DB), "agents")
+	}
+	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger),
+		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
+	r.ev = newEvents(r)
+	r.ext.logf = r.logf
+	r.bgCtx, r.bgCancel = context.WithCancel(context.Background())
+	r.jobs = newJobs(r)
+	if id := registryAgent(cfg.Engine); id != "" && cfg.Engine != workflows.EngineCodex && cfg.Engine != workflows.EngineCopilot &&
+		!r.knownAgent(ctx, id) {
+		r.lsp.Close()
+		r.ev.close()
+		closeDB(db)
+		return nil, fmt.Errorf("runtime: the engine %q: %w: %s", cfg.Engine, ErrNoProvider, id)
+	}
 	fail := func(err error) (*Runtime, error) {
-		db.Close()
+		r.bgCancel()
+		r.ev.close()
+		r.lsp.Close()
+		closeDB(db)
 		return nil, err
 	}
 	if r.Store, err = store.New(ctx, db); err != nil {
@@ -136,6 +254,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return fail(err)
 	}
+	r.ks = ks
 	r.K, err = kairo.Open(ctx, kairo.Options{
 		Store:   ks,
 		Owner:   cfg.Owner,
@@ -157,8 +276,37 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		r.K.Close()
 		return fail(err)
 	}
+	r.jobs.recover()
+	r.background(r.keepMissed) // the flows' runs a stopped process did not keep (ADR 0029)
 	return r, nil
 }
+
+// Awaiting says something here needs the process to stay up though
+// nothing runs (ADR 0028): a wait with a deadline or a sleep (kairo's
+// timers fire only in a process). A command in the background does not: its runner
+// starts a daemon to tell of its end.
+func (r *Runtime) Awaiting(ctx context.Context) bool {
+	ts, err := r.ks.DueTimers(ctx, math.MaxInt64, 1)
+	return err == nil && len(ts) > 0
+}
+
+// background runs f on its own, stopped (its ctx) and waited for as the
+// runtime closes; not once it is closing.
+func (r *Runtime) background(f func(ctx context.Context)) {
+	r.bgMu.Lock()
+	defer r.bgMu.Unlock()
+	if r.closed.Load() || r.bgCtx == nil {
+		return
+	}
+	r.bg.Add(1)
+	go func() {
+		defer r.bg.Done()
+		f(r.bgCtx)
+	}()
+}
+
+// closing says the runtime is closing (or closed).
+func (r *Runtime) closing() bool { return r.closed.Load() }
 
 // Drain stops the runtime at the edges of its steps (kairo's Drain): no new
 // step starts, and the steps under way finish with their outcomes recorded,
@@ -169,11 +317,41 @@ func (r *Runtime) Drain(ctx context.Context) error { return r.K.Drain(ctx) }
 // Close closes the runtime; closing it again does nothing.
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
+		r.bgMu.Lock()
+		r.closed.Store(true)
+		r.bgMu.Unlock()
+		if r.bgCancel != nil {
+			r.bgCancel()
+		}
+		r.bg.Wait()
+		r.ev.close()
 		err := r.mcp.close()
 		err = errors.Join(err, r.K.Close())
-		r.closeErr = errors.Join(err, r.db.Close())
+		r.lsp.Close()
+		r.ext.close()
+		r.closeErr = errors.Join(err, closeDB(r.db))
 	})
 	return r.closeErr
+}
+
+// closeDB closes db and returns once it holds no connection. database/sql's
+// Close does not wait for its opener: a connection asked for before (a
+// query cut short as kairo closed, with another waiting: the pool has one)
+// is opened after Close returns and only then closed, touching the files
+// (kairo.db-wal) of a closed runtime, after a daemon let go of its lock.
+// The pool's count of open connections, which counts that one from when it
+// is asked for, is the only sign of it.
+// A connection that stays (one leaked, or the opener stopped with one asked
+// for) is an error after a while, not a wait without end.
+func closeDB(db *sql.DB) error {
+	err := db.Close()
+	for end := time.Now().Add(5 * time.Second); db.Stats().OpenConnections > 0; {
+		if time.Now().After(end) {
+			return errors.Join(err, fmt.Errorf("closing the database: %d connections still open after 5s", db.Stats().OpenConnections))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return err
 }
 
 // toolDefs is every tool this runtime offers.
@@ -194,11 +372,16 @@ func (r *Runtime) observe(o kairo.Observation) {
 	if r.cfg.Observe != nil {
 		r.cfg.Observe(o)
 	}
+	r.ev.observe(o)
 	if o.Kind != kairo.ObsRunStarted && o.Kind != kairo.ObsRunSettled {
 		return
 	}
 	if o.Kind == kairo.ObsRunSettled && o.Status == "blocked" && r.mcp != nil {
 		r.mcp.blocked(o.Parent)
+	}
+	if o.Kind == kairo.ObsRunSettled && o.Workflow == workflows.Flow && o.Status != "blocked" {
+		run := o.RunID // kept to be looked at later (ADR 0029); kairo's observer must not block
+		r.background(func(ctx context.Context) { r.keepSettled(ctx, run) })
 	}
 	r.mu.Lock()
 	close(r.changed)
@@ -226,17 +409,80 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 }
 
 func (r *Runtime) declare() {
-	if r.cfg.onlyV2 {
-		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion2))
-		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion2))
-	} else {
-		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
+	switch v := r.cfg.onlyVersion; v {
+	case workflows.SessionVersion6:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
+	case workflows.SessionVersion5:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(v))
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
-		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion2), kairo.Draining())
-		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion2), kairo.Draining())
+	case workflows.SessionVersion4:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV4, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurn, kairo.WorkflowVersion(workflows.TurnVersion))
+	case workflows.SessionVersion3, workflows.SessionVersion2:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV3, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV3, kairo.WorkflowVersion(v))
+	default:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
+		// Version 6 finishes as it started: a turn is taken as its result
+		// said (kairo-gap #22).
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(workflows.SessionVersion6), kairo.Draining())
+		// Version 5 finishes as it started: no switch of engine or model.
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(workflows.SessionVersion5), kairo.Draining())
+		// Version 4 finishes as it started: a stopped turn is not kept.
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV4, kairo.WorkflowVersion(workflows.SessionVersion4), kairo.Draining())
+		// Versions 3 and 2 finish with the functions they started with.
+		for _, v := range []string{workflows.SessionVersion3, workflows.SessionVersion2} {
+			kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV3, kairo.WorkflowVersion(v), kairo.Draining())
+		}
+		for _, v := range []string{workflows.TurnVersion3, workflows.TurnVersion2} {
+			kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV3, kairo.WorkflowVersion(v), kairo.Draining())
+		}
 	}
 	kairo.Workflow(r.K, workflows.MCPCall, workflows.RunMCPCall, kairo.WorkflowVersion(workflows.MCPCallVersion))
+	if r.cfg.onlyFlowVersion == workflows.FlowVersion1 {
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1))
+	} else {
+		run := workflows.RunFlow
+		if r.cfg.flowFunc != nil {
+			run = r.cfg.flowFunc
+		}
+		kairo.Workflow(r.K, workflows.Flow, run, kairo.WorkflowVersion(workflows.FlowVersion))
+		// Versions 2 and 1 finish as they started: no flow.step, and in 1
+		// no At either.
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV2, kairo.WorkflowVersion(workflows.FlowVersion2), kairo.Draining())
+		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1), kairo.Draining())
+	}
+	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
+	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, r.flowLoad)
+	kairo.Action(r.K, workflows.ActFlowWould, kairo.Unprotected, r.flowWould)
+	// bash_wait (ADR 0028): watching a command and reading it change
+	// nothing; done again, they find the same.
+	kairo.Action(r.K, workflows.ActJobWatch, kairo.Unprotected, r.jobWatch)
+	kairo.Action(r.K, workflows.ActJobResult, kairo.Unprotected, r.jobResult)
+	kairo.Action(r.K, workflows.ActFlowPut, kairo.Unprotected, r.flowPut)
+	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
+	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,
+		func(*kairo.TaskContext, workflows.FlowAskInput) (bool, error) { return true, nil }) // recorded: Pending reads it
+	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, kairo.Timeout(10*time.Minute))
+	kairo.Action(r.K, workflows.ActHookTrust, kairo.Unprotected, r.hookTrustAction) // a record, written once
+	kairo.Action(r.K, workflows.ActHookCheck, kairo.Unprotected, r.hookCheckAction)
+	kairo.Action(r.K, workflows.ActHookDecide, kairo.Unprotected, r.hookDecideAction) // a record, written once
+	kairo.Action(r.K, workflows.ActHookCommand, kairo.Real, r.hookCommandAction)      // a command: not run again unasked
+	kairo.Action(r.K, workflows.ActHookNote, kairo.Unprotected, r.hookNoteAction)
+	kairo.Action(r.K, workflows.ActTaskArgs, kairo.Unprotected, r.taskArgs)
+	kairo.Action(r.K, workflows.ActTaskResult, kairo.Unprotected,
+		func(t *kairo.TaskContext, in workflows.TaskResultInput) (workflows.ToolOutput, error) {
+			return r.toolResult(t, in.Call, tools.Result{Output: in.Text, IsError: in.IsError})
+		})
 	kairo.Action(r.K, workflows.ActClaudeTurn, kairo.Unprotected, r.claudeTurn, kairo.Timeout(time.Hour))
+	kairo.Action(r.K, workflows.ActCodexTurn, kairo.Unprotected, r.acpTurn(workflows.EngineCodex), kairo.Timeout(time.Hour))
+	kairo.Action(r.K, workflows.ActCopilotTurn, kairo.Unprotected, r.acpTurn(workflows.EngineCopilot), kairo.Timeout(time.Hour))
+	kairo.Action(r.K, workflows.ActACPTurn, kairo.Unprotected,
+		func(t *kairo.TaskContext, in workflows.ClaudeTurnInput) (workflows.ClaudeTurnOutput, error) {
+			return r.acpTurn(in.Engine)(t, in)
+		}, kairo.Timeout(time.Hour))
 	kairo.Action(r.K, workflows.ActPermissionCheck, kairo.Unprotected, r.permissionCheck)
 	kairo.Action(r.K, workflows.ActToolDenied, kairo.Unprotected, r.toolDenied)
 	kairo.Action(r.K, workflows.ActMCPAsk, kairo.Unprotected, r.mcpAsk)
@@ -248,6 +494,15 @@ func (r *Runtime) declare() {
 		func(t *kairo.TaskContext, in workflows.HistoryExtendInput) (string, error) {
 			return r.Store.Extend(t, in.Prev, in.Messages)
 		})
+	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
+	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, kairo.Timeout(10*time.Minute))
+	// External tools (ADR 0022): listed as the turn starts (a server that
+	// lists its tools again lists the same, as far as KairoCode can tell);
+	// run by their declared effect: read, or real (invariant 3).
+	kairo.Action(r.K, workflows.ActExtLoad, kairo.Unprotected, r.extLoad, kairo.Timeout(2*time.Minute))
+	kairo.Action(r.K, workflows.ActToolExtRead, kairo.Unprotected, r.extTool)
+	kairo.Action(r.K, workflows.ActToolExtReal, kairo.Real, r.extTool)
+	kairo.Action(r.K, workflows.ActTurnSettled, kairo.Unprotected, r.turnSettled) // it reads kairo's record
 	kairo.Action(r.K, workflows.ActToolMissing, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.ToolInput) (workflows.ToolOutput, error) {
 			call, err := r.toolCall(t, in)
@@ -282,6 +537,10 @@ func (r *Runtime) declare() {
 	}
 	eff, opts := effect(tools.Idempotent)
 	kairo.Action(r.K, workflows.ActFileApply, eff, r.applyWrite, opts...)
+	// A snapshot writes only to its store; a restore makes the files what a
+	// tree has, the same however often it runs.
+	kairo.Action(r.K, workflows.ActSnapshot, eff, r.snapshotAction, opts...)
+	kairo.Action(r.K, workflows.ActRestore, eff, r.restoreAction, opts...)
 }
 
 // toolArgs is a call's arguments: given (MCP), or read from its message.
@@ -309,6 +568,18 @@ func (r *Runtime) planTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolI
 		return workflows.PlanOutput{Done: true, Result: out}, err
 	}
 	defer root.Close()
+	if d.Name == tools.FlowPublishTool.Name {
+		// Only the draft the user decided on (and reviewed) is published:
+		// one changed since is not (ADR 0030).
+		reviewed := store.Hash(store.KindReviewed, []byte(reviewKey(in, draftHash(in.Dir, args))))
+		if _, _, err := r.Store.Get(t, reviewed); errors.Is(err, store.ErrNotFound) {
+			out, err := r.toolResult(t, in.Call, tools.Result{IsError: true,
+				Output: "not published: the draft changed after it was reviewed (or the user decided on none). Publish it again with flow_publish: the user reviews it as it is now."})
+			return workflows.PlanOutput{Done: true, Result: out}, err
+		} else if err != nil {
+			return workflows.PlanOutput{}, err
+		}
+	}
 	p := d.Plan(t, tools.Env{Root: root, Dir: in.Dir}, args)
 	if p.Fail != nil {
 		out, err := r.toolResult(t, in.Call, *p.Fail)
@@ -364,11 +635,32 @@ func (r *Runtime) applyWrite(t *kairo.TaskContext, in workflows.ApplyInput) (wor
 	if res.Unknown {
 		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
 	}
+	if !res.IsError {
+		if errs := r.lspErrors(t, in.Dir, in.Path, content); errs != "" {
+			res.Output += "\n\n" + errs
+		}
+	}
 	out, err := r.toolResult(t, in.Call, res)
 	if err != nil {
 		return out, kairo.Unknown(fmt.Errorf("the write was made, its result was not stored: %w", err))
 	}
 	return out, nil
+}
+
+// lspErrors are the errors the language server for the file at path (in
+// dir) sees in content, as text for the write's result (ADR 0009). Which
+// server, if any, is decided here from the settings, and shows in the
+// result, which is recorded. No server, or none in time: "".
+func (r *Runtime) lspErrors(ctx context.Context, dir, path string, content []byte) string {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return ""
+	}
+	servers, err := lsp.Servers(filepath.Join(userConfigDir(), ConfigFile), filepath.Join(real, ConfigFile))
+	if err != nil {
+		r.logf("lsp: %v", err) // what is left out; the servers given are used
+	}
+	return r.lsp.Errors(ctx, servers, real, filepath.Join(real, filepath.FromSlash(path)), content)
 }
 
 // runTool runs one tool call in the working directory and stores its result.
@@ -385,7 +677,14 @@ func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolIn
 		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
 	}
 	defer root.Close()
-	res := d.Run(t, tools.Env{Root: root, Dir: in.Dir}, args)
+	env := tools.Env{Root: root, Dir: in.Dir,
+		Jobs: jobEnv{m: r.jobs, session: sessionOf(t.RunID), dir: in.Dir, key: t.IdempotencyKey}}
+	if d.Name == tools.FetchTool.Name || d.Name == tools.HTTPTool.Name {
+		if env.Net, err = userNet(); err != nil {
+			return r.toolResult(t, in.Call, tools.Result{Output: err.Error(), IsError: true})
+		}
+	}
+	res := d.Run(t, env, args)
 	if res.Unknown && d.Effect != tools.Read {
 		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
 	}
@@ -434,7 +733,23 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	if err != nil {
 		return workflows.ModelReply{}, err
 	}
-	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, System: system, Tools: specs, Messages: ms})
+	if ms, err = r.withImages(t, ms); err != nil {
+		return workflows.ModelReply{}, err
+	}
+	// The text streams to those who watch the session (live output, not a
+	// record: the message is recorded once it is whole).
+	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: system, Tools: specs, Messages: ms,
+		OnText: func(text string) { t.Emit([]byte(text)) }})
+	if errors.Is(err, provider.ErrNoCredentials) {
+		r.authSeen(ProviderAnthropic, AuthNeeded, nil)
+	} else if err == nil {
+		r.authSeen(ProviderAnthropic, AuthSignedIn, nil)
+	}
+	if errors.Is(err, provider.ErrContextTooLong) {
+		// Recorded as such: the turn compacts the conversation and asks
+		// again (ADR 0020).
+		return workflows.ModelReply{Stop: workflows.StopContext}, nil
+	}
 	if err != nil {
 		var permanent *provider.PermanentError
 		if t.Err() != nil || errors.As(err, &permanent) {
@@ -465,9 +780,42 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 	if in.Agent == "" {
 		in.Agent = "build"
 	}
+	if in.Engine == "" {
+		// The provider last chosen, if it still runs here (2026-10-20).
+		if last, err := r.Store.LastProvider(ctx); err == nil && last != "" && r.available(ctx, last) {
+			in.Engine = last
+		}
+	} else {
+		e, _ := engineOf(in.Engine)
+		if err := r.Store.SetLastProvider(ctx, providerOf(e)); err != nil {
+			return "", err
+		}
+	}
 	if in.Engine != "" {
+		in.Engine, _ = engineOf(in.Engine) // a provider's name: its engine's
 		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {
 			return "", err
+		}
+		if id := registryAgent(in.Engine); id != "" && !r.knownAgent(ctx, id) {
+			return "", fmt.Errorf("%w: %s", ErrNoProvider, id)
+		}
+	}
+	// A session that names no model or effort gets those last chosen for
+	// its provider (ADR 0014, 追記).
+	engine := in.Engine
+	if engine == "" {
+		engine = r.cfg.Engine
+	}
+	if in.Model == "" || in.Effort == "" {
+		pref, err := r.Store.ProviderPref(ctx, providerOf(engine))
+		if err != nil {
+			return "", err
+		}
+		if in.Model == "" && pref.Model != "" {
+			in.Model, in.Engine = pref.Model, engine
+		}
+		if in.Effort == "" && pref.Effort != "" {
+			in.Effort, in.Engine = pref.Effort, engine
 		}
 	}
 	abs, err := filepath.Abs(in.Dir)
@@ -485,16 +833,176 @@ func (r *Runtime) Send(ctx context.Context, session, text string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return r.sendMessage(ctx, session, h)
+}
+
+// sendMessage gives the session the user message stored as h.
+func (r *Runtime) sendMessage(ctx context.Context, session, h string) (int, error) {
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h})
+}
+
+// ErrNoUndo: the session started before undo existed (version 3 or
+// older): it would take an undo for a message.
+var ErrNoUndo = errors.New("this session started before undo existed: start a new session to undo")
+
+// Undo asks the session to put the working files back as they were before
+// its last turn in effect (design 7). It returns the number of the turn
+// that does it.
+func (r *Runtime) Undo(ctx context.Context, session string) (int, error) {
+	return r.undo(ctx, session, workflows.EventUndo)
+}
+
+// Redo asks the session to put back what its last undo took away.
+// Compact starts a turn that only compacts the session's conversation
+// (/compact, ADR 0020), and returns its number.
+func (r *Runtime) Compact(ctx context.Context, session string) (int, error) {
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventCompact})
+}
+
+func (r *Runtime) Redo(ctx context.Context, session string) (int, error) {
+	return r.undo(ctx, session, workflows.EventRedo)
+}
+
+func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
+	info, err := r.K.Get(ctx, session)
+	if err != nil {
+		return 0, err
+	}
+	if !slices.Contains([]string{workflows.SessionVersion, workflows.SessionVersion6, workflows.SessionVersion5, workflows.SessionVersion4}, info.Version) {
+		return 0, ErrNoUndo
+	}
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: kind})
+}
+
+// signal gives the session an event and returns the number of the turn
+// that takes it.
+func (r *Runtime) signal(ctx context.Context, session string, ev workflows.SessionEvent) (int, error) {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
+	// A session that failed takes nothing more (kairo-gap #16): said so,
+	// not sent to be lost (ADR 0021, 追記 2026-10-28).
+	if err := r.failed(ctx, session); err != nil {
+		return 0, err
+	}
 	n, err := r.sent(ctx, session)
 	if err != nil {
 		return 0, err
 	}
-	if err := r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h}); err != nil {
+	sw := r.takeSwitch(session)
+	ev.Switch = sw
+	if err := r.K.Signal(ctx, session, workflows.SignalMessage, ev); err != nil {
+		if sw != nil { // not sent: it waits for the next event
+			r.switchMu.Lock()
+			if r.switches[session] == nil {
+				r.switches[session] = sw
+			}
+			r.switchMu.Unlock()
+		}
 		return 0, err
 	}
 	return n, nil
+}
+
+// ErrSessionFailed: the session stopped on an error (a store's, say:
+// kairo-gap #16) and takes no more messages. It goes on in a session forked
+// from its last finished turn (ADR 0021).
+var ErrSessionFailed = errors.New("this session stopped on an error and takes no more messages")
+
+// FailedNote is put before the first message of a session forked from one
+// that failed (ADR 0021): the turn cut short may have changed files.
+const FailedNote = "[The session this one goes on from stopped on an error during a turn. That turn may have changed the working files; look before going on.]"
+
+// failed returns ErrSessionFailed, with why, if the session ended on an
+// error: a finished run that Await says failed (kairo records a code
+// workflow's failure as its end with ok false).
+func (r *Runtime) failed(ctx context.Context, session string) error {
+	info, err := r.K.Get(ctx, session)
+	if err != nil {
+		return err
+	}
+	if !info.Finished() || info.Status == "cancelled" {
+		return nil
+	}
+	_, err = kairo.Await[json.RawMessage](ctx, r.K, session)
+	var we *kairo.WorkflowError
+	if errors.As(err, &we) {
+		return fmt.Errorf("%w (%s)", ErrSessionFailed, we.Message)
+	}
+	return nil
+}
+
+// stoppedNote is what the conversation says of a turn the user stopped
+// (ADR 0011), in the assistant's place: the next turn's model reads it.
+const stoppedNote = "[The user stopped this turn before it finished. Tool calls made in it may have changed the working files; look before going on.]"
+
+// historyCancelled keeps a stopped turn in the conversation: the message
+// it was asked with, and the note.
+func (r *Runtime) historyCancelled(t *kairo.TaskContext, in workflows.HistoryCancelledInput) (string, error) {
+	note, err := r.Store.PutMessage(t, msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.Text, Text: stoppedNote}}})
+	if err != nil {
+		return "", err
+	}
+	return r.Store.Extend(t, in.Prev, []string{in.Message, note})
+}
+
+// StoppedCancelled is why a turn the user stopped ended, as clients are
+// told it (a turn's Stopped).
+const StoppedCancelled = "cancelled"
+
+// ErrNoTurnToCancel: the session's last turn has ended (or none was sent).
+var ErrNoTurnToCancel = errors.New("no turn is running")
+
+// Cancel stops the session's turn under way (ADR 0011): kairo cancels it,
+// with what it waits for and the steps under way. It returns the turn's
+// number. Turns run one at a time: the one under way is the one not ended,
+// whatever was sent after it. With none under way, the last turn sent is
+// waited for if it has not begun (a stop pressed just after a send).
+func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
+	for {
+		changed := r.changes()
+		kids, err := r.K.Children(ctx, session)
+		if err != nil {
+			return 0, err
+		}
+		for _, k := range kids {
+			if k.Workflow == workflows.Turn && !k.Finished() {
+				var w struct {
+					Input workflows.TurnInput `json:"input"`
+				}
+				_ = json.Unmarshal(k.Input, &w)
+				// kairo-gap #22: were the turn's function to return between
+				// the look above and this cancel, kairo would record the run
+				// cancelled while the session had its value. The session
+				// (version 7) reads back how the run was recorded and takes
+				// it as cancelled (turn.settled).
+				return w.Input.N, r.K.Cancel(ctx, k.RunID)
+			}
+		}
+		r.sendMu.Lock()
+		n, err := r.sent(ctx, session)
+		r.sendMu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			return 0, ErrNoTurnToCancel
+		}
+		if _, ok, err := r.TurnRun(ctx, session, n-1); err != nil || ok {
+			return n - 1, cmp.Or(err, ErrNoTurnToCancel) // it has ended
+		}
+		info, err := r.K.Get(ctx, session)
+		if err != nil {
+			return 0, err
+		}
+		if info.Finished() { // the last event closed it
+			return 0, ErrNoTurnToCancel
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
 }
 
 // CloseSession ends a session after the turns it has been sent.
@@ -522,6 +1030,31 @@ func (r *Runtime) sent(ctx context.Context, session string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// LastTurn is the number of the session's latest turn; false if it has
+// none.
+func (r *Runtime) LastTurn(ctx context.Context, session string) (int, bool, error) {
+	kids, err := r.K.Children(ctx, session)
+	if err != nil {
+		return 0, false, err
+	}
+	last, found := 0, false
+	for _, k := range kids {
+		if k.Workflow != workflows.Turn {
+			continue
+		}
+		var w struct {
+			Input workflows.TurnInput `json:"input"`
+		}
+		if err := json.Unmarshal(k.Input, &w); err != nil {
+			return 0, false, fmt.Errorf("turn %s: %w", k.RunID, err)
+		}
+		if !found || w.Input.N > last {
+			last, found = w.Input.N, true
+		}
+	}
+	return last, found, nil
 }
 
 // TurnRun is the kairo run of turn n of a session, or "" if the session has
@@ -583,4 +1116,163 @@ func (r *Runtime) Reply(ctx context.Context, hash string) (string, error) {
 		return "", err
 	}
 	return m.Text(), nil
+}
+
+// logf logs what the runtime could not do but goes on without.
+func (r *Runtime) logf(format string, args ...any) {
+	r.cfg.Logger.Warn(fmt.Sprintf(format, args...))
+}
+
+// History is the session's conversation as of its last finished turn: what
+// a client that comes back shows (ACP's session/load).
+func (r *Runtime) History(ctx context.Context, session string) ([]msg.Message, error) {
+	if _, err := r.K.Get(ctx, session); err != nil {
+		return nil, err
+	}
+	runs, err := r.K.Children(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	last, run := -1, ""
+	for _, t := range runs {
+		if t.Workflow != workflows.Turn || t.Status != "completed" {
+			continue
+		}
+		var in workflows.TurnInput
+		if json.Unmarshal(input(t), &in) == nil && in.N > last {
+			last, run = in.N, t.RunID
+		}
+	}
+	if run == "" {
+		return nil, nil
+	}
+	out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, run)
+	if err != nil {
+		return nil, err
+	}
+	hashes, err := r.Store.Conversation(ctx, out.Head)
+	if err != nil {
+		return nil, err
+	}
+	return r.Store.Messages(ctx, hashes)
+}
+
+// turnSettled says whether turn n of a session was recorded cancelled
+// (kairo-gap #22). The session has its result, so its run has settled: the
+// embedded runtime records a run's end before its parent is given it, and
+// a turn is kept as long as its session runs.
+func (r *Runtime) turnSettled(t *kairo.TaskContext, in workflows.TurnSettledInput) (workflows.TurnSettledOutput, error) {
+	info, ok, err := r.TurnRun(t, in.Session, in.N)
+	if err != nil {
+		return workflows.TurnSettledOutput{}, kairo.Retryable(err)
+	}
+	if !ok || !info.Finished() {
+		return workflows.TurnSettledOutput{}, fmt.Errorf("turn %d of %s: no settled run", in.N, in.Session)
+	}
+	return workflows.TurnSettledOutput{Cancelled: info.Status == "cancelled"}, nil
+}
+
+// turnWorkflow is the turn's function: RunTurn, or a test's stand-in.
+func (r *Runtime) turnWorkflow() func(*kairo.Context, workflows.TurnInput) (workflows.TurnOutput, error) {
+	if r.cfg.turn != nil {
+		return r.cfg.turn
+	}
+	return workflows.RunTurn
+}
+
+// ErrNoForkPoint: the session has no finished turn to fork from there.
+// ErrNoSnapshot: there is no record of the files after it, to put back.
+// ErrForkWhileRunning: the files are not put back while a turn of the
+// session runs in them.
+var (
+	ErrNoForkPoint      = errors.New("no finished turn to fork from")
+	ErrNoSnapshot       = errors.New("there is no snapshot of the files after that turn, to put them back as they were")
+	ErrForkWhileRunning = errors.New("a turn of the session is running in its files: fork with --files once it ends")
+)
+
+// Fork starts session id from turn n of session from (n < 0: its last
+// finished turn), with that turn's conversation and settings; from is not
+// changed (ADR 0021). With files, the new session's first turn puts the
+// working files back as they were after turn n. It returns the session
+// and the turn it was forked from.
+func (r *Runtime) Fork(ctx context.Context, id, from string, n int, files bool) (string, int, error) {
+	info, err := r.K.Get(ctx, from)
+	if err != nil {
+		return "", 0, err
+	}
+	var src workflows.SessionInput
+	if err := json.Unmarshal(input(info), &src); err != nil {
+		return "", 0, err
+	}
+	kids, err := r.K.Children(ctx, from)
+	if err != nil {
+		return "", 0, err
+	}
+	type done struct {
+		in  workflows.TurnInput
+		out workflows.TurnOutput
+	}
+	var turns []done // finished, by number
+	running := false
+	for _, k := range kids {
+		if k.Workflow != workflows.Turn {
+			continue
+		}
+		if !k.Finished() {
+			running = true
+		}
+		var d done
+		if k.Status != "completed" || json.Unmarshal(input(k), &d.in) != nil || runOutput(k.Output, &d.out) != nil || d.out.Head == "" {
+			continue
+		}
+		turns = append(turns, d)
+	}
+	slices.SortFunc(turns, func(a, b done) int { return a.in.N - b.in.N })
+	at := -1
+	for i, d := range turns {
+		if n < 0 || d.in.N == n {
+			at = i
+		}
+	}
+	if at < 0 {
+		return "", 0, ErrNoForkPoint
+	}
+	tin, tout := turns[at].in, turns[at].out
+	tree := ""
+	if files {
+		if running {
+			return "", 0, ErrForkWhileRunning // its restore would change files under the turn's tools
+		}
+		// The files after the turn: its end's snapshot; for an undo or a
+		// redo, the snapshot it put back; for a turn that changed no file
+		// (/compact), the nearest one before it.
+		for i := at; i >= 0 && tree == ""; i-- {
+			d := turns[i]
+			switch {
+			case d.out.After != "":
+				tree = d.out.After
+			case d.in.Undo != nil && d.out.Restored:
+				tree = d.in.Undo.Tree
+			}
+		}
+		if tree == "" {
+			return "", 0, ErrNoSnapshot
+		}
+	}
+	engine := tin.Engine
+	if engine == "" {
+		engine = r.cfg.Engine // the daemon's, which the turn ran with
+	}
+	s, err := r.CreateSession(ctx, id, workflows.SessionInput{Dir: src.Dir, Agent: src.Agent, Engine: engine, Model: tin.Model,
+		Effort: tin.Effort, History: tout.Head, From: &workflows.ForkRef{Session: from, Turn: tin.N}})
+	if err != nil {
+		return "", 0, err
+	}
+	if tree != "" {
+		if _, err := r.signal(ctx, s, workflows.SessionEvent{Kind: workflows.EventForkFiles,
+			Restore: &workflows.UndoInput{Of: tin.N, Tree: tree}}); err != nil {
+			return "", 0, err
+		}
+	}
+	return s, tin.N, nil
 }

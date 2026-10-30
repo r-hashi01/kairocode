@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,11 @@ type fakeClaudeRun struct {
 	// exists (the tool is under way), without waiting for its result.
 	Die   bool   `json:"die,omitempty"`
 	Reply string `json:"reply"`
+	// Decide: run with --json-schema, it answers this structured output;
+	// DecideFails: it ends with an error result of this subtype instead,
+	// and exits 1, as claude does.
+	Decide      json.RawMessage `json:"decide,omitempty"`
+	DecideFails string          `json:"decide_fails,omitempty"`
 }
 
 type fakeClaudeCall struct {
@@ -43,22 +49,83 @@ type fakeClaudeStart struct {
 	Mode    string `json:"mode"` // --session-id or --resume
 	Session string `json:"session"`
 	Allowed string `json:"allowed"`
+	// Sources is --setting-sources (nil: not given); System, --system-prompt.
+	Sources *string `json:"sources,omitempty"`
+	System  string  `json:"system,omitempty"`
+	// Images are the images of a stream-json input, "<type>:<bytes>".
+	Images []string `json:"images,omitempty"`
+	// ToolTimeout is MCP_TOOL_TIMEOUT; ServerTimeout, KairoCode's server's
+	// timeout in --mcp-config (ms).
+	ToolTimeout   string `json:"tool_timeout,omitempty"`
+	ServerTimeout int64  `json:"server_timeout,omitempty"`
+}
+
+// fakeStreamInput reads the user message of a stream-json input, as
+// Claude Code does: its text, and its images.
+func fakeStreamInput() (string, []string) {
+	var in struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type   string `json:"type"`
+				Text   string `json:"text"`
+				Source struct {
+					Type      string `json:"type"`
+					MediaType string `json:"media_type"`
+					Data      []byte `json:"data"`
+				} `json:"source"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	b, _ := io.ReadAll(os.Stdin)
+	if json.Unmarshal(b, &in) != nil || in.Type != "user" || in.Message.Role != "user" {
+		return "", nil
+	}
+	var text string
+	var images []string
+	for _, c := range in.Message.Content {
+		switch {
+		case c.Type == "text":
+			text += c.Text
+		case c.Type == "image" && c.Source.Type == "base64":
+			images = append(images, fmt.Sprintf("%s:%d", c.Source.MediaType, len(c.Source.Data)))
+		}
+	}
+	return text, images
 }
 
 func fakeClaude() {
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "auth" { // claude auth status: signed in, not a run
+		fmt.Println(`{"loggedIn": true}`)
+		return
+	}
 	var start fakeClaudeStart
-	var mcpConfig string
+	var mcpConfig, jsonSchema string
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "-p":
-			start.Prompt = args[i+1]
+			if !strings.HasPrefix(args[i+1], "--") {
+				start.Prompt = args[i+1]
+			}
+		case "--input-format":
+			// The prompt, and its images, as one stream-json line on stdin.
+			if args[i+1] == "stream-json" {
+				start.Prompt, start.Images = fakeStreamInput()
+			}
 		case "--session-id", "--resume":
 			start.Mode, start.Session = args[i], args[i+1]
 		case "--mcp-config":
 			mcpConfig = args[i+1]
 		case "--allowedTools":
 			start.Allowed = args[i+1]
+		case "--setting-sources":
+			start.Sources = &args[i+1]
+		case "--system-prompt":
+			start.System = args[i+1]
+		case "--json-schema":
+			jsonSchema = args[i+1]
 		}
 	}
 	// Like Claude Code: the session's transcript gets the prompt.
@@ -68,6 +135,13 @@ func fakeClaude() {
 		p, _ := json.Marshal(map[string]any{"type": "user", "prompt": start.Prompt})
 		tf.Write(append(p, '\n'))
 		tf.Close()
+	}
+	start.ToolTimeout = os.Getenv("MCP_TOOL_TIMEOUT")
+	var timeouts struct {
+		MCPServers map[string]struct{ Timeout int64 } `json:"mcpServers"`
+	}
+	if json.Unmarshal([]byte(mcpConfig), &timeouts) == nil {
+		start.ServerTimeout = timeouts.MCPServers[MCPServerName].Timeout
 	}
 	logPath := os.Getenv("KC_FAKE_CLAUDE_LOG")
 	prev, _ := os.ReadFile(logPath)
@@ -89,6 +163,19 @@ func fakeClaude() {
 		panic(err)
 	}
 	r := script.Runs[run]
+	if jsonSchema != "" && r.DecideFails != "" {
+		res, _ := json.Marshal(map[string]any{"type": "result", "subtype": r.DecideFails, "is_error": true,
+			"usage": map[string]any{"input_tokens": 2, "output_tokens": 1}})
+		fmt.Println(string(res))
+		os.Exit(1)
+	}
+	if jsonSchema != "" { // a decision: one JSON object, no tools
+		res, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false,
+			"structured_output": r.Decide, "schema": json.RawMessage(jsonSchema),
+			"usage": map[string]any{"input_tokens": 2, "output_tokens": 1}})
+		fmt.Println(string(res))
+		return
+	}
 	var cfg struct {
 		MCPServers map[string]struct{ URL string } `json:"mcpServers"`
 	}
@@ -494,5 +581,225 @@ func TestClaudeEngineApprovalServesOneRun(t *testing.T) {
 	}
 	if got := countRuns(t, e); got != 2 {
 		t.Fatalf("the tool ran %d times, want 2 (n=1 once on its approval, n=9 once)", got)
+	}
+}
+
+// A flow's agents on Claude Code each have a Claude Code session of their
+// own: not the session's (they start with no history), and not each
+// other's (one would stop the other's claude).
+func TestFlowAgentsOnClaudeCode(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Reply: "one"}, fakeClaudeRun{Reply: "two"})
+	r := openClaude(t, e)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/pair.star": `
+def main(input):
+    rs = parallel([{"agent": "build", "prompt": "a"}, {"agent": "build", "prompt": "b"}])
+    return "%d replies" % len([x for x in rs if x.ok])
+`})
+	_, text, s := flowTurn(t, r, ws, "pair", "")
+	if text != "2 replies" {
+		t.Fatalf("reply %q", text)
+	}
+	st := e.starts(t)
+	if len(st) != 2 || st[0].Session == st[1].Session {
+		t.Fatalf("claude was started as %+v", st)
+	}
+	for _, x := range st {
+		if x.Mode != "--session-id" || x.Session == claudeSessionID(s) {
+			t.Fatalf("an agent in the session's Claude Code session: %+v", x)
+		}
+	}
+}
+
+// decide() on Claude Code: its answer fits the schema (claude --json-schema)
+// and comes back typed.
+func TestFlowDecideOnClaudeCode(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Decide: json.RawMessage(`{"value": "medium"}`)})
+	r := openClaude(t, e)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/size.star": `
+def main(input):
+    d = decide("How big is this change?", type = "choice", choices = ["small", "medium", "large"])
+    return "%s %s" % (d.ok, d.value)
+`})
+	if _, text, _ := flowTurn(t, r, ws, "size", ""); text != "True medium" {
+		t.Fatalf("reply %q", text)
+	}
+	st := e.starts(t)
+	if len(st) != 1 || st[0].Prompt != "How big is this change?" || st[0].Session != "" {
+		t.Fatalf("claude was started as %+v", st)
+	}
+}
+
+// Claude Code that will not decide ends with an error result and a status
+// of 1: that is an outcome (ok False), not a step to try again.
+func TestFlowDecideOnClaudeCodeFails(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{DecideFails: "error_max_structured_output_retries"})
+	r := openClaude(t, e)
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/no.star": `
+def main(input):
+    d = decide("Is it done?")
+    return "%s %s" % (d.ok, d.error)
+`})
+	if _, text, _ := flowTurn(t, r, ws, "no", ""); text != "False Claude Code made no decision (error_max_structured_output_retries)" {
+		t.Fatalf("reply %q", text)
+	}
+	if n := len(e.starts(t)); n != 1 {
+		t.Fatalf("claude started %d times, want 1", n)
+	}
+}
+
+// Claude Code reads none of its own settings, CLAUDE.md files among them:
+// KairoCode gives it its instructions, the user's CLAUDE.md once, in the
+// system prompt. (Checked by hand with Claude Code 2.1.305 against a local
+// server that kept the request: with --setting-sources "", none of
+// ~/.claude/CLAUDE.md, CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md is
+// in it; without it, each is, once.)
+func TestClaudeEngineReadsNoSettingsOfItsOwn(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Reply: "ok"})
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "CLAUDE.md"), []byte("USER_MEMORY_MARK"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "sources", workflows.SessionInput{Dir: repo(t)})
+	n, _ := r.Send(ctx, s, "hello")
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	st := e.starts(t)
+	if len(st) != 1 || st[0].Sources == nil || *st[0].Sources != "" {
+		t.Fatalf("claude was not told to read no settings: %+v", st)
+	}
+	if strings.Count(st[0].System, "USER_MEMORY_MARK") != 1 {
+		t.Fatalf("the user's CLAUDE.md is not in the system prompt once:\n%s", st[0].System)
+	}
+}
+
+// The user sees what an approval let run, where they were asked: the call
+// Claude Code makes again after the approval is told under the approval's
+// own call (its start, its result); declined, that call is told it did not
+// run. The first call, which only asked, is not told as a failure.
+func TestClaudeEngineApprovedCallIsToldWhereItWasAsked(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(fmt.Sprint("approve=", approve), func(t *testing.T) {
+			e := setupFakeClaude(t,
+				fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "asked"},
+				fakeClaudeRun{Calls: []fakeClaudeCall{{Tool: "count", Args: map[string]any{"n": 1}}}, Reply: "done"},
+			)
+			r := openClaude(t, e)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			ws := repo(t)
+			os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"count": "ask"}}`), 0o644)
+			s, _ := r.CreateSession(ctx, "told", workflows.SessionInput{Dir: ws})
+			events, _ := r.Events(ctx, s)
+			n, _ := r.Send(ctx, s, "count once")
+			var key string
+			var asked []Event // the tool ends before the approval was asked
+			for key == "" {
+				switch ev := next(t, ctx, events); ev.Type {
+				case EventApprovalRequested:
+					key = ev.Pending.Key
+				case EventToolEnd:
+					asked = append(asked, ev)
+				}
+			}
+			if len(asked) != 1 || asked[0].IsError || !strings.Contains(asked[0].Output, "approval") {
+				t.Fatalf("the call that asked was told as %+v", asked)
+			}
+			if err := r.Approve(ctx, key, approve, ""); err != nil {
+				t.Fatal(err)
+			}
+			var started bool
+			var end *Event
+			for end == nil {
+				switch ev := next(t, ctx, events); {
+				case ev.Type == EventToolStart && ev.Call == key:
+					started = true
+				case ev.Type == EventToolEnd && ev.Call == key:
+					end = &ev
+				case ev.Type == EventTurnEnd:
+					t.Fatal("the turn ended before the approved call was told under its approval")
+				}
+			}
+			if approve {
+				if !started || end.IsError || end.Output != "counted" {
+					t.Fatalf("approved: started %v, end %+v", started, *end)
+				}
+			} else if started || !end.IsError || !strings.Contains(end.Output, "declined") {
+				t.Fatalf("declined: started %v, end %+v", started, *end)
+			}
+			if _, err := r.WaitTurn(ctx, s, n); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// A call made again in the next claude run of the turn, after the run
+// before it ended with a result (it ended to wait for an approval), is a
+// new call: it runs, not asked about as one made again after an
+// interruption. The run before kept its result in its session.
+func TestClaudeEngineSameCallAfterARunThatEnded(t *testing.T) {
+	e := setupFakeClaude(t,
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 1}},
+			{Tool: "count", Args: map[string]any{"n": 9}},
+		}, Reply: "asked"},
+		fakeClaudeRun{Calls: []fakeClaudeCall{
+			{Tool: "count", Args: map[string]any{"n": 9}},
+			{Tool: "count", Args: map[string]any{"n": 1}},
+		}, Reply: "done"},
+	)
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ws := repo(t)
+	os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"count": {"*": "allow", "{\"n\":9}": "ask"}}}`), 0o644)
+	s, _ := r.CreateSession(ctx, "again", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "count")
+	p := waitPending(t, r, s, 1)
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+	defer wcancel()
+	if _, err := r.WaitTurn(wctx, s, n); err != nil {
+		ps, _ := r.Pending(ctx, s)
+		t.Fatalf("the turn did not end (%v); pending %+v", err, ps)
+	}
+	if got := countRuns(t, e); got != 3 {
+		t.Fatalf("the tool ran %d times, want 3 (n=1 twice, n=9 once)", got)
+	}
+}
+
+// Claude Code waits for a call of KairoCode's tools as long as the tool
+// may run (bash_wait: a day), not its own default of a minute, after which
+// it gave up on a long command whose result then never reached the model.
+func TestClaudeWaitsForLongCalls(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Reply: "ok"})
+	r := openClaude(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "long", workflows.SessionInput{Dir: repo(t)})
+	n, _ := r.Send(ctx, s, "hi")
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	st := e.starts(t)
+	want := claudeToolTimeout.Milliseconds()
+	if len(st) != 1 || st[0].ToolTimeout != fmt.Sprint(want) || st[0].ServerTimeout != want {
+		t.Fatalf("claude was started as %+v, want timeouts of %d ms", st, want)
+	}
+	if want < tools.JobMaxTimeout.Milliseconds() {
+		t.Fatalf("Claude Code waits %d ms, less than bash_wait may (%v)", want, tools.JobMaxTimeout)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -183,6 +184,7 @@ func TestPlanModeOnlyReads(t *testing.T) {
 // TestEscalationAlwaysAsks: running outside the sandbox is asked even when
 // the rules allow bash; a command in the sandbox is not (ADR 0005).
 func TestEscalationAlwaysAsks(t *testing.T) {
+	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"bash": "allow"}`)
 	script := []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo in > inside.txt"}`)}}},

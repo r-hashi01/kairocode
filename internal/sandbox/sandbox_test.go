@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -16,6 +17,9 @@ import (
 // The test binary runs as a helper inside the sandbox when KC_SANDBOX_DIAL
 // is set: it connects to that address and exits 0 if it could.
 func TestMain(m *testing.M) {
+	if role := os.Getenv("KC_SANDBOX_ROLE"); role != "" {
+		os.Exit(helper(role))
+	}
 	if addr := os.Getenv("KC_SANDBOX_DIAL"); addr != "" {
 		c, err := net.DialTimeout("tcp", addr, 3*time.Second)
 		if err != nil {
@@ -30,6 +34,13 @@ func TestMain(m *testing.M) {
 func needSandbox(t *testing.T) {
 	t.Helper()
 	if err := Available(); err != nil {
+		// As sandboxtest.Require, which this package cannot import.
+		if path := os.Getenv("KAIROCODE_SKIPPED"); path != "" {
+			if f, ferr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); ferr == nil {
+				fmt.Fprintln(f, t.Name())
+				f.Close()
+			}
+		}
 		t.Skipf("no sandbox here: %v", err)
 	}
 }
@@ -117,7 +128,9 @@ func TestSandboxProtectsGitAndConfig(t *testing.T) {
 	}
 	if runtime.GOOS != "linux" {
 		// Names that do not exist yet: kept out on macOS, not on Linux.
-		scripts = append(scripts, "mkdir .kairocode", "mkdir -p .claude/hooks")
+		scripts = append(scripts, "mkdir .kairocode", "mkdir -p .claude/hooks",
+			// copilot's hooks (ADR 0018): .github itself stays writable.
+			"mkdir -p .github/hooks", "mkdir -p .github/copilot")
 	}
 	for _, script := range scripts {
 		if _, ok := run(t, p, "", script); ok {
@@ -139,6 +152,9 @@ func TestSandboxProtectsGitAndConfig(t *testing.T) {
 	}
 	if _, ok := run(t, p, "", "echo ok > notes.txt"); !ok {
 		t.Error("an ordinary write was refused")
+	}
+	if _, ok := run(t, p, "", "mkdir -p .github/workflows && echo 'on: push' > .github/workflows/ci.yml"); !ok {
+		t.Error("a write in .github was refused")
 	}
 }
 
@@ -248,4 +264,62 @@ func TestSandboxEscalatedRunsOutside(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh")
 	}
+}
+
+// A writable directory inside a protected name (a hook's .claude/.cache,
+// ADR 0018) is writable, and only it: the rest of .claude is not, and
+// without it .claude/.cache is not either. Its own protected names stay so.
+func TestSandboxWritableInsideProtected(t *testing.T) {
+	needSandbox(t)
+	root := workspace(t)
+	cache := filepath.Join(root, ".claude", ".cache")
+	if err := os.MkdirAll(filepath.Join(root, ".claude", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bare := Policy{Mode: WorkspaceWrite, Root: root}
+	if _, ok := run(t, bare, "", "echo x > .claude/.cache/last"); ok {
+		t.Error(".claude/.cache was written with no leave")
+	}
+	for _, p := range []Policy{
+		{Mode: WorkspaceWrite, Root: root, Writable: []string{cache}},
+		{Mode: WorkspaceWrite, Root: root, Writable: []string{cache}, Loopback: true, SocketDir: socketDir(t)},
+	} {
+		if out, ok := run(t, p, "", "mkdir -p .claude/.cache/state && echo x > .claude/.cache/state/last"); !ok {
+			t.Errorf("loopback %v: .claude/.cache not written: %s", p.Loopback, out)
+		}
+		scripts := []string{
+			`echo '{"hooks": {}}' > .claude/settings.json`,
+			"echo x > .claude/hooks/stop.sh",
+			"mv .claude/.cache .claude/moved",
+		}
+		if runtime.GOOS != "linux" {
+			// A protected name that does not exist yet: kept out on macOS
+			// alone (ADR 0005).
+			scripts = append(scripts, "mkdir .claude/.cache/.git")
+		}
+		for _, script := range scripts {
+			if _, ok := run(t, p, "", script); ok {
+				t.Errorf("loopback %v: %q went through", p.Loopback, script)
+			}
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, ".claude", "settings.json")); string(b) != "{}" {
+		t.Errorf(".claude/settings.json changed: %q", b)
+	}
+}
+
+func socketDir(t *testing.T) string {
+	t.Helper()
+	dir, done, err := SocketDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(done)
+	return dir
 }

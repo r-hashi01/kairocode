@@ -35,6 +35,11 @@ var workflowImports = map[string]bool{
 	module + "/internal/permission":     true,
 	module + "/internal/plan":           true,
 	module + "/internal/tools":          true, // for the Def and Effect types
+	// Starlark (ADR 0003): a language with no clock, randomness or I/O,
+	// whose dicts keep their order; flows run in it inside the workflow.
+	"go.starlark.net/starlark":       true,
+	"go.starlark.net/starlarkstruct": true,
+	"go.starlark.net/syntax":         true,
 }
 
 // workflowImportPrefixes are allowed with everything below them.
@@ -254,13 +259,23 @@ func Secrets(roots ...string) ([]string, error) {
 }
 
 // commandStarters are the files allowed to start a command (ADR 0005):
-// the sandbox, the Claude Code engine's start of claude (ADR 0007), and a
-// client's start of the daemon (ADR 0008).
-var commandStarters = []string{"internal/sandbox/", "internal/runtime/claude.go", "internal/daemon/spawn.go"}
+// the sandbox, the CLI engines' start of claude, codex and copilot and
+// their model lists (ADR 0007, 0014), the installers of ACP agents (ADR
+// 0015), and a client's start of the daemon (ADR 0008).
+var commandStarters = []string{"internal/sandbox/", "internal/agents/", "internal/runtime/claude.go", "internal/runtime/cliengines.go", "internal/runtime/acpengine.go", "internal/tui/login.go", "internal/daemon/spawn.go",
+	"internal/runtime/secrets.go",     // the key store's commands, security and secret-tool (ADR 0025)
+	"internal/cli/plugin.go",          // the browser, for a plugin's OAuth (ADR 0025)
+	"internal/runtime/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
+	"scripts/envcheck/",               // check.sh's look at whether a sandbox can be started here
+	"internal/runtime/jobs.go",        // the runner of a command in the background: this binary (ADR 0028)
+	"internal/tui/clipboard.go"}       // osascript, wl-paste or xclip, to read the clipboard's image (ADR 0026)
 
 // fullAccessUsers may name sandbox.FullAccess: the tools that run outside
 // the sandbox only once the user approved (escalated bash, git_push).
-var fullAccessUsers = []string{"internal/sandbox/", "internal/tools/bash.go", "internal/tools/git.go"}
+var fullAccessUsers = []string{"internal/sandbox/", "internal/tools/bash.go", "internal/tools/git.go",
+	"internal/runtime/commandhooks.go", // a hook the user said runs outside the sandbox (ADR 0018)
+	"internal/runtime/external.go",     // the user's MCP servers and custom tools, or a project's they let out (ADR 0022)
+	"internal/runtime/jobs.go"}         // a command in the background the user let out (escalate), as bash (ADR 0028)
 
 // Commands reports, in the non-test Go files under root, every way to start
 // a command outside the sandbox: exec.Command, exec.CommandContext or an

@@ -69,13 +69,28 @@ func TestEngineAndModelPerSession(t *testing.T) {
 	if _, err := r.CreateSession(ctx, "bad", workflows.SessionInput{Dir: ws, Engine: "gpt"}); err == nil {
 		t.Error("a session with an unknown engine was created")
 	}
+	// Nor does a daemon open with one as its default (a typo in
+	// KAIROCODE_ENGINE).
+	for _, e := range []string{"gpt", "acp:"} {
+		if bad, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Engine: e, Owner: "bad"}); err == nil {
+			bad.Close()
+			t.Errorf("opened with the engine %q", e)
+		}
+	}
 }
 
-// A session and a turn of version 2 (before sessions carried an engine and
-// a model) that wait for approval are finished by this build: the same turn
+// A session and a turn of an older version (2: before sessions carried an
+// engine and a model; 3: before snapshots and undo) that wait for approval
+// are finished by this build with that version's functions: the same turn
 // and the same agent.load, not new ones, and the write made once. The
-// session's next turn runs at version 3.
-func TestVersion2RunsFinishHere(t *testing.T) {
+// session's next turn runs at the current version.
+func TestOldVersionRunsFinishHere(t *testing.T) {
+	for _, v := range []string{workflows.TurnVersion2, workflows.TurnVersion3} {
+		t.Run("v"+v, func(t *testing.T) { oldVersionRunsFinishHere(t, v) })
+	}
+}
+
+func oldVersionRunsFinishHere(t *testing.T, version string) {
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	script := []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hello\n"}`)}}},
@@ -85,11 +100,11 @@ func TestVersion2RunsFinishHere(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "k.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	old, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1, Script: script}, Owner: "v", onlyV2: true})
+	old, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1, Script: script}, Owner: "v", onlyVersion: version})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, _ := old.CreateSession(ctx, "v2", workflows.SessionInput{Dir: ws})
+	s, _ := old.CreateSession(ctx, "v"+version, workflows.SessionInput{Dir: ws})
 	n, _ := old.Send(ctx, s, "write")
 	waitPending(t, old, s, 1)
 	before, _, _ := old.TurnRun(ctx, s, n)
@@ -112,7 +127,7 @@ func TestVersion2RunsFinishHere(t *testing.T) {
 		t.Fatalf("reply %q", text)
 	}
 	after, _, _ := r.TurnRun(ctx, s, n)
-	if after.RunID != before.RunID || after.Version != workflows.TurnVersion2 {
+	if after.RunID != before.RunID || after.Version != version {
 		t.Fatalf("turn %s v%s, was %s", after.RunID, after.Version, before.RunID)
 	}
 	kids, _ := r.K.Children(ctx, after.RunID)
@@ -128,7 +143,7 @@ func TestVersion2RunsFinishHere(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "hello\n" {
 		t.Fatalf("notes.txt %q %v", b, err)
 	}
-	if info, _ := r.K.Get(ctx, s); info.Version != workflows.SessionVersion2 {
+	if info, _ := r.K.Get(ctx, s); info.Version != version {
 		t.Fatalf("session version %q", info.Version)
 	}
 	m, _ := r.Send(ctx, s, "again")

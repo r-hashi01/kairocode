@@ -135,11 +135,16 @@ func TestBuiltinToolsAreWellFormed(t *testing.T) {
 		if d.Plan != nil && d.Effect != Idempotent {
 			t.Errorf("%s: a planned write is idempotent, got %v", d.Name, d.Effect)
 		}
-		if d.Run != nil && d.Effect != Read && d.Name != "bash" {
-			t.Errorf("%s: of the tools that run directly, only bash acts, got %v", d.Name, d.Effect)
+		// bash, http's POST (ADR 0013), and stopping a command in the
+		// background (ADR 0028).
+		if d.Run != nil && d.Effect != Read && d.Name != "bash" && d.Name != "http" && d.Name != "bash_kill" {
+			t.Errorf("%s: of the tools that run directly, only bash, http and bash_kill act, got %v", d.Name, d.Effect)
 		}
-		if d.Name == "bash" && d.Effect != Real {
-			t.Errorf("bash is real, got %v", d.Effect)
+		if (d.Name == "bash" || d.Name == "http" || d.Name == "bash_kill") && d.Effect != Real {
+			t.Errorf("%s is real, got %v", d.Name, d.Effect)
+		}
+		if d.Name == "fetch" && d.Effect != Read {
+			t.Errorf("fetch only reads, got %v", d.Effect)
 		}
 		var s struct{ Properties map[string]any }
 		if err := json.Unmarshal(d.Schema, &s); err != nil || s.Properties == nil {
@@ -280,7 +285,8 @@ func TestWriteRefusesProtectedNames(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755)
 	os.WriteFile(filepath.Join(root, "kairocode.json"), []byte(`{}`), 0o644)
 	e := env(t, root)
-	for _, p := range []string{".git/hooks/pre-push", ".git/config", "kairocode.json", ".claude/settings.json", ".kairocode/x"} {
+	for _, p := range []string{".git/hooks/pre-push", ".git/config", "kairocode.json", ".claude/settings.json", ".kairocode/x",
+		".github/hooks/h.json", ".github/copilot/settings.json"} {
 		if pl := plan(t, WriteTool, e, map[string]any{"path": p, "content": "x"}); pl.Fail == nil || !strings.Contains(pl.Fail.Output, "protected") {
 			t.Errorf("write %s: want refused as protected, got %+v", p, pl.Fail)
 		}
@@ -290,6 +296,12 @@ func TestWriteRefusesProtectedNames(t *testing.T) {
 	}
 	if r := Apply(e, ".git/hooks/pre-push", Absent, Hash([]byte("x")), []byte("x"), ""); !r.IsError {
 		t.Error("apply wrote a git hook")
+	}
+	// The rest of .github is the project's.
+	for _, p := range []string{".github/workflows/ci.yml", ".github/hooks-notes.md"} {
+		if pl := plan(t, WriteTool, e, map[string]any{"path": p, "content": "x"}); pl.Fail != nil {
+			t.Errorf("write %s refused: %+v", p, pl.Fail)
+		}
 	}
 }
 
@@ -310,5 +322,152 @@ func TestApplyKeepsModeAndRefusesSymlinks(t *testing.T) {
 	p = plan(t, WriteTool, e, map[string]any{"path": "link.go", "content": "x"})
 	if r := apply(e, p); !r.IsError || !strings.Contains(r.Output, "symbolic link") {
 		t.Errorf("got %+v", r)
+	}
+}
+
+// flow_write writes only a flow's draft, and only one with nothing wrong:
+// a bad name or a script with problems is not written; a good one is,
+// new or over the old; and write still may not write .kairocode.
+func TestFlowWrite(t *testing.T) {
+	dir := t.TempDir()
+	e := env(t, dir)
+	run := func(name, src string) Result {
+		b, _ := json.Marshal(map[string]string{"name": name, "source": src})
+		p := FlowWriteTool.Plan(context.Background(), e, b)
+		if p.Fail != nil {
+			return *p.Fail
+		}
+		return FlowWriteTool.Apply(context.Background(), e, p.Data)
+	}
+	path := filepath.Join(dir, ".kairocode", "workflows", "drafts", "hello.star")
+	for _, c := range []struct{ name, src, want string }{
+		{"../x", "def main(input):\n    pass\n", "not a flow's name"},
+		{"new", "def main(input):\n    pass\n", "not a flow's name"},
+		{"hello", "def main(input):\n    return f\"x\"\n", "no f-strings"},
+		{"hello", "X = 1\n", "main(input)"},
+	} {
+		if res := run(c.name, c.src); !res.IsError || !strings.Contains(res.Output, c.want) {
+			t.Errorf("%s %q: %+v", c.name, c.src, res)
+		}
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a script with problems was written")
+	}
+	for _, src := range []string{"def main(input):\n    return \"one\"\n", "def main(input):\n    return \"two\"\n"} {
+		if res := run("hello", src); res.IsError || !strings.Contains(res.Output, "/flow hello") {
+			t.Fatalf("%+v", res)
+		}
+		if b, _ := os.ReadFile(path); string(b) != src {
+			t.Fatalf("hello.star is %q", b)
+		}
+	}
+	b, _ := json.Marshal(map[string]string{"path": ".kairocode/workflows/other.star", "content": "x"})
+	if p := WriteTool.Plan(context.Background(), e, b); p.Fail == nil || !strings.Contains(p.Fail.Output, "protected") {
+		t.Fatalf("write wrote into .kairocode: %+v", p)
+	}
+	// A plan that names anything else of .kairocode is not applied.
+	forged, _ := json.Marshal(map[string]string{"path": ".kairocode/settings.json", "before": "absent", "content": "{}"})
+	if res := FlowWriteTool.Apply(context.Background(), e, forged); !res.IsError {
+		t.Fatalf("applied a plan for another file: %+v", res)
+	}
+	// Done again (an unknown outcome retried), it does not write twice; a
+	// file changed meanwhile is a conflict, not overwritten.
+	b, _ = json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    return \"three\"\n"})
+	p := FlowWriteTool.Plan(context.Background(), e, b)
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); res.IsError {
+		t.Fatal(res)
+	}
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); res.IsError {
+		t.Fatalf("done again: %+v", res)
+	}
+	p = FlowWriteTool.Plan(context.Background(), e, b)
+	os.WriteFile(path, []byte("def main(input):\n    return \"mine\"\n"), 0o644)
+	b2, _ := json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    return \"four\"\n"})
+	p = FlowWriteTool.Plan(context.Background(), e, b2)
+	os.WriteFile(path, []byte("def main(input):\n    return \"someone else's\"\n"), 0o644)
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); !res.IsError || !strings.Contains(res.Output, "changed since") {
+		t.Fatalf("overwrote a change: %+v", res)
+	}
+}
+
+// flow_publish puts a flow's draft, as it is, where the flow runs from: not
+// one there is not, nor one with problems; done again, it does not write
+// twice (ADR 0030).
+func TestFlowPublish(t *testing.T) {
+	dir := t.TempDir()
+	e := env(t, dir)
+	publish := func(name string) Result {
+		b, _ := json.Marshal(map[string]string{"name": name})
+		p := FlowPublishTool.Plan(context.Background(), e, b)
+		if p.Fail != nil {
+			return *p.Fail
+		}
+		return FlowPublishTool.Apply(context.Background(), e, p.Data)
+	}
+	if res := publish("hello"); !res.IsError || !strings.Contains(res.Output, "no draft") {
+		t.Fatalf("published no draft: %+v", res)
+	}
+	drafts := filepath.Join(dir, ".kairocode", "workflows", "drafts")
+	os.MkdirAll(drafts, 0o755)
+	os.WriteFile(filepath.Join(drafts, "broken.star"), []byte("X = 1\n"), 0o644)
+	if res := publish("broken"); !res.IsError || !strings.Contains(res.Output, "main(input)") {
+		t.Fatalf("published a draft with problems: %+v", res)
+	}
+	src := "def main(input):\n    return \"hi\"\n"
+	os.WriteFile(filepath.Join(drafts, "hello.star"), []byte(src), 0o644)
+	b, _ := json.Marshal(map[string]string{"name": "hello"})
+	p := FlowPublishTool.Plan(context.Background(), e, b)
+	for range 2 { // done again: the same
+		if res := FlowPublishTool.Apply(context.Background(), e, p.Data); res.IsError || !strings.Contains(res.Output, "Published hello") {
+			t.Fatalf("%+v", res)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, ".kairocode", "workflows", "hello.star")); string(got) != src {
+		t.Fatalf("published %q", got)
+	}
+}
+
+// flow_write does not write through a link: a .kairocode/workflows that
+// points elsewhere in the working directory is refused.
+func TestFlowWriteRefusesLinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".kairocode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../.git/hooks", filepath.Join(dir, ".kairocode", "workflows")); err != nil {
+		t.Fatal(err)
+	}
+	e := env(t, dir)
+	b, _ := json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    pass\n"})
+	p := FlowWriteTool.Plan(context.Background(), e, b)
+	if p.Fail != nil {
+		t.Fatal(p.Fail.Output)
+	}
+	if res := FlowWriteTool.Apply(context.Background(), e, p.Data); !res.IsError || !strings.Contains(res.Output, "symbolic link") {
+		t.Fatalf("wrote through the link: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "hello.star")); err == nil {
+		t.Fatal("hello.star is in .git/hooks")
+	}
+}
+
+// todo gives back the list it is given, marked; a status it does not know
+// is refused (ADR 0022).
+func TestTodo(t *testing.T) {
+	root := workspace(t)
+	r := run(t, TodoTool, root, map[string]any{"todos": []map[string]string{
+		{"content": "read the code", "status": "completed"},
+		{"content": "write the fix", "status": "in_progress"},
+		{"content": "run the tests", "status": "pending"},
+	}})
+	want := "Todo (1 of 3 done):\n[x] read the code\n[>] write the fix\n[ ] run the tests"
+	if r.IsError || r.Output != want {
+		t.Fatalf("got %+v", r)
+	}
+	if r := run(t, TodoTool, root, map[string]any{"todos": []map[string]string{{"content": "x", "status": "done"}}}); !r.IsError {
+		t.Fatalf("an unknown status: %+v", r)
 	}
 }

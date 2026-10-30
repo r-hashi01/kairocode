@@ -15,7 +15,7 @@
 
 KairoCode は、kairo（耐久ワークフローのランタイム）の上に作るコーディングエージェントです。opencode や Claude Code と同じ種類の道具ですが、セッションを kairo のワークフローとして動かします。目標は「落ちても、待っても、並べても壊れない」ことです。
 
-- Go 1.27.1。kairo は、Go の SDK `github.com/r-hashi01/kairo/sdk/go`（v0.4.1 以上、パッケージ名 `kairo`）の埋め込みのランタイム（`kairo.Open`）で使います（ADR 0001）。
+- Go 1.27.2。kairo は、Go の SDK `github.com/r-hashi01/kairo/sdk/go`（v0.4.1 以上、パッケージ名 `kairo`）の埋め込みのランタイム（`kairo.Open`）で使います（ADR 0001）。
 - 保存先は、手元では SQLite（`modernc.org/sqlite`）、サーバーレスとチームでは PostgreSQL です。手元のサーバーは待ちモード、サーバーレスはサスペンドモードです。
 - サーバー（HTTP + SSE）と、それにつなぐクライアント（TUI と CLI）に分けます。配り方は単一のバイナリ（`cmd/kairocode`）です。
 
@@ -23,18 +23,27 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 
 | パッケージ | 責務 | I/O・goroutine |
 |---|---|---|
-| `internal/workflows` | kairo のワークフロー（`session`、`turn`、`agent`、動的なワークフローの解釈）。エージェントのループの制御 | **一切禁止。** SDK の `*kairo.Context`（`kairo.Call`、`Parallel`、`WaitFor`、`Child`、`ctx.Now`、`ctx.Random`、`ctx.Sleep`）を通してだけ外を見る |
+| `internal/workflows` | kairo のワークフロー（`session`、`turn`、`flow`（Starlark のフローをワークフローの中で動かす。ADR 0003））。エージェントのループの制御 | **一切禁止。** SDK の `*kairo.Context`（`kairo.Call`、`Parallel`、`WaitFor`、`Child`、`ctx.Now`、`ctx.Random`、`ctx.Sleep`）を通してだけ外を見る |
 | `internal/runtime` | `kairo.Open`、ワークフローとアクションの宣言。アクションの実装（`agent.load`、`model`、`history.extend`、`tool.<name>`。後で `permission.check`、`snapshot`、`restore`）。ツールの作用の型から kairo の `Effect` への写し。サーバーと CLI に向けた小さな API（`CreateSession`、`Send`、`WaitTurn`） | ここで I/O する |
 | `internal/tools` | 組み込みのツール。1 ファイル 1 ツールで、`tools.Def` に作用の型を書く | ここで I/O する |
 | `internal/provider` | モデルのプロバイダーのアダプター（Anthropic と、テスト用の fake） | ここで I/O する |
 | `internal/store` | メッセージの保存（`kc_message`、内容のハッシュで引く。1 度だけ書く） | ここで I/O する |
 | `internal/daemon` | データの置き場ごとに 1 つのデーモン（ADR 0008）。ロック、`server.json`、Unix ソケットの上の HTTP、何もしないときの終了。ほかのプロセスが使うクライアントと、デーモンの自動の起動 | ここで I/O する |
 | `internal/server` | HTTP + SSE の API（設計 8.1 節）。ライブの出力は `k.Subscribe(<セッションの ID>)` から流す（ID の前方一致で、子孫の出力も届く） | ここで I/O する |
-| `internal/cli` | `kairocode run / approvals / approve / daemon`、後で `acp`、`chat`、`replay`。DB を自分で開かず、デーモンにつなぐ | ここで I/O する |
+| `internal/opencode` | opencode のエージェント・コマンド・スキルの定義（`.opencode/agents`、`commands`、`SKILL.md`）を、opencode と同じ意味で読み、コマンドを展開する。frontmatter の YAML は小さな自前のパーサーで読む | ファイルを読むだけ（コマンドの `` !`…` `` は呼び出し側が sandbox で動かす） |
+| `internal/acp` | ACP のエージェント（ADR 0002）と、端末の対話が使う ACP のクライアント。stdio の JSON-RPC、デーモンのセッション・出来事・承認を ACP に写す。待ちの状態を持たない（承認の待ちは kairo にある） | ここで I/O する |
+| `internal/jsonrpc` | 改行で区切った JSON の上の JSON-RPC 2.0（ACP の stdio）。`internal/acp`（KairoCode が ACP のエージェント）と、`internal/runtime` の ACP のエンジン（KairoCode が codex・copilot の ACP のクライアント。ADR 0014）が使う | 渡された読み書きの口だけ |
+| `internal/cli` | `kairocode chat`（引数なしの `kairo` も。自分の ACP のクライアントとして話す端末の対話）、`run / approvals / approve / daemon / acp / usage`、後で `replay`。DB を自分で開かず、デーモンにつなぐ | ここで I/O する |
+| `internal/flowchart` | フローの形（ADR 0003）。Starlark のスクリプトの構文の木から、プリミティブの呼び出しを、順番・分岐・繰り返し・並列の形で読む。木の形の文字の図も | なし（読むだけ） |
+| `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力だけを持つ | 端末の入出力だけ |
+| `internal/tui/screen` | 端末の画面の下の領域を描き、会話をその上に書く（ADR 0033。Codex と同じ仕組み）。生モードと端末の設定 | 端末の入出力だけ |
+| `internal/lsp` | 書いたファイルの、言語サーバーの診断のエラー（ADR 0009）。サーバーは sandbox の中で起動し、デーモンの中で持ち続け、使われなければ止める | ここで I/O する |
+| `internal/locale` | 読む人の言語（`KAIROCODE_LANG`、利用者の `kairocode.json`、ロケール）と、フローのレビューの言い回しの置き換え（項目名とスクリプトは置き換えない） | 環境変数と利用者の設定を読むだけ |
+| `internal/trust` | 信頼したフォルダの一覧（ADR 0010。データの置き場の `trust.json`）。クライアントだけが読み書きする | ここで I/O する |
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
 | `cmd/kairocode` | エントリーポイント | — |
 
-ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、`internal/msg`、`internal/plan`、`internal/tools` の型、決定的な標準ライブラリ）。`internal/msg`（メッセージの型）と `internal/plan`（動的なワークフローの計画の型と検査）は、純粋なパッケージとして足す予定です。
+ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、Starlark（`go.starlark.net`。ADR 0003）、`internal/msg`、`internal/plan`、`internal/tools` の型、決定的な標準ライブラリ）。`internal/msg`（メッセージの型）と `internal/plan`（動的なワークフローの計画の型と検査）は、純粋なパッケージとして足す予定です。
 
 ## 破ってはいけない不変条件
 
@@ -65,6 +74,11 @@ make check | quick | build
 ```
 
 - **完了の条件は `scripts/check.sh` が通ることです。** 通らない状態で終わるなら、何が失敗していて、なぜ直せないのかを明記してください。
+- **`scripts/check.sh` は、エージェントの sandbox の外で動かします。** テストは `127.0.0.1` と Unix ソケットで待ち受け（偽のサーバー、デーモン）、KairoCode の sandbox でコマンドを起動します。エージェントの sandbox の中ではそれができないので、検査はテストの前に `== env` で止まり、何ができないかを言います（合格にはしません）。
+  - KairoCode: `bash` を `sandbox: "loopback"`（sandbox の中で、手元の通信だけを許す。ADR 0031）で呼んで動かします。承認は要りません（`bash` の規則に従う）。sandbox を起動するテストは、入れ子にできないので自分を飛ばし、検査は「一部」の合格（`partial: N skipped`）になります。全部を動かすときだけ、`sandbox: "escalate"`（利用者の承認で sandbox の外）を使います。`KAIROCODE_CHECK_FULL=1` なら、「一部」は合格にせず終了コード 3 で止まります。
+  - Codex: `scripts/check.sh` は、sandbox の外での実行の許可（escalated）を求めて動かします。`network_access` を許すだけでは足りません（macOS は、sandbox の中で別の sandbox を始められない）。
+  - `== env` で止まったときの終了コードは 3 です。Stop hook は、そのとき「直せ」ではなく「外で動かせ」と返します。外で通れば、`check.sh` が通ったこと（`.claude/.cache/last-green`）を書くので、ソースが変わるまで Stop hook は検査を繰り返しません。
+  - 外で動かす許可が得られないなら、`== env` の出力を添えて、利用者に外で動かしてもらってください。
 - 段階（M0〜M4）の作業は `/milestone` スキルで進めます。受け入れ条件をテストとして先に書き、それが通ったら段階を終えます。
 - 実のツール、ワークフロー、再開に関わる変更では、**プロセスを強制終了して再開するテスト**（crash のテスト）を書きます。名前は `TestCrash...` にし、先頭で `if testing.Short() { t.Skip(...) }` とします。テストのバイナリを子のプロセスとして起動し直し（`os.Args[0]` と `-test.run`、環境変数で役を渡す）、途中で `SIGKILL` して、同じ DB で再開します。「二重に起きない」は、ツールの handler が呼ばれた回数か、外から見える作用（ファイル、git の記録）の回数で確かめます。
 - テストの閾値や期待値を緩めて通してはいけません。待ち合わせは固定の `time.Sleep` でなく、条件を見て待ちます。
@@ -75,7 +89,7 @@ make check | quick | build
 - **ツールを足す・変える。** `/tool-change` スキル（作用の型、結果が不明なときの確かめ方、権限の規則の形、crash のテスト）。
 - **ワークフロー（`internal/workflows`）を変える。** `/workflow-change` スキル（決定性、記録された値、ID の規則、版の扱い）。
 - **kairo の API が足りない。** `/kairo-gap` スキル。
-- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003 の承認後）、`github.com/elastic/go-seccomp-bpf`（ADR 0005 の承認後）です。それ以外（TUI のライブラリを含む）は、利用者の了承と ADR が要ります（hook が確認を求めます）。
+- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003、承認済み）、`github.com/elastic/go-seccomp-bpf` と `golang.org/x/net`（ADR 0005。`x/net/bpf` を Linux の sandbox だけが使う）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）、`golang.org/x/oauth2`（ADR 0025。MCP の SDK の `auth` の型。プラグインの OAuth だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
 
 ## コーディング規約
 

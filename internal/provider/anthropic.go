@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -23,8 +25,8 @@ type Anthropic struct {
 	// Effort is output_config.effort. Claude Opus 5.5 defaults to "medium";
 	// a coding agent asks for "high".
 	Effort string
-	// MaxTokens per reply. Non-streaming requests stay at 16000 to keep under
-	// the SDK's HTTP timeouts; streaming (M2) raises it.
+	// MaxTokens per reply. Requests stream, so the SDK's HTTP timeouts for
+	// long non-streaming requests do not apply; it stays at 16000 for now.
 	MaxTokens int64
 }
 
@@ -52,6 +54,10 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 			InputSchema: anthropic.BetaToolInputSchemaParam{Properties: schema.Properties, Required: schema.Required},
 		}})
 	}
+	effort := a.Effort
+	if r.Effort != "" {
+		effort = r.Effort
+	}
 	params := anthropic.BetaMessageNewParams{
 		Model:     r.Model,
 		MaxTokens: a.MaxTokens,
@@ -59,7 +65,7 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 		Tools:     tools,
 		// The conversation only grows (append-only), so the whole prefix caches.
 		CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
-		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffort(a.Effort)},
+		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffort(effort)},
 		// A request a safety classifier declines is answered by a fallback
 		// model in the same call, routed by the refusal's category.
 		Fallbacks: anthropic.BetaFallbacksParamOfDefault(),
@@ -68,13 +74,26 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 	if r.System != "" {
 		params.System = []anthropic.BetaTextBlockParam{{Text: r.System}}
 	}
-	resp, err := a.client.Beta.Messages.New(ctx, params)
+	if r.Force != "" {
+		params.ToolChoice = anthropic.BetaToolChoiceParamOfTool(r.Force)
+	}
+	if r.NoTools && len(r.Tools) > 0 {
+		params.ToolChoice = anthropic.BetaToolChoiceUnionParam{OfNone: &anthropic.BetaToolChoiceNoneParam{}}
+	}
+	resp, err := a.stream(ctx, params, r.OnText)
 	if err != nil {
+		if strings.Contains(err.Error(), "no Anthropic credentials") {
+			// Said once and plainly: what to do, not the SDK's page.
+			return Response{}, &PermanentError{Err: ErrNoCredentials}
+		}
 		var apierr *anthropic.Error
 		if errors.As(err, &apierr) {
 			switch apierr.StatusCode {
 			case 400, 401, 403, 404, 413, 422:
 				// Asking again gets the same answer.
+				if strings.Contains(err.Error(), "prompt is too long") || apierr.StatusCode == 413 {
+					return Response{}, &PermanentError{Err: fmt.Errorf("%w: %v", ErrContextTooLong, err)}
+				}
 				return Response{}, &PermanentError{Err: err}
 			}
 		}
@@ -122,6 +141,32 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 	return out, nil
 }
 
+// stream makes the request as a stream, giving the text to onText as it
+// comes, and returns the whole message.
+func (a *Anthropic) stream(ctx context.Context, params anthropic.BetaMessageNewParams, onText func(string)) (*anthropic.BetaMessage, error) {
+	stream := a.client.Beta.Messages.NewStreaming(ctx, params)
+	defer stream.Close()
+	var resp anthropic.BetaMessage
+	for stream.Next() {
+		ev := stream.Current()
+		if err := resp.Accumulate(ev); err != nil {
+			return nil, err
+		}
+		if onText == nil {
+			continue
+		}
+		if d, ok := ev.AsAny().(anthropic.BetaRawContentBlockDeltaEvent); ok {
+			if t, ok := d.Delta.AsAny().(anthropic.BetaTextDelta); ok && t.Text != "" {
+				onText(t.Text)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // anthropicMessages renders a conversation for the Claude API. An assistant
 // message that came from this provider is sent back exactly as it arrived (its
 // thinking blocks must not change). Consecutive messages of one role are
@@ -151,6 +196,14 @@ func anthropicMessages(ms []msg.Message) ([]anthropic.BetaMessageParam, error) {
 					p.Content = append(p.Content, anthropic.NewBetaToolUseBlock(part.ID, in, part.Name))
 				case msg.ToolResult:
 					p.Content = append(p.Content, anthropic.NewBetaToolResultBlock(part.ToolUseID, part.Text, part.IsError))
+				case msg.Image:
+					if len(part.Data) == 0 {
+						return nil, fmt.Errorf("image %s: its bytes were not given", part.Ref)
+					}
+					p.Content = append(p.Content, anthropic.NewBetaImageBlock(anthropic.BetaBase64ImageSourceParam{
+						Data:      base64.StdEncoding.EncodeToString(part.Data),
+						MediaType: anthropic.BetaBase64ImageSourceMediaType(part.MediaType),
+					}))
 				}
 			}
 		}

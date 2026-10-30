@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -52,6 +53,12 @@ type mcpTurn struct {
 	policy workflows.Policy
 	tools  map[string]tools.Def
 	srv    *mcp.Server
+	// hooks and session: the turn's tool hooks, run around each call
+	// (ADR 0018).
+	hooks   []workflows.Hook
+	session string
+	// ext: the turn's external tools (ADR 0022), by name.
+	ext map[string]workflows.ExtRef
 
 	mu sync.Mutex
 	// live: calls a handler of this run is waiting on. A call never meets
@@ -94,16 +101,29 @@ func (s *mcpServer) close() error { return s.http.Close() }
 // open makes an endpoint for one claude run of turn, serving the named
 // tools. It returns its URL, the run's state, and a function that closes
 // the endpoint.
-func (s *mcpServer) open(turn, dir string, names []string, policy workflows.Policy) (string, *mcpTurn, func(), error) {
+func (s *mcpServer) open(ctx context.Context, turn, dir string, names []string, policy workflows.Policy, hooks []workflows.Hook, session string,
+	ext map[string]workflows.ExtRef) (string, *mcpTurn, func(), error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", nil, nil, err
 	}
 	token := hex.EncodeToString(b)
-	t := &mcpTurn{turn: turn, proc: token, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{}}
+	t := &mcpTurn{turn: turn, proc: token, dir: dir, policy: policy, tools: map[string]tools.Def{}, live: map[string]bool{},
+		hooks: hooks, session: session, ext: ext}
 	t.srv = mcp.NewServer(&mcp.Implementation{Name: MCPServerName, Version: "0"}, nil)
 	for _, name := range names {
 		d, ok := s.rt.tool(name)
+		if ref, isExt := ext[name]; isExt {
+			// An external tool, as the turn recorded it (ADR 0022).
+			def, err := s.rt.extDefOf(ctx, ref.Def)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("tool %s: %w", name, err)
+			}
+			d, ok = tools.Def{Name: def.Name, Description: def.Description, Schema: def.Schema, Effect: tools.Real}, true
+			if ref.Read {
+				d.Effect = tools.Read
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -142,7 +162,36 @@ func (s *mcpServer) acknowledge(ctx context.Context, t *mcpTurn) error {
 	return nil
 }
 
+// kindRunEnded is what the store keeps of a claude run that ended with a
+// result (its token): what it was handed is in its saved session.
+const kindRunEnded = "mcp-run-ended"
+
+// ended records that t's run ended with a result: every result it was
+// handed reached it and is in the session Claude Code saved, so a call it
+// made is not lost to the runs after it.
+func (s *mcpServer) ended(ctx context.Context, t *mcpTurn) error {
+	if err := s.acknowledge(ctx, t); err != nil {
+		return err
+	}
+	_, err := s.rt.Store.Put(ctx, kindRunEnded, []byte(t.proc))
+	return err
+}
+
+// runEnded says whether the claude run proc ended with a result. Not known
+// (not recorded, or the store fails) counts as cut off: asked about.
+func (s *mcpServer) runEnded(ctx context.Context, proc string) bool {
+	_, _, err := s.rt.Store.Get(ctx, store.Hash(kindRunEnded, []byte(proc)))
+	return err == nil
+}
+
 // takeAsks are the calls of the run that wait for the user, each once.
+// addAsk records a question for the user that the run's round ends on.
+func (t *mcpTurn) addAsk(a workflows.AskRequest) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.asks = append(t.asks, a)
+}
+
 func (t *mcpTurn) takeAsks() []workflows.AskRequest {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -265,9 +314,10 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 //     reached Claude Code and that no other handler waits on: the call is
 //     that one, made again after an interruption;
 //   - else a new run, started here. If the content's last run was a real
-//     tool's, from an earlier claude run, the new one asks the user first:
-//     Claude Code may be making again a call whose result it lost (ADR
-//     0007, invariant 4).
+//     tool's, from an earlier claude run that was cut off, the new one asks
+//     the user first: Claude Code may be making again a call whose result
+//     it lost (ADR 0007, invariant 4). An earlier run that ended with a
+//     result kept every result in its session: the call is a new one.
 //
 // blocked says the run it met stopped for review.
 func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, args json.RawMessage) (id string, blocked bool, err error) {
@@ -295,7 +345,7 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	}
 	n := len(calls)
 	repeat := false
-	if n > 0 && t.tools[tool].Effect == tools.Real && calls[n-1].Proc != t.proc {
+	if n > 0 && t.tools[tool].Effect == tools.Real && calls[n-1].Proc != t.proc && !s.runEnded(ctx, calls[n-1].Proc) {
 		repeat = true
 	}
 	id = fmt.Sprintf("%s/mcp/%s.%d", t.turn, key, n)
@@ -303,8 +353,14 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 		return "", false, err
 	}
 	in := workflows.MCPCallInput{
-		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy,
+		Tool: tool, Dir: t.dir, Args: args, Planned: t.tools[tool].Plan != nil, Policy: t.policy, Hooks: t.hooks,
 		MCP: workflows.MCPRef{Turn: t.turn, Run: id, Key: key, Ask: fmt.Sprintf("%s.%d", key, n), Repeat: repeat},
+	}
+	if ref, ok := t.ext[tool]; ok {
+		in.Ext = &ref
+	}
+	if len(t.hooks) > 0 {
+		in.Session = t.session
 	}
 	// kairo-gap #17: the run is a root of its own, not a child of the turn.
 	if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
@@ -317,7 +373,7 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 // reviewResult answers a call whose run stopped for review: whether it took
 // effect is unknown, and a person has to say (invariant 4).
 func reviewResult(tool string) *mcp.CallToolResult {
-	return errorResult(fmt.Sprintf("Not run again: a run of this %s call was cut off and may have taken effect. "+
+	return errorResult(fmt.Sprintf("Not run again: a run of this %s call (or of a hook around it) was cut off and may have taken effect. "+
 		"It waits for a person to say whether it did. Stop here and tell the user.", tool))
 }
 

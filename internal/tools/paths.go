@@ -55,8 +55,9 @@ func within(dir, p string) (string, bool) {
 // as the sandbox does, so no tool can change what the next turn may do or
 // plant a git hook.
 func protected(p string) bool {
-	first, _, _ := strings.Cut(p, "/")
-	return slices.Contains(sandbox.Protected, first)
+	return slices.ContainsFunc(sandbox.Protected, func(name string) bool {
+		return p == name || strings.HasPrefix(p, name+"/")
+	})
 }
 
 // walkFiles calls fn with the slash-separated path of each regular file under

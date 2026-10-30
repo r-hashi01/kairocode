@@ -1,0 +1,19 @@
+{
+  "name": "exa",
+  "description": "Web search and fetching by Exa",
+  "version": "1.0.0",
+  "mcp": {
+    "type": "remote",
+    "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa,web_search_advanced_exa",
+    "headers": { "x-api-key": "{secret:api_key}" }
+  },
+  "auth": {
+    "type": "key",
+    "keys": [{ "name": "api_key", "description": "an Exa API key (https://dashboard.exa.ai/api-keys)" }]
+  },
+  "tools": {
+    "web_search_exa": { "effect": "read" },
+    "web_fetch_exa": { "effect": "read" },
+    "web_search_advanced_exa": { "effect": "read" }
+  }
+}

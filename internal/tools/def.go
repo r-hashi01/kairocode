@@ -86,6 +86,10 @@ type Env struct {
 	// Dir is the working directory's absolute path, to read the absolute
 	// paths a model may give.
 	Dir string
+	// Net is how fetch and http reach the network (ADR 0013).
+	Net Net
+	// Jobs are the session's commands in the background (ADR 0028).
+	Jobs Jobs
 }
 
 type Result struct {
@@ -104,5 +108,5 @@ func failed(format string, args ...any) Result {
 
 // Builtin is the tools every agent may be given, by name.
 func Builtin() []Def {
-	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, GitCommitTool, GitPushTool}
+	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, BashOutputTool, BashWaitTool, BashKillTool, GitCommitTool, GitPushTool, FetchTool, HTTPTool, TodoTool, SkillTool, FlowCheckTool, FlowWriteTool, FlowPublishTool, TaskTool}
 }

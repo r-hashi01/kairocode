@@ -6,11 +6,11 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 )
 
-// RunSession is a session (design 2.1): it waits for messages and runs a turn
-// for each, one after another. A resumed session reads back each turn's
-// recorded result instead of running it again, so only the turn under way is
-// replayed.
-func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+// RunSessionV3 is a session of version 3 (design 2.1): it waits for
+// messages and runs a turn for each, one after another. A resumed session
+// reads back each turn's recorded result instead of running it again, so
+// only the turn under way is replayed.
+func RunSessionV3(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 	head := ""
 	for n := 0; ; n++ {
 		ev, err := kairo.WaitFor[SessionEvent](ctx, SignalMessage)
@@ -37,5 +37,182 @@ func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 			return SessionOutput{Turns: n, Head: head}, err
 		}
 		head = out.Head
+	}
+}
+
+// done is a turn whose effect on the working files can be undone (from
+// after back to before) or, undone, redone (from before back to after).
+type done struct {
+	n             int
+	before, after string
+}
+
+// RunSessionV4 is a session of version 4: RunSessionV3, with undo and redo
+// (design 7). What an undo or a redo restores is worked out from the turns'
+// recorded outputs alone (their snapshots), so a resumed session undoes the
+// same turns.
+func RunSessionV4(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, false, false, false)
+}
+
+// RunSessionV5 is a session of version 5: RunSessionV4, and a turn the
+// user stopped stays in the conversation, with a note that it was stopped
+// (ADR 0011): the model knows what was asked, and that tool calls may have
+// changed the files.
+func RunSessionV5(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, false, false)
+}
+
+// RunSessionV6 is a session of version 6: RunSessionV5, and an event may
+// switch the session's engine or model for its turn and those after it
+// (ADR 0014). A switch of engine starts a new epoch, in which a CLI engine
+// starts a session of its own.
+func RunSessionV6(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, true, false)
+}
+
+// RunSession is a session of version 7: RunSessionV6, and a turn is taken
+// as its run was recorded, cancelled or not, whatever its result said when
+// it came (kairo-gap #22: a turn stopped just as it ended returns its value
+// live and is read back cancelled).
+func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, true, true)
+}
+
+// runSession is RunSessionV4; with keepStopped RunSessionV5; with switches
+// too RunSessionV6; with settle too RunSession.
+func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, settle bool) (SessionOutput, error) {
+	head := in.History // a forked session's (ADR 0021); "" otherwise
+	engine, model, effort, mode, epoch := in.Engine, in.Model, in.Effort, "", 0
+	// applied: turns in effect, the last undone first; undone: turns undone,
+	// the last redone first. A new turn clears undone.
+	var applied, undone []done
+	var lastInput int64 // the last turn's last model call's input (ADR 0020)
+	for n := 0; ; n++ {
+		ev, err := kairo.WaitFor[SessionEvent](ctx, SignalMessage)
+		if err != nil {
+			return SessionOutput{Turns: n, Head: head}, err
+		}
+		if ev.Kind == EventClose {
+			return SessionOutput{Turns: n, Head: head}, nil
+		}
+		if switches && ev.Switch != nil {
+			if ev.Switch.Engine != "" && ev.Switch.Engine != engine {
+				engine, model, effort = ev.Switch.Engine, "", ""
+				epoch++
+			}
+			if ev.Switch.Model != "" {
+				model = ev.Switch.Model
+			}
+			if ev.Switch.Effort != "" {
+				effort = ev.Switch.Effort
+			}
+			switch ev.Switch.Mode {
+			case ModeManual:
+				mode = ""
+			case ModePlan, ModeAuto:
+				mode = ev.Switch.Mode
+			}
+		}
+		tin := TurnInput{
+			Session: ctx.ID(), N: n, Dir: in.Dir, Agent: in.Agent, Engine: engine, Model: model, History: head, Message: ev.Message,
+			Epoch: epoch, Effort: effort, Mode: mode, LastInput: lastInput, Forked: in.From != nil,
+		}
+		if mode == ModePlan {
+			tin.Agent = "plan" // it only reads (ADR 0016)
+		}
+		if ev.Agent != "" {
+			tin.Agent = ev.Agent
+		}
+		if ev.Model != "" {
+			tin.Model = ev.Model
+		}
+		tin.Flow = ev.Flow
+		tin.Compact = ev.Kind == EventCompact
+		switch ev.Kind {
+		case EventUndo:
+			tin.Undo = &UndoInput{Of: -1}
+			if len(applied) > 0 {
+				d := applied[len(applied)-1]
+				tin.Undo.Of, tin.Undo.Tree, tin.Undo.From = d.n, d.before, d.after
+			}
+		case EventRedo:
+			tin.Undo = &UndoInput{Redo: true, Of: -1}
+			if len(undone) > 0 {
+				d := undone[len(undone)-1]
+				tin.Undo.Of, tin.Undo.Tree, tin.Undo.From = d.n, d.after, d.before
+			}
+		case EventForkFiles:
+			if ev.Restore != nil {
+				r := *ev.Restore
+				r.Fork = true
+				tin.Undo = &r
+			}
+		}
+		out, err := kairo.Child[TurnOutput](ctx, Turn, tin)
+		var failed *kairo.WorkflowError
+		isFailure := err != nil && errors.As(err, &failed)
+		if settle && (err == nil || isFailure || errors.Is(err, kairo.ErrCancelled)) {
+			// kairo-gap #22: a turn's value or failure, live, may be of a
+			// run kairo recorded cancelled, which read back is
+			// ErrCancelled. The record decides, live and read back alike:
+			// the call is made for any outcome of the turn, so both make
+			// the same calls.
+			s, serr := kairo.Call[TurnSettledOutput](ctx, ActTurnSettled, TurnSettledInput{Session: ctx.ID(), N: n})
+			if serr != nil {
+				return SessionOutput{Turns: n, Head: head}, serr
+			}
+			if s.Cancelled {
+				err, isFailure = kairo.ErrCancelled, false
+			}
+		}
+		if err != nil {
+			// As in RunSessionV3: a recorded failure or cancellation leaves
+			// things as they were; anything else is not an outcome. From
+			// version 5, a message's turn the user stopped is kept with
+			// its note. Stopped means the turn's own run was cancelled: a
+			// turn that failed with a cancelled call inside is a failure,
+			// and is told apart by its type alone (live, its error wraps
+			// the call's; read back, it does not).
+			switch {
+			case keepStopped && !isFailure && errors.Is(err, kairo.ErrCancelled) && ev.Kind == EventMessage:
+				h, err := kairo.Call[string](ctx, ActHistoryCancelled, HistoryCancelledInput{Prev: head, Message: ev.Message})
+				if err != nil {
+					return SessionOutput{Turns: n, Head: head}, err
+				}
+				head = h
+				continue
+			case isFailure || errors.Is(err, kairo.ErrCancelled):
+				continue
+			}
+			return SessionOutput{Turns: n, Head: head}, err
+		}
+		head = out.Head
+		lastInput = out.LastInput
+		switch {
+		case out.Compacted: // no file changed: nothing to undo
+		case tin.Undo != nil && tin.Undo.Fork:
+			// The files put back as the fork began: an undo takes them back
+			// to what they were.
+			if out.Restored {
+				applied = append(applied, done{n: n, before: out.Prior, after: tin.Undo.Tree})
+				undone = nil
+			}
+		case tin.Undo != nil && (tin.Undo.Of < 0 || !(out.Restored || out.Skipped)):
+		case tin.Undo != nil && !tin.Undo.Redo:
+			// A redo puts back the files as they were just before the undo.
+			d := applied[len(applied)-1]
+			d.after = out.Prior
+			undone = append(undone, d)
+			applied = applied[:len(applied)-1]
+		case tin.Undo != nil:
+			// The files are now d.after: an undo takes them from there.
+			d := undone[len(undone)-1]
+			applied = append(applied, d)
+			undone = undone[:len(undone)-1]
+		default:
+			applied = append(applied, done{n: n, before: out.Before, after: out.After})
+			undone = nil
+		}
 	}
 }

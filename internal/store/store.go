@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -24,6 +26,12 @@ const (
 	KindContent = "content"
 	// KindPermissions is the permission rules as a turn started with them.
 	KindPermissions = "permissions"
+	// KindReviewed is a flow_publish call and the draft it was decided
+	// on (ADR 0030): only that draft is published by it.
+	KindReviewed = "reviewed"
+	// KindImage is an image's bytes, a message's image part refers to by
+	// hash (ADR 0026).
+	KindImage = "image"
 )
 
 var ErrNotFound = errors.New("store: no such content")
@@ -43,6 +51,19 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS kc_claude_proc (
 			session TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL)`,
+		// Per provider (ADR 0014, 追記): the model and effort last chosen,
+		// and the models and efforts its agent said it has (JSON lists).
+		`CREATE TABLE IF NOT EXISTS kc_provider_pref (
+			provider TEXT PRIMARY KEY,
+			model TEXT NOT NULL DEFAULT '',
+			effort TEXT NOT NULL DEFAULT '',
+			models TEXT NOT NULL DEFAULT '[]',
+			efforts TEXT NOT NULL DEFAULT '[]')`,
+		// The sessions of the Codex and Copilot CLIs (ADR 0014): theirs are
+		// ids the CLI makes, kept by the name KairoCode gives each.
+		`CREATE TABLE IF NOT EXISTS kc_engine_session (
+			name TEXT PRIMARY KEY,
+			id TEXT NOT NULL)`,
 		// The tool calls Claude Code made over MCP (ADR 0007): which run each
 		// is, from which claude run (proc), and whether its result is known
 		// to have reached Claude Code. Kept here as well as in kairo, which
@@ -64,10 +85,27 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			reason TEXT NOT NULL,
 			used_by TEXT,
 			PRIMARY KEY (turn, ask))`,
+		// Flows' runs, kept once they end (ADR 0029): kairo removes a
+		// finished tree's record after a while; this one stays.
+		`CREATE TABLE IF NOT EXISTS kc_flow_run (
+			id TEXT PRIMARY KEY,
+			dir TEXT NOT NULL,
+			name TEXT NOT NULL,
+			started INTEGER NOT NULL,
+			ended INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			body BLOB NOT NULL,
+			try INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE INDEX IF NOT EXISTS kc_flow_run_dir ON kc_flow_run (dir, started)`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)
 		}
+	}
+	// try (a try of a flow, ADR 0029 追記): a table made before it lacks it.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE kc_flow_run ADD COLUMN try INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return nil, fmt.Errorf("store: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -133,9 +171,20 @@ func (s *Store) Message(ctx context.Context, hash string) (msg.Message, error) {
 // Link is one turn's worth of a conversation: the messages it added, after the
 // conversation up to Prev. A conversation is named by its last link, so a
 // workflow passes one hash however long the conversation is.
+//
+// A Base link starts a conversation afresh (ADR 0020): its messages (a
+// summary) stand for all before it, which Conversation does not read. Its
+// Prev still names them, so they are kept and can be looked at.
 type Link struct {
 	Prev     string   `json:"prev,omitempty"`
 	Messages []string `json:"messages"`
+	Base     bool     `json:"base,omitempty"`
+}
+
+// Compacted adds a Base link holding summary after the conversation that
+// ends at prev, and returns its hash.
+func (s *Store) Compacted(ctx context.Context, prev, summary string) (string, error) {
+	return s.PutJSON(ctx, KindHistory, Link{Prev: prev, Messages: []string{summary}, Base: true})
 }
 
 // Extend appends messages to the conversation that ends at prev.
@@ -153,6 +202,9 @@ func (s *Store) Conversation(ctx context.Context, head string) ([]string, error)
 			return nil, err
 		}
 		links = append(links, l.Messages)
+		if l.Base {
+			break // what is before it is in its summary
+		}
 		h = l.Prev
 	}
 	var out []string
@@ -194,6 +246,85 @@ func (s *Store) SetClaudeProc(ctx context.Context, session string, pid int) erro
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO kc_claude_proc (session, pid) VALUES (?, ?) ON CONFLICT (session) DO UPDATE SET pid = excluded.pid`,
 		session, pid)
+	return err
+}
+
+// ProviderPref is what is kept of a provider: the model and effort last
+// chosen, and the models and efforts its agent said it has.
+type ProviderPref struct {
+	Model, Effort   string
+	Models, Efforts []string
+}
+
+// ProviderPref is provider's (zero if nothing is kept).
+func (s *Store) ProviderPref(ctx context.Context, provider string) (ProviderPref, error) {
+	var p ProviderPref
+	var models, efforts string
+	err := s.db.QueryRowContext(ctx, `SELECT model, effort, models, efforts FROM kc_provider_pref WHERE provider = ?`, provider).
+		Scan(&p.Model, &p.Effort, &models, &efforts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProviderPref{}, nil
+	}
+	if err != nil {
+		return ProviderPref{}, err
+	}
+	_ = json.Unmarshal([]byte(models), &p.Models)
+	_ = json.Unmarshal([]byte(efforts), &p.Efforts)
+	return p, nil
+}
+
+// LastProvider is the provider last chosen, in any session ("" if none).
+// It is kept in the row of provider "", in its model.
+func (s *Store) LastProvider(ctx context.Context) (string, error) {
+	p, err := s.ProviderPref(ctx, "")
+	return p.Model, err
+}
+
+// SetLastProvider keeps provider as the one last chosen.
+func (s *Store) SetLastProvider(ctx context.Context, provider string) error {
+	return s.SetProviderChoice(ctx, "", provider, "")
+}
+
+// SetProviderChoice keeps the model and the effort chosen for provider
+// ("" leaves one as it is).
+func (s *Store) SetProviderChoice(ctx context.Context, provider, model, effort string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_provider_pref (provider, model, effort) VALUES (?, ?, ?)
+		ON CONFLICT (provider) DO UPDATE SET
+			model = CASE WHEN excluded.model = '' THEN kc_provider_pref.model ELSE excluded.model END,
+			effort = CASE WHEN excluded.effort = '' THEN kc_provider_pref.effort ELSE excluded.effort END`,
+		provider, model, effort)
+	return err
+}
+
+// SetProviderOptions keeps the models and efforts provider's agent said
+// it has (nil leaves one as it is).
+func (s *Store) SetProviderOptions(ctx context.Context, provider string, models, efforts []string) error {
+	m, _ := json.Marshal(models)
+	e, _ := json.Marshal(efforts)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_provider_pref (provider, models, efforts) VALUES (?, ?, ?)
+		ON CONFLICT (provider) DO UPDATE SET
+			models = CASE WHEN excluded.models = 'null' THEN kc_provider_pref.models ELSE excluded.models END,
+			efforts = CASE WHEN excluded.efforts = 'null' THEN kc_provider_pref.efforts ELSE excluded.efforts END`,
+		provider, string(m), string(e))
+	return err
+}
+
+// EngineSession is the id a CLI gave the session KairoCode calls name,
+// or "" if it has none yet.
+func (s *Store) EngineSession(ctx context.Context, name string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM kc_engine_session WHERE name = ?`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// SetEngineSession records that the CLI's session name is id.
+func (s *Store) SetEngineSession(ctx context.Context, name, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO kc_engine_session (name, id) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET id = excluded.id`,
+		name, id)
 	return err
 }
 
@@ -300,4 +431,109 @@ func (s *Store) MCPRuns(ctx context.Context, turn string) ([]string, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// FlowRunRow is a flow's run as it is kept (ADR 0029): its body is the
+// runtime's (JSON).
+type FlowRunRow struct {
+	ID, Dir, Name, Status string
+	Try                   bool // a try of the flow (ADR 0017), counted apart
+	Started, Ended        time.Time
+	Body                  []byte
+}
+
+// PutFlowRun keeps a flow's run; kept again, it is replaced.
+func (s *Store) PutFlowRun(ctx context.Context, r FlowRunRow) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_flow_run (id, dir, name, started, ended, status, body, try)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET
+		dir = excluded.dir, name = excluded.name, started = excluded.started, ended = excluded.ended,
+		status = excluded.status, body = excluded.body, try = excluded.try`,
+		r.ID, r.Dir, r.Name, r.Started.UnixNano(), r.Ended.UnixNano(), r.Status, r.Body, r.Try)
+	if err != nil {
+		return fmt.Errorf("store: put flow run: %w", err)
+	}
+	return nil
+}
+
+// HasFlowRun says a flow's run is kept.
+func (s *Store) HasFlowRun(ctx context.Context, id string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM kc_flow_run WHERE id = ?`, id).Scan(&n)
+	return n > 0, err
+}
+
+// FlowRun is a kept flow's run.
+func (s *Store) FlowRun(ctx context.Context, id string) (FlowRunRow, error) {
+	rows, err := s.flowRuns(ctx, `WHERE id = ?`, id)
+	if err != nil {
+		return FlowRunRow{}, err
+	}
+	if len(rows) == 0 {
+		return FlowRunRow{}, ErrNotFound
+	}
+	return rows[0], nil
+}
+
+// FlowRuns are the kept runs of dir's flows ("" any dir), of flow name
+// ("" any), the latest first, at most limit (0: all), with their bodies;
+// only "tries" or "runs" of them, or both ("").
+func (s *Store) FlowRuns(ctx context.Context, dir, name, only string, limit int) ([]FlowRunRow, error) {
+	where, args := `WHERE 1 = 1`, []any{}
+	switch only {
+	case "tries":
+		where += ` AND try = 1`
+	case "runs":
+		where += ` AND try = 0`
+	}
+	if dir != "" {
+		where, args = where+` AND dir = ?`, append(args, dir)
+	}
+	if name != "" {
+		where, args = where+` AND name = ?`, append(args, name)
+	}
+	where += ` ORDER BY started DESC, id`
+	if limit > 0 {
+		where, args = where+` LIMIT ?`, append(args, limit)
+	}
+	return s.flowRuns(ctx, where, args...)
+}
+
+// FlowRunsSince counts dir's kept runs (or tries) of flow name started
+// after at.
+func (s *Store) FlowRunsSince(ctx context.Context, dir, name string, try bool, at time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM kc_flow_run WHERE dir = ? AND name = ? AND try = ? AND started > ?`,
+		dir, name, try, at.UnixNano()).Scan(&n)
+	return n, err
+}
+
+func (s *Store) flowRuns(ctx context.Context, where string, args ...any) ([]FlowRunRow, error) {
+	q, err := s.db.QueryContext(ctx, `SELECT id, dir, name, started, ended, status, body, try FROM kc_flow_run `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: flow runs: %w", err)
+	}
+	defer q.Close()
+	var out []FlowRunRow
+	for q.Next() {
+		var r FlowRunRow
+		var started, ended int64
+		if err := q.Scan(&r.ID, &r.Dir, &r.Name, &started, &ended, &r.Status, &r.Body, &r.Try); err != nil {
+			return nil, err
+		}
+		r.Started, r.Ended = time.Unix(0, started), time.Unix(0, ended)
+		out = append(out, r)
+	}
+	return out, q.Err()
+}
+
+// PruneFlowRuns removes dir's runs (or tries: counted apart) of flow name
+// past the newest keep, or started before before.
+func (s *Store) PruneFlowRuns(ctx context.Context, dir, name string, try bool, keep int, before time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM kc_flow_run WHERE dir = ? AND name = ? AND try = ? AND (started < ? OR id NOT IN
+		(SELECT id FROM kc_flow_run WHERE dir = ? AND name = ? AND try = ? ORDER BY started DESC, id LIMIT ?))`,
+		dir, name, try, before.UnixNano(), dir, name, try, keep)
+	if err != nil {
+		return fmt.Errorf("store: prune flow runs: %w", err)
+	}
+	return nil
 }
