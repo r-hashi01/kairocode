@@ -13,6 +13,7 @@ import (
 	"image/color"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -329,7 +330,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in := textarea.New()
 	in.Placeholder = placeholder(80)
 	in.ShowLineNumbers = false
-	in.Prompt = "> "
+	in.Prompt = "▌ "
 	in.DynamicHeight = true
 	in.MinHeight, in.MaxHeight = 1, 10
 	in.KeyMap.InsertNewline.SetKeys("shift+enter", "alt+enter", "ctrl+j")
@@ -376,16 +377,40 @@ func (m *model) writeHeader() {
 	}
 }
 
-// The provider, model, effort and mode are in the status line only.
+// The provider, model, effort and mode are in the status line only. The
+// header has kairo's line down its left, as the input and what the user
+// said have (kairo: a circuit): its name, the folder, and (around) what
+// goes on there.
 func (m *model) headerBox() string {
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent.GetForeground()).Padding(0, 1)
-	room := max(m.width-5, 12) // the border and padding, and a column spare
+	room := max(m.width-4, 12)
 	version := m.o.Version
 	if len(version) > 8 {
 		version = version[:8]
 	}
-	return box.Render(accent.Bold(true).Render("ϟ kairo") + faint.Render(" "+version) + "\n" +
-		faint.Render(cutLeft(m.o.Dir, room)))
+	return thread(accent.Bold(true).Render("ϟ kairo") + faint.Render("  "+version) + "\n" +
+		faint.Render(cutLeft(home(m.o.Dir), room)))
+}
+
+// thread is lines with kairo's line down their left.
+func thread(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = accent.Render("▎") + " " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// home is path with the home directory as ~.
+func home(path string) string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		if path == h {
+			return "~"
+		}
+		if rest, ok := strings.CutPrefix(path, h+string(filepath.Separator)); ok {
+			return "~" + string(filepath.Separator) + rest
+		}
+	}
+	return path
 }
 
 // cut is s in at most n columns, cut at its end.
@@ -460,11 +485,7 @@ func queuedLines(text string, w int) string {
 		more, lines = len(lines)-queuedShown, lines[:queuedShown]
 	}
 	for i, l := range lines {
-		lead := "  "
-		if i == 0 {
-			lead = "> "
-		}
-		lines[i] = faint.Render(lead + l)
+		lines[i] = faint.Render("▌ " + l)
 	}
 	if more > 0 {
 		lines = append(lines, faint.Render(fmt.Sprintf("  … +%d lines", more)))
@@ -1192,11 +1213,7 @@ func reply(text string, width int, first bool) string {
 func userLine(text string) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	for i, l := range lines {
-		lead := "  "
-		if i == 0 {
-			lead = "> "
-		}
-		lines[i] = you.Render(lead + l + " ")
+		lines[i] = accent.Render("▌") + you.Render(" "+l+" ")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1519,7 +1536,7 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 
 // commands are the slash commands: the UI's own, then the agent's.
 func (m *model) commands() []acp.Command {
-	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session stays in the daemon)"},
+	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session is kept: kairo -continue takes it up)"},
 		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"},
 		{Name: "resume", Description: "Take up another session of this folder"}}, m.cmds...)
 }

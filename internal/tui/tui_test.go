@@ -321,7 +321,7 @@ func TestTurn(t *testing.T) {
 		{Kind: "agent_message_chunk", Text: "Done."},
 	}
 	header := d.out()
-	for _, want := range []string{"ϟ kairo abc12345", "/work/repo"} {
+	for _, want := range []string{"ϟ kairo  abc12345", "/work/repo"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("no %q in the header\n%s", want, header)
 		}
@@ -337,7 +337,7 @@ func TestTurn(t *testing.T) {
 	out := d.out()
 	// One mark for a reply's paragraphs; a reply after a tool call is a new
 	// one.
-	want := []string{"> write the notes", "⏺ I will write it.", "\n\n  First", "⏺ write notes.txt", "⎿  created notes.txt (2 lines)", "⏺ Done."}
+	want := []string{"▌ write the notes", "⏺ I will write it.", "\n\n  First", "⏺ write notes.txt", "⎿  created notes.txt (2 lines)", "⏺ Done."}
 	at := 0
 	for _, w := range want {
 		i := strings.Index(out[at:], w)
@@ -347,7 +347,7 @@ func TestTurn(t *testing.T) {
 		at += i + len(w)
 	}
 	v := d.view()
-	for _, w := range []string{"> ", "claude-code · claude-opus-5-5", "session 01234567"} {
+	for _, w := range []string{"▌ ", "claude-code · claude-opus-5-5", "session 01234567"} {
 		if !strings.Contains(v, w) {
 			t.Errorf("no %q on the screen\n%s", w, v)
 		}
@@ -368,7 +368,7 @@ func TestQueuedDuringATurn(t *testing.T) {
 		// written there twice, the second time when it is sent.
 		t.Fatalf("prompts %q\n%s", a.prompts, d.out())
 	}
-	if v := d.view(); !strings.Contains(v, "> and then this") || !strings.Contains(v, "> and this too\n  over two lines") || !strings.Contains(v, "sent when this turn ends") {
+	if v := d.view(); !strings.Contains(v, "▌ and then this") || !strings.Contains(v, "▌ and this too\n▌ over two lines") || !strings.Contains(v, "sent when this turn ends") {
 		t.Fatalf("the queued messages are not shown below:\n%s", v)
 	}
 	d.send(turnDoneMsg{stop: "end_turn"})
@@ -641,7 +641,7 @@ func TestScreenNeverTallerThanTheTerminal(t *testing.T) {
 	if !strings.Contains(plain(lines[len(lines)-1]), "session") {
 		t.Fatalf("the status line is not last:\n%s", plain(v.Content))
 	}
-	if v.Cursor == nil || v.Cursor.Y < 0 || v.Cursor.Y >= len(lines) || !strings.HasPrefix(plain(lines[v.Cursor.Y]), ">") {
+	if v.Cursor == nil || v.Cursor.Y < 0 || v.Cursor.Y >= len(lines) || !strings.HasPrefix(plain(lines[v.Cursor.Y]), "▌") {
 		t.Fatalf("the cursor is not in the input: %+v\n%s", v.Cursor, plain(v.Content))
 	}
 }
@@ -1595,7 +1595,7 @@ func TestQueuedShowsTheMessage(t *testing.T) {
 	typed(d, "[Image #1] \nwhat is wrong on this screen?")
 	typed(d, strings.Repeat("line\n", 9)+"end")
 	v := d.view()
-	if !strings.Contains(v, "> [Image #1]\n  what is wrong on this screen?") {
+	if !strings.Contains(v, "▌ [Image #1]\n▌ what is wrong on this screen?") {
 		t.Fatalf("the message is not shown:\n%s", v)
 	}
 	if !strings.Contains(v, "… +6 lines") || strings.Contains(v, "  end\n") {

@@ -53,7 +53,7 @@ func (m *model) aroundText(msg aroundMsg) string {
 		if hint != "" {
 			l += faint.Render(" · " + hint)
 		}
-		lines = append(lines, "  "+cut(l, room))
+		lines = append(lines, cut(l, room))
 	}
 	switch {
 	case waiting > 0:
@@ -74,7 +74,7 @@ func (m *model) aroundText(msg aroundMsg) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return strings.Join(lines, "\n")
+	return thread(strings.Join(lines, "\n"))
 }
 
 // plural is n and noun, plural when n is not one.

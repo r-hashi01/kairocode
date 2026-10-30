@@ -106,7 +106,7 @@ func TestInputStaysWhileAsked(t *testing.T) {
 	d.send(askMsg{req: acp.PermissionRequest{ToolCallID: "c", Title: "git_push", Options: []acp.PermissionOption{
 		{ID: "allow_once", Name: "Allow", Kind: "allow_once"}, {ID: "reject_once", Name: "Reject", Kind: "reject_once"}}}, reply: reply})
 	v := d.view()
-	q, in, st := strings.Index(v, "Allow this?"), strings.Index(v, "> half typed"), strings.Index(v, "session")
+	q, in, st := strings.Index(v, "Allow this?"), strings.Index(v, "▌ half typed"), strings.Index(v, "session")
 	if q < 0 || in < 0 || st < 0 || !(q < in && in < st) {
 		t.Fatalf("the question, the input, the status line:\n%s", v)
 	}
@@ -116,7 +116,7 @@ func TestInputStaysWhileAsked(t *testing.T) {
 	}
 	d.send(key("enter"))
 	<-reply
-	if v := d.view(); !strings.Contains(v, "> half typed") {
+	if v := d.view(); !strings.Contains(v, "▌ half typed") {
 		t.Fatalf("after the answer:\n%s", v)
 	}
 }

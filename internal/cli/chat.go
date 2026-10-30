@@ -115,7 +115,7 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		s, err := ui.Run(cl)
 		if s != "" {
-			fmt.Fprintf(out, "The session stays in the daemon: kairo -session %s takes it up again.\n", strings.TrimPrefix(s, "s/"))
+			fmt.Fprintf(out, "ϟ Kept: the session goes on without this terminal. kairo -continue takes it up (or kairo -session %s).\n", strings.TrimPrefix(s, "s/"))
 		}
 		return err
 	}
