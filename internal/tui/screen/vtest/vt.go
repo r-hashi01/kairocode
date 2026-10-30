@@ -25,6 +25,9 @@ type VT struct {
 	// wrapped: the row goes on in the next (autowrap), one line with it;
 	// a resize wraps such lines again (Resize).
 	wrapped []bool
+	// NoPull: made taller, it adds blank rows below what it shows (as some
+	// terminals do), instead of taking lines back from the scrollback.
+	NoPull bool
 }
 
 func New(w, h int) *VT {
@@ -278,7 +281,7 @@ func (t *VT) Resize(w, h int) {
 		rows, wraps = append(rows, row), append(wraps, false)
 	}
 	// Taller: lines come back from the scrollback above what it shows.
-	for len(rows) < h && len(t.Scrollback) > 0 {
+	for !t.NoPull && len(rows) < h && len(t.Scrollback) > 0 {
 		l := t.Scrollback[len(t.Scrollback)-1]
 		t.Scrollback = t.Scrollback[:len(t.Scrollback)-1]
 		row := []rune(strings.Repeat(" ", w))
