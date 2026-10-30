@@ -266,3 +266,14 @@
   - **フックを sandbox の外で動かすよう利用者に答えてもらう:** 今もできますが、フックの台本は何でもできるようになります。検査に要るのは手元の通信と記録の置き場所だけです。
   - **フックが「この環境では動かない」で止めたときは止めない:** 検査が無いまま終われるようになります。
 - **実装（2026-10-28）:** `hookCommandAction` が、sandbox の中のフックを `Loopback` で動かし、Claude Code のフックには `.claude/.cache` を `Policy.Writable` に足します（無ければ作る。`.claude` か `.claude/.cache` がリンクなら足さない）。Linux では、書ける場所が別の書ける場所の守る名前の中にあるとき、守る名前を読み取り専用にした後で、もう一度書けるようにします（macOS は書ける場所ごとの規則なので、そのままで書ける）。テスト: `TestSandboxWritableInsideProtected`、`TestClaudeHookLoopbackAndCache`、`TestHookCache`（macOS で通した。Linux は CI で）。
+
+### 9. Claude Code のフックを読まない設定（2026-10-30 追記、利用者の判断）
+
+利用者の指摘（2026-10-30）: 中身の見えないフックが急に動くのは怖い。KairoCode は、聞かずにフックを動かすことはしないが、Claude Code の設定にフックがあれば、そのフォルダーで初めて動く前に毎回聞く。聞かれること自体を止める手段がなかった。
+
+- **`kairocode.json` の `"agents": {"claudeHooks": "off"}` で、Claude Code のフック（2 節の `~/.claude/settings.json`、`.claude/settings.json`、`.claude/settings.local.json`）を読まない。** 既定の `"ask"` は今までどおり（初めて動く前に聞く）。
+  - 利用者の設定で決め、プロジェクトの設定は `"off"` にすること（厳しくすること）だけができる（ADR 0031 の `sandbox.loopback` と同じ）。知らない値は `"off"` とみなす。
+  - 読むのは `agent.load` の中なので、決めた値は記録され、進行中のターンは開始時の値で進む（不変条件 2）。KairoCode 自身のフック（`kairocode.json` の `hooks`）には効かない。
+- **質問の見せ方（同じ日）:** フックの質問には、コマンドが指すファイル（`~` かフォルダーから）の最初の 60 行を添え、この設定で止められることも書く（ACP のエージェントが見せるときに読む。記録には残さない）。選択肢は、フローの質問と同じく、どれも利用者が選ぶまで選ばれない種類（reject）にする。
+- テスト: `TestClaudeHooksOff`（値の組み合わせと、`"off"` でフックを聞かずにターンが進む）、`TestACPHookQuestion`。
+

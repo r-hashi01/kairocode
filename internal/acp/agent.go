@@ -1328,7 +1328,8 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	case question: // the question whole; a hook's, with what it runs
 		text := p.Subject
 		if strings.Contains(p.Key, "#hook_") {
-			text += hookScripts(p.Subject, a.dirOf(session))
+			text += hookScripts(p.Subject, a.dirOf(session)) +
+				"\n\nNot to read Claude Code's hooks at all: \"agents\": {\"claudeHooks\": \"off\"} in ~/.config/kairocode/kairocode.json."
 		}
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(text)}}
 	case !question && p.Kind != "review" && !strings.Contains(title, ruleText):

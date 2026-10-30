@@ -1536,6 +1536,9 @@ func TestACPHookQuestion(t *testing.T) {
 	if !strings.Contains(string(p.ToolCall.Content), "echo what this hook does") {
 		t.Fatalf("the script is not shown: %s", req.Params)
 	}
+	if !strings.Contains(string(p.ToolCall.Content), `claudeHooks`) {
+		t.Fatalf("how not to be asked is not said: %s", req.Params)
+	}
 	if len(p.Options) != 3 {
 		t.Fatalf("options %s", req.Params)
 	}
