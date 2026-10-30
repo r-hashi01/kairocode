@@ -568,9 +568,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 // history is the session's conversation as of its last finished turn: the
-// messages' roles and parts (not their providers' encodings).
+// messages' roles and parts (not their providers' encodings); with ?live=1,
+// then what the turns under way were asked (Runtime.HistoryLive).
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	ms, err := s.rt.History(r.Context(), sessionOf(r))
+	history := s.rt.History
+	if r.URL.Query().Get("live") != "" { // with what the turns under way were asked
+		history = s.rt.HistoryLive
+	}
+	ms, err := history(r.Context(), sessionOf(r))
 	if errors.Is(err, kairo.ErrUnknownRun) {
 		fail(w, http.StatusNotFound, err)
 		return

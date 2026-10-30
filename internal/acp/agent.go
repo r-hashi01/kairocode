@@ -1281,6 +1281,9 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			options = append(options, map[string]any{"optionId": TryOption, "name": "Try it first", "kind": "reject_once"})
 		}
 		rule, _, _ := strings.Cut(p.Rule, "\n") // one line: the title is not a page
+		if rule == "*: ask" {                   // the catch-all, as said to a person
+			rule = "asked by default: no rule allows it"
+		}
 		if len([]rune(rule)) > 120 {
 			rule = string([]rune(rule)[:120]) + "…"
 		}

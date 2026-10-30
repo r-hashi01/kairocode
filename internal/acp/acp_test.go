@@ -88,7 +88,7 @@ func (l *local) Events(ctx context.Context, s string) (<-chan runtime.Event, err
 }
 
 func (l *local) History(ctx context.Context, s string) ([]msg.Message, error) {
-	return l.r.History(ctx, s)
+	return l.r.HistoryLive(ctx, s) // as the daemon's client asks for it
 }
 
 func (l *local) Undo(ctx context.Context, s string) (int, error) { return l.r.Undo(ctx, s) }
@@ -595,7 +595,19 @@ func TestACPApprovalSurvivesRestart(t *testing.T) {
 
 	d := start(t, ctx, b)
 	initialize(d)
-	d.call("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
+	id := d.request("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
+	_, replayed := d.until(isResponse(id))
+	// What the turn was asked comes again before the approval, which
+	// would else come with nothing before it.
+	said := false
+	for _, m := range replayed {
+		if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "user_message_chunk" && updateOf(t, m).text() == "write notes" {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatalf("the turn's message is not shown again: %d updates", len(replayed))
+	}
 	req, _ := d.until(isMethod("session/request_permission"))
 	allow(d, req, "allow_once")
 	for {

@@ -599,10 +599,11 @@ func (c *Client) events(ctx context.Context, session string) (*http.Response, er
 	return resp, nil
 }
 
-// History is the session's conversation as of its last finished turn.
+// History is the session's conversation as of its last finished turn, then
+// what the turns under way were asked: as a client shows it again.
 func (c *Client) History(ctx context.Context, session string) ([]msg.Message, error) {
 	var out []msg.Message
-	err := c.do(ctx, "GET", sessionPath(session)+"/history", nil, &out)
+	err := c.do(ctx, "GET", sessionPath(session)+"/history?live=1", nil, &out) // as shown again: with the turns under way
 	return out, err
 }
 
