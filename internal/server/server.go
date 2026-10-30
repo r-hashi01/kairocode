@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -430,6 +431,12 @@ func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"stopped": runtime.StoppedCancelled})
 		return
 	}
+	if errors.Is(err, kairo.ErrStopped) || errors.Is(err, context.Canceled) {
+		// The wait was cut (the daemon going, as it hands over: ADR 0019),
+		// not the turn: the client waits again, there.
+		fail(w, http.StatusServiceUnavailable, err)
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return
@@ -561,9 +568,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 // history is the session's conversation as of its last finished turn: the
-// messages' roles and parts (not their providers' encodings).
+// messages' roles and parts (not their providers' encodings); with ?live=1,
+// then what the turns under way were asked (Runtime.HistoryLive).
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	ms, err := s.rt.History(r.Context(), sessionOf(r))
+	history := s.rt.History
+	if r.URL.Query().Get("live") != "" { // with what the turns under way were asked
+		history = s.rt.HistoryLive
+	}
+	ms, err := history(r.Context(), sessionOf(r))
 	if errors.Is(err, kairo.ErrUnknownRun) {
 		fail(w, http.StatusNotFound, err)
 		return

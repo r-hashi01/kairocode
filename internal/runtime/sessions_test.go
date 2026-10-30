@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -41,5 +42,32 @@ func TestSessions(t *testing.T) {
 	}
 	if one, _ := r.Sessions(ctx, ws, 1); len(one) != 1 || one[0].ID != second {
 		t.Fatalf("limit 1 %+v", one)
+	}
+}
+
+// A session listed says what waits for a person in its turn under way;
+// answered, nothing does.
+func TestSessionsWaiting(t *testing.T) {
+	ws := workspaceWith(t, `{"write": "ask"}`)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "w", workflows.SessionInput{Dir: ws})
+	n, err := r.Send(ctx, s, "write notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := waitPending(t, r, s, 1)
+	if list, err := r.Sessions(ctx, ws, 0); err != nil || len(list) != 1 || list[0].Waiting != 1 || list[0].Jobs != 0 {
+		t.Fatalf("waiting: %+v %v", list, err)
+	}
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := r.Sessions(ctx, ws, 0); len(list) != 1 || list[0].Waiting != 0 {
+		t.Fatalf("answered: %+v", list)
 	}
 }

@@ -174,15 +174,17 @@ func TestTallAreaAndAScreenOfItsOwn(t *testing.T) {
 	}
 }
 
-// The terminal's new size: the area is drawn again whole at its bottom.
+// The terminal's new size: the area is drawn again whole, at its bottom
+// where it was at the bottom.
 func TestResize(t *testing.T) {
 	s, vt := newTest(20, 10, 0)
 	s.Draw(area(3, "> input"), nil)
 	for i := range 12 {
 		s.Insert([]string{fmt.Sprint("line ", i)})
 	}
-	*vt = *vtest.New(20, 14)
+	vt.Resize(20, 14)
 	s.Resize(20, 14)
+	s.Place(vt.Y) // where the terminal tells the cursor went
 	s.Draw(area(3, "> input"), nil)
 	if rows := vt.Rows(); rows[13] != "> input" {
 		t.Fatalf("%q", rows)
@@ -258,5 +260,51 @@ func TestNoRegions(t *testing.T) {
 	}
 	if n := strings.Count(strings.Join(vt.Lines(), "\n"), "> input"); n != 1 {
 		t.Fatalf("the area is drawn %d times", n)
+	}
+}
+
+// Made narrower, the terminal wraps again what it shows (as tmux, iTerm2
+// and Ghostty do): the area's full-width rules take rows above where it
+// was. Told where the cursor went (Place), the area is drawn again from
+// where its old self now begins: nothing of it is left above, and the
+// conversation's last lines are kept; wider again, the same.
+func TestResizeRewraps(t *testing.T) {
+	const w, h = 60, 16
+	for _, to := range [][2]int{{25, 16}, {25, 10}, {90, 16}, {33, 20}} {
+		s, vt := newTest(w, h, 0)
+		rule := func(w int) string { return strings.Repeat("─", w-1) }
+		draw := func(w int) {
+			s.Draw([]string{"", rule(w), "> input", rule(w), " status"}, &Cursor{X: 2, Y: 2})
+		}
+		draw(w)
+		for i := range 20 {
+			s.Insert([]string{fmt.Sprint("line ", i)})
+			draw(w)
+		}
+		vt.Resize(to[0], to[1])
+		s.Resize(to[0], to[1])
+		draw(to[0]) // not drawn: its place is not known
+		s.Place(vt.Y)
+		draw(to[0])
+		rows := vt.Rows()
+		joined := strings.Join(rows, "\n")
+		n := 0
+		for _, r := range rows {
+			if strings.Contains(r, "─────") {
+				n++
+			}
+		}
+		if n != 2 {
+			t.Fatalf("to %v: %d rules shown:\n%s", to, n, joined)
+		}
+		if n := strings.Count(joined, "> input"); n != 1 {
+			t.Fatalf("to %v: the input shown %d times:\n%s", to, n, joined)
+		}
+		if !strings.Contains(strings.Join(vt.Lines(), "\n"), "line 19") {
+			t.Fatalf("to %v: the conversation's last line is gone:\n%s", to, joined)
+		}
+		if rows[len(rows)-1] != " status" {
+			t.Fatalf("to %v: the status line is not at the bottom:\n%s", to, joined)
+		}
 	}
 }

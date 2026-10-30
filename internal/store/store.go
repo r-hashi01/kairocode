@@ -433,6 +433,25 @@ func (s *Store) MCPRuns(ctx context.Context, turn string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// MCPTurns are the turns with an MCP call recorded: one of them may hold a
+// call cut off, to be reviewed, after it finished.
+func (s *Store) MCPTurns(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT turn FROM kc_mcp_call`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out[t] = true
+	}
+	return out, rows.Err()
+}
+
 // FlowRunRow is a flow's run as it is kept (ADR 0029): its body is the
 // runtime's (JSON).
 type FlowRunRow struct {

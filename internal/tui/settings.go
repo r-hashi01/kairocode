@@ -78,7 +78,7 @@ func (m *model) settings() string {
 	if o, ok := m.option("model"); ok {
 		model = o.CurrentValue
 		if model == "default" {
-			model = provider + "'s default model"
+			model = "default model"
 		}
 	}
 	out := provider

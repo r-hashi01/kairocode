@@ -13,6 +13,7 @@ import (
 	"image/color"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -308,6 +309,10 @@ type model struct {
 	// header: the header is written (once the width is known); inReply: a
 	// reply has begun (its first paragraph has the mark).
 	header, inReply bool
+	// around is what goes on in the folder, under the header; said: the
+	// user has sent something (then it is not shown).
+	around string
+	said   bool
 
 	// The lines to write, in order: one batch is out at a time.
 	toPrint  []string
@@ -325,7 +330,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in := textarea.New()
 	in.Placeholder = placeholder(80)
 	in.ShowLineNumbers = false
-	in.Prompt = "> "
+	in.Prompt = "▌ "
 	in.DynamicHeight = true
 	in.MinHeight, in.MaxHeight = 1, 10
 	in.KeyMap.InsertNewline.SetKeys("shift+enter", "alt+enter", "ctrl+j")
@@ -343,7 +348,11 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.start(), listFiles(m.o.Dir))
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, m.start(), listFiles(m.o.Dir)}
+	if m.o.Session == "" && !m.o.Resume {
+		cmds = append(cmds, m.lookAround())
+	}
+	return tea.Batch(cmds...)
 }
 
 // restyle gives the parts that keep a style the colours now in use.
@@ -363,18 +372,45 @@ func (m *model) writeHeader() {
 	}
 	m.header = true
 	m.print(m.headerBox())
+	if m.around != "" {
+		m.print(m.around)
+	}
 }
 
-// The provider, model, effort and mode are in the status line only.
+// The provider, model, effort and mode are in the status line only. The
+// header has kairo's line down its left, as the input and what the user
+// said have (kairo: a circuit): its name, the folder, and (around) what
+// goes on there.
 func (m *model) headerBox() string {
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent.GetForeground()).Padding(0, 1)
-	room := max(m.width-5, 12) // the border and padding, and a column spare
+	room := max(m.width-4, 12)
 	version := m.o.Version
 	if len(version) > 8 {
 		version = version[:8]
 	}
-	return box.Render(accent.Bold(true).Render("ϟ kairo") + faint.Render(" "+version) + "\n" +
-		faint.Render(cutLeft(m.o.Dir, room)))
+	return thread(accent.Bold(true).Render("ϟ kairo") + faint.Render("  "+version) + "\n" +
+		faint.Render(cutLeft(home(m.o.Dir), room)))
+}
+
+// thread is lines with kairo's line down their left.
+func thread(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = accent.Render("▎") + " " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// home is path with the home directory as ~.
+func home(path string) string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		if path == h {
+			return "~"
+		}
+		if rest, ok := strings.CutPrefix(path, h+string(filepath.Separator)); ok {
+			return "~" + string(filepath.Separator) + rest
+		}
+	}
+	return path
 }
 
 // cut is s in at most n columns, cut at its end.
@@ -449,11 +485,7 @@ func queuedLines(text string, w int) string {
 		more, lines = len(lines)-queuedShown, lines[:queuedShown]
 	}
 	for i, l := range lines {
-		lead := "  "
-		if i == 0 {
-			lead = "> "
-		}
-		lines[i] = faint.Render(lead + l)
+		lines[i] = faint.Render("▌ " + l)
 	}
 	if more > 0 {
 		lines = append(lines, faint.Render(fmt.Sprintf("  … +%d lines", more)))
@@ -603,6 +635,16 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		setTheme(m.isDark)
 		m.restyle()
 		m.writeHeader()
+		return nil
+	case aroundMsg:
+		// Under the header, before anything is said: else it is not shown.
+		if m.said {
+			return nil
+		}
+		m.around = m.aroundText(msg)
+		if m.header && m.around != "" {
+			m.print(m.around)
+		}
 		return nil
 	case startedMsg:
 		m.writeHeader()
@@ -1171,11 +1213,7 @@ func reply(text string, width int, first bool) string {
 func userLine(text string) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	for i, l := range lines {
-		lead := "  "
-		if i == 0 {
-			lead = "> "
-		}
-		lines[i] = you.Render(lead + l + " ")
+		lines[i] = accent.Render("▌") + you.Render(" "+l+" ")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1255,6 +1293,7 @@ func (m *model) recall(by int) bool {
 
 // submit sends text as the next turn.
 func (m *model) submit(text string) tea.Cmd {
+	m.said = true
 	m.remember(text)
 	// What is left of the last reply is written first, in its place: not
 	// after the message, nor run on into the next reply.
@@ -1375,6 +1414,11 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.nextMode()
 	case "ctrl+e": // the next effort
 		return m.nextEffort()
+	case "ctrl+o": // the pastes opened in the input, to change them
+		if m.hasPaste() {
+			m.openPastes()
+			return nil
+		}
 	case "ctrl+z": // stopped, as a shell's Ctrl+Z stops a program (fg goes on)
 		return m.stop()
 	case "ctrl+v": // the clipboard's image, else its text (ADR 0026)
@@ -1492,7 +1536,7 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 
 // commands are the slash commands: the UI's own, then the agent's.
 func (m *model) commands() []acp.Command {
-	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session stays in the daemon)"},
+	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session is kept: kairo -continue takes it up)"},
 		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"},
 		{Name: "resume", Description: "Take up another session of this folder"}}, m.cmds...)
 }
@@ -1723,6 +1767,9 @@ func (m *model) status(w int) string {
 		left = warn.Render(m.note)
 	}
 	var right []string
+	if m.hasPaste() {
+		right = append(right, faint.Render("^O open paste"))
+	}
 	if n := len(m.asks); n > 0 {
 		right = append(right, warn.Render(fmt.Sprintf("%d waiting for you", n)))
 	}

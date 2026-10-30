@@ -88,7 +88,7 @@ func (l *local) Events(ctx context.Context, s string) (<-chan runtime.Event, err
 }
 
 func (l *local) History(ctx context.Context, s string) ([]msg.Message, error) {
-	return l.r.History(ctx, s)
+	return l.r.HistoryLive(ctx, s) // as the daemon's client asks for it
 }
 
 func (l *local) Undo(ctx context.Context, s string) (int, error) { return l.r.Undo(ctx, s) }
@@ -423,13 +423,34 @@ func initialize(c *client) {
 
 func newSession(c *client, ws string) string {
 	c.t.Helper()
+	resp, _ := newSessionWithCommands(c, c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}}))
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
-	if err := json.Unmarshal(c.call("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}}), &r); err != nil || r.SessionID == "" {
+	if err := json.Unmarshal(resp.Result, &r); err != nil || r.SessionID == "" {
 		c.t.Fatalf("session/new: %s %v", r.SessionID, err)
 	}
 	return r.SessionID
+}
+
+// newSessionWithCommands is session/new's answer and the session's
+// commands, offered after it: nothing of a session comes before the client
+// has its id (Zed drops it).
+func newSessionWithCommands(c *client, id string) (message, []message) {
+	c.t.Helper()
+	resp, before := c.until(isResponse(id))
+	if resp.Error != nil {
+		c.t.Fatalf("session/new: %+v", resp.Error)
+	}
+	for _, m := range before {
+		if m.Method == "session/update" {
+			c.t.Fatalf("an update before the session's id: %s", m.Params)
+		}
+	}
+	m, _ := c.until(func(m message) bool {
+		return m.Method == "session/update" && strings.Contains(string(m.Params), "available_commands_update")
+	})
+	return resp, []message{m}
 }
 
 func prompt(c *client, session, text string) string {
@@ -574,7 +595,19 @@ func TestACPApprovalSurvivesRestart(t *testing.T) {
 
 	d := start(t, ctx, b)
 	initialize(d)
-	d.call("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
+	id := d.request("session/load", map[string]any{"sessionId": s, "cwd": ws, "mcpServers": []any{}})
+	_, replayed := d.until(isResponse(id))
+	// What the turn was asked comes again before the approval, which
+	// would else come with nothing before it.
+	said := false
+	for _, m := range replayed {
+		if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "user_message_chunk" && updateOf(t, m).text() == "write notes" {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatalf("the turn's message is not shown again: %d updates", len(replayed))
+	}
 	req, _ := d.until(isMethod("session/request_permission"))
 	allow(d, req, "allow_once")
 	for {
@@ -813,7 +846,7 @@ func TestACPUndoRedo(t *testing.T) {
 	c := start(t, ctx, b)
 	initialize(c)
 	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
-	resp, before := c.until(isResponse(id))
+	resp, before := newSessionWithCommands(c, id)
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -876,7 +909,7 @@ func TestACPProjectCommand(t *testing.T) {
 	c := start(t, ctx, b)
 	initialize(c)
 	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
-	resp, before := c.until(isResponse(id))
+	resp, before := newSessionWithCommands(c, id)
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -1076,7 +1109,7 @@ func TestACPFlowQuestion(t *testing.T) {
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		t.Fatal(err)
 	}
-	if p.ToolCall.Title != "Which way?" || p.ToolCall.Kind != "think" || len(p.Options) != 2 || p.Options[1].Name != "right" {
+	if p.ToolCall.Title != "Which way?" || p.ToolCall.Kind != "other" || len(p.Options) != 2 || p.Options[1].Name != "right" {
 		t.Fatalf("request %s", req.Params)
 	}
 	for _, o := range p.Options {
@@ -1318,7 +1351,7 @@ func TestACPSkills(t *testing.T) {
 	c := start(t, ctx, b)
 	initialize(c)
 	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
-	resp, before := c.until(isResponse(id))
+	resp, before := newSessionWithCommands(c, id)
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -1456,5 +1489,59 @@ func TestACPPromptWithFile(t *testing.T) {
 	}
 	if got := h[0].Text(); !strings.Contains(got, "write notes as @spec.md says") || !strings.Contains(got, "<file path=\"spec.md\">\nthe notes say hello\n</file>") {
 		t.Fatalf("the user's message:\n%s", got)
+	}
+}
+
+// A hook's question (ADR 0018) reaches the client as one to answer: its
+// first line the title (a title is cut), the question whole its content,
+// not a thought, with the script the command runs; no option is of an
+// allow kind (nothing runs before the user chose).
+func TestACPHookQuestion(t *testing.T) {
+	b, ws := setup(t)
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	if err := os.WriteFile(filepath.Join(ws, ".claude", "state.sh"), []byte("#!/bin/sh\necho what this hook does\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".claude", "settings.json"),
+		[]byte(`{"hooks": {"SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "sh '.claude/state.sh' session"}]}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	prompt(c, s, "hello")
+	req, _ := c.until(isMethod("session/request_permission"))
+	var p struct {
+		ToolCall struct {
+			Title   string          `json:"title"`
+			Kind    string          `json:"kind"`
+			Content json.RawMessage `json:"content"`
+		} `json:"toolCall"`
+		Options []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(p.ToolCall.Title, "A hook of ") || strings.Contains(p.ToolCall.Title, "\n") || p.ToolCall.Kind != "other" {
+		t.Fatalf("the question: %s", req.Params)
+	}
+	if !strings.Contains(string(p.ToolCall.Content), "    sh '.claude/state.sh' session") || !strings.Contains(string(p.ToolCall.Content), "In KairoCode's sandbox") {
+		t.Fatalf("the question whole is not its content: %s", req.Params)
+	}
+	if !strings.Contains(string(p.ToolCall.Content), "echo what this hook does") {
+		t.Fatalf("the script is not shown: %s", req.Params)
+	}
+	if len(p.Options) != 3 {
+		t.Fatalf("options %s", req.Params)
+	}
+	for _, o := range p.Options {
+		if o.Kind != "reject_once" {
+			t.Fatalf("option %q is of kind %s", o.Name, o.Kind)
+		}
 	}
 }

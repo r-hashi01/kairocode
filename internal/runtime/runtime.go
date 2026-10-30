@@ -1109,6 +1109,45 @@ func (r *Runtime) WaitTurn(ctx context.Context, session string, n int) (workflow
 	}
 }
 
+// HistoryLive is the session's conversation as a client shows it again:
+// History, then what the turns under way were asked (a turn waiting for an
+// approval is not in the history yet; shown without it, the approval would
+// come with nothing before it).
+func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Message, error) {
+	ms, err := r.History(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := r.K.Children(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	type asked struct {
+		n int
+		h string
+	}
+	var live []asked
+	for _, t := range runs {
+		if t.Workflow != workflows.Turn || t.Finished() {
+			continue
+		}
+		var in workflows.TurnInput
+		if json.Unmarshal(input(t), &in) != nil || in.Sub || in.Undo != nil || in.Compact || in.Message == "" {
+			continue
+		}
+		live = append(live, asked{in.N, in.Message})
+	}
+	slices.SortFunc(live, func(a, b asked) int { return a.n - b.n })
+	for _, l := range live {
+		m, err := r.Store.Message(ctx, l.h)
+		if err != nil {
+			return nil, err
+		}
+		ms = append(ms, m)
+	}
+	return ms, nil
+}
+
 // Reply is the text of an assistant message.
 func (r *Runtime) Reply(ctx context.Context, hash string) (string, error) {
 	m, err := r.Store.Message(ctx, hash)

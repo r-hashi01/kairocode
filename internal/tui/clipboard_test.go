@@ -142,22 +142,52 @@ func TestSavePasted(t *testing.T) {
 	}
 }
 
-// A large paste stands in the input as a label, and goes with the message
-// in its place; the conversation shows the label. A small one is pasted.
+// A large paste stands in the input as a label that says how it begins,
+// and goes with the message in its place; the conversation shows the
+// label, not the text. A small one is pasted.
 func TestLargePaste(t *testing.T) {
 	d, a := start(t, Options{})
 	big := strings.Repeat("log line\n", 41) + "end"
 	d.send(tea.PasteMsg{Content: "small"})
 	d.send(tea.PasteMsg{Content: big})
-	if v := d.m.input.Value(); v != "small[Pasted text #1 +42 lines] " {
+	label := `[Pasted text #1 +42 lines · "log line"]`
+	if v := d.m.input.Value(); v != "small"+label+" " {
 		t.Fatalf("the input: %q", v)
+	}
+	if !strings.Contains(d.view(), "^O open paste") {
+		t.Fatalf("Ctrl+O is not said:\n%s", d.view())
 	}
 	d.m.input.InsertString("why?")
 	d.send(key("enter"))
 	if len(a.prompts) != 1 || a.prompts[0] != "small"+big+" why?" {
 		t.Fatalf("sent %q", a.prompts)
 	}
-	if out := d.out(); !strings.Contains(out, "[Pasted text #1 +42 lines]") || strings.Contains(out, "log line") {
+	if out := d.out(); !strings.Contains(out, label) || strings.Count(out, "log line") != 1 {
 		t.Fatalf("the conversation shows\n%s", out)
+	}
+}
+
+// Ctrl+O opens a paste in the input, to change it there; what is sent is
+// what the input then holds. The label's beginning is cut, without the
+// quotes and brackets that would end it.
+func TestOpenPaste(t *testing.T) {
+	d, a := start(t, Options{})
+	big := "\n  \"quoted\" [bracket] and a first line far longer than a label holds\n" + strings.Repeat("x\n", 20)
+	d.send(tea.PasteMsg{Content: big})
+	label := `[Pasted text #1 +23 lines · "quoted [bracket and a fi…"]`
+	if v := d.m.input.Value(); v != label+" " {
+		t.Fatalf("the input: %q", v)
+	}
+	d.send(key("ctrl+o"))
+	if v := d.m.input.Value(); v != big+" " {
+		t.Fatalf("opened: %q", v)
+	}
+	if strings.Contains(d.view(), "^O open paste") {
+		t.Fatal("Ctrl+O is still said")
+	}
+	d.m.input.SetValue(strings.Replace(d.m.input.Value(), "quoted", "changed", 1))
+	d.send(key("enter"))
+	if len(a.prompts) != 1 || !strings.Contains(a.prompts[0], "changed") {
+		t.Fatalf("sent %q", a.prompts)
 	}
 }

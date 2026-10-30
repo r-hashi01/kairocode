@@ -420,8 +420,10 @@ type SessionInfo struct {
 	Updated string `json:"updatedAt"`
 	Meta    struct {
 		KairoCode struct {
-			Turns  int  `json:"turns"`
-			Closed bool `json:"closed"`
+			Turns   int  `json:"turns"`
+			Closed  bool `json:"closed"`
+			Waiting int  `json:"waiting"` // asked of a person, in its turns under way
+			Jobs    int  `json:"jobs"`    // its commands in the background running
 		} `json:"kairocode"`
 	} `json:"_meta"`
 }

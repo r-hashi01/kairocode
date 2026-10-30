@@ -223,7 +223,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 	if !slices.Contains(ms, current) {
 		name := current
 		if current == defaultModel {
-			name = "Default (" + st.Provider + "'s)"
+			name = "Default model" // the provider's own choice
 		}
 		models = append(models, map[string]any{"value": current, "name": name})
 	}
@@ -249,7 +249,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 		if !slices.Contains(es, cur) {
 			name := cur
 			if cur == defaultModel {
-				name = "Default (" + st.Provider + "'s)"
+				name = "Default effort" // the provider's own choice
 			}
 			efforts = append(efforts, map[string]any{"value": cur, "name": name})
 		}
@@ -310,6 +310,22 @@ func (a *agent) setConfig(ctx context.Context, session, id, value string) ([]map
 // offerCommands tells the client the slash commands: KairoCode's, then the
 // project's (opencode's commands/*.md).
 func (a *agent) offerCommands(ctx context.Context, session string) {
+	a.update(session, a.commandsUpdate(ctx, session))
+}
+
+// afterNew is what is sent once a new session's id is answered: its
+// updates before would be of a session the client does not know yet (Zed
+// drops them).
+func (a *agent) afterNew(ctx context.Context, w *sessionWatch, session string) func() {
+	update := a.commandsUpdate(ctx, session)
+	return func() {
+		a.update(session, update)
+		w.release()
+	}
+}
+
+// commandsUpdate is the session's commands, as available_commands_update.
+func (a *agent) commandsUpdate(ctx context.Context, session string) map[string]any {
 	all := append([]map[string]any(nil), builtinCommands...)
 	cs, err := a.b.Commands(ctx, session)
 	if err != nil {
@@ -332,7 +348,7 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		}
 		all = append(all, map[string]any{"name": c.Name, "description": desc, "input": map[string]any{"hint": hint}})
 	}
-	a.update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": all})
+	return map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": all}
 }
 
 // Options are the agent's settings.
@@ -438,8 +454,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
-		a.offerCommands(ctx, s)
-		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: w.release}, nil
+		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: a.afterNew(ctx, w, s)}, nil
 	case "session/list":
 		var p struct {
 			Cwd    string `json:"cwd"`
@@ -569,8 +584,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
-		a.offerCommands(ctx, s)
-		return then{Result: map[string]any{"sessionId": s, "turn": turn}, After: w.release}, nil
+		return then{Result: map[string]any{"sessionId": s, "turn": turn}, After: a.afterNew(ctx, w, s)}, nil
 	case FlowRunRPC:
 		var p struct {
 			ID string `json:"id"`
@@ -1232,18 +1246,28 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	}
 	answers := map[string]bool{"allow_once": true, "reject_once": false}
 	title := strings.TrimSpace(p.Tool + " " + p.Subject)
+	ruleText := p.Rule // the rule, as the title says it
 	question := p.Kind == runtime.KindQuestion
 	kind := toolKind(p.Tool)
 	if question {
 		// A flow's question (ADR 0003): its options, each of a reject kind
 		// for the reason a review's are (a client that allows by itself
-		// must not answer for the user).
+		// must not answer for the user: a hook's too, nothing is run before
+		// the user chose). Its first line is the title, the question whole
+		// its content (a title is cut); a hook's has the script it runs.
 		options, answers = nil, nil
 		for i, o := range p.Options {
 			id := fmt.Sprintf("answer_%d", i)
 			options = append(options, map[string]any{"optionId": id, "name": o, "kind": "reject_once"})
 		}
-		title, kind = p.Subject, "think"
+		first, _, _ := strings.Cut(strings.TrimSpace(p.Subject), "\n")
+		if h, err := os.UserHomeDir(); err == nil && h != "" {
+			first = strings.ReplaceAll(first, h+"/", "~/")
+		}
+		if r := []rune(first); len(r) > 100 {
+			first = string(r[:100]) + "…"
+		}
+		title, kind = first, "other"
 	} else if p.Kind == "review" {
 		// Neither option is of an allow kind: a client that allows tool
 		// calls by itself must not say a call took effect (invariant 4).
@@ -1257,7 +1281,10 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		if p.Try != nil { // a flow: it can be tried first (ADR 0017)
 			options = append(options, map[string]any{"optionId": TryOption, "name": "Try it first", "kind": "reject_once"})
 		}
-		rule, _, _ := strings.Cut(p.Rule, "\n") // one line: the title is not a page
+		if p.Rule == "*: ask" { // the catch-all, as said to a person
+			ruleText = "asked by default: no rule allows it"
+		}
+		rule, _, _ := strings.Cut(ruleText, "\n") // one line: the title is not a page
 		if len([]rune(rule)) > 120 {
 			rule = string([]rune(rule)[:120]) + "…"
 		}
@@ -1298,9 +1325,15 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		toolCall["content"] = content
 	case p.Preview != "": // what it would do: a flow's shape
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
-	case !question && p.Kind != "review" && !strings.Contains(title, p.Rule):
+	case question: // the question whole; a hook's, with what it runs
+		text := p.Subject
+		if strings.Contains(p.Key, "#hook_") {
+			text += hookScripts(p.Subject, a.dirOf(session))
+		}
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(text)}}
+	case !question && p.Kind != "review" && !strings.Contains(title, ruleText):
 		// The reason, cut short in the title: all of it, to decide on.
-		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Rule)}}
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(ruleText)}}
 	}
 	params := map[string]any{
 		"sessionId": session,
@@ -1550,7 +1583,7 @@ func (a *agent) listSessions(ctx context.Context, cwd, cursor string) (any, erro
 	for _, s := range list[min(from, len(list)):min(from+sessionsPage, len(list))] {
 		sessions = append(sessions, map[string]any{"sessionId": s.ID, "cwd": s.Dir, "title": s.Title,
 			"updatedAt": s.Updated.UTC().Format(time.RFC3339),
-			"_meta":     map[string]any{"kairocode": map[string]any{"turns": s.Turns, "closed": s.Closed}}})
+			"_meta":     map[string]any{"kairocode": map[string]any{"turns": s.Turns, "closed": s.Closed, "waiting": s.Waiting, "jobs": s.Jobs}}})
 	}
 	out := map[string]any{"sessions": sessions}
 	if end := from + sessionsPage; end < len(list) {
