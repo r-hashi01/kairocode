@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
@@ -459,9 +460,29 @@ func (c *Client) LastTurn(ctx context.Context, session string) (int, error) {
 
 // WaitTurn waits for turn n of the session to finish.
 func (c *Client) WaitTurn(ctx context.Context, session string, n int) (Turn, error) {
-	var out Turn
-	err := c.do(ctx, "GET", fmt.Sprintf("%s/turns/%d", sessionPath(session), n), nil, &out)
-	return out, err
+	for {
+		var out Turn
+		err := c.do(ctx, "GET", fmt.Sprintf("%s/turns/%d", sessionPath(session), n), nil, &out)
+		if err == nil || ctx.Err() != nil || !cutOff(err) {
+			return out, err
+		}
+		// The daemon went while this waited (it handed over to a new build,
+		// ADR 0019): waiting only reads, so it is waited for again, of the
+		// daemon there is now.
+		if rerr := c.reconnect(ctx); rerr != nil {
+			return out, fmt.Errorf("%w (connecting again: %v)", err, rerr)
+		}
+	}
+}
+
+// cutOff says whether err is a wait cut by the daemon going, not an
+// answer: it says so (503), or the connection ended under the request.
+func cutOff(err error) bool {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.code == http.StatusServiceUnavailable
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // CloseSession ends the session after the turns it has been sent.

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -428,6 +429,12 @@ func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 	out, err := s.rt.WaitTurn(r.Context(), sessionOf(r), n)
 	if errors.Is(err, kairo.ErrCancelled) { // stopped by the user: an end, not a failure
 		writeJSON(w, http.StatusOK, map[string]any{"stopped": runtime.StoppedCancelled})
+		return
+	}
+	if errors.Is(err, kairo.ErrStopped) || errors.Is(err, context.Canceled) {
+		// The wait was cut (the daemon going, as it hands over: ADR 0019),
+		// not the turn: the client waits again, there.
+		fail(w, http.StatusServiceUnavailable, err)
 		return
 	}
 	if err != nil {

@@ -310,6 +310,22 @@ func (a *agent) setConfig(ctx context.Context, session, id, value string) ([]map
 // offerCommands tells the client the slash commands: KairoCode's, then the
 // project's (opencode's commands/*.md).
 func (a *agent) offerCommands(ctx context.Context, session string) {
+	a.update(session, a.commandsUpdate(ctx, session))
+}
+
+// afterNew is what is sent once a new session's id is answered: its
+// updates before would be of a session the client does not know yet (Zed
+// drops them).
+func (a *agent) afterNew(ctx context.Context, w *sessionWatch, session string) func() {
+	update := a.commandsUpdate(ctx, session)
+	return func() {
+		a.update(session, update)
+		w.release()
+	}
+}
+
+// commandsUpdate is the session's commands, as available_commands_update.
+func (a *agent) commandsUpdate(ctx context.Context, session string) map[string]any {
 	all := append([]map[string]any(nil), builtinCommands...)
 	cs, err := a.b.Commands(ctx, session)
 	if err != nil {
@@ -332,7 +348,7 @@ func (a *agent) offerCommands(ctx context.Context, session string) {
 		}
 		all = append(all, map[string]any{"name": c.Name, "description": desc, "input": map[string]any{"hint": hint}})
 	}
-	a.update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": all})
+	return map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": all}
 }
 
 // Options are the agent's settings.
@@ -438,8 +454,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
-		a.offerCommands(ctx, s)
-		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: w.release}, nil
+		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: a.afterNew(ctx, w, s)}, nil
 	case "session/list":
 		var p struct {
 			Cwd    string `json:"cwd"`
@@ -569,8 +584,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err != nil {
 			return nil, err
 		}
-		a.offerCommands(ctx, s)
-		return then{Result: map[string]any{"sessionId": s, "turn": turn}, After: w.release}, nil
+		return then{Result: map[string]any{"sessionId": s, "turn": turn}, After: a.afterNew(ctx, w, s)}, nil
 	case FlowRunRPC:
 		var p struct {
 			ID string `json:"id"`
@@ -1237,13 +1251,28 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	if question {
 		// A flow's question (ADR 0003): its options, each of a reject kind
 		// for the reason a review's are (a client that allows by itself
-		// must not answer for the user).
+		// must not answer for the user). A hook's (ADR 0018) has its first,
+		// the sandbox, of an allow kind: what KairoCode does by itself is
+		// no harm, and a client shows it as the one to take. Its first line
+		// is the title, the question whole its content (a title is cut).
+		hook := strings.Contains(p.Key, "#hook_")
 		options, answers = nil, nil
 		for i, o := range p.Options {
 			id := fmt.Sprintf("answer_%d", i)
-			options = append(options, map[string]any{"optionId": id, "name": o, "kind": "reject_once"})
+			kind := "reject_once"
+			if hook && i == 0 {
+				kind = "allow_once"
+			}
+			options = append(options, map[string]any{"optionId": id, "name": o, "kind": kind})
 		}
-		title, kind = p.Subject, "think"
+		first, _, _ := strings.Cut(strings.TrimSpace(p.Subject), "\n")
+		if h, err := os.UserHomeDir(); err == nil && h != "" {
+			first = strings.ReplaceAll(first, h+"/", "~/")
+		}
+		if r := []rune(first); len(r) > 100 {
+			first = string(r[:100]) + "…"
+		}
+		title, kind = first, "other"
 	} else if p.Kind == "review" {
 		// Neither option is of an allow kind: a client that allows tool
 		// calls by itself must not say a call took effect (invariant 4).
@@ -1298,6 +1327,8 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		toolCall["content"] = content
 	case p.Preview != "": // what it would do: a flow's shape
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
+	case question: // the question whole
+		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Subject)}}
 	case !question && p.Kind != "review" && !strings.Contains(title, p.Rule):
 		// The reason, cut short in the title: all of it, to decide on.
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Rule)}}

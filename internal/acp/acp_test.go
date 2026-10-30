@@ -423,13 +423,34 @@ func initialize(c *client) {
 
 func newSession(c *client, ws string) string {
 	c.t.Helper()
+	resp, _ := newSessionWithCommands(c, c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}}))
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
-	if err := json.Unmarshal(c.call("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}}), &r); err != nil || r.SessionID == "" {
+	if err := json.Unmarshal(resp.Result, &r); err != nil || r.SessionID == "" {
 		c.t.Fatalf("session/new: %s %v", r.SessionID, err)
 	}
 	return r.SessionID
+}
+
+// newSessionWithCommands is session/new's answer and the session's
+// commands, offered after it: nothing of a session comes before the client
+// has its id (Zed drops it).
+func newSessionWithCommands(c *client, id string) (message, []message) {
+	c.t.Helper()
+	resp, before := c.until(isResponse(id))
+	if resp.Error != nil {
+		c.t.Fatalf("session/new: %+v", resp.Error)
+	}
+	for _, m := range before {
+		if m.Method == "session/update" {
+			c.t.Fatalf("an update before the session's id: %s", m.Params)
+		}
+	}
+	m, _ := c.until(func(m message) bool {
+		return m.Method == "session/update" && strings.Contains(string(m.Params), "available_commands_update")
+	})
+	return resp, []message{m}
 }
 
 func prompt(c *client, session, text string) string {
@@ -813,7 +834,7 @@ func TestACPUndoRedo(t *testing.T) {
 	c := start(t, ctx, b)
 	initialize(c)
 	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
-	resp, before := c.until(isResponse(id))
+	resp, before := newSessionWithCommands(c, id)
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -876,7 +897,7 @@ func TestACPProjectCommand(t *testing.T) {
 	c := start(t, ctx, b)
 	initialize(c)
 	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
-	resp, before := c.until(isResponse(id))
+	resp, before := newSessionWithCommands(c, id)
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -1076,7 +1097,7 @@ func TestACPFlowQuestion(t *testing.T) {
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		t.Fatal(err)
 	}
-	if p.ToolCall.Title != "Which way?" || p.ToolCall.Kind != "think" || len(p.Options) != 2 || p.Options[1].Name != "right" {
+	if p.ToolCall.Title != "Which way?" || p.ToolCall.Kind != "other" || len(p.Options) != 2 || p.Options[1].Name != "right" {
 		t.Fatalf("request %s", req.Params)
 	}
 	for _, o := range p.Options {
@@ -1318,7 +1339,7 @@ func TestACPSkills(t *testing.T) {
 	c := start(t, ctx, b)
 	initialize(c)
 	id := c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})
-	resp, before := c.until(isResponse(id))
+	resp, before := newSessionWithCommands(c, id)
 	var r struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -1456,5 +1477,48 @@ func TestACPPromptWithFile(t *testing.T) {
 	}
 	if got := h[0].Text(); !strings.Contains(got, "write notes as @spec.md says") || !strings.Contains(got, "<file path=\"spec.md\">\nthe notes say hello\n</file>") {
 		t.Fatalf("the user's message:\n%s", got)
+	}
+}
+
+// A hook's question (ADR 0018) reaches the client as one to answer: its
+// first line the title (a title is cut), the question whole its content,
+// not a thought; the sandbox, its first option, of an allow kind, the
+// others not.
+func TestACPHookQuestion(t *testing.T) {
+	b, ws := setup(t)
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	if err := os.WriteFile(filepath.Join(ws, ".claude", "settings.json"),
+		[]byte(`{"hooks": {"SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "true"}]}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := start(t, ctx, b)
+	initialize(c)
+	s := newSession(c, ws)
+	prompt(c, s, "hello")
+	req, _ := c.until(isMethod("session/request_permission"))
+	var p struct {
+		ToolCall struct {
+			Title   string          `json:"title"`
+			Kind    string          `json:"kind"`
+			Content json.RawMessage `json:"content"`
+		} `json:"toolCall"`
+		Options []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(p.ToolCall.Title, "A hook of ") || strings.Contains(p.ToolCall.Title, "\n") || p.ToolCall.Kind != "other" {
+		t.Fatalf("the question: %s", req.Params)
+	}
+	if !strings.Contains(string(p.ToolCall.Content), "    true") || !strings.Contains(string(p.ToolCall.Content), "In KairoCode's sandbox") {
+		t.Fatalf("the question whole is not its content: %s", req.Params)
+	}
+	if len(p.Options) != 3 || p.Options[0].Kind != "allow_once" || p.Options[1].Kind != "reject_once" || p.Options[2].Kind != "reject_once" {
+		t.Fatalf("options %s", req.Params)
 	}
 }

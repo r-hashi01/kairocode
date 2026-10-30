@@ -556,6 +556,64 @@ func TestNewBuildReplacesADaemonInUse(t *testing.T) {
 	}
 }
 
+// A client waiting for a turn when a new build takes the daemon over
+// (ADR 0019) is not told the turn failed: the wait was cut, not the turn,
+// and it waits again, of the new daemon, until the turn ends there.
+func TestWaitGoesOnAcrossANewBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts daemon processes")
+	}
+	data := dataDir(t)
+	dir := t.TempDir()
+	installed := filepath.Join(dir, "installed")
+	install(t, installed, "v1")
+	fake := writeFake(t, filepath.Join(dir, "fake.json"), provider.Fake{Script: writeScript, HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a, err := Connect(ctx, data, childStartAt(data, fake, "v1", installed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	s, err := a.CreateSession(ctx, workflows.SessionInput{Dir: workspace(t, `{"write": "ask"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.Send(ctx, s, "write the notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPending(t, ctx, a, s) // no step runs: the old build may hand over
+	type result struct {
+		turn Turn
+		err  error
+	}
+	waited := make(chan result, 1)
+	go func() {
+		turn, err := a.WaitTurn(ctx, s, n)
+		waited <- result{turn, err}
+	}()
+	install(t, installed, "v2")
+	b, err := Connect(ctx, data, childStartAt(data, fake, "v2", installed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	select {
+	case r := <-waited:
+		t.Fatalf("the wait ended with the old daemon: %+v %v", r.turn, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	p := waitPending(t, ctx, b, s)
+	if err := b.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	r := <-waited
+	if r.err != nil || r.turn.Stopped != "" {
+		t.Fatalf("the turn: %+v %v", r.turn, r.err)
+	}
+}
+
 // A daemon of the old build that runs a step is not stopped: it hands over
 // once no step runs (between the turn's steps), and the turn goes on in the
 // new build (ADR 0019).
