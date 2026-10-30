@@ -308,3 +308,34 @@ func TestResizeRewraps(t *testing.T) {
 		}
 	}
 }
+
+// Made smaller, then taller again: the area at the bottom stays at the
+// bottom, on a terminal that takes lines back from its scrollback and on
+// one that adds blank rows below (what is above moves down to it).
+func TestResizeSmallerThenTaller(t *testing.T) {
+	for _, noPull := range []bool{false, true} {
+		s, vt := newTest(40, 16, 0)
+		vt.NoPull = noPull
+		draw := func(w int) {
+			s.Draw([]string{"", strings.Repeat("─", w-1), "> input", strings.Repeat("─", w-1), " status"}, &Cursor{X: 2, Y: 2})
+		}
+		draw(40)
+		for i := range 30 {
+			s.Insert([]string{fmt.Sprint("line ", i)})
+			draw(40)
+		}
+		for _, size := range [][2]int{{40, 8}, {40, 24}, {30, 10}, {60, 30}} {
+			vt.Resize(size[0], size[1])
+			s.Resize(size[0], size[1])
+			s.Place(vt.Y)
+			draw(size[0])
+			rows := vt.Rows()
+			if rows[len(rows)-1] != " status" || rows[len(rows)-3] != "> input" {
+				t.Fatalf("noPull %v, to %v: the area is not at the bottom:\n%s", noPull, size, strings.Join(rows, "\n"))
+			}
+			if !strings.Contains(strings.Join(vt.Lines(), "\n"), "line 29") {
+				t.Fatalf("noPull %v, to %v: the conversation's last line is gone", noPull, size)
+			}
+		}
+	}
+}

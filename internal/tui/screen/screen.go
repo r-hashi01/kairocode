@@ -57,6 +57,9 @@ type Screen struct {
 	// the area's old self is found from it (old: its lines then).
 	ay, ax int
 	old    []string
+	// bottom: the area was at the terminal's bottom before it was resized;
+	// it is drawn at the bottom again, wherever the terminal left it.
+	bottom bool
 	// resized: the terminal changed its size; the area's place is asked
 	// again (Place) once it is shown (not while a screen of its own is).
 	resized bool
@@ -112,11 +115,13 @@ func (s *Screen) Place(row int) {
 		s.write(fmt.Sprintf("\x1b[%d;1H\x1b[J", row+1))
 		s.old = nil
 		s.top, s.known, s.lines = row, true, nil
-		if row+rows >= s.h {
-			// It reached the bottom: it is drawn at the bottom again, what
+		if row+rows >= s.h || s.bottom {
+			// It reaches the bottom, or was there (a terminal made taller
+			// may add rows below it): it is drawn at the bottom again, what
 			// is above moved down to it (Draw, as for an area got shorter).
 			s.lines = make([]string, s.h-row)
 		}
+		s.bottom = false
 		return
 	}
 	s.top, s.known, s.lines = min(max(row, 0), s.h-1), true, nil
@@ -163,6 +168,9 @@ func (s *Screen) Resize(w, h int) {
 	w, h = max(w, 1), max(h, 1)
 	if w == s.w && h == s.h {
 		return
+	}
+	if s.old == nil && (s.known || s.resized) {
+		s.bottom = len(s.lines) > 0 && s.top+len(s.lines) >= s.h
 	}
 	s.w, s.h = w, h
 	if s.old == nil && (s.known || s.resized) {
