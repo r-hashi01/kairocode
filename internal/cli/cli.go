@@ -258,7 +258,18 @@ func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.Arg(0) == "stop" {
+	stop := fs.Arg(0) == "stop"
+	if stop {
+		// Its flags after it too (daemon stop -data DIR): else they are
+		// not read, and another data directory's daemon is stopped.
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return err
+		}
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("daemon takes -data and stop only: %q", fs.Args())
+	}
+	if stop {
 		running, err := daemon.Stop(ctx, *data)
 		if err == nil && !running {
 			fmt.Fprintln(stderr, "no daemon runs for", *data)

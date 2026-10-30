@@ -271,6 +271,23 @@ func TestRunNeedsARequest(t *testing.T) {
 	}
 }
 
+// daemon stop reads its flags after "stop" too: the data directory named
+// is the one whose daemon is stopped, not the default. Another word is
+// refused, not taken for nothing.
+func TestDaemonStopFlags(t *testing.T) {
+	data := t.TempDir()
+	for _, args := range [][]string{{"daemon", "stop", "-data", data}, {"daemon", "-data", data, "stop"}} {
+		var stdout, stderr bytes.Buffer
+		if code := Main(context.Background(), args, &stdout, &stderr); code != 0 || !strings.Contains(stderr.String(), "no daemon runs for "+data) {
+			t.Fatalf("%q: exit %d: %s", args, code, stderr.String())
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Main(context.Background(), []string{"daemon", "-data", data, "stopp"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "stopp") {
+		t.Fatalf("a word not known: exit %d: %s", code, stderr.String())
+	}
+}
+
 // The first Ctrl-C (SIGINT) stops the daemon letting its steps finish; the
 // second stops it now, without waiting out the drain (30s).
 func TestSecondSignalStopsTheDaemonNow(t *testing.T) {
