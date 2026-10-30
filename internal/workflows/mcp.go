@@ -34,6 +34,20 @@ func RunMCPCall(ctx *kairo.Context, in MCPCallInput) (ToolOutput, error) {
 			g.Action = ActToolExtRead
 		}
 	}
+	if g.Action == ActToolPrefix+AskUserTool {
+		// ask_user (ADR 0018, 7): claude is not kept waiting; the call is
+		// answered "waiting for the answer", and the turn asks the
+		// question as its round ends, as for an approval.
+		q, err := kairo.Call[AskUserArgs](ctx, ActAskUserArgs, ti)
+		if err != nil {
+			return ToolOutput{}, err
+		}
+		if q.Error != "" {
+			return kairo.Call[ToolOutput](ctx, ActAskUserResult, TaskResultInput{Text: q.Error, IsError: true})
+		}
+		return kairo.Call[ToolOutput](ctx, ActMCPAsk, MCPAskInput{Request: AskRequest{Key: mcp.Ask, Content: mcp.Key, Tool: AskUserTool,
+			Subject: q.Question, Options: q.Options}})
+	}
 	out, err := runGated(ctx, g, ti)
 	if err != nil || !ran(g) || !hasCommandHook(in.Hooks, HookToolAfter) {
 		return out, err

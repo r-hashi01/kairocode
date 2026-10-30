@@ -52,6 +52,8 @@ var defaultRules = []permission.Rule{
 	{Tool: "todo", Action: permission.Allow},
 	// A subagent's tools are checked as they run.
 	{Tool: "task", Action: permission.Allow},
+	// Asking the user changes nothing: it waits for them (ADR 0018, 7).
+	{Tool: "ask_user", Action: permission.Allow},
 	// Reading a command in the background, and waiting for it, change
 	// nothing (ADR 0028); stopping one is asked about.
 	{Tool: "bash_output", Action: permission.Allow},
@@ -385,8 +387,13 @@ func (r *Runtime) toolDenied(t *kairo.TaskContext, in workflows.DeniedInput) (wo
 }
 
 func (r *Runtime) mcpAsk(t *kairo.TaskContext, in workflows.MCPAskInput) (workflows.ToolOutput, error) {
-	out, err := r.toolResult(t, "", tools.Result{IsError: true, Output: "Not run yet: this call waits for the user's approval (" +
-		in.Request.Rule + "). End your turn now, without other calls; you will be told the answer and can make the call again."})
+	text := "Not run yet: this call waits for the user's approval (" + in.Request.Rule +
+		"). End your turn now, without other calls; you will be told the answer and can make the call again."
+	if len(in.Request.Options) > 0 { // ask_user's question (ADR 0018, 7)
+		text = "The question is put to the user. End your turn now, without other calls and without asking it again in words; " +
+			"you will be told the answer, and go on."
+	}
+	out, err := r.toolResult(t, "", tools.Result{IsError: len(in.Request.Options) == 0, Output: text})
 	out.Ask = &in.Request
 	return out, err
 }

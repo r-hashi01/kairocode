@@ -108,5 +108,5 @@ func failed(format string, args ...any) Result {
 
 // Builtin is the tools every agent may be given, by name.
 func Builtin() []Def {
-	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, BashOutputTool, BashWaitTool, BashKillTool, GitCommitTool, GitPushTool, FetchTool, HTTPTool, TodoTool, SkillTool, FlowCheckTool, FlowWriteTool, FlowPublishTool, TaskTool}
+	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, BashOutputTool, BashWaitTool, BashKillTool, GitCommitTool, GitPushTool, FetchTool, HTTPTool, TodoTool, SkillTool, FlowCheckTool, FlowWriteTool, FlowPublishTool, TaskTool, AskUserTool}
 }

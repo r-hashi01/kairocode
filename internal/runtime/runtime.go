@@ -472,6 +472,11 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActHookCommand, kairo.Real, r.hookCommandAction)      // a command: not run again unasked
 	kairo.Action(r.K, workflows.ActHookNote, kairo.Unprotected, r.hookNoteAction)
 	kairo.Action(r.K, workflows.ActTaskArgs, kairo.Unprotected, r.taskArgs)
+	kairo.Action(r.K, workflows.ActAskUserArgs, kairo.Unprotected, r.askUserArgs)
+	kairo.Action(r.K, workflows.ActAskUserResult, kairo.Unprotected,
+		func(t *kairo.TaskContext, in workflows.TaskResultInput) (workflows.ToolOutput, error) {
+			return r.toolResult(t, in.Call, tools.Result{Output: in.Text, IsError: in.IsError})
+		})
 	kairo.Action(r.K, workflows.ActTaskResult, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.TaskResultInput) (workflows.ToolOutput, error) {
 			return r.toolResult(t, in.Call, tools.Result{Output: in.Text, IsError: in.IsError})
@@ -1109,6 +1114,45 @@ func (r *Runtime) WaitTurn(ctx context.Context, session string, n int) (workflow
 	}
 }
 
+// lastLink is the one of heads that has all the others before it in its
+// links: the conversation's end ("" for none). The links of one session
+// form one chain, each head a later end of it.
+func (r *Runtime) lastLink(ctx context.Context, heads []string) (string, error) {
+	last := ""
+	for _, h := range heads {
+		if h == "" || h == last {
+			continue
+		}
+		if last == "" {
+			last = h
+			continue
+		}
+		later, err := r.linkReaches(ctx, h, last)
+		if err != nil {
+			return "", err
+		}
+		if later {
+			last = h
+		}
+	}
+	return last, nil
+}
+
+// linkReaches says whether target is from or one of its links before it.
+func (r *Runtime) linkReaches(ctx context.Context, from, target string) (bool, error) {
+	for h := from; h != ""; {
+		if h == target {
+			return true, nil
+		}
+		var l store.Link
+		if err := r.Store.GetJSON(ctx, h, store.KindHistory, &l); err != nil {
+			return false, err
+		}
+		h = l.Prev
+	}
+	return false, nil
+}
+
 // HistoryLive is the session's conversation as a client shows it again:
 // History, then what the turns under way were asked (a turn waiting for an
 // approval is not in the history yet; shown without it, the approval would
@@ -1174,36 +1218,38 @@ func (r *Runtime) History(ctx context.Context, session string) ([]msg.Message, e
 	}
 	// The conversation's last link: of the last turn completed, or of a
 	// turn the user stopped after it (its message and note kept by
-	// history.cancelled, ADR 0011), whichever came last.
-	var last kairo.RunInfo
+	// history.cancelled, ADR 0011). Which came last is read from the links
+	// themselves, not a clock: the last one has the others before it.
+	lastN, run := -1, ""
+	var heads []string
 	for _, t := range runs {
-		turn := t.Workflow == workflows.Turn && t.Status == "completed"
-		stopped := t.Plan == "kairo.call/"+workflows.ActHistoryCancelled && t.Status == "completed"
-		if !turn && !stopped {
-			continue
-		}
-		if turn {
+		switch {
+		case t.Workflow == workflows.Turn && t.Status == "completed":
 			var in workflows.TurnInput
-			if json.Unmarshal(input(t), &in) != nil || in.Sub {
-				continue
+			if json.Unmarshal(input(t), &in) == nil && !in.Sub && in.N > lastN {
+				lastN, run = in.N, t.RunID
 			}
-		}
-		if last.RunID == "" || t.Created.After(last.Created) {
-			last = t
+		case t.Plan == "kairo.call/"+workflows.ActHistoryCancelled && t.Status == "completed":
+			var h string
+			if err := json.Unmarshal(t.Output, &h); err != nil {
+				return nil, fmt.Errorf("history.cancelled's link: %w", err)
+			}
+			heads = append(heads, h)
 		}
 	}
-	if last.RunID == "" {
-		return nil, nil
-	}
-	var head string
-	if last.Workflow == workflows.Turn {
-		out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, last.RunID)
+	if run != "" {
+		out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, run)
 		if err != nil {
 			return nil, err
 		}
-		head = out.Head
-	} else if err := json.Unmarshal(last.Output, &head); err != nil {
-		return nil, fmt.Errorf("history.cancelled's link: %w", err)
+		heads = append(heads, out.Head)
+	}
+	head, err := r.lastLink(ctx, heads)
+	if err != nil {
+		return nil, err
+	}
+	if head == "" {
+		return nil, nil
 	}
 	hashes, err := r.Store.Conversation(ctx, head)
 	if err != nil {
