@@ -148,7 +148,8 @@ func (r *Runtime) providers(ctx context.Context) []ProviderInfo {
 	_, claudeErr := exec.LookPath(r.cfg.ClaudePath)
 	out := []ProviderInfo{
 		{ID: ProviderAnthropic, Name: "Claude API", Kind: "api", Available: r.cfg.Provider != nil},
-		{ID: workflows.EngineClaudeCode, Name: "Claude Code (your plan)", Kind: "cli", Available: claudeErr == nil},
+		{ID: workflows.EngineClaudeCode, Name: "Claude Code", Kind: "cli", Available: claudeErr == nil,
+			Description: "your claude command, on your Claude subscription"},
 	}
 	list, err := r.agents.List(ctx)
 	if err != nil {

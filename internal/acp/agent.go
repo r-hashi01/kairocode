@@ -223,7 +223,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 	if !slices.Contains(ms, current) {
 		name := current
 		if current == defaultModel {
-			name = "Default (" + st.Provider + "'s)"
+			name = "Default model" // the provider's own choice
 		}
 		models = append(models, map[string]any{"value": current, "name": name})
 	}
@@ -249,7 +249,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 		if !slices.Contains(es, cur) {
 			name := cur
 			if cur == defaultModel {
-				name = "Default (" + st.Provider + "'s)"
+				name = "Default effort" // the provider's own choice
 			}
 			efforts = append(efforts, map[string]any{"value": cur, "name": name})
 		}
