@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"slices"
 	"strings"
-	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
@@ -18,28 +18,9 @@ import (
 // call, tool call and its result, what waited for a person and how it was
 // answered, and what was used. It only reads.
 
-// SessionLog is a session's record.
-type SessionLog struct {
-	Session string             `json:"session"`
-	Dir     string             `json:"dir"`
-	Engine  string             `json:"engine,omitempty"`
-	From    *workflows.ForkRef `json:"from,omitempty"`
-	Usage   msg.Usage          `json:"usage"`
-	Turns   []LogEntry         `json:"turns"`
-}
+type SessionLog = api.SessionLog
 
-// LogEntry is a run of the record: a turn, a call, a wait, a child
-// workflow (with its own runs).
-type LogEntry struct {
-	At     time.Time  `json:"at"`
-	End    time.Time  `json:"end,omitzero"`
-	Kind   string     `json:"kind"` // turn, model, tool, permission, wait, workflow, step
-	Name   string     `json:"name"`
-	Status string     `json:"status"`
-	Text   string     `json:"text,omitempty"`
-	Usage  *msg.Usage `json:"usage,omitempty"`
-	Runs   []LogEntry `json:"runs,omitempty"`
-}
+type LogEntry = api.LogEntry
 
 // logText is how much of a message or result a log line shows.
 const logText = 400
@@ -300,47 +281,4 @@ func compactJSON(v any) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
-}
-
-// Text is the record as lines to read.
-func (l SessionLog) Text() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Session %s in %s", strings.TrimPrefix(l.Session, "s/"), l.Dir)
-	if l.Engine != "" {
-		fmt.Fprintf(&b, " (%s)", l.Engine)
-	}
-	if l.From != nil {
-		fmt.Fprintf(&b, ", forked from turn %d of %s", l.From.Turn, strings.TrimPrefix(l.From.Session, "s/"))
-	}
-	fmt.Fprintf(&b, "\nUsed: %s\n", usageText(l.Usage))
-	for _, t := range l.Turns {
-		b.WriteString("\n" + l.entriesText([]LogEntry{t}))
-	}
-	return b.String()
-}
-
-// entriesText is entries, and the runs in each, as lines to read.
-func (SessionLog) entriesText(es []LogEntry) string {
-	var b strings.Builder
-	var write func(es []LogEntry, depth int)
-	write = func(es []LogEntry, depth int) {
-		for _, e := range es {
-			pad := strings.Repeat("  ", depth)
-			line := fmt.Sprintf("%s%s %s %s: %s", pad, e.At.Local().Format("15:04:05"), e.Kind, e.Name, e.Status)
-			if e.Usage != nil && (e.Usage.Input > 0 || e.Usage.Output > 0) {
-				line += " [" + usageText(*e.Usage) + "]"
-			}
-			if e.Text != "" {
-				line += "\n" + pad + "    " + strings.ReplaceAll(e.Text, "\n", "\n"+pad+"    ")
-			}
-			b.WriteString(line + "\n")
-			write(e.Runs, depth+1)
-		}
-	}
-	write(es, 0)
-	return b.String()
-}
-
-func usageText(u msg.Usage) string {
-	return fmt.Sprintf("in %d, out %d, cache read %d, cache write %d tokens", u.Input, u.Output, u.CacheRead, u.CacheWrite)
 }

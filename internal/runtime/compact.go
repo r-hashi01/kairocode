@@ -1,15 +1,11 @@
 package runtime
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -24,21 +20,20 @@ const summaryLead = "[A summary of the conversation before this point. The earli
 // modelContext is model's context in tokens: the user's kairocode.json
 // (models.<name>.context), else the provider's.
 func modelContext(model string) (int, error) {
-	path := filepath.Join(userConfigDir(), ConfigFile)
-	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return provider.ContextOf(model), nil
-	}
+	l, ok, err := config.User()
 	if err != nil {
 		return 0, err
+	}
+	if !ok {
+		return provider.ContextOf(model), nil
 	}
 	var cfg struct {
 		Models map[string]struct {
 			Context int `json:"context"`
 		} `json:"models"`
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return 0, fmt.Errorf("%s: %w", path, err)
+	if err := l.Decode(&cfg); err != nil {
+		return 0, err
 	}
 	if m, ok := cfg.Models[model]; ok && m.Context > 0 {
 		return m.Context, nil

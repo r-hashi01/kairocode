@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
@@ -23,7 +24,7 @@ func TestPluginInstallConnectRemove(t *testing.T) {
 	src := t.TempDir()
 	manifest, _ := json.Marshal(map[string]any{"name": "notes",
 		"auth": map[string]any{"type": "key", "keys": []map[string]string{{"name": "token", "description": "the API token"}}}})
-	os.WriteFile(filepath.Join(src, runtime.PluginManifest), manifest, 0o600)
+	os.WriteFile(filepath.Join(src, plugins.ManifestFile), manifest, 0o600)
 	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "one"}} {
 		if out, err := exec.Command("git", append([]string{"-C", src}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
@@ -34,7 +35,7 @@ func TestPluginInstallConnectRemove(t *testing.T) {
 	if err := pluginInstall(ctx, t.TempDir(), t.TempDir(), src, nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(runtime.UserPluginsDir(), "notes")
+	dir := filepath.Join(plugins.UserPluginsDir(), "notes")
 	if b, err := os.ReadFile(filepath.Join(dir, ".kairocode-commit")); err != nil || len(strings.TrimSpace(string(b))) != 12 {
 		t.Fatalf("the commit kept: %q %v", b, err)
 	}

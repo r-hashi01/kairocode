@@ -7,7 +7,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // commands are the commands the session can run (opencode's commands/*.md).
@@ -78,7 +78,7 @@ func (s *Server) pluginConnected(w http.ResponseWriter, r *http.Request) {
 func (s *Server) jobDone(w http.ResponseWriter, r *http.Request) {
 	if err := s.rt.JobDone(r.PathValue("id")); err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, runtime.ErrClosing) {
+		if errors.Is(err, api.ErrClosing) {
 			code = http.StatusServiceUnavailable // the runner tells the next daemon
 		}
 		fail(w, code, err)
@@ -111,7 +111,7 @@ func (s *Server) runCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, err := s.rt.RunCommand(r.Context(), sessionOf(r), in.Name, in.Arguments)
-	if errors.Is(err, runtime.ErrNoCommand) {
+	if errors.Is(err, api.ErrNoCommand) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}

@@ -20,6 +20,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/locale"
@@ -52,7 +53,7 @@ func (l *local) CreateSession(ctx context.Context, in workflows.SessionInput) (s
 }
 
 func (l *local) Send(ctx context.Context, s, text string) (int, error) { return l.r.Send(ctx, s, text) }
-func (l *local) SendImages(ctx context.Context, s, text string, images []runtime.Image) (int, error) {
+func (l *local) SendImages(ctx context.Context, s, text string, images []api.Image) (int, error) {
 	return l.r.SendImages(ctx, s, text, images)
 }
 func (l *local) ImageData(ctx context.Context, ref string) ([]byte, error) {
@@ -62,7 +63,7 @@ func (l *local) ImageData(ctx context.Context, ref string) ([]byte, error) {
 func (l *local) WaitTurn(ctx context.Context, s string, n int) (daemon.Turn, error) {
 	out, err := l.r.WaitTurn(ctx, s, n)
 	if errors.Is(err, kairo.ErrCancelled) { // as the daemon's server answers it
-		return daemon.Turn{Stopped: runtime.StoppedCancelled}, nil
+		return daemon.Turn{Stopped: api.StoppedCancelled}, nil
 	}
 	if err != nil {
 		return daemon.Turn{}, err
@@ -79,11 +80,11 @@ func (l *local) TryFlow(ctx context.Context, key, args string) error {
 	return l.r.TryFlow(ctx, key, args)
 }
 
-func (l *local) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
+func (l *local) Skills(ctx context.Context, session string) (api.SkillsInfo, error) {
 	return l.r.Skills(ctx, session)
 }
 
-func (l *local) Events(ctx context.Context, s string) (<-chan runtime.Event, error) {
+func (l *local) Events(ctx context.Context, s string) (<-chan api.Event, error) {
 	return l.r.Events(ctx, s)
 }
 
@@ -94,22 +95,22 @@ func (l *local) History(ctx context.Context, s string) ([]msg.Message, error) {
 func (l *local) Undo(ctx context.Context, s string) (int, error) { return l.r.Undo(ctx, s) }
 
 func (l *local) Redo(ctx context.Context, s string) (int, error) { return l.r.Redo(ctx, s) }
-func (l *local) Log(ctx context.Context, s string) (runtime.SessionLog, error) {
+func (l *local) Log(ctx context.Context, s string) (api.SessionLog, error) {
 	return l.r.Log(ctx, s)
 }
-func (l *local) Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error) {
+func (l *local) Sessions(ctx context.Context, dir string, limit int) ([]api.SessionInfo, error) {
 	return l.r.Sessions(ctx, dir, limit)
 }
-func (l *local) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
+func (l *local) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
 	return l.r.FlowRuns(ctx, dir, flow, only, n)
 }
-func (l *local) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
+func (l *local) FlowRun(ctx context.Context, id string) (api.FlowRun, error) {
 	return l.r.FlowRunByID(ctx, id)
 }
-func (l *local) Plugins(ctx context.Context, s string) ([]runtime.PluginInfo, error) {
+func (l *local) Plugins(ctx context.Context, s string) ([]api.PluginInfo, error) {
 	return l.r.Plugins(ctx, s)
 }
-func (l *local) MCP(ctx context.Context, s string) ([]runtime.MCPInfo, error) {
+func (l *local) MCP(ctx context.Context, s string) ([]api.MCPInfo, error) {
 	return l.r.MCP(ctx, s)
 }
 func (l *local) Compact(ctx context.Context, s string) (int, error) {
@@ -129,7 +130,7 @@ func (l *local) RunCommand(ctx context.Context, s, name, args string) (int, erro
 
 func (l *local) Cancel(ctx context.Context, s string) (int, error) { return l.r.Cancel(ctx, s) }
 
-func (l *local) Flows(ctx context.Context, s string) ([]runtime.FlowInfo, error) {
+func (l *local) Flows(ctx context.Context, s string) ([]api.FlowInfo, error) {
 	return l.r.Flows(ctx, s)
 }
 
@@ -141,11 +142,11 @@ func (l *local) NewFlow(ctx context.Context, s, request string) (int, error) {
 	return l.r.NewFlow(ctx, s, request)
 }
 
-func (l *local) Providers(ctx context.Context) ([]runtime.ProviderInfo, error) {
+func (l *local) Providers(ctx context.Context) ([]api.ProviderInfo, error) {
 	return l.r.Providers(ctx), nil
 }
 
-func (l *local) LoginMethods(ctx context.Context, id string) ([]runtime.AuthMethod, error) {
+func (l *local) LoginMethods(ctx context.Context, id string) ([]api.AuthMethod, error) {
 	return l.r.LoginMethods(ctx, id)
 }
 
@@ -157,23 +158,23 @@ func (l *local) Login(ctx context.Context, id, method string, done bool) error {
 	return l.r.Login(ctx, id, method)
 }
 
-func (l *local) InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error) {
+func (l *local) InstallProvider(ctx context.Context, id, version string) (api.ProviderInfo, error) {
 	return l.r.InstallProvider(ctx, id, version)
 }
 
 func (l *local) Models(ctx context.Context, p string) ([]string, error) { return l.r.Models(ctx, p) }
 
-func (l *local) Settings(ctx context.Context, s string) (runtime.Settings, error) {
+func (l *local) Settings(ctx context.Context, s string) (api.Settings, error) {
 	return l.r.Settings(ctx, s)
 }
 
-func (l *local) Switch(ctx context.Context, s, provider, model, effort string) (runtime.Settings, error) {
+func (l *local) Switch(ctx context.Context, s, provider, model, effort string) (api.Settings, error) {
 	return l.r.Switch(ctx, s, provider, model, effort)
 }
 
 func (l *local) Efforts(ctx context.Context, p string) ([]string, error) { return l.r.Efforts(ctx, p) }
 
-func (l *local) SetMode(ctx context.Context, s, mode string) (runtime.Settings, error) {
+func (l *local) SetMode(ctx context.Context, s, mode string) (api.Settings, error) {
 	return l.r.SetMode(ctx, s, mode)
 }
 
@@ -1326,7 +1327,7 @@ func TestACPTryFlow(t *testing.T) {
 func TestLocalizedReview(t *testing.T) {
 	chart, _ := json.Marshal(flowchart.Chart{Name: "f", Nodes: []flowchart.Node{
 		{Kind: flowchart.Tool, Title: "mcp__s__post ⚠", Text: "sends reply of agent plan (draft)"}}})
-	s := localized(locale.Japanese, runtime.PreviewSection{Name: "Overview",
+	s := localized(locale.Japanese, api.PreviewSection{Name: "Overview",
 		Text:    "▌ REACHES\n  files                     none",
 		Details: []string{"", "… 2 the same"}, Chart: chart})
 	var c flowchart.Chart
@@ -1337,7 +1338,7 @@ func TestLocalizedReview(t *testing.T) {
 		t.Fatalf("%q %q %q", s.Text, s.Details, c.Nodes[0].Text)
 	}
 	// The script is as written.
-	script := runtime.PreviewSection{Name: "Script", Text: "    tool(\"x\")  # outside service"}
+	script := api.PreviewSection{Name: "Script", Text: "    tool(\"x\")  # outside service"}
 	if got := localized(locale.Japanese, script); got.Text != script.Text {
 		t.Fatalf("the script changed: %q", got.Text)
 	}

@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/atomicfile"
+	"github.com/r-hashi01/kairocode/internal/config"
 )
 
 // Plugins' credentials (ADR 0025): kept in the system's key store (macOS's
@@ -43,7 +44,7 @@ func Secrets() SecretStore {
 			return secretTool{}
 		}
 	}
-	return &fileSecrets{path: filepath.Join(userConfigDir(), "credentials.json"), chosen: os.Getenv("KAIROCODE_SECRETS") == "file"}
+	return &fileSecrets{path: filepath.Join(config.UserDir(), "credentials.json"), chosen: os.Getenv("KAIROCODE_SECRETS") == "file"}
 }
 
 func onPath(name string) bool {

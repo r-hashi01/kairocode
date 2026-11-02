@@ -14,7 +14,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // fakeAgent is the agent's end of a client's pipes: the test reads the
@@ -140,7 +140,7 @@ func TestClientReadsAFlowPlan(t *testing.T) {
 }
 
 // A prompt to a session that failed comes back to the client as
-// runtime.ErrSessionFailed, saying how to go on (ADR 0021).
+// api.ErrSessionFailed, saying how to go on (ADR 0021).
 func TestPromptToAFailedSession(t *testing.T) {
 	l, _ := setup(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -157,7 +157,7 @@ func TestPromptToAFailedSession(t *testing.T) {
 	go Serve(ctx, l, toAgentR, fromAgentW, Options{Version: "test"})
 	cl := Dial(ctx, fromAgentR, toAgentW, ClientHandler{})
 	_, err := cl.Prompt(ctx, "s/fails", "hello")
-	if !errors.Is(err, runtime.ErrSessionFailed) || !strings.Contains(err.Error(), "database is locked") || !strings.Contains(err.Error(), "/fork") {
+	if !errors.Is(err, api.ErrSessionFailed) || !strings.Contains(err.Error(), "database is locked") || !strings.Contains(err.Error(), "/fork") {
 		t.Fatalf("Prompt: %v", err)
 	}
 }

@@ -6,8 +6,8 @@ package locale
 
 import (
 	"encoding/json"
+	"github.com/r-hashi01/kairocode/internal/config"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -54,20 +54,12 @@ func configured() string { return UserSetting("language") }
 // ($XDG_CONFIG_HOME/kairocode, else ~/.config/kairocode); "" if none.
 // Only the user's: a project does not set what is the reader's.
 func UserSetting(name string) string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".config")
-	}
-	b, err := os.ReadFile(filepath.Join(dir, "kairocode", "kairocode.json"))
-	if err != nil {
+	l, ok, err := config.User()
+	if !ok || err != nil {
 		return ""
 	}
 	var c map[string]json.RawMessage
-	if json.Unmarshal(b, &c) != nil {
+	if l.Decode(&c) != nil {
 		return ""
 	}
 	var v string

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
@@ -98,7 +99,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func Fail(w http.ResponseWriter, code int, err error) { fail(w, code, err) }
 
 func fail(w http.ResponseWriter, code int, err error) {
-	if errors.Is(err, runtime.ErrSessionFailed) {
+	if errors.Is(err, api.ErrSessionFailed) {
 		code = http.StatusGone // it takes no more (ADR 0021)
 	}
 	body := map[string]string{"error": err.Error()}

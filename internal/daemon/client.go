@@ -18,10 +18,10 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
-	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/server"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -264,7 +264,7 @@ func responseError(status int, b []byte) error {
 	}
 	is := server.ErrorOf(e.Code)
 	if is == nil && status == http.StatusGone { // a daemon from before codes (ADR 0021)
-		is = runtime.ErrSessionFailed
+		is = api.ErrSessionFailed
 	}
 	return &statusError{code: status, msg: msg, is: is}
 }
@@ -358,7 +358,7 @@ func (c *Client) Send(ctx context.Context, session, text string) (int, error) {
 }
 
 // SendImages is Send with images (ADR 0026).
-func (c *Client) SendImages(ctx context.Context, session, text string, images []runtime.Image) (int, error) {
+func (c *Client) SendImages(ctx context.Context, session, text string, images []api.Image) (int, error) {
 	var out struct {
 		Turn int `json:"turn"`
 	}
@@ -395,22 +395,22 @@ type Turn struct {
 }
 
 // Providers are the providers a session can switch to (ADR 0014).
-func (c *Client) Providers(ctx context.Context) ([]runtime.ProviderInfo, error) {
-	var out []runtime.ProviderInfo
+func (c *Client) Providers(ctx context.Context) ([]api.ProviderInfo, error) {
+	var out []api.ProviderInfo
 	err := c.do(ctx, "GET", "/providers", nil, &out)
 	return out, err
 }
 
 // InstallProvider installs agent id of ACP's registry (ADR 0015).
-func (c *Client) InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error) {
-	var out runtime.ProviderInfo
+func (c *Client) InstallProvider(ctx context.Context, id, version string) (api.ProviderInfo, error) {
+	var out api.ProviderInfo
 	err := c.do(ctx, "POST", "/providers/"+url.PathEscape(id)+"/install?version="+url.QueryEscape(version), nil, &out)
 	return out, err
 }
 
 // SetMode sets the session's mode from its next turn on (ADR 0016).
-func (c *Client) SetMode(ctx context.Context, session, mode string) (runtime.Settings, error) {
-	var out runtime.Settings
+func (c *Client) SetMode(ctx context.Context, session, mode string) (api.Settings, error) {
+	var out api.Settings
 	err := c.do(ctx, "POST", sessionPath(session)+"/settings", map[string]string{"mode": mode}, &out)
 	return out, err
 }
@@ -423,8 +423,8 @@ func (c *Client) Efforts(ctx context.Context, id string) ([]string, error) {
 }
 
 // LoginMethods are the ways to sign in to provider id.
-func (c *Client) LoginMethods(ctx context.Context, id string) ([]runtime.AuthMethod, error) {
-	var out []runtime.AuthMethod
+func (c *Client) LoginMethods(ctx context.Context, id string) ([]api.AuthMethod, error) {
+	var out []api.AuthMethod
 	err := c.do(ctx, "GET", "/providers/"+url.PathEscape(id)+"/login", nil, &out)
 	return out, err
 }
@@ -443,16 +443,16 @@ func (c *Client) Models(ctx context.Context, id string) ([]string, error) {
 }
 
 // Settings are the provider and model the session's next turn runs with.
-func (c *Client) Settings(ctx context.Context, session string) (runtime.Settings, error) {
-	var out runtime.Settings
+func (c *Client) Settings(ctx context.Context, session string) (api.Settings, error) {
+	var out api.Settings
 	err := c.do(ctx, "GET", sessionPath(session)+"/settings", nil, &out)
 	return out, err
 }
 
 // Switch switches the session's provider or model ("": keep it) from its
 // next turn on, and returns the settings it then has.
-func (c *Client) Switch(ctx context.Context, session, provider, model, effort string) (runtime.Settings, error) {
-	var out runtime.Settings
+func (c *Client) Switch(ctx context.Context, session, provider, model, effort string) (api.Settings, error) {
+	var out api.Settings
 	err := c.do(ctx, "POST", sessionPath(session)+"/settings", map[string]string{"provider": provider, "model": model, "effort": effort}, &out)
 	return out, err
 }
@@ -506,19 +506,19 @@ func (c *Client) CloseSession(ctx context.Context, session string) error {
 }
 
 // Pending lists the session's calls that wait for a person.
-func (c *Client) Pending(ctx context.Context, session string) ([]runtime.Pending, error) {
-	var out []runtime.Pending
+func (c *Client) Pending(ctx context.Context, session string) ([]api.Pending, error) {
+	var out []api.Pending
 	err := c.do(ctx, "GET", sessionPath(session)+"/approvals", nil, &out)
 	return out, err
 }
 
 // Approve answers one of them. Only the first answer goes through: a later
-// one returns runtime.ErrAnswered.
+// one returns api.ErrAnswered.
 func (c *Client) Approve(ctx context.Context, key string, ok bool, reason string) error {
 	err := c.do(ctx, "POST", "/approvals", map[string]any{"key": key, "ok": ok, "reason": reason}, nil)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusConflict {
-		return runtime.ErrAnswered
+		return api.ErrAnswered
 	}
 	return err
 }
@@ -528,18 +528,18 @@ func (c *Client) TryFlow(ctx context.Context, key, args string) error {
 	err := c.do(ctx, "POST", "/approvals/try", map[string]any{"key": key, "args": args}, nil)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusConflict {
-		return runtime.ErrAnswered
+		return api.ErrAnswered
 	}
 	return err
 }
 
 // Answer answers a flow's question with one of its options. Only the
-// first answer goes through: a later one returns runtime.ErrAnswered.
+// first answer goes through: a later one returns api.ErrAnswered.
 func (c *Client) Answer(ctx context.Context, key, option string) error {
 	err := c.do(ctx, "POST", "/questions", map[string]any{"key": key, "answer": option}, nil)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusConflict {
-		return runtime.ErrAnswered
+		return api.ErrAnswered
 	}
 	return err
 }
@@ -548,7 +548,7 @@ func (c *Client) Answer(ctx context.Context, key, option string) error {
 // what waits for a person, then what happens. The channel closes when ctx
 // ends or the stream does (the daemon stopped, or this client fell
 // behind); call it again to go on.
-func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Event, error) {
+func (c *Client) Events(ctx context.Context, session string) (<-chan api.Event, error) {
 	resp, err := c.events(ctx, session)
 	if unreached(err) && c.start != nil {
 		if rerr := c.reconnect(ctx); rerr != nil {
@@ -559,7 +559,7 @@ func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Eve
 	if err != nil {
 		return nil, err
 	}
-	out := make(chan runtime.Event)
+	out := make(chan api.Event)
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
@@ -578,7 +578,7 @@ func (c *Client) Events(ctx context.Context, session string) (<-chan runtime.Eve
 			if line != "" || len(data) == 0 {
 				continue
 			}
-			var ev runtime.Event
+			var ev api.Event
 			err = json.Unmarshal(data, &ev)
 			data = data[:0]
 			if err != nil {
@@ -623,8 +623,8 @@ func (c *Client) History(ctx context.Context, session string) ([]msg.Message, er
 }
 
 // Usage is what the session's model calls recorded they used.
-func (c *Client) Usage(ctx context.Context, session string) (runtime.SessionUsage, error) {
-	var out runtime.SessionUsage
+func (c *Client) Usage(ctx context.Context, session string) (api.SessionUsage, error) {
+	var out api.SessionUsage
 	err := c.do(ctx, "GET", sessionPath(session)+"/usage", nil, &out)
 	return out, err
 }
@@ -633,7 +633,7 @@ func (c *Client) Usage(ctx context.Context, session string) (runtime.SessionUsag
 // the session's last turn in effect; Redo puts back what an undo took away.
 // They return the turn's number.
 // Cancel stops the session's last turn (ADR 0011). It returns the turn's
-// number, or runtime.ErrNoTurnToCancel when it has ended.
+// number, or api.ErrNoTurnToCancel when it has ended.
 func (c *Client) Cancel(ctx context.Context, session string) (int, error) {
 	var out struct {
 		Turn int `json:"turn"`
@@ -641,7 +641,7 @@ func (c *Client) Cancel(ctx context.Context, session string) (int, error) {
 	err := c.do(ctx, "POST", sessionPath(session)+"/cancel", nil, &out)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusConflict {
-		return 0, runtime.ErrNoTurnToCancel
+		return 0, api.ErrNoTurnToCancel
 	}
 	return out.Turn, err
 }
@@ -693,37 +693,37 @@ func (c *Client) Commands(ctx context.Context, session string) ([]opencode.Comma
 }
 
 // Log is the session's record (ADR 0023).
-func (c *Client) Log(ctx context.Context, session string) (runtime.SessionLog, error) {
-	var out runtime.SessionLog
+func (c *Client) Log(ctx context.Context, session string) (api.SessionLog, error) {
+	var out api.SessionLog
 	err := c.do(ctx, "GET", sessionPath(session)+"/log", nil, &out)
 	return out, err
 }
 
 // MCP lists the session's MCP servers and custom tools (ADR 0022).
-func (c *Client) MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error) {
-	var out []runtime.MCPInfo
+func (c *Client) MCP(ctx context.Context, session string) ([]api.MCPInfo, error) {
+	var out []api.MCPInfo
 	err := c.do(ctx, "GET", sessionPath(session)+"/mcp", nil, &out)
 	return out, err
 }
 
 // Sessions lists the sessions of dir ("" all), the latest used first, at
 // most limit (0: all).
-func (c *Client) Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error) {
-	var out []runtime.SessionInfo
+func (c *Client) Sessions(ctx context.Context, dir string, limit int) ([]api.SessionInfo, error) {
+	var out []api.SessionInfo
 	err := c.do(ctx, "GET", "/sessions?dir="+url.QueryEscape(dir)+"&limit="+strconv.Itoa(limit), nil, &out)
 	return out, err
 }
 
 // Plugins lists the session's plugins and their state (ADR 0025).
-func (c *Client) Plugins(ctx context.Context, session string) ([]runtime.PluginInfo, error) {
-	var out []runtime.PluginInfo
+func (c *Client) Plugins(ctx context.Context, session string) ([]api.PluginInfo, error) {
+	var out []api.PluginInfo
 	err := c.do(ctx, "GET", sessionPath(session)+"/plugins", nil, &out)
 	return out, err
 }
 
 // PluginsIn lists dir's plugins and their state.
-func (c *Client) PluginsIn(ctx context.Context, dir string) ([]runtime.PluginInfo, error) {
-	var out []runtime.PluginInfo
+func (c *Client) PluginsIn(ctx context.Context, dir string) ([]api.PluginInfo, error) {
+	var out []api.PluginInfo
 	err := c.do(ctx, "GET", "/plugins?dir="+url.QueryEscape(dir), nil, &out)
 	return out, err
 }
@@ -740,15 +740,15 @@ func (c *Client) JobDone(ctx context.Context, id string) error {
 }
 
 // Skills are the session's skills, and the SKILL.md files not taken.
-func (c *Client) Skills(ctx context.Context, session string) (runtime.SkillsInfo, error) {
-	var out runtime.SkillsInfo
+func (c *Client) Skills(ctx context.Context, session string) (api.SkillsInfo, error) {
+	var out api.SkillsInfo
 	err := c.do(ctx, "GET", sessionPath(session)+"/skills", nil, &out)
 	return out, err
 }
 
 // Flows lists the flows of the session's project (ADR 0003).
-func (c *Client) Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error) {
-	var out []runtime.FlowInfo
+func (c *Client) Flows(ctx context.Context, session string) ([]api.FlowInfo, error) {
+	var out []api.FlowInfo
 	err := c.do(ctx, "GET", sessionPath(session)+"/flows", nil, &out)
 	return out, err
 }
@@ -769,7 +769,7 @@ func (c *Client) LastFlow(ctx context.Context, session string) (*flowchart.View,
 	err := c.do(ctx, "GET", sessionPath(session)+"/flow", nil, &v)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusNotFound {
-		return nil, runtime.ErrNoFlow
+		return nil, api.ErrNoFlow
 	}
 	return &v, err
 }
@@ -777,28 +777,28 @@ func (c *Client) LastFlow(ctx context.Context, session string) (*flowchart.View,
 // FlowRuns are the flows' runs of dir and flow ("" any), the latest
 // first, at most n (0: all), only "tries" or "runs" or both ("") (ADR
 // 0029).
-func (c *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
-	var out []runtime.FlowRun
+func (c *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
+	var out []api.FlowRun
 	q := url.Values{"dir": {dir}, "flow": {flow}, "only": {only}, "n": {strconv.Itoa(n)}}
 	err := c.do(ctx, "GET", "/flows/runs?"+q.Encode(), nil, &out)
 	return out, err
 }
 
 // FlowRun is a flow's run, with its chart and steps.
-func (c *Client) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
-	var f runtime.FlowRun
+func (c *Client) FlowRun(ctx context.Context, id string) (api.FlowRun, error) {
+	var f api.FlowRun
 	err := c.do(ctx, "GET", "/flows/run?id="+url.QueryEscape(id), nil, &f)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusNotFound {
-		return f, runtime.ErrNoFlowRun
+		return f, api.ErrNoFlowRun
 	}
 	return f, err
 }
 
 // FlowStats are the flows the sessions in dir ran, and the project's
 // flows that none ran.
-func (c *Client) FlowStats(ctx context.Context, dir string) ([]runtime.FlowStat, error) {
-	var out []runtime.FlowStat
+func (c *Client) FlowStats(ctx context.Context, dir string) ([]api.FlowStat, error) {
+	var out []api.FlowStat
 	err := c.do(ctx, "GET", "/flows/stats?dir="+url.QueryEscape(dir), nil, &out)
 	return out, err
 }

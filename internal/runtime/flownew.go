@@ -2,7 +2,7 @@ package runtime
 
 import (
 	"context"
-	"errors"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
@@ -39,8 +39,7 @@ With flow_write and flow_publish, give asked: what the user asked for, one thing
 
 Choose a short name (lowercase letters, digits and -; not new, graph or runs). When the draft is written, say in one or two sentences what the flow does, and how to try it (/flow <name> --draft) and publish it (/flow <name> --publish).`
 
-// ErrNoFlowRequest: /flow new was given nothing to make a flow of.
-var ErrNoFlowRequest = errors.New("/flow new needs what the flow is to do: /flow new <what it does>")
+var ErrNoFlowRequest = api.ErrNoFlowRequest
 
 // NewFlow starts a turn in which the model writes a flow from the user's
 // words (/flow new). The conversation keeps the request as it is asked of

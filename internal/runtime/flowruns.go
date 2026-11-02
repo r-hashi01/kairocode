@@ -4,18 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"slices"
-	"strings"
 	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
-	"github.com/r-hashi01/kairocode/internal/flowchart"
-	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -26,13 +21,12 @@ import (
 // Kept as kairo says a flow's run settled, and, for those a process missed
 // (it stopped), as the runtime opens.
 
-// Flow runs' statuses, besides running.
 const (
-	FlowRunOK        = "ok"
-	FlowRunFailed    = "failed"
-	FlowRunBroken    = "broken" // the script could not run
-	FlowRunCancelled = "cancelled"
-	FlowRunRunning   = "running"
+	FlowRunOK        = api.FlowRunOK
+	FlowRunFailed    = api.FlowRunFailed
+	FlowRunBroken    = api.FlowRunBroken
+	FlowRunCancelled = api.FlowRunCancelled
+	FlowRunRunning   = api.FlowRunRunning
 )
 
 // Defaults of how many of a flow's runs are kept (flowHistory).
@@ -41,30 +35,7 @@ const (
 	flowRunsDays = 90
 )
 
-// FlowRun is a flow's run: where it ran and from what, how it ended, its
-// chart with each step's state, and its steps with their times.
-type FlowRun struct {
-	ID      string `json:"id"` // the flow's run (kairo's)
-	Session string `json:"session"`
-	Turn    int    `json:"turn"`
-	Dir     string `json:"dir"`
-	Name    string `json:"name"`
-	Args    string `json:"args,omitempty"`
-	From    string `json:"from"` // FromCommand, FromAgent, FromHook
-	// Try: a try of the flow before it was written (ADR 0017): what it
-	// would have done, kept apart from its runs.
-	Try     bool      `json:"try,omitempty"`
-	Hook    string    `json:"hook,omitempty"` // the hook that ran it
-	Started time.Time `json:"started"`
-	Ended   time.Time `json:"ended,omitzero"`
-	Status  string    `json:"status"`
-	Message string    `json:"message,omitempty"` // what the flow said it did
-	Agents  int       `json:"agents,omitempty"`
-	Usage   msg.Usage `json:"usage"`
-	// View and Steps: not in a list (FlowRuns).
-	View  *flowchart.View `json:"view,omitempty"`
-	Steps []LogEntry      `json:"steps,omitempty"`
-}
+type FlowRun = api.FlowRun
 
 // unnamed says a flow's run has no flow's name to keep it by.
 func unnamed(k kairo.RunInfo) bool {
@@ -284,8 +255,7 @@ func (r *Runtime) keptFlowRun(ctx context.Context, id string) (FlowRun, error) {
 	return f, json.Unmarshal(row.Body, &f)
 }
 
-// ErrNoFlowRun: no flow's run of that id, running or kept.
-var ErrNoFlowRun = errors.New("no flow run of that id (kept runs: kairocode flow runs)")
+var ErrNoFlowRun = api.ErrNoFlowRun
 
 // FlowRunByID is a flow's run with its chart and steps: as it goes, if it
 // runs; as it was kept, if it ended.
@@ -308,8 +278,8 @@ func (r *Runtime) FlowRunByID(ctx context.Context, id string) (FlowRun, error) {
 // days: the user's kairocode.json, {"flowHistory": {"keep": 200, "days": 90}}.
 func flowHistory() (keep, days int) {
 	keep, days = flowRunsKeep, flowRunsDays
-	b, err := os.ReadFile(filepath.Join(userConfigDir(), ConfigFile))
-	if errors.Is(err, fs.ErrNotExist) || err != nil {
+	l, ok, err := config.User()
+	if !ok || err != nil {
 		return keep, days
 	}
 	var cfg struct {
@@ -318,7 +288,7 @@ func flowHistory() (keep, days int) {
 			Days int `json:"days"`
 		} `json:"flowHistory"`
 	}
-	if json.Unmarshal(b, &cfg) == nil {
+	if l.Decode(&cfg) == nil {
 		if cfg.FlowHistory.Keep > 0 {
 			keep = cfg.FlowHistory.Keep
 		}
@@ -327,48 +297,4 @@ func flowHistory() (keep, days int) {
 		}
 	}
 	return keep, days
-}
-
-// Line is the run in a line of a list.
-func (f FlowRun) Line() string {
-	took := ""
-	if !f.Ended.IsZero() {
-		took = " in " + f.Ended.Sub(f.Started).Round(time.Second).String()
-	}
-	args := ""
-	if f.Args != "" {
-		args = " " + f.Args
-	}
-	from := f.From
-	if f.Hook != "" {
-		from += " " + f.Hook
-	}
-	if f.Try {
-		from = "a try, before it was written"
-	}
-	name := f.Name
-	if f.Try {
-		name += " (try)"
-	}
-	return fmt.Sprintf("%s  %s%s  %s%s  (%s, session %s turn %d)", f.Started.Local().Format("2006-01-02 15:04"),
-		name, args, f.Status, took, from, strings.TrimPrefix(f.Session, "s/"), f.Turn)
-}
-
-// Text is the run's steps, with their times, as lines to read (its chart
-// is drawn apart).
-func (f FlowRun) Text() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n", f.Line())
-	if f.Message != "" {
-		fmt.Fprintf(&b, "said: %s\n", f.Message)
-	}
-	if f.Usage.Input > 0 || f.Usage.Output > 0 {
-		fmt.Fprintf(&b, "used: %s, %d agents\n", usageText(f.Usage), f.Agents)
-	}
-	fmt.Fprintf(&b, "id: %s\n", f.ID)
-	if len(f.Steps) > 0 {
-		b.WriteString("\nSteps:\n")
-		b.WriteString(SessionLog{}.entriesText(f.Steps))
-	}
-	return b.String()
 }

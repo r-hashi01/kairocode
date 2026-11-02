@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"strings"
 	"time"
 
@@ -13,12 +13,11 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// States of a call of a flow, as its chart shows them.
 const (
-	FlowRunning = "running"
-	FlowDone    = "done"
-	FlowFailed  = "failed"
-	FlowWaiting = "waiting" // for the user: an approval, a review, a question
+	FlowRunning = api.FlowRunning
+	FlowDone    = api.FlowDone
+	FlowFailed  = api.FlowFailed
+	FlowWaiting = api.FlowWaiting
 )
 
 // callState gathers what the runs of one call of the script say.
@@ -189,8 +188,7 @@ func (r *Runtime) FlowView(ctx context.Context, flow kairo.RunInfo, chart *flowc
 	return v, nil
 }
 
-// ErrNoFlow: the session has run no flow.
-var ErrNoFlow = errors.New("this session has run no flow")
+var ErrNoFlow = api.ErrNoFlow
 
 // LastFlow is the session's latest flow, running or ended, as far as it
 // has gone.

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"github.com/r-hashi01/kairocode/internal/api"
 	"maps"
 
 	"context"
@@ -17,64 +18,22 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// Kinds of Event.
 const (
-	EventToken             = "token"
-	EventTurnStart         = "turn.start"
-	EventTurnEnd           = "turn.end"
-	EventToolStart         = "tool.start"
-	EventToolEnd           = "tool.end"
-	EventApprovalRequested = "approval.requested"
-	EventApprovalResolved  = "approval.resolved"
-	EventReviewRequested   = "review.requested"
-	EventReviewResolved    = "review.resolved"
-	// A flow's question (ADR 0003): Pending has it, and its options.
-	EventQuestionRequested = "question.requested"
-	EventQuestionResolved  = "question.resolved"
-	// A flow ran on (ADR 0003): Flow is its chart and its calls' states.
-	EventFlow = "flow"
+	EventToken             = api.EventToken
+	EventTurnStart         = api.EventTurnStart
+	EventTurnEnd           = api.EventTurnEnd
+	EventToolStart         = api.EventToolStart
+	EventToolEnd           = api.EventToolEnd
+	EventApprovalRequested = api.EventApprovalRequested
+	EventApprovalResolved  = api.EventApprovalResolved
+	EventReviewRequested   = api.EventReviewRequested
+	EventReviewResolved    = api.EventReviewResolved
+	EventQuestionRequested = api.EventQuestionRequested
+	EventQuestionResolved  = api.EventQuestionResolved
+	EventFlow              = api.EventFlow
 )
 
-// Event is something that happened in a session, told to those who watch
-// it (issue #1). Events are not records: they are made from the records
-// and the runtime's observations as things happen, and carry nothing that
-// is not recorded (invariant 6). They come from this process's
-// observations, so they tell of what runs here: all of it while one daemon
-// drives the data directory (ADR 0008). A watcher that misses some (it joined
-// late, was too slow, or the daemon restarted) is told first what waits
-// for a person when it watches again; the rest it reads from the records.
-type Event struct {
-	// Seq orders a session's events while this process runs.
-	Seq  int64  `json:"seq"`
-	Type string `json:"type"`
-	// Turn is the turn's run id; N its number (turn.start, turn.end).
-	Turn string `json:"turn,omitempty"`
-	N    int    `json:"n"`
-	// Call names a tool call: the model's tool_use id, or the MCP call's run
-	// id (ADR 0007).
-	Call    string          `json:"call,omitempty"`
-	Tool    string          `json:"tool,omitempty"`
-	Input   json.RawMessage `json:"input,omitempty"`
-	Output  string          `json:"output,omitempty"`
-	IsError bool            `json:"is_error,omitempty"`
-	// Text is a token's text.
-	Text string `json:"text,omitempty"`
-	// Pending is what waits (approval.requested, review.requested); Key
-	// what was answered (approval.resolved, review.resolved), and OK the
-	// answer when it was given in this process: the call may run, or (a
-	// review) it took effect.
-	Pending *Pending `json:"pending,omitempty"`
-	Key     string   `json:"key,omitempty"`
-	OK      *bool    `json:"ok,omitempty"`
-	// turn.end
-	Reply   string     `json:"reply,omitempty"`
-	Steps   int        `json:"steps,omitempty"`
-	Stopped string     `json:"stopped,omitempty"`
-	Usage   *msg.Usage `json:"usage,omitempty"`
-	Error   string     `json:"error,omitempty"`
-	// Flow: a flow's chart and how far it has gone (flow).
-	Flow *flowchart.View `json:"flow,omitempty"`
-}
+type Event = api.Event
 
 // Events delivers the events of session until ctx ends, when the channel
 // is closed. It is closed earlier if the watcher falls too far behind, or

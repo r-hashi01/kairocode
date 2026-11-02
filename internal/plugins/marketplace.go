@@ -1,4 +1,4 @@
-package runtime
+package plugins
 
 import (
 	"cmp"
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"io/fs"
 	"net/url"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/atomicfile"
+	"github.com/r-hashi01/kairocode/internal/config"
 )
 
 // Plugin marketplaces (ADR 0027): catalogs of plugins, by name and where
@@ -80,10 +82,10 @@ type addedMarket struct {
 }
 
 // UserPluginsDir is the folder of the user's plugins.
-func UserPluginsDir() string { return filepath.Join(userConfigDir(), "plugins") }
+func UserPluginsDir() string { return filepath.Join(config.UserDir(), "plugins") }
 
-func marketsFile() string { return filepath.Join(userConfigDir(), "marketplaces.json") }
-func marketsDir() string  { return filepath.Join(userConfigDir(), "marketplaces") }
+func marketsFile() string { return filepath.Join(config.UserDir(), "marketplaces.json") }
+func marketsDir() string  { return filepath.Join(config.UserDir(), "marketplaces") }
 
 // folderName says name can be a folder's: not empty, no separator, not
 // starting with a dot.
@@ -137,7 +139,7 @@ func readAdded() ([]addedMarket, error) {
 }
 
 func writeAdded(list []addedMarket) error {
-	if err := os.MkdirAll(userConfigDir(), 0o700); err != nil {
+	if err := os.MkdirAll(config.UserDir(), 0o700); err != nil {
 		return err
 	}
 	b, _ := json.MarshalIndent(list, "", "  ")
@@ -451,9 +453,9 @@ func isGit(dir string) bool {
 
 // manifestOf reads a plugin's manifest in dir (KairoCode's, else Claude
 // Code's name).
-func manifestOf(dir string) (pluginManifest, bool) {
-	var m pluginManifest
-	if b, err := os.ReadFile(filepath.Join(dir, PluginManifest)); err == nil && json.Unmarshal(b, &m) == nil {
+func manifestOf(dir string) (Manifest, bool) {
+	var m Manifest
+	if b, err := os.ReadFile(filepath.Join(dir, ManifestFile)); err == nil && json.Unmarshal(b, &m) == nil {
 		return m, true
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json")); err == nil && json.Unmarshal(b, &m) == nil {
@@ -468,7 +470,7 @@ func placePlugin(tmp, dest, name string, origin pluginOrigin) (Installed, error)
 	m, _ := manifestOf(tmp)
 	// KairoCode's manifest names its plugin; a Claude Code one goes by
 	// its marketplace's name for it, as in Claude Code.
-	if _, err := os.Stat(filepath.Join(tmp, PluginManifest)); err == nil && m.Name != "" && m.Name != name {
+	if _, err := os.Stat(filepath.Join(tmp, ManifestFile)); err == nil && m.Name != "" && m.Name != name {
 		return Installed{}, fmt.Errorf("the plugin's manifest names it %q, not %s", m.Name, name)
 	}
 	// The markers are KairoCode's: none the plugin brings is taken.
@@ -524,7 +526,7 @@ func placePlugin(tmp, dest, name string, origin pluginOrigin) (Installed, error)
 		os.RemoveAll(old)
 	}
 	auth := cmp.Or(m.Auth.Type, "none")
-	return Installed{Name: name, Version: cmp.Or(m.Version, pluginCommit(dest)), Auth: auth}, nil
+	return Installed{Name: name, Version: cmp.Or(m.Version, Commit(dest)), Auth: auth}, nil
 }
 
 // treeHash is a hash of the files in dir (their paths and contents, .git
@@ -733,7 +735,7 @@ func UpdatePlugin(ctx context.Context, name string) (before, after string, err e
 		return "", "", fmt.Errorf("no plugin %q is installed", name)
 	}
 	m, _ := manifestOf(dir)
-	before = cmp.Or(m.Version, pluginCommit(dir))
+	before = cmp.Or(m.Version, Commit(dir))
 	var origin pluginOrigin
 	if b, err := os.ReadFile(filepath.Join(dir, originFile)); err == nil {
 		_ = json.Unmarshal(b, &origin)
@@ -800,26 +802,9 @@ func RemovePlugin(name string) error {
 	return os.RemoveAll(dir)
 }
 
-// CatalogPlugin is a plugin of a marketplace, as /plugin shows it.
-type CatalogPlugin struct {
-	Name        string `json:"name"`
-	Marketplace string `json:"marketplace"`
-	Description string `json:"description,omitempty"`
-	Installed   bool   `json:"installed,omitempty"` // one of the user's has its name
-	// Unsupported: why it cannot be installed.
-	Unsupported string `json:"unsupported,omitempty"`
-}
+type CatalogPlugin = api.CatalogPlugin
 
-// MarketInfo is a marketplace, as /plugin shows it.
-type MarketInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Source      string `json:"source,omitempty"` // "" built in
-	Commit      string `json:"commit,omitempty"`
-	BuiltIn     bool   `json:"builtIn,omitempty"`
-	Claude      bool   `json:"claude,omitempty"` // Claude Code's
-	Plugins     int    `json:"plugins"`
-}
+type MarketInfo = api.MarketInfo
 
 // Catalog is every marketplace's plugins, the marketplaces, and why any
 // could not be read.
@@ -913,4 +898,36 @@ func gitIn(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// PluginsText is /plugin's answer.
+func PluginsText(list []api.PluginInfo) string {
+	if len(list) == 0 {
+		return "No plugin is installed here (a project's go in .kairocode/plugins/<name>).\n"
+	}
+	var b strings.Builder
+	for _, p := range list {
+		whose := "yours"
+		if p.Project {
+			whose = "the project's"
+		}
+		head := p.Name
+		if p.Version != "" {
+			head += " " + p.Version
+		}
+		fmt.Fprintf(&b, "%s (%s): %s\n", head, whose, p.State)
+		if p.Description != "" {
+			fmt.Fprintf(&b, "    %s\n", p.Description)
+		}
+		for _, t := range p.Tools {
+			fmt.Fprintf(&b, "    %s  %s\n", t.Name, t.Effect)
+		}
+		if len(p.Skills) > 0 {
+			fmt.Fprintf(&b, "    skills: %s\n", strings.Join(p.Skills, ", "))
+		}
+		if len(p.Unused) > 0 {
+			fmt.Fprintf(&b, "    not used by KairoCode: %s\n", strings.Join(p.Unused, ", "))
+		}
+	}
+	return b.String()
 }

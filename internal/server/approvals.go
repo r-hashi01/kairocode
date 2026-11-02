@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request) {
@@ -15,7 +15,7 @@ func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p == nil {
-		p = []runtime.Pending{}
+		p = []api.Pending{}
 	}
 	writeJSON(w, http.StatusOK, p)
 }
@@ -34,7 +34,7 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.rt.Approve(r.Context(), in.Key, in.OK, in.Reason); err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, runtime.ErrAnswered) {
+		if errors.Is(err, api.ErrAnswered) {
 			code = http.StatusConflict // another client answered first
 		}
 		fail(w, code, err)
@@ -56,7 +56,7 @@ func (s *Server) tryFlow(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.rt.TryFlow(r.Context(), in.Key, in.Args); err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, runtime.ErrAnswered) {
+		if errors.Is(err, api.ErrAnswered) {
 			code = http.StatusConflict
 		}
 		fail(w, code, err)
@@ -78,7 +78,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.rt.Answer(r.Context(), in.Key, in.Answer); err != nil {
 		code := http.StatusBadRequest
-		if errors.Is(err, runtime.ErrAnswered) {
+		if errors.Is(err, api.ErrAnswered) {
 			code = http.StatusConflict
 		}
 		fail(w, code, err)

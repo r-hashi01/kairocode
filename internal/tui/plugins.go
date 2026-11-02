@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // The plugins, to browse (/plugin, ADR 0027): the marketplaces' to
@@ -41,10 +41,10 @@ type browser struct {
 type row struct {
 	name, market, desc, state string
 	installed, project        bool
-	unsupported               string              // why it cannot be installed
-	info                      *runtime.PluginInfo // installed: its state, tools, skills
-	mk                        *runtime.MarketInfo // a marketplace
-	add                       bool                // "Add a marketplace"
+	unsupported               string          // why it cannot be installed
+	info                      *api.PluginInfo // installed: its state, tools, skills
+	mk                        *api.MarketInfo // a marketplace
+	add                       bool            // "Add a marketplace"
 }
 
 // pluginsMsg: the plugins, read for /plugin.
@@ -169,7 +169,7 @@ func (b *browser) tabRows(tab int) []row {
 }
 
 // installed is the user's plugin of name, if it is installed.
-func (b *browser) installed(name string) *runtime.PluginInfo {
+func (b *browser) installed(name string) *api.PluginInfo {
 	for i, p := range b.view.Installed {
 		if p.Name == name && !p.Project {
 			return &b.view.Installed[i]

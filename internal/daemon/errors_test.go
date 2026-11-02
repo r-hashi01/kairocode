@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/server"
 )
 
@@ -17,8 +17,8 @@ import (
 // status. One the table does not know is a plain error with its message.
 func TestErrorsCrossTheSocket(t *testing.T) {
 	for _, want := range []error{
-		runtime.ErrForkWhileRunning, runtime.ErrNoSnapshot, runtime.ErrNoForkPoint, runtime.ErrNoUndo,
-		runtime.ErrSessionFailed, runtime.ErrAnswered, runtime.ErrUnavailable, runtime.ErrNotInstalled,
+		api.ErrForkWhileRunning, api.ErrNoSnapshot, api.ErrNoForkPoint, api.ErrNoUndo,
+		api.ErrSessionFailed, api.ErrAnswered, api.ErrUnavailable, api.ErrNotInstalled,
 	} {
 		sent := fmt.Errorf("fork: %w", want)
 		rec := httptest.NewRecorder()

@@ -27,18 +27,21 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/runtime` | `kairo.Open`、ワークフローとアクションの宣言。アクションの実装（`agent.load`、`model`、`history.extend`、`tool.<name>`。後で `permission.check`、`snapshot`、`restore`）。ツールの作用の型から kairo の `Effect` への写し。サーバーと CLI に向けた小さな API（`CreateSession`、`Send`、`WaitTurn`） | ここで I/O する |
 | `internal/tools` | 組み込みのツール。1 ファイル 1 ツールで、`tools.Def` に作用の型を書く | ここで I/O する |
 | `internal/provider` | モデルのプロバイダーのアダプター（Anthropic と、テスト用の fake） | ここで I/O する |
+| `internal/plugins` | プラグインとマーケットプレイス（ADR 0025、0027）: 入れる・更新する・消す、一覧、プラグインの定義（`kairocode-plugin.json`、Claude Code のプラグイン）を読む。サーバーにつなぐのと、鍵を使うのは runtime | ここで I/O する（入れるときに git を動かす） |
 | `internal/store` | メッセージの保存（`kc_message`、内容のハッシュで引く。1 度だけ書く） | ここで I/O する |
 | `internal/daemon` | データの置き場ごとに 1 つのデーモン（ADR 0008）。ロック、`server.json`、Unix ソケットの上の HTTP、何もしないときの終了。ほかのプロセスが使うクライアントと、デーモンの自動の起動 | ここで I/O する |
+| `internal/api` | デーモンとクライアントのあいだの型（セッション、出来事、承認、プロバイダー、プラグイン、フローの実行）と、名前の付いたエラー。runtime はこれを別名で使い、tui と acp は runtime ではなくこれを使う（`TestClientsDoNotImportTheRuntime`） | なし（型と小さな関数だけ） |
 | `internal/server` | HTTP + SSE の API（設計 8.1 節）。ライブの出力は `k.Subscribe(<セッションの ID>)` から流す（ID の前方一致で、子孫の出力も届く） | ここで I/O する |
 | `internal/opencode` | opencode のエージェント・コマンド・スキルの定義（`.opencode/agents`、`commands`、`SKILL.md`）を、opencode と同じ意味で読み、コマンドを展開する。frontmatter の YAML は小さな自前のパーサーで読む | ファイルを読むだけ（コマンドの `` !`…` `` は呼び出し側が sandbox で動かす） |
-| `internal/acp` | ACP のエージェント（ADR 0002）と、端末の対話が使う ACP のクライアント。stdio の JSON-RPC、デーモンのセッション・出来事・承認を ACP に写す。待ちの状態を持たない（承認の待ちは kairo にある） | ここで I/O する |
+| `internal/acp` | ACP のエージェント（ADR 0002）と、端末の対話が使う ACP のクライアント。stdio の JSON-RPC、デーモンのセッション・出来事・承認を ACP に写す。待ちの状態を持たない（承認の待ちは kairo にある）。runtime は import しない（型は `internal/api`） | ここで I/O する |
 | `internal/jsonrpc` | 改行で区切った JSON の上の JSON-RPC 2.0（ACP の stdio）。`internal/acp`（KairoCode が ACP のエージェント）と、`internal/runtime` の ACP のエンジン（KairoCode が codex・copilot の ACP のクライアント。ADR 0014）が使う | 渡された読み書きの口だけ |
 | `internal/cli` | `kairocode chat`（引数なしの `kairo` も。自分の ACP のクライアントとして話す端末の対話）、`run / approvals / approve / daemon / acp / usage`、後で `replay`。DB を自分で開かず、デーモンにつなぐ | ここで I/O する |
 | `internal/flowfile` | プロジェクトのフローのスクリプト（`.kairocode/workflows/<名前>.star` と下書き）の場所、一覧、読み書き。作業ディレクトリの中（`os.Root`）でだけ読み書きする | フローのファイルだけ |
 | `internal/flowchart` | フローの形（ADR 0003）。Starlark のスクリプトの構文の木から、プリミティブの呼び出しを、順番・分岐・繰り返し・並列の形で読む。木の形の文字の図も | なし（読むだけ） |
-| `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力を持つ。フローの図と編集のため、フローのスクリプトを `internal/flowfile` で読み書きする | 端末の入出力と、`internal/flowfile` を通したフローのファイルだけ |
+| `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力を持つ。フローの図と編集のため、フローのスクリプトを `internal/flowfile` で読み書きする。runtime は import しない（型は `internal/api`） | 端末の入出力と、`internal/flowfile` を通したフローのファイルだけ |
 | `internal/tui/screen` | 端末の画面の下の領域を描き、会話をその上に書く（ADR 0033。Codex と同じ仕組み）。生モードと端末の設定 | 端末の入出力だけ |
 | `internal/lsp` | 書いたファイルの、言語サーバーの診断のエラー（ADR 0009）。サーバーは sandbox の中で起動し、デーモンの中で持ち続け、使われなければ止める | ここで I/O する |
+| `internal/config` | 設定の置き場所（利用者の `$XDG_CONFIG_HOME/kairocode` と、プロジェクトの `kairocode.json`）と、その読み出し（利用者の分、プロジェクトの分の順の層）。各節の意味は、読む側が決める | 設定のファイルを読むだけ |
 | `internal/locale` | 読む人の言語（`KAIROCODE_LANG`、利用者の `kairocode.json`、ロケール）と、フローのレビューの言い回しの置き換え（項目名とスクリプトは置き換えない） | 環境変数と利用者の設定を読むだけ |
 | `internal/trust` | 信頼したフォルダの一覧（ADR 0010。データの置き場の `trust.json`）。クライアントだけが読み書きする | ここで I/O する |
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |

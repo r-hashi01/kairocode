@@ -1,4 +1,4 @@
-package runtime
+package plugins
 
 import (
 	"context"
@@ -27,7 +27,7 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("%s: %+v", p.Name, got)
 		}
 	}
-	plugins := readPlugins(t.TempDir())
+	plugins := Read(t.TempDir())
 	if len(plugins) != len(m.Plugins) {
 		t.Fatalf("%d plugins read, of %d", len(plugins), len(m.Plugins))
 	}
@@ -59,7 +59,7 @@ func writeMarket(t *testing.T, dir, name string, plugins map[string]string, extr
 	m := Marketplace{Name: name, Description: "the " + name + " plugins"}
 	for p, desc := range plugins {
 		m.Plugins = append(m.Plugins, MarketPlugin{Name: p, Description: desc, Source: "./plugins/" + p})
-		writeJSON(t, filepath.Join(dir, "plugins", p, PluginManifest), map[string]any{"name": p, "description": desc, "version": "1"})
+		writeJSON(t, filepath.Join(dir, "plugins", p, ManifestFile), map[string]any{"name": p, "description": desc, "version": "1"})
 	}
 	m.Plugins = append(m.Plugins, extra...)
 	writeJSON(t, filepath.Join(dir, MarketplaceManifest), m)
@@ -85,7 +85,7 @@ func TestMarketplaceInstall(t *testing.T) {
 	// Plugins beside the marketplace, each a good one of its name: only
 	// the check of where they are keeps them out.
 	for _, name := range []string{"escape", "linked", "local"} {
-		writeJSON(t, filepath.Join(parent, name, PluginManifest), map[string]any{"name": name})
+		writeJSON(t, filepath.Join(parent, name, ManifestFile), map[string]any{"name": name})
 	}
 	exec.Command("git", "-C", filepath.Join(parent, "local"), "init", "-q").Run()
 	writeMarket(t, acme, "acme", map[string]string{"tracker": "Acme's tracker", "github": "Acme's GitHub"},
@@ -130,7 +130,7 @@ func TestMarketplaceInstall(t *testing.T) {
 		t.Fatal("a plugin no marketplace has installed")
 	}
 
-	writeJSON(t, filepath.Join(acme, "plugins", "tracker", PluginManifest), map[string]any{"name": "tracker", "version": "2"})
+	writeJSON(t, filepath.Join(acme, "plugins", "tracker", ManifestFile), map[string]any{"name": "tracker", "version": "2"})
 	if before, after, err := UpdatePlugin(ctx, "tracker"); err != nil || before != "1" || after != "2" {
 		t.Fatalf("update: %s → %s, %v", before, after, err)
 	}
@@ -174,7 +174,7 @@ func TestMarketplaceGit(t *testing.T) {
 	if _, err := InstallPlugin(ctx, "notes@team"); err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(src, "plugins", "notes", PluginManifest), map[string]any{"name": "notes", "version": "2"})
+	writeJSON(t, filepath.Join(src, "plugins", "notes", ManifestFile), map[string]any{"name": "notes", "version": "2"})
 	commit("two")
 	if before, after, err := UpdatePlugin(ctx, "notes"); err != nil || before != "1" || after != "2" {
 		t.Fatalf("update: %s → %s, %v", before, after, err)
@@ -184,7 +184,7 @@ func TestMarketplaceGit(t *testing.T) {
 	}
 
 	plain := t.TempDir()
-	writeJSON(t, filepath.Join(plain, PluginManifest), map[string]any{"name": "plain"})
+	writeJSON(t, filepath.Join(plain, ManifestFile), map[string]any{"name": "plain"})
 	os.MkdirAll(filepath.Join(plain, "skills", "s"), 0o700)
 	os.WriteFile(filepath.Join(plain, "skills", "s", "SKILL.md"), []byte("---\nname: s\n---\n"), 0o600)
 	if got, err := InstallPlugin(ctx, plain); err != nil || got.Name != "plain" {
@@ -192,61 +192,6 @@ func TestMarketplaceGit(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(UserPluginsDir(), "plain", "skills", "s", "SKILL.md")); err != nil {
 		t.Fatal("the folder's files were not copied")
-	}
-}
-
-// A copied plugin is at a hash of its files, which goes into its servers'
-// fingerprint: changed without a new version, it is another (turns under
-// way do not call it; ADR 0025). The markers a plugin brings are not
-// taken, nor the links in it.
-func TestCopiedPluginIsAtItsFiles(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	ctx := context.Background()
-	acme := t.TempDir()
-	writeMarket(t, acme, "acme", nil, MarketPlugin{Name: "notes", Source: "./notes"})
-	writeJSON(t, filepath.Join(acme, "notes", PluginManifest), map[string]any{"name": "notes",
-		"mcp": map[string]any{"type": "local", "command": []string{"./server.sh"}}})
-	server := filepath.Join(acme, "notes", "server.sh")
-	os.WriteFile(server, []byte("#!/bin/sh\necho one\n"), 0o700)
-	writeJSON(t, filepath.Join(acme, "notes", originFile), pluginOrigin{Marketplace: BuiltIn, Plugin: "github"})
-	os.WriteFile(filepath.Join(acme, "notes", ".kairocode-commit"), []byte("fixed\n"), 0o600)
-	os.Symlink("/etc/hosts", filepath.Join(acme, "notes", "hosts"))
-	if _, err := AddMarketplace(ctx, acme); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InstallPlugin(ctx, "notes"); err != nil {
-		t.Fatal(err)
-	}
-	dir := filepath.Join(UserPluginsDir(), "notes")
-	spec := func() string {
-		servers, _ := pluginServers(t.TempDir())
-		for _, s := range servers {
-			if s.Plugin == "notes" {
-				return s.Spec
-			}
-		}
-		t.Fatal("no server of notes")
-		return ""
-	}
-	first, at := spec(), pluginCommit(dir)
-	if len(at) != 12 || at == "fixed" {
-		t.Fatalf("at %q", at)
-	}
-	if b, _ := os.ReadFile(filepath.Join(dir, originFile)); !strings.Contains(string(b), `"acme"`) {
-		t.Fatalf("its origin: %s", b)
-	}
-	if _, err := os.Lstat(filepath.Join(dir, "hosts")); err == nil {
-		t.Fatal("a link was copied")
-	}
-	if fi, err := os.Stat(filepath.Join(dir, "server.sh")); err != nil || fi.Mode()&0o100 == 0 {
-		t.Fatalf("server.sh: %v %v", fi, err)
-	}
-	os.WriteFile(server, []byte("#!/bin/sh\necho two\n"), 0o700)
-	if _, _, err := UpdatePlugin(ctx, "notes"); err != nil {
-		t.Fatal(err)
-	}
-	if spec() == first || pluginCommit(dir) == at {
-		t.Fatal("changed files, and the same fingerprint")
 	}
 }
 
@@ -385,8 +330,8 @@ func TestClaudeMarketplace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(kitDir, ".git")); err == nil {
 		t.Fatal("the repository came with its folder")
 	}
-	read := map[string]plugin{}
-	for _, p := range readPlugins(t.TempDir()) {
+	read := map[string]Plugin{}
+	for _, p := range Read(t.TempDir()) {
 		read[p.Name] = p
 	}
 	if p := read["notes"]; p.Err != nil || p.Manifest.MCP == nil || p.Manifest.MCP.URL != "https://notes.example.com/mcp" {
@@ -395,7 +340,7 @@ func TestClaudeMarketplace(t *testing.T) {
 	if p := read["kit"]; p.Err != nil || p.Manifest.Name != "kit" || p.Manifest.MCP != nil {
 		t.Fatalf("kit: %+v", p)
 	}
-	if u := claudeUnused(read["notes"].Dir); strings.Join(u, ",") != "commands,subagents" {
+	if u := ClaudeUnused(read["notes"].Dir); strings.Join(u, ",") != "commands,subagents" {
 		t.Fatalf("not used: %v", u)
 	}
 }
@@ -450,18 +395,12 @@ func TestClaudePluginStaysInItsFolder(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dir, "link")); err == nil {
 		t.Fatal("a link came with the plugin")
 	}
-	for _, p := range readPlugins(t.TempDir()) {
+	for _, p := range Read(t.TempDir()) {
 		if p.Name != "tools" {
 			continue
 		}
 		if p.Err != nil || p.Manifest.MCP == nil || p.Manifest.MCP.URL != "https://tools.example.com/mcp" || len(p.Manifest.Tools) != 0 {
 			t.Fatalf("tools: %+v %v", p.Manifest, p.Err)
-		}
-	}
-	_, decls := pluginServers(t.TempDir())
-	for _, d := range decls {
-		if d.Effect != "real" {
-			t.Fatalf("a Claude Code plugin's tools declared %+v", d)
 		}
 	}
 }

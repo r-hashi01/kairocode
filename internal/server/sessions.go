@@ -11,6 +11,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -48,12 +49,12 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New(`want {"text": "...", "images": [{"media_type": "image/png", "data": "<base64>"}]}`))
 		return
 	}
-	var images []runtime.Image
+	var images []api.Image
 	for _, im := range in.Images {
-		images = append(images, runtime.Image{MediaType: im.MediaType, Data: im.Data})
+		images = append(images, api.Image{MediaType: im.MediaType, Data: im.Data})
 	}
 	n, err := s.rt.SendImages(r.Context(), sessionOf(r), in.Text, images)
-	if errors.Is(err, runtime.ErrBadImage) {
+	if errors.Is(err, api.ErrBadImage) {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
@@ -98,7 +99,7 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 		n = *in.Turn
 	}
 	id, turn, err := s.rt.Fork(r.Context(), s.newID(), sessionOf(r), n, in.Files)
-	if errors.Is(err, runtime.ErrNoForkPoint) {
+	if errors.Is(err, api.ErrNoForkPoint) {
 		fail(w, http.StatusConflict, err)
 		return
 	}
@@ -129,7 +130,7 @@ func (s *Server) undo(redo bool) http.HandlerFunc {
 			ask = s.rt.Redo
 		}
 		n, err := ask(r.Context(), sessionOf(r))
-		if errors.Is(err, runtime.ErrNoUndo) {
+		if errors.Is(err, api.ErrNoUndo) {
 			fail(w, http.StatusConflict, err)
 			return
 		}
@@ -144,7 +145,7 @@ func (s *Server) undo(redo bool) http.HandlerFunc {
 // cancel stops the session's last turn (ADR 0011); 409 when it has ended.
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	n, err := s.rt.Cancel(r.Context(), sessionOf(r))
-	if errors.Is(err, runtime.ErrNoTurnToCancel) {
+	if errors.Is(err, api.ErrNoTurnToCancel) {
 		fail(w, http.StatusConflict, err)
 		return
 	}
@@ -186,7 +187,7 @@ func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.rt.WaitTurn(r.Context(), sessionOf(r), n)
 	if errors.Is(err, kairo.ErrCancelled) { // stopped by the user: an end, not a failure
-		writeJSON(w, http.StatusOK, map[string]any{"stopped": runtime.StoppedCancelled})
+		writeJSON(w, http.StatusOK, map[string]any{"stopped": api.StoppedCancelled})
 		return
 	}
 	if errors.Is(err, kairo.ErrStopped) || errors.Is(err, context.Canceled) {

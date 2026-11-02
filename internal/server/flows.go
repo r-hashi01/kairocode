@@ -8,7 +8,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // flows lists the flows the session's project has (ADR 0003).
@@ -48,7 +48,7 @@ func (s *Server) runFlow(w http.ResponseWriter, r *http.Request) {
 // it ran none.
 func (s *Server) lastFlow(w http.ResponseWriter, r *http.Request) {
 	v, err := s.rt.LastFlow(r.Context(), sessionOf(r))
-	if errors.Is(err, runtime.ErrNoFlow) || errors.Is(err, kairo.ErrUnknownRun) {
+	if errors.Is(err, api.ErrNoFlow) || errors.Is(err, kairo.ErrUnknownRun) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
@@ -70,7 +70,7 @@ func (s *Server) flowRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if runs == nil {
-		runs = []runtime.FlowRun{}
+		runs = []api.FlowRun{}
 	}
 	writeJSON(w, http.StatusOK, runs)
 }
@@ -78,7 +78,7 @@ func (s *Server) flowRuns(w http.ResponseWriter, r *http.Request) {
 // flowRun is a flow's run (?id=), with its chart and steps.
 func (s *Server) flowRun(w http.ResponseWriter, r *http.Request) {
 	f, err := s.rt.FlowRunByID(r.Context(), r.URL.Query().Get("id"))
-	if errors.Is(err, runtime.ErrNoFlowRun) {
+	if errors.Is(err, api.ErrNoFlowRun) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
@@ -115,7 +115,7 @@ func (s *Server) newFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, err := s.rt.NewFlow(r.Context(), sessionOf(r), in.Request)
-	if errors.Is(err, runtime.ErrNoFlowRequest) {
+	if errors.Is(err, api.ErrNoFlowRequest) {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}

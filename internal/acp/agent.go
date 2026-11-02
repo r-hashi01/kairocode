@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -15,11 +16,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/locale"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -33,13 +35,13 @@ type Backend interface {
 	Send(ctx context.Context, session, text string) (int, error)
 	// SendImages and ImageData: a message with images, and an image's
 	// bytes for a conversation shown again (ADR 0026).
-	SendImages(ctx context.Context, session, text string, images []runtime.Image) (int, error)
+	SendImages(ctx context.Context, session, text string, images []api.Image) (int, error)
 	ImageData(ctx context.Context, ref string) ([]byte, error)
 	WaitTurn(ctx context.Context, session string, n int) (daemon.Turn, error)
 	Approve(ctx context.Context, key string, ok bool, reason string) error
 	// TryFlow tries the flow an approval would write first (ADR 0017).
 	TryFlow(ctx context.Context, key, args string) error
-	Events(ctx context.Context, session string) (<-chan runtime.Event, error)
+	Events(ctx context.Context, session string) (<-chan api.Event, error)
 	History(ctx context.Context, session string) ([]msg.Message, error)
 	Undo(ctx context.Context, session string) (int, error)
 	Redo(ctx context.Context, session string) (int, error)
@@ -47,32 +49,32 @@ type Backend interface {
 	Fork(ctx context.Context, session string, n int, files bool) (string, int, error)
 	Commands(ctx context.Context, session string) ([]opencode.Command, error)
 	// Skills are the session's skills, and the SKILL.md files not taken.
-	Skills(ctx context.Context, session string) (runtime.SkillsInfo, error)
+	Skills(ctx context.Context, session string) (api.SkillsInfo, error)
 	// MCP lists the session's MCP servers and custom tools (ADR 0022).
-	MCP(ctx context.Context, session string) ([]runtime.MCPInfo, error)
-	Plugins(ctx context.Context, session string) ([]runtime.PluginInfo, error)
-	Sessions(ctx context.Context, dir string, limit int) ([]runtime.SessionInfo, error)
+	MCP(ctx context.Context, session string) ([]api.MCPInfo, error)
+	Plugins(ctx context.Context, session string) ([]api.PluginInfo, error)
+	Sessions(ctx context.Context, dir string, limit int) ([]api.SessionInfo, error)
 	// Log is the session's record (ADR 0023).
-	Log(ctx context.Context, session string) (runtime.SessionLog, error)
+	Log(ctx context.Context, session string) (api.SessionLog, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
-	Flows(ctx context.Context, session string) ([]runtime.FlowInfo, error)
+	Flows(ctx context.Context, session string) ([]api.FlowInfo, error)
 	// FlowRuns and FlowRun are the flows' runs, kept once they end (ADR
 	// 0029).
-	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error)
-	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
+	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error)
+	FlowRun(ctx context.Context, id string) (api.FlowRun, error)
 	Answer(ctx context.Context, key, option string) error
 	RunFlow(ctx context.Context, session, name, args string) (int, error)
 	NewFlow(ctx context.Context, session, request string) (int, error)
-	Providers(ctx context.Context) ([]runtime.ProviderInfo, error)
-	InstallProvider(ctx context.Context, id, version string) (runtime.ProviderInfo, error)
-	LoginMethods(ctx context.Context, id string) ([]runtime.AuthMethod, error)
+	Providers(ctx context.Context) ([]api.ProviderInfo, error)
+	InstallProvider(ctx context.Context, id, version string) (api.ProviderInfo, error)
+	LoginMethods(ctx context.Context, id string) ([]api.AuthMethod, error)
 	Login(ctx context.Context, id, method string, done bool) error
 	Models(ctx context.Context, provider string) ([]string, error)
-	Settings(ctx context.Context, session string) (runtime.Settings, error)
-	Switch(ctx context.Context, session, provider, model, effort string) (runtime.Settings, error)
+	Settings(ctx context.Context, session string) (api.Settings, error)
+	Switch(ctx context.Context, session, provider, model, effort string) (api.Settings, error)
 	Efforts(ctx context.Context, provider string) ([]string, error)
-	SetMode(ctx context.Context, session, mode string) (runtime.Settings, error)
+	SetMode(ctx context.Context, session, mode string) (api.Settings, error)
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -115,7 +117,7 @@ const (
 	PluginRPC  = "_kairocode/plugin"
 	// FlowRunsRPC lists the flows' runs of a folder ({"dir", "flow", "n"}
 	// → {"runs"}); FlowRunRPC gives one, with its chart and steps
-	// ({"id"} → runtime.FlowRun). ADR 0029.
+	// ({"id"} → api.FlowRun). ADR 0029.
 	FlowRunsRPC = "_kairocode/flow_runs"
 	FlowRunRPC  = "_kairocode/flow_run"
 	// GoOnRPC goes on from a session that failed, in a new session forked
@@ -300,7 +302,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 				return nil, invalid(err)
 			}
 			if ms == nil {
-				ms = []runtime.AuthMethod{}
+				ms = []api.AuthMethod{}
 			}
 			return map[string]any{"methods": ms}, nil
 		}
@@ -320,7 +322,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return nil, invalid(err)
 		}
 		v := PluginsView{Installed: list}
-		v.Catalog, v.Marketplaces, v.Errors = runtime.Catalog()
+		v.Catalog, v.Marketplaces, v.Errors = plugins.Catalog()
 		return v, nil
 	case FlowRunsRPC:
 		var p struct {
@@ -337,7 +339,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return nil, invalid(err)
 		}
 		if runs == nil {
-			runs = []runtime.FlowRun{}
+			runs = []api.FlowRun{}
 		}
 		return map[string]any{"runs": runs}, nil
 	case GoOnRPC:
@@ -438,7 +440,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		a.wg.Add(1)
 		go func() {
 			defer a.wg.Done()
-			if _, err := a.b.Cancel(a.ctx, p.SessionID); err != nil && !errors.Is(err, runtime.ErrNoTurnToCancel) {
+			if _, err := a.b.Cancel(a.ctx, p.SessionID); err != nil && !errors.Is(err, api.ErrNoTurnToCancel) {
 				a.o.Logger.Warn("acp: cancelling the turn", "session", p.SessionID, "err", err)
 			}
 		}()
@@ -467,7 +469,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		return nil, invalid(err)
 	}
 	var text, files []string
-	var images []runtime.Image
+	var images []api.Image
 	dir := a.dirOf(p.SessionID)
 	for _, b := range p.Prompt {
 		switch b.Type {
@@ -478,7 +480,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			if err != nil {
 				return nil, invalid(fmt.Errorf("image %d: not base64", len(images)+1))
 			}
-			images = append(images, runtime.Image{MediaType: b.MimeType, Data: data})
+			images = append(images, api.Image{MediaType: b.MimeType, Data: data})
 		case "resource_link":
 			// A file of the session's folder is put in; anything else
 			// stays a link.
@@ -502,7 +504,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if len(text) == 0 && len(images) == 0 {
 		return nil, invalid(errors.New("the prompt has no text"))
 	}
-	if err := runtime.CheckImages(images); err != nil {
+	if err := api.CheckImages(images); err != nil {
 		return nil, invalid(err)
 	}
 	// Watching before sending: no update of the turn is missed.
@@ -545,9 +547,9 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		}
 		switch {
 		case bad != "":
-		case errors.Is(err, runtime.ErrNoForkPoint):
+		case errors.Is(err, api.ErrNoForkPoint):
 			text = "There is no finished turn to fork from there."
-		case errors.Is(err, runtime.ErrForkWhileRunning), errors.Is(err, runtime.ErrNoSnapshot):
+		case errors.Is(err, api.ErrForkWhileRunning), errors.Is(err, api.ErrNoSnapshot):
 			text = err.Error()
 		case err != nil:
 			return nil, err
@@ -606,7 +608,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			return a.listFlows(ctx, p.SessionID)
 		}
 		if strings.TrimSpace(rest) == "--help" { // what it is to be given, without a turn
-			text, err := runtime.FlowHelp(a.dirOf(p.SessionID), flow)
+			text, err := flowfile.FlowHelp(a.dirOf(p.SessionID), flow)
 			if err != nil {
 				text = err.Error()
 			}
@@ -637,7 +639,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		}
 	}
 	n, err := start(ctx, p.SessionID, prompt)
-	if errors.Is(err, runtime.ErrSessionFailed) {
+	if errors.Is(err, api.ErrSessionFailed) {
 		return nil, &rpcError{Code: CodeSessionFailed, Message: err.Error() +
 			". Go on from its last turn with /fork, or start a new session."}
 	}
@@ -667,7 +669,7 @@ func stopReason(stopped string) string {
 		return "max_turn_requests"
 	case "max_tokens", "refusal":
 		return stopped
-	case runtime.StoppedCancelled:
+	case api.StoppedCancelled:
 		return "cancelled"
 	}
 	return "end_turn"
@@ -733,9 +735,9 @@ func (a *agent) listSessions(ctx context.Context, cwd, cursor string) (any, erro
 		}
 		// After it; if it is gone (or changed since), after where it was.
 		from = len(list)
-		if i := slices.IndexFunc(list, func(s runtime.SessionInfo) bool { return s.ID == id }); i >= 0 && list[i].Updated.Equal(t) {
+		if i := slices.IndexFunc(list, func(s api.SessionInfo) bool { return s.ID == id }); i >= 0 && list[i].Updated.Equal(t) {
 			from = i + 1
-		} else if i := slices.IndexFunc(list, func(s runtime.SessionInfo) bool { return s.Updated.Before(t) }); i >= 0 {
+		} else if i := slices.IndexFunc(list, func(s api.SessionInfo) bool { return s.Updated.Before(t) }); i >= 0 {
 			from = i
 		}
 	}

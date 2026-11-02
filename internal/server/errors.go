@@ -3,7 +3,7 @@ package server
 import (
 	"errors"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // The errors a client tells apart, by the code the API's error carries
@@ -14,26 +14,26 @@ var wireErrors = []struct {
 	code string
 	err  error
 }{
-	{"session_failed", runtime.ErrSessionFailed},
-	{"no_fork_point", runtime.ErrNoForkPoint},
-	{"fork_while_running", runtime.ErrForkWhileRunning},
-	{"no_snapshot", runtime.ErrNoSnapshot},
-	{"no_undo", runtime.ErrNoUndo},
-	{"no_turn_to_cancel", runtime.ErrNoTurnToCancel},
-	{"answered", runtime.ErrAnswered},
-	{"question", runtime.ErrQuestion},
-	{"not_a_flow", runtime.ErrNotAFlow},
-	{"trying", runtime.ErrTrying},
-	{"no_provider", runtime.ErrNoProvider},
-	{"not_installed", runtime.ErrNotInstalled},
-	{"unavailable", runtime.ErrUnavailable},
-	{"no_command", runtime.ErrNoCommand},
-	{"no_flow", runtime.ErrNoFlow},
-	{"no_flow_name", runtime.ErrNoFlowName},
-	{"no_flow_request", runtime.ErrNoFlowRequest},
-	{"no_flow_run", runtime.ErrNoFlowRun},
-	{"bad_image", runtime.ErrBadImage},
-	{"closing", runtime.ErrClosing},
+	{"session_failed", api.ErrSessionFailed},
+	{"no_fork_point", api.ErrNoForkPoint},
+	{"fork_while_running", api.ErrForkWhileRunning},
+	{"no_snapshot", api.ErrNoSnapshot},
+	{"no_undo", api.ErrNoUndo},
+	{"no_turn_to_cancel", api.ErrNoTurnToCancel},
+	{"answered", api.ErrAnswered},
+	{"question", api.ErrQuestion},
+	{"not_a_flow", api.ErrNotAFlow},
+	{"trying", api.ErrTrying},
+	{"no_provider", api.ErrNoProvider},
+	{"not_installed", api.ErrNotInstalled},
+	{"unavailable", api.ErrUnavailable},
+	{"no_command", api.ErrNoCommand},
+	{"no_flow", api.ErrNoFlow},
+	{"no_flow_name", api.ErrNoFlowName},
+	{"no_flow_request", api.ErrNoFlowRequest},
+	{"no_flow_run", api.ErrNoFlowRun},
+	{"bad_image", api.ErrBadImage},
+	{"closing", api.ErrClosing},
 }
 
 // ErrorCode is err's code on the wire ("" for an error a client does not

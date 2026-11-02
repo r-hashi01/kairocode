@@ -16,8 +16,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
-	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/tui/screen"
 	"github.com/r-hashi01/kairocode/internal/tui/screen/vtest"
 )
@@ -135,7 +135,7 @@ type fakeAgent struct {
 	set      []string // settings set: id=value
 	plugins  acp.PluginsView
 	changes  []string // /plugin's changes asked for
-	runs     []runtime.FlowRun
+	runs     []api.FlowRun
 	failed   bool     // the session failed: the next prompt is refused (ADR 0021)
 	goneOn   []string // the sessions gone on from
 }
@@ -146,18 +146,18 @@ func (a *fakeAgent) GoOn(ctx context.Context, session string) (string, int, erro
 	return "s/forked0123456789", 3, nil
 }
 
-func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
+func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
 	return a.runs, nil
 }
 
-func (a *fakeAgent) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
+func (a *fakeAgent) FlowRun(ctx context.Context, id string) (api.FlowRun, error) {
 	for _, f := range a.runs {
 		if f.ID == id {
-			f.Steps = []runtime.LogEntry{{At: f.Started, Kind: "tool", Name: "read", Status: "completed", Text: "main.go"}}
+			f.Steps = []api.LogEntry{{At: f.Started, Kind: "tool", Name: "read", Status: "completed", Text: "main.go"}}
 			return f, nil
 		}
 	}
-	return runtime.FlowRun{}, runtime.ErrNoFlowRun
+	return api.FlowRun{}, api.ErrNoFlowRun
 }
 
 func (a *fakeAgent) Plugins(ctx context.Context, session string) (acp.PluginsView, error) {
@@ -176,11 +176,11 @@ func (a *fakeAgent) PluginChange(ctx context.Context, args ...string) (string, e
 				v.Catalog[i].Installed = true
 			}
 		}
-		v.Installed = append(v.Installed, runtime.PluginInfo{Name: name, Auth: "key", State: "not connected: kairocode plugin connect " + name,
-			Tools: []runtime.MCPToolInfo{{Name: name + "_list_issues", Effect: "read"}, {Name: name + "_create_issue", Effect: "real"}}})
+		v.Installed = append(v.Installed, api.PluginInfo{Name: name, Auth: "key", State: "not connected: kairocode plugin connect " + name,
+			Tools: []api.MCPToolInfo{{Name: name + "_list_issues", Effect: "read"}, {Name: name + "_create_issue", Effect: "real"}}})
 		return "Installed " + name + ".", nil
 	case "remove":
-		v.Installed = slices.DeleteFunc(v.Installed, func(p runtime.PluginInfo) bool { return p.Name == args[1] })
+		v.Installed = slices.DeleteFunc(v.Installed, func(p api.PluginInfo) bool { return p.Name == args[1] })
 		for i := range v.Catalog {
 			if v.Catalog[i].Name == args[1] {
 				v.Catalog[i].Installed = false
@@ -242,7 +242,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error 
 
 func (a *fakeAgent) Prompt(ctx context.Context, session, text string, files ...string) (string, error) {
 	if a.failed {
-		return "", fmt.Errorf("%w (database is locked)", runtime.ErrSessionFailed)
+		return "", fmt.Errorf("%w (database is locked)", api.ErrSessionFailed)
 	}
 	a.prompts = append(a.prompts, text)
 	a.files = append(a.files, files...)
@@ -1454,7 +1454,7 @@ func TestGoOnFromAFailedSession(t *testing.T) {
 	if d.m.session != "s/forked0123456789" {
 		t.Fatalf("the UI is in %q", d.m.session)
 	}
-	if len(a.prompts) != 1 || a.prompts[0] != runtime.FailedNote+"\n\nfix the test" {
+	if len(a.prompts) != 1 || a.prompts[0] != api.FailedNote+"\n\nfix the test" {
 		t.Fatalf("sent %q", a.prompts)
 	}
 	out := d.out()

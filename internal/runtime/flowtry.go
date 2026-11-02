@@ -3,8 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"slices"
 	"strings"
 
@@ -13,18 +13,11 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// TryTarget is the flow an approval would write, to try it first (ADR
-// 0017): its name and its script's hash in the store.
-type TryTarget struct {
-	Name   string `json:"name"`
-	Script string `json:"script"`
-}
+type TryTarget = api.TryTarget
 
-// ErrNotAFlow: a request to try what is not a flow's write; ErrTrying:
-// one while a try of it is under way.
 var (
-	ErrNotAFlow = errors.New("this call writes no flow to try")
-	ErrTrying   = errors.New("it is being tried: answer it, or wait for the try to end")
+	ErrNotAFlow = api.ErrNotAFlow
+	ErrTrying   = api.ErrTrying
 )
 
 // canTry says why the flow of turn's approval cannot be tried, if it

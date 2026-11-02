@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"maps"
 	"os"
 	"slices"
@@ -109,19 +110,7 @@ const (
 	unreadable = "!"
 )
 
-// PreviewSection is a named part of what a call would do: Overview,
-// Flow, Changes, Script, Try. Refs: for each line of Text, the script's
-// lines it is ({0, 0} for none), to show them; Details: for each line,
-// more to show of it ("" for none: a change's before and after). Chart:
-// the flow's chart (flowchart.Chart), for a client that draws it (Text is
-// its tree).
-type PreviewSection struct {
-	Name    string          `json:"name"`
-	Text    string          `json:"text"`
-	Refs    [][2]int        `json:"refs,omitempty"`
-	Details []string        `json:"details,omitempty"`
-	Chart   json.RawMessage `json:"chart,omitempty"`
-}
+type PreviewSection = api.PreviewSection
 
 // withRefs is a section's refs as recorded after its text.
 func withRefs(refs []flowchart.Lines) string {

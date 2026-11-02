@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"io"
 	"log/slog"
 	"os"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/acp"
 	"github.com/r-hashi01/kairocode/internal/agents"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/provider"
@@ -324,7 +326,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if flow, ok := strings.CutPrefix(request, "/flow "); ok { // what a flow is to be given: no session for it
 		if name, rest, _ := strings.Cut(strings.TrimSpace(flow), " "); strings.TrimSpace(rest) == "--help" {
-			text, err := runtime.FlowHelp(abs, name)
+			text, err := flowfile.FlowHelp(abs, name)
 			if err != nil {
 				return err
 			}
@@ -558,11 +560,11 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintln(stdout, "nothing waits for approval")
 	}
 	for _, x := range p {
-		if x.Kind == runtime.KindQuestion {
+		if x.Kind == api.KindQuestion {
 			fmt.Fprintf(stdout, "%s\n  question: %s\n  answers: %s (kairocode answer <key> <answer>)\n", x.Key, x.Subject, strings.Join(x.Options, " | "))
 			continue
 		}
-		fmt.Fprintf(stdout, "%s\n  %s %q (%s)\n", x.Key, x.Tool, x.Subject, x.Rule)
+		fmt.Fprintf(stdout, "%s\n  %s %q (%s)\n", x.Key, x.Tool, x.Subject, x.RuleText())
 	}
 	return nil
 }
@@ -642,7 +644,7 @@ func stopOnSignals(ctx context.Context) (context.Context, <-chan struct{}, func(
 // client fell behind): it watches again while the turn has not ended
 // (turnDone). A stream begun again may have missed the turn's end, so it is
 // read only until the turn is known to have ended.
-func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan runtime.Event, w io.Writer,
+func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan api.Event, w io.Writer,
 	sent <-chan struct{}, n *int, turnDone <-chan struct{}, waiting chan<- struct{}) {
 	var until <-chan struct{} // nil: read to the turn's end
 	for {
@@ -663,7 +665,7 @@ func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan r
 				until = turnDone
 				continue
 			}
-			if ev.Type == runtime.EventTurnEnd {
+			if ev.Type == api.EventTurnEnd {
 				<-sent
 				if ev.N == *n {
 					return
@@ -671,7 +673,7 @@ func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan r
 			}
 			showEvent(w, ev)
 			switch ev.Type {
-			case runtime.EventApprovalRequested, runtime.EventReviewRequested, runtime.EventQuestionRequested:
+			case api.EventApprovalRequested, api.EventReviewRequested, api.EventQuestionRequested:
 				select {
 				case waiting <- struct{}{}:
 				default:
@@ -685,7 +687,7 @@ func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan r
 
 // showEvent writes one event as a line, if it is one to show. Tokens are
 // not: the reply is written whole when the turn ends.
-func showEvent(w io.Writer, ev runtime.Event) {
+func showEvent(w io.Writer, ev api.Event) {
 	answer := func(ok *bool, yes, no string) string {
 		switch {
 		case ok == nil:
@@ -697,28 +699,28 @@ func showEvent(w io.Writer, ev runtime.Event) {
 		}
 	}
 	switch ev.Type {
-	case runtime.EventToolStart:
+	case api.EventToolStart:
 		fmt.Fprintf(w, "· %s %s\n", ev.Tool, oneLine(string(ev.Input), 80))
-	case runtime.EventToolEnd:
+	case api.EventToolEnd:
 		if ev.IsError {
 			fmt.Fprintf(w, "  ✗ %s: %s\n", ev.Tool, oneLine(ev.Output, 80))
 		} else {
 			fmt.Fprintf(w, "  ✓ %s\n", ev.Tool)
 		}
-	case runtime.EventApprovalRequested:
+	case api.EventApprovalRequested:
 		fmt.Fprintf(w, "waiting for approval: %s %s (%s)\n  kairocode approve %s\n",
-			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Rule, ev.Pending.Key)
-	case runtime.EventReviewRequested:
-		fmt.Fprintf(w, "cut off while it ran, did it take effect? %s %s\n  kairocode approve %s   (or -deny: it did not)\n",
+			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.RuleText(), ev.Pending.Key)
+	case api.EventReviewRequested:
+		fmt.Fprintf(w, "%s %s %s\n  kairocode approve %s   (or -deny: it did not)\n", api.ReviewQuestion,
 			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Key)
-	case runtime.EventQuestionRequested:
+	case api.EventQuestionRequested:
 		fmt.Fprintf(w, "the flow asks: %s\n  answers: %s\n  kairocode answer %s <answer>\n",
 			ev.Pending.Subject, strings.Join(ev.Pending.Options, " | "), ev.Pending.Key)
-	case runtime.EventQuestionResolved:
+	case api.EventQuestionResolved:
 		fmt.Fprintln(w, "  answered")
-	case runtime.EventApprovalResolved:
+	case api.EventApprovalResolved:
 		fmt.Fprintf(w, "  %s\n", answer(ev.OK, "approved", "declined"))
-	case runtime.EventReviewResolved:
+	case api.EventReviewResolved:
 		fmt.Fprintf(w, "  %s\n", answer(ev.OK, "it took effect", "it did not take effect"))
 	}
 }
@@ -859,7 +861,7 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			_, err = fmt.Fprint(stdout, "\n"+f.Text())
 			return err
 		}
-		var events <-chan runtime.Event
+		var events <-chan api.Event
 		if *follow { // watched before it is looked at: nothing between is missed
 			if events, err = c.Events(ctx, s); err != nil {
 				return err
@@ -874,7 +876,7 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			return nil
 		}
 		for ev := range events {
-			if ev.Type != runtime.EventFlow || ev.Flow == nil || ev.Flow.Chart == nil {
+			if ev.Type != api.EventFlow || ev.Flow == nil || ev.Flow.Chart == nil {
 				continue
 			}
 			lipgloss.Fprintln(stdout, "\n"+tui.ChartOf(ev.Flow, *width))
@@ -965,7 +967,7 @@ func flowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 
 // writeFlowStats puts flow stats in a table: a flow that is no longer in
 // the project is marked so.
-func writeFlowStats(w io.Writer, stats []runtime.FlowStat) error {
+func writeFlowStats(w io.Writer, stats []api.FlowStat) error {
 	if len(stats) == 0 {
 		_, err := fmt.Fprintln(w, "no flows: none in "+runtime.FlowsDir+", and none ran")
 		return err

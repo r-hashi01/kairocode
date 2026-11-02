@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/clipboard"
 	"image/color"
 	"io"
 	"os"
@@ -26,8 +27,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
-	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/tui/screen"
 )
 
@@ -57,8 +58,8 @@ type Agent interface {
 	Plugins(ctx context.Context, session string) (acp.PluginsView, error)
 	PluginChange(ctx context.Context, args ...string) (string, error)
 	// FlowRuns and FlowRun are /flow runs' screen (ADR 0029).
-	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error)
-	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
+	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error)
+	FlowRun(ctx context.Context, id string) (api.FlowRun, error)
 	// GoOn goes on from a session that failed, in a new one forked from its
 	// last finished turn (ADR 0021).
 	GoOn(ctx context.Context, session string) (string, int, error)
@@ -221,7 +222,7 @@ func rejectID(options []acp.PermissionOption) string {
 }
 
 type model struct {
-	// clip reads the clipboard's image (clipboardImage; tests put theirs).
+	// clip reads the clipboard's image (clipboard.Image; tests put theirs).
 	clip func(context.Context) ([]byte, error)
 	// images: the images put in the input, by the label that stands for
 	// them there ([Image #1]), for as long as the UI runs.
@@ -342,7 +343,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
 	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
-		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage, images: map[string]string{}, notif: newNotifier()}
+		tried: map[string]*review{}, flowTop: -1, clip: clipboard.Image, images: map[string]string{}, notif: newNotifier()}
 	m.restyle()
 	return m
 }
@@ -801,9 +802,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.print(faint.Render(fmt.Sprintf("  ⎿  Now in session %s, from turn %d of %s, which is kept (kairocode log %s).",
 			short(msg.session), msg.turn, short(old), strings.TrimPrefix(old, "s/"))))
 		m.running, m.began = true, time.Now()
-		return m.send(runtime.FailedNote+"\n\n"+msg.text, msg.files)
+		return m.send(api.FailedNote+"\n\n"+msg.text, msg.files)
 	case turnDoneMsg:
-		if errors.Is(msg.err, runtime.ErrSessionFailed) && m.ctx.Err() == nil && msg.text != "" {
+		if errors.Is(msg.err, api.ErrSessionFailed) && m.ctx.Err() == nil && msg.text != "" {
 			// It took nothing: the message goes on in a new session.
 			m.flushLive()
 			m.print(warn.Render("  ⎿  " + shortError(msg.err.Error())))

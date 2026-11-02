@@ -1,0 +1,168 @@
+package api
+
+import (
+	"fmt"
+	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/workflows"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+)
+
+import ()
+
+// Image is an image the user gives with a message (ADR 0026).
+type Image struct {
+	MediaType string
+	Data      []byte
+}
+
+// SessionLog is a session's record.
+type SessionLog struct {
+	Session string             `json:"session"`
+	Dir     string             `json:"dir"`
+	Engine  string             `json:"engine,omitempty"`
+	From    *workflows.ForkRef `json:"from,omitempty"`
+	Usage   msg.Usage          `json:"usage"`
+	Turns   []LogEntry         `json:"turns"`
+}
+
+// LogEntry is a run of the record: a turn, a call, a wait, a child
+// workflow (with its own runs).
+type LogEntry struct {
+	At     time.Time  `json:"at"`
+	End    time.Time  `json:"end,omitzero"`
+	Kind   string     `json:"kind"` // turn, model, tool, permission, wait, workflow, step
+	Name   string     `json:"name"`
+	Status string     `json:"status"`
+	Text   string     `json:"text,omitempty"`
+	Usage  *msg.Usage `json:"usage,omitempty"`
+	Runs   []LogEntry `json:"runs,omitempty"`
+}
+
+// Text is the record as lines to read.
+func (l SessionLog) Text() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Session %s in %s", strings.TrimPrefix(l.Session, "s/"), l.Dir)
+	if l.Engine != "" {
+		fmt.Fprintf(&b, " (%s)", l.Engine)
+	}
+	if l.From != nil {
+		fmt.Fprintf(&b, ", forked from turn %d of %s", l.From.Turn, strings.TrimPrefix(l.From.Session, "s/"))
+	}
+	fmt.Fprintf(&b, "\nUsed: %s\n", usageText(l.Usage))
+	for _, t := range l.Turns {
+		b.WriteString("\n" + l.entriesText([]LogEntry{t}))
+	}
+	return b.String()
+}
+
+// Settings are a session's provider and model: those its next turn runs
+// with. Model "" is the provider's default.
+type Settings struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"` // "": the provider's default
+	Mode     string `json:"mode"`             // manual, plan (ADR 0016)
+}
+
+// Modes are the modes a session can be in (ADR 0016).
+var Modes = []string{workflows.ModeManual, workflows.ModeAuto, workflows.ModePlan}
+
+// FailedNote is put before the first message of a session forked from one
+// that failed (ADR 0021): the turn cut short may have changed files.
+const FailedNote = "[The session this one goes on from stopped on an error during a turn. That turn may have changed the working files; look before going on.]"
+
+// StoppedCancelled is why a turn the user stopped ended, as clients are
+// told it (a turn's Stopped).
+const StoppedCancelled = "cancelled"
+
+// SessionInfo is a session as a list of them shows it (kairocode
+// sessions, /resume, ACP's session/list).
+type SessionInfo struct {
+	ID      string    `json:"id"` // the run's: s/<id>
+	Dir     string    `json:"dir"`
+	Title   string    `json:"title"` // its first message, on a line
+	Turns   int       `json:"turns"`
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"` // its last turn's last change
+	Closed  bool      `json:"closed,omitempty"`
+	From    string    `json:"from,omitempty"` // forked from (s/<id>)
+	// Waiting is what its turns under way wait for from a person
+	// (approvals, questions); Jobs, its commands in the background not
+	// ended (ADR 0028). What a client shows as going on.
+	Waiting int `json:"waiting,omitempty"`
+	Jobs    int `json:"jobs,omitempty"`
+}
+
+// SessionUsage is what a session's model calls used, as they recorded it.
+type SessionUsage struct {
+	Session string      `json:"session"`
+	Turns   []TurnUsage `json:"turns"`
+	Total   msg.Usage   `json:"total"`
+}
+
+// TurnUsage is what one turn's model calls used so far.
+type TurnUsage struct {
+	N        int       `json:"n"`
+	Finished bool      `json:"finished"`
+	Usage    msg.Usage `json:"usage"`
+}
+
+// entriesText is entries, and the runs in each, as lines to read.
+func (SessionLog) entriesText(es []LogEntry) string {
+	var b strings.Builder
+	var write func(es []LogEntry, depth int)
+	write = func(es []LogEntry, depth int) {
+		for _, e := range es {
+			pad := strings.Repeat("  ", depth)
+			line := fmt.Sprintf("%s%s %s %s: %s", pad, e.At.Local().Format("15:04:05"), e.Kind, e.Name, e.Status)
+			if e.Usage != nil && (e.Usage.Input > 0 || e.Usage.Output > 0) {
+				line += " [" + usageText(*e.Usage) + "]"
+			}
+			if e.Text != "" {
+				line += "\n" + pad + "    " + strings.ReplaceAll(e.Text, "\n", "\n"+pad+"    ")
+			}
+			b.WriteString(line + "\n")
+			write(e.Runs, depth+1)
+		}
+	}
+	write(es, 0)
+	return b.String()
+}
+
+func usageText(u msg.Usage) string {
+	return fmt.Sprintf("in %d, out %d, cache read %d, cache write %d tokens", u.Input, u.Output, u.CacheRead, u.CacheWrite)
+}
+
+// CheckImages refuses, before anything is stored, what the model would:
+// a kind it does not read, more than MaxImageBytes, more than MaxImages.
+// The bytes must be of the kind said. Errors name no content.
+func CheckImages(images []Image) error {
+	if len(images) > msg.MaxImages {
+		return fmt.Errorf("%w: %d images, at most %d in a message", ErrBadImage, len(images), msg.MaxImages)
+	}
+	total := 0
+	for _, im := range images {
+		total += len(im.Data)
+	}
+	if total > msg.MaxRequestImageBytes {
+		return fmt.Errorf("%w: the images are %d bytes together, at most %d", ErrBadImage, total, msg.MaxRequestImageBytes)
+	}
+	for i, im := range images {
+		if !slices.Contains(msg.ImageTypes, im.MediaType) {
+			return fmt.Errorf("%w: image %d is %q; %s are read", ErrBadImage, i+1, im.MediaType, strings.Join(msg.ImageTypes, ", "))
+		}
+		if len(im.Data) == 0 {
+			return fmt.Errorf("%w: image %d is empty", ErrBadImage, i+1)
+		}
+		if len(im.Data) > msg.MaxImageBytes {
+			return fmt.Errorf("%w: image %d is %d bytes, at most %d", ErrBadImage, i+1, len(im.Data), msg.MaxImageBytes)
+		}
+		if got := http.DetectContentType(im.Data); got != im.MediaType {
+			return fmt.Errorf("%w: image %d is said to be %s, but is %s", ErrBadImage, i+1, im.MediaType, got)
+		}
+	}
+	return nil
+}

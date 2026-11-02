@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
+	"github.com/r-hashi01/kairocode/internal/api"
+	"github.com/r-hashi01/kairocode/internal/plugins"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -27,108 +27,22 @@ import (
 // key store and put in where the manifest writes {secret:NAME}.
 
 // PluginManifest is the file KairoCode reads in a plugin's folder.
-const PluginManifest = "kairocode-plugin.json"
+const PluginManifest = plugins.ManifestFile
 
-type pluginManifest struct {
-	Name        string                `json:"name"`
-	Description string                `json:"description"`
-	Version     string                `json:"version"`
-	MCP         *mcpConfig            `json:"mcp"`
-	Auth        pluginAuth            `json:"auth"`
-	Tools       map[string]toolConfig `json:"tools"` // effects, by the server's tool name (* ends a prefix)
-}
+type (
+	pluginManifest = plugins.Manifest
+	pluginAuth     = plugins.Auth
+	pluginKey      = plugins.Key
+)
 
-// pluginAuth is what a plugin needs to connect: none, keys (each named,
-// given where the manifest writes {secret:NAME}), or oauth.
-type pluginAuth struct {
-	Type     string      `json:"type"` // none, key, oauth
-	Keys     []pluginKey `json:"keys"`
-	ClientID string      `json:"client_id"` // oauth: a client registered beforehand (else registered dynamically)
-}
-
-type pluginKey struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
+// pluginCommit is the commit an installed plugin is at.
+func pluginCommit(dir string) string { return plugins.Commit(dir) }
 
 // plugin is a plugin as read.
-type plugin struct {
-	opencode.Plugin
-	Manifest pluginManifest
-	Source   string // the manifest's path
-	Err      error  // why it could not be read
-}
+type plugin = plugins.Plugin
 
 // readPlugins reads dir's plugins.
-func readPlugins(dir string) []plugin {
-	var out []plugin
-	for _, p := range opencode.PluginDirs(dir) {
-		pl := plugin{Plugin: p, Source: filepath.Join(p.Dir, PluginManifest)}
-		b, err := os.ReadFile(pl.Source)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			pl.Manifest, pl.Source, pl.Err = claudePlugin(p.Dir)
-		case err != nil:
-			pl.Err = err
-		default:
-			if err := json.Unmarshal(b, &pl.Manifest); err != nil {
-				pl.Err = fmt.Errorf("%s: %w", pl.Source, err)
-			}
-		}
-		if pl.Err == nil && !extName.MatchString(p.Name) {
-			pl.Err = fmt.Errorf("the plugin's folder name %q is not one a tool's name can start with", p.Name)
-		}
-		out = append(out, pl)
-	}
-	return out
-}
-
-// claudePlugin reads a Claude Code plugin (.claude-plugin/plugin.json, its
-// .mcp.json, its skills): its server's tools declare no effect, and so are
-// real (invariant 3).
-func claudePlugin(dir string) (pluginManifest, string, error) {
-	var m pluginManifest
-	path := filepath.Join(dir, ".claude-plugin", "plugin.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return m, path, fmt.Errorf("neither %s nor .claude-plugin/plugin.json: not a plugin", PluginManifest)
-	}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return m, path, fmt.Errorf("%s: %w", path, err)
-	}
-	// What is KairoCode's to say is not taken from Claude Code's manifest:
-	// its server is its .mcp.json's, and its tools declare no effect
-	// (invariant 3).
-	m.MCP, m.Auth, m.Tools = nil, pluginAuth{}, nil
-	var mcpFile struct {
-		MCPServers map[string]struct {
-			Type    string            `json:"type"`
-			Command string            `json:"command"`
-			Args    []string          `json:"args"`
-			Env     map[string]string `json:"env"`
-			URL     string            `json:"url"`
-			Headers map[string]string `json:"headers"`
-		} `json:"mcpServers"`
-	}
-	if b, err := os.ReadFile(filepath.Join(dir, ".mcp.json")); err == nil {
-		if err := json.Unmarshal(b, &mcpFile); err != nil {
-			return m, path, fmt.Errorf("%s: %w", filepath.Join(dir, ".mcp.json"), err)
-		}
-		names := slices.Sorted(maps.Keys(mcpFile.MCPServers))
-		if len(names) > 1 {
-			return m, path, fmt.Errorf("its .mcp.json has %d servers: KairoCode takes a plugin of one", len(names))
-		}
-		for _, n := range names {
-			s := mcpFile.MCPServers[n]
-			c := &mcpConfig{URL: s.URL, Headers: s.Headers, Environment: s.Env}
-			if s.Command != "" {
-				c.Command = append([]string{s.Command}, s.Args...)
-			}
-			m.MCP = c
-		}
-	}
-	return m, path, nil
-}
+func readPlugins(dir string) []plugin { return plugins.Read(dir) }
 
 // secretRef is where a manifest puts a credential in.
 var secretRef = regexp.MustCompile(`\{secret:([A-Za-z0-9_.-]+)\}`)
@@ -206,21 +120,7 @@ func pluginServers(dir string) ([]extServer, []extDecl) {
 	return servers, decls
 }
 
-// PluginInfo is what /plugin shows of a plugin.
-type PluginInfo struct {
-	Name        string        `json:"name"`
-	Description string        `json:"description,omitempty"`
-	Version     string        `json:"version,omitempty"`
-	Source      string        `json:"source"`
-	Project     bool          `json:"project,omitempty"`
-	Auth        string        `json:"auth"` // none, key, oauth
-	State       string        `json:"state"`
-	Tools       []MCPToolInfo `json:"tools,omitempty"`
-	Skills      []string      `json:"skills,omitempty"`
-	// Unused: what of a Claude Code plugin KairoCode does not use
-	// (commands, subagents, hooks…; ADR 0027).
-	Unused []string `json:"unused,omitempty"`
-}
+type PluginInfo = api.PluginInfo
 
 // Plugins lists the session's plugins and their state: whether each is
 // connected, needs connecting, has lost its authentication, does not
@@ -255,7 +155,7 @@ func (r *Runtime) PluginsIn(ctx context.Context, dir string) ([]PluginInfo, erro
 		pi := PluginInfo{Name: p.Name, Description: p.Manifest.Description, Version: pluginVersion(p), Source: p.Source,
 			Project: p.Project, Auth: cmp.Or(p.Manifest.Auth.Type, "none")}
 		if strings.HasSuffix(p.Source, filepath.Join(".claude-plugin", "plugin.json")) {
-			pi.Unused = claudeUnused(p.Dir)
+			pi.Unused = plugins.ClaudeUnused(p.Dir)
 		}
 		for _, n := range slices.Sorted(maps.Keys(skills)) {
 			if strings.HasPrefix(skills[n].Path, p.Dir+string(filepath.Separator)) {
@@ -279,37 +179,7 @@ func (r *Runtime) PluginsIn(ctx context.Context, dir string) ([]PluginInfo, erro
 // servers start again with them, and it is no longer "expired".
 func (r *Runtime) PluginConnected(plugin string) { r.ext.connected(plugin) }
 
-// PluginsText is /plugin's answer.
-func PluginsText(list []PluginInfo) string {
-	if len(list) == 0 {
-		return "No plugin is installed here (a project's go in .kairocode/plugins/<name>).\n"
-	}
-	var b strings.Builder
-	for _, p := range list {
-		whose := "yours"
-		if p.Project {
-			whose = "the project's"
-		}
-		head := p.Name
-		if p.Version != "" {
-			head += " " + p.Version
-		}
-		fmt.Fprintf(&b, "%s (%s): %s\n", head, whose, p.State)
-		if p.Description != "" {
-			fmt.Fprintf(&b, "    %s\n", p.Description)
-		}
-		for _, t := range p.Tools {
-			fmt.Fprintf(&b, "    %s  %s\n", t.Name, t.Effect)
-		}
-		if len(p.Skills) > 0 {
-			fmt.Fprintf(&b, "    skills: %s\n", strings.Join(p.Skills, ", "))
-		}
-		if len(p.Unused) > 0 {
-			fmt.Fprintf(&b, "    not used by KairoCode: %s\n", strings.Join(p.Unused, ", "))
-		}
-	}
-	return b.String()
-}
+var PluginsText = plugins.PluginsText
 
 // pluginState is a plugin's server's state, and its tools.
 func (r *Runtime) pluginState(ctx context.Context, dir string, p plugin, srcs []workflows.ExtSource, decls []extDecl) (string, []MCPToolInfo) {
@@ -383,12 +253,6 @@ func pluginVersion(p plugin) string {
 		return p.Manifest.Version
 	}
 	return pluginCommit(p.Dir)
-}
-
-// pluginCommit is the commit an installed plugin is at.
-func pluginCommit(dir string) string {
-	b, _ := os.ReadFile(filepath.Join(dir, ".kairocode-commit"))
-	return strings.TrimSpace(string(b))
 }
 
 // refused says a plugin's remote server turned the message away (its POST

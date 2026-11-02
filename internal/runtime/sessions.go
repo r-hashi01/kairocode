@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"slices"
 	"strings"
-	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
@@ -14,23 +14,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// SessionInfo is a session as a list of them shows it (kairocode
-// sessions, /resume, ACP's session/list).
-type SessionInfo struct {
-	ID      string    `json:"id"` // the run's: s/<id>
-	Dir     string    `json:"dir"`
-	Title   string    `json:"title"` // its first message, on a line
-	Turns   int       `json:"turns"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"` // its last turn's last change
-	Closed  bool      `json:"closed,omitempty"`
-	From    string    `json:"from,omitempty"` // forked from (s/<id>)
-	// Waiting is what its turns under way wait for from a person
-	// (approvals, questions); Jobs, its commands in the background not
-	// ended (ADR 0028). What a client shows as going on.
-	Waiting int `json:"waiting,omitempty"`
-	Jobs    int `json:"jobs,omitempty"`
-}
+type SessionInfo = api.SessionInfo
 
 // Sessions lists the sessions of dir ("" any), the latest used first, at
 // most limit (0: all).

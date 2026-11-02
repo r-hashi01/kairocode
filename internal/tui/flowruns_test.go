@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // /flow runs lists the folder's flows' runs on a screen of its own,
@@ -14,10 +14,10 @@ import (
 func TestFlowRunsScreen(t *testing.T) {
 	d, a := start(t, Options{})
 	at := time.Date(2026, 10, 27, 9, 30, 0, 0, time.Local)
-	a.runs = []runtime.FlowRun{
-		{ID: "s/a/t.0/f.0", Name: "triage", Args: "repo", Status: runtime.FlowRunOK, From: runtime.FromCommand, Started: at, Ended: at.Add(90 * time.Second), Message: "commented on #13"},
-		{ID: "s/b/t.0/f.0", Name: "nightly", Status: runtime.FlowRunFailed, From: runtime.FromHook, Started: at.Add(-time.Hour), Ended: at.Add(-50 * time.Minute)},
-		{ID: "s/c/t.0/f.0", Name: "draft", Try: true, Status: runtime.FlowRunOK, From: runtime.FromAgent, Started: at.Add(-2 * time.Hour), Ended: at.Add(-119 * time.Minute)},
+	a.runs = []api.FlowRun{
+		{ID: "s/a/t.0/f.0", Name: "triage", Args: "repo", Status: api.FlowRunOK, From: api.FromCommand, Started: at, Ended: at.Add(90 * time.Second), Message: "commented on #13"},
+		{ID: "s/b/t.0/f.0", Name: "nightly", Status: api.FlowRunFailed, From: api.FromHook, Started: at.Add(-time.Hour), Ended: at.Add(-50 * time.Minute)},
+		{ID: "s/c/t.0/f.0", Name: "draft", Try: true, Status: api.FlowRunOK, From: api.FromAgent, Started: at.Add(-2 * time.Hour), Ended: at.Add(-119 * time.Minute)},
 	}
 	typed(d, "/flow runs")
 	if !d.m.View().AltScreen {

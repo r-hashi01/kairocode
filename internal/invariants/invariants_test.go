@@ -110,3 +110,24 @@ func TestCommandsCheckerFindsAStartOutsideTheSandbox(t *testing.T) {
 		}
 	}
 }
+
+// The terminal and the ACP agent know the daemon by internal/api alone.
+func TestClientsDoNotImportTheRuntime(t *testing.T) {
+	bad, err := ClientImports(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bad {
+		t.Error(b)
+	}
+}
+
+func TestClientImportsCheckerFindsOne(t *testing.T) {
+	bad, err := ClientImports("testdata/clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) != 1 || !strings.Contains(bad[0], "tui/view.go") {
+		t.Fatalf("got %v", bad)
+	}
+}

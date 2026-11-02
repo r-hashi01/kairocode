@@ -3,20 +3,16 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"slices"
 
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// ErrNoForkPoint: the session has no finished turn to fork from there.
-// ErrNoSnapshot: there is no record of the files after it, to put back.
-// ErrForkWhileRunning: the files are not put back while a turn of the
-// session runs in them.
 var (
-	ErrNoForkPoint      = errors.New("no finished turn to fork from")
-	ErrNoSnapshot       = errors.New("there is no snapshot of the files after that turn, to put them back as they were")
-	ErrForkWhileRunning = errors.New("a turn of the session is running in its files: fork with --files once it ends")
+	ErrNoForkPoint      = api.ErrNoForkPoint
+	ErrNoSnapshot       = api.ErrNoSnapshot
+	ErrForkWhileRunning = api.ErrForkWhileRunning
 )
 
 // Fork starts session id from turn n of session from (n < 0: its last

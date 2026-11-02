@@ -76,7 +76,16 @@ func decideHooks(ctx *kairo.Context, in TurnInput, agent Agent) ([]Hook, error) 
 	return out, nil
 }
 
-// claudeNames are KairoCode's tools by the names Claude Code's hooks match.
+// ClaudeName is the name Claude Code calls KairoCode's tool by (its hooks
+// match it, and are given it as tool_name); a tool it has not, its own.
+func ClaudeName(tool string) string {
+	if n, ok := claudeNames[tool]; ok {
+		return n
+	}
+	return tool
+}
+
+// claudeNames are KairoCode's tools by the names Claude Code calls them.
 var claudeNames = map[string]string{
 	"bash": "Bash", "edit": "Edit", "write": "Write", "read": "Read", "grep": "Grep",
 	"glob": "Glob", "list": "LS", "task": "Task", "skill": "Skill",
@@ -90,10 +99,7 @@ func hookMatches(h Hook, tool string) bool {
 	if h.Matcher == "" || h.Matcher == "*" {
 		return true
 	}
-	name, ok := claudeNames[tool]
-	if !ok {
-		name = tool
-	}
+	name := ClaudeName(tool)
 	for _, m := range strings.Split(h.Matcher, "|") {
 		m = strings.TrimSpace(m)
 		if prefix, ok := strings.CutSuffix(m, ".*"); ok {

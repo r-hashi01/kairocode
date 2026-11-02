@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -121,7 +122,7 @@ func workspace(t *testing.T, permission string) string {
 	return ws
 }
 
-func waitPending(t *testing.T, ctx context.Context, c *Client, session string) []runtime.Pending {
+func waitPending(t *testing.T, ctx context.Context, c *Client, session string) []api.Pending {
 	t.Helper()
 	for {
 		p, err := c.Pending(ctx, session)
@@ -857,7 +858,7 @@ func TestIdleDaemonStops(t *testing.T) {
 }
 
 // nextEvent is the next event that is not a token.
-func nextEvent(t *testing.T, ctx context.Context, events <-chan runtime.Event) runtime.Event {
+func nextEvent(t *testing.T, ctx context.Context, events <-chan api.Event) api.Event {
 	t.Helper()
 	for {
 		select {
@@ -865,7 +866,7 @@ func nextEvent(t *testing.T, ctx context.Context, events <-chan runtime.Event) r
 			if !ok {
 				t.Fatal("the events ended")
 			}
-			if ev.Type != runtime.EventToken {
+			if ev.Type != api.EventToken {
 				return ev
 			}
 		case <-ctx.Done():
@@ -912,10 +913,10 @@ func TestApprovalToManyClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	var key string
-	for _, events := range []<-chan runtime.Event{ea, eb} {
+	for _, events := range []<-chan api.Event{ea, eb} {
 		for {
 			ev := nextEvent(t, ctx, events)
-			if ev.Type == runtime.EventApprovalRequested {
+			if ev.Type == api.EventApprovalRequested {
 				if key != "" && ev.Pending.Key != key {
 					t.Fatalf("two keys: %s %s", key, ev.Pending.Key)
 				}
@@ -927,20 +928,20 @@ func TestApprovalToManyClients(t *testing.T) {
 	if err := b.Approve(ctx, key, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Approve(ctx, key, false, ""); !errors.Is(err, runtime.ErrAnswered) {
+	if err := a.Approve(ctx, key, false, ""); !errors.Is(err, api.ErrAnswered) {
 		t.Fatalf("the second answer: %v", err)
 	}
-	for _, events := range []<-chan runtime.Event{ea, eb} {
+	for _, events := range []<-chan api.Event{ea, eb} {
 		var resolved bool
 		for {
 			ev := nextEvent(t, ctx, events)
-			if ev.Type == runtime.EventApprovalResolved {
+			if ev.Type == api.EventApprovalResolved {
 				if ev.Key != key || ev.OK == nil || !*ev.OK {
 					t.Fatalf("resolved %+v", ev)
 				}
 				resolved = true
 			}
-			if ev.Type == runtime.EventTurnEnd {
+			if ev.Type == api.EventTurnEnd {
 				if !resolved || ev.Reply != "done" {
 					t.Fatalf("turn end %+v (resolved %v)", ev, resolved)
 				}
@@ -995,7 +996,7 @@ func TestCrashDaemonEventsAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	review := nextEvent(t, ctx, events)
-	if review.Type != runtime.EventReviewRequested || review.Pending == nil || review.Tool != "bash" {
+	if review.Type != api.EventReviewRequested || review.Pending == nil || review.Tool != "bash" {
 		t.Fatalf("first event %+v", review)
 	}
 	if err := b.Approve(ctx, review.Pending.Key, true, ""); err != nil {
@@ -1003,7 +1004,7 @@ func TestCrashDaemonEventsAfterRestart(t *testing.T) {
 	}
 	for {
 		ev := nextEvent(t, ctx, events)
-		if ev.Type == runtime.EventTurnEnd {
+		if ev.Type == api.EventTurnEnd {
 			if ev.N != n || ev.Reply != "done" {
 				t.Fatalf("turn end %+v", ev)
 			}
