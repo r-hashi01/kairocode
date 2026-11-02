@@ -1167,8 +1167,9 @@ func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Messag
 		return nil, err
 	}
 	type asked struct {
-		n int
-		h string
+		n   int
+		h   string
+		run string
 	}
 	var live []asked
 	for _, t := range runs {
@@ -1179,7 +1180,7 @@ func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Messag
 		if json.Unmarshal(input(t), &in) != nil || in.Sub || in.Undo != nil || in.Compact || in.Message == "" {
 			continue
 		}
-		live = append(live, asked{in.N, in.Message})
+		live = append(live, asked{in.N, in.Message, t.RunID})
 	}
 	slices.SortFunc(live, func(a, b asked) int { return a.n - b.n })
 	for _, l := range live {
@@ -1188,8 +1189,92 @@ func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Messag
 			return nil, err
 		}
 		ms = append(ms, m)
+		so, err := r.turnSoFar(ctx, l.run)
+		if err != nil {
+			return nil, err
+		}
+		ms = append(ms, so...)
 	}
 	return ms, nil
+}
+
+// turnSoFar is what a turn under way has done so far, as messages: the
+// model's replies and the results of its calls (the API engine's), or its
+// calls over MCP and their results (a CLI engine's, whose replies come at
+// the turn's end). A call still waiting has its call and no result.
+func (r *Runtime) turnSoFar(ctx context.Context, turn string) ([]msg.Message, error) {
+	steps, err := r.K.Children(ctx, turn)
+	if err != nil {
+		return nil, err
+	}
+	var out []msg.Message
+	seen := map[string]bool{}
+	add := func(h string) error {
+		if h == "" || seen[h] {
+			return nil
+		}
+		seen[h] = true
+		m, err := r.Store.Message(ctx, h)
+		if err != nil {
+			return err
+		}
+		out = append(out, m)
+		return nil
+	}
+	for _, c := range steps {
+		if c.Status != "completed" {
+			continue
+		}
+		var o struct {
+			Message string `json:"message"`
+		}
+		switch plan := strings.TrimPrefix(c.Plan, "kairo.call/"); {
+		case plan == workflows.ActModel,
+			strings.HasPrefix(plan, workflows.ActToolPrefix) && !strings.HasSuffix(plan, workflows.ActPlanSuffix):
+			if json.Unmarshal(c.Output, &o) == nil {
+				if err := add(o.Message); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	// A CLI engine's calls, over MCP: a run of their own each (kairo-gap
+	// #17), its input the call.
+	runs, err := r.Store.MCPRuns(ctx, turn)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range runs {
+		info, err := r.K.Get(ctx, id)
+		if errors.Is(err, kairo.ErrUnknownRun) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var in workflows.MCPCallInput
+		if json.Unmarshal(input(info), &in) != nil {
+			continue
+		}
+		out = append(out, msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.ToolUse, ID: id, Name: in.Tool, Input: in.Args}}})
+		if info.Status != "completed" {
+			continue // still running, or waiting: its call alone
+		}
+		o, err := kairo.Await[workflows.ToolOutput](ctx, r.K, id)
+		if err != nil || o.Message == "" {
+			continue
+		}
+		res, err := r.Store.Message(ctx, o.Message)
+		if err != nil {
+			return nil, err
+		}
+		text := ""
+		if len(res.Parts) > 0 {
+			text = res.Parts[0].Text
+		}
+		out = append(out, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.ToolResult, ToolUseID: id, Text: text, IsError: o.IsError}}})
+	}
+	return out, nil
 }
 
 // Reply is the text of an assistant message.
