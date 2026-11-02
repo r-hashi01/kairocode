@@ -115,3 +115,16 @@ type PreviewSection struct {
 	Details []string        `json:"details,omitempty"`
 	Chart   json.RawMessage `json:"chart,omitempty"`
 }
+
+// RuleText is the rule that asks about p, as said to a person: the
+// catch-all ("*: ask") in words.
+func (p Pending) RuleText() string {
+	if p.Rule == "*: ask" {
+		return "asked by default: no rule allows it"
+	}
+	return p.Rule
+}
+
+// ReviewQuestion is what a review asks of a call cut off while it ran
+// (invariant 4): whether it took effect.
+const ReviewQuestion = "Cut off while it ran — did it take effect?"

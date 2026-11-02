@@ -35,7 +35,7 @@ func (a *agent) ask(session string, p api.Pending) {
 	}
 	answers := map[string]bool{"allow_once": true, "reject_once": false}
 	title := strings.TrimSpace(p.Tool + " " + p.Subject)
-	ruleText := p.Rule // the rule, as the title says it
+	ruleText := p.RuleText() // the rule, as the title says it
 	question := p.Kind == api.KindQuestion
 	kind := toolKind(p.Tool)
 	if question {
@@ -65,13 +65,10 @@ func (a *agent) ask(session string, p api.Pending) {
 			{"optionId": "took_effect", "name": "It took effect", "kind": "reject_once"},
 		}
 		answers = map[string]bool{"took_effect": true, "did_not_take_effect": false}
-		title = "Cut off while it ran — did it take effect? " + title
+		title = api.ReviewQuestion + " " + title
 	} else if p.Rule != "" {
 		if p.Try != nil { // a flow: it can be tried first (ADR 0017)
 			options = append(options, map[string]any{"optionId": TryOption, "name": "Try it first", "kind": "reject_once"})
-		}
-		if p.Rule == "*: ask" { // the catch-all, as said to a person
-			ruleText = "asked by default: no rule allows it"
 		}
 		rule, _, _ := strings.Cut(ruleText, "\n") // one line: the title is not a page
 		if len([]rune(rule)) > 120 {

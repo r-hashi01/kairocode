@@ -564,7 +564,7 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			fmt.Fprintf(stdout, "%s\n  question: %s\n  answers: %s (kairocode answer <key> <answer>)\n", x.Key, x.Subject, strings.Join(x.Options, " | "))
 			continue
 		}
-		fmt.Fprintf(stdout, "%s\n  %s %q (%s)\n", x.Key, x.Tool, x.Subject, x.Rule)
+		fmt.Fprintf(stdout, "%s\n  %s %q (%s)\n", x.Key, x.Tool, x.Subject, x.RuleText())
 	}
 	return nil
 }
@@ -709,9 +709,9 @@ func showEvent(w io.Writer, ev api.Event) {
 		}
 	case api.EventApprovalRequested:
 		fmt.Fprintf(w, "waiting for approval: %s %s (%s)\n  kairocode approve %s\n",
-			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Rule, ev.Pending.Key)
+			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.RuleText(), ev.Pending.Key)
 	case api.EventReviewRequested:
-		fmt.Fprintf(w, "cut off while it ran, did it take effect? %s %s\n  kairocode approve %s   (or -deny: it did not)\n",
+		fmt.Fprintf(w, "%s %s %s\n  kairocode approve %s   (or -deny: it did not)\n", api.ReviewQuestion,
 			ev.Pending.Tool, ev.Pending.Subject, ev.Pending.Key)
 	case api.EventQuestionRequested:
 		fmt.Fprintf(w, "the flow asks: %s\n  answers: %s\n  kairocode answer %s <answer>\n",
