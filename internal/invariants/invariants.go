@@ -266,7 +266,7 @@ var commandStarters = []string{"internal/sandbox/", "internal/agents/", "interna
 	"internal/plugins/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
 	"scripts/envcheck/",               // check.sh's look at whether a sandbox can be started here
 	"internal/runtime/jobs.go",        // the runner of a command in the background: this binary (ADR 0028)
-	"internal/tui/clipboard.go"}       // osascript, wl-paste or xclip, to read the clipboard's image (ADR 0026)
+	"internal/clipboard/clipboard.go"} // osascript, wl-paste or xclip, to read the clipboard's image (ADR 0026)
 
 // fullAccessUsers may name sandbox.FullAccess: the tools that run outside
 // the sandbox only once the user approved (escalated bash, git_push).

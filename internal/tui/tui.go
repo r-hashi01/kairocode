@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/clipboard"
 	"image/color"
 	"io"
 	"os"
@@ -221,7 +222,7 @@ func rejectID(options []acp.PermissionOption) string {
 }
 
 type model struct {
-	// clip reads the clipboard's image (clipboardImage; tests put theirs).
+	// clip reads the clipboard's image (clipboard.Image; tests put theirs).
 	clip func(context.Context) ([]byte, error)
 	// images: the images put in the input, by the label that stands for
 	// them there ([Image #1]), for as long as the UI runs.
@@ -342,7 +343,7 @@ func newModel(ctx context.Context, a Agent, o Options) *model {
 	in.SetVirtualCursor(false) // the terminal's own: an IME puts its words there
 	sp := spinner.New(spinner.WithSpinner(spinner.Points), spinner.WithStyle(accent))
 	m := &model{ctx: ctx, a: a, o: o, input: in, spin: sp, width: 80, tools: map[string]string{}, notes: map[string][]string{}, isDark: true,
-		tried: map[string]*review{}, flowTop: -1, clip: clipboardImage, images: map[string]string{}, notif: newNotifier()}
+		tried: map[string]*review{}, flowTop: -1, clip: clipboard.Image, images: map[string]string{}, notif: newNotifier()}
 	m.restyle()
 	return m
 }
