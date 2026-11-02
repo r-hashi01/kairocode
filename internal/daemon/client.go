@@ -22,6 +22,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/server"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -242,6 +243,30 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 type statusError struct {
 	code int
 	msg  string
+	// is: the error it stands for, by the code the server gave it.
+	is error
+}
+
+// Unwrap is the error the server's code stands for: errors.Is holds as on
+// the daemon's side.
+func (e *statusError) Unwrap() error { return e.is }
+
+// responseError is an error response: its message, and the error its code
+// stands for (server.ErrorOf).
+func responseError(status int, b []byte) error {
+	var e struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	msg := strings.TrimSpace(string(b))
+	if json.Unmarshal(b, &e) == nil && e.Error != "" {
+		msg = e.Error
+	}
+	is := server.ErrorOf(e.Code)
+	if is == nil && status == http.StatusGone { // a daemon from before codes (ADR 0021)
+		is = runtime.ErrSessionFailed
+	}
+	return &statusError{code: status, msg: msg, is: is}
 }
 
 func (e *statusError) Error() string {
@@ -303,18 +328,8 @@ func (c *Client) doOnce(ctx context.Context, method, path string, b []byte, hasB
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		var e struct {
-			Error string `json:"error"`
-		}
 		b, _ := io.ReadAll(resp.Body)
-		msg := strings.TrimSpace(string(b))
-		if json.Unmarshal(b, &e) == nil && e.Error != "" {
-			msg = e.Error
-		}
-		if resp.StatusCode == http.StatusGone { // the session failed (ADR 0021)
-			return fmt.Errorf("%w%s", runtime.ErrSessionFailed, strings.TrimPrefix(msg, runtime.ErrSessionFailed.Error()))
-		}
-		return &statusError{code: resp.StatusCode, msg: msg}
+		return responseError(resp.StatusCode, b)
 	}
 	if out == nil {
 		return nil
@@ -649,11 +664,7 @@ func (c *Client) Fork(ctx context.Context, session string, n int, files bool) (s
 		Turn int    `json:"turn"`
 	}
 	err := c.do(ctx, "POST", sessionPath(session)+"/fork", in, &out)
-	var se *statusError
-	if errors.As(err, &se) && se.code == http.StatusConflict {
-		return "", 0, runtime.ErrNoForkPoint
-	}
-	return out.ID, out.Turn, err
+	return out.ID, out.Turn, err // ErrNoForkPoint, ErrForkWhileRunning, ErrNoSnapshot by their codes
 }
 
 // Compact starts a turn that only compacts the session's conversation
