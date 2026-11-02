@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -101,71 +99,4 @@ type JobArgs struct {
 	ID        string `json:"id"`
 	Since     int64  `json:"since"`
 	TimeoutMS int64  `json:"timeout_ms"`
-}
-
-var BashOutputTool = Def{
-	Name: "bash_output",
-	Description: "Read what a command started with bash's background wrote, and whether it still runs. since: the byte to " +
-		"read from (the size the last read gave), to read only what is new.",
-	Schema: json.RawMessage(`{"properties":{
-		"id":{"type":"string","description":"The command's id (bg_…)"},
-		"since":{"type":"integer","description":"Read from this byte on (default 0: from the start; a long output gives its end)"}},
-		"required":["id"]}`),
-	Effect: Read,
-	Run: func(ctx context.Context, env Env, input json.RawMessage) Result {
-		var in JobArgs
-		if err := json.Unmarshal(input, &in); err != nil || in.ID == "" {
-			return failed("invalid input: want {id}")
-		}
-		if env.Jobs == nil {
-			return failed("commands in the background are not available here")
-		}
-		v, err := env.Jobs.View(in.ID, in.Since)
-		if err != nil {
-			return failed("%v", err)
-		}
-		return Result{Output: v.Text()}
-	},
-}
-
-var BashWaitTool = Def{
-	Name: BashWaitName,
-	Description: "Wait for a command started with bash's background to end, and read its output. Waiting holds nothing: it " +
-		"may be hours, and survives restarts. With timeout_ms (at most 24 hours), it waits at most that long, and says so " +
-		"with what the command wrote if it has not ended: to do other work meanwhile, and wait again later.",
-	Schema: json.RawMessage(`{"properties":{
-		"id":{"type":"string","description":"The command's id (bg_…)"},
-		"timeout_ms":{"type":"integer","description":"How long to wait at most (default: until it ends)"}},
-		"required":["id"]}`),
-	Effect: Read,
-	// The workflow waits for it (runGated); run as a step, it only looks.
-	Run: func(ctx context.Context, env Env, input json.RawMessage) Result {
-		return BashOutputTool.Run(ctx, env, input)
-	},
-}
-
-var BashKillTool = Def{
-	Name:        "bash_kill",
-	Description: "Stop a command started with bash's background, and what it started.",
-	Schema: json.RawMessage(`{"properties":{
-		"id":{"type":"string","description":"The command's id (bg_…)"}},
-		"required":["id"]}`),
-	Effect: Real,
-	Run: func(ctx context.Context, env Env, input json.RawMessage) Result {
-		var in JobArgs
-		if err := json.Unmarshal(input, &in); err != nil || in.ID == "" {
-			return failed("invalid input: want {id}")
-		}
-		if env.Jobs == nil {
-			return failed("commands in the background are not available here")
-		}
-		if err := env.Jobs.Kill(in.ID); err != nil {
-			return failed("%v", err)
-		}
-		v, err := env.Jobs.View(in.ID, 0)
-		if err != nil {
-			return Result{Output: in.ID + ": stopped"}
-		}
-		return Result{Output: v.Text()}
-	},
 }
