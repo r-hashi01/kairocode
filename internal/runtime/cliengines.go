@@ -2,14 +2,11 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -32,13 +29,6 @@ func cliTurnPlan(plan string) bool {
 		return true
 	}
 	return false
-}
-
-// engineSessionName is the name KairoCode gives the session of engine for
-// the turns of session in epoch (AGENTS.md, invariant 8).
-func engineSessionName(engine, session string, epoch int) string {
-	h := sha256.Sum256([]byte("kairocode/" + engine + "-session:" + session + ":" + strconv.Itoa(epoch)))
-	return "kairocode-" + hex.EncodeToString(h[:12])
 }
 
 // maxCarried is how much of the conversation, at most, a CLI session that

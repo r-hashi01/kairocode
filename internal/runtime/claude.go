@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,15 +29,6 @@ import (
 // continuePrompt is what a turn sends when Claude Code already has its prompt
 // and is resumed after the run was cut short.
 const continuePrompt = "Continue where you left off."
-
-// claudeSessionID is the Claude Code session of a KairoCode session: a UUID
-// made from its id, so it is the same every time (AGENTS.md, invariant 8).
-func claudeSessionID(session string) string {
-	h := sha256.Sum256([]byte("kairocode/claude-session:" + session))
-	h[6] = h[6]&0x0f | 0x40 // version 4
-	h[8] = h[8]&0x3f | 0x80 // RFC 4122 variant
-	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
-}
 
 // claudeEnv is the environment of the claude process: this process's, less
 // what marks a Claude Code session it would run nested in, and less API keys

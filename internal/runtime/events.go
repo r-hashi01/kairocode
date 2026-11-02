@@ -184,27 +184,6 @@ func (e *events) close() {
 	}
 }
 
-// sessionOf is the session a run is in ("s/<id>"), if it is in one.
-func sessionOf(run string) string {
-	if !strings.HasPrefix(run, "s/") {
-		return ""
-	}
-	parts := strings.SplitN(run, "/", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[0] + "/" + parts[1]
-}
-
-// turnOf is the turn a run is in, the session's child.
-func turnOf(run string) string {
-	parts := strings.SplitN(run, "/", 4)
-	if len(parts) < 3 {
-		return ""
-	}
-	return strings.Join(parts[:3], "/")
-}
-
 func (e *events) watch(session string) *watcher {
 	w := &watcher{session: session, ch: make(chan Event, 256), gone: make(chan struct{})}
 	e.mu.Lock()
@@ -636,31 +615,6 @@ func (e *events) callEnded(session, run string) {
 	if held {
 		e.emit(session, ev)
 	}
-}
-
-// input is the input a run was given. kairo keeps a call's as
-// {"in": ...} and a workflow run's as {"workflow": ..., "input": ...}.
-func input(info kairo.RunInfo) json.RawMessage {
-	var w struct {
-		In    json.RawMessage `json:"in"`
-		Input json.RawMessage `json:"input"`
-	}
-	if json.Unmarshal(info.Input, &w) == nil {
-		if len(w.Input) > 0 {
-			return w.Input
-		}
-		if len(w.In) > 0 {
-			return w.In
-		}
-	}
-	return info.Input
-}
-
-// inMCPCall reports whether run is a step of an MCP call's run
-// (<session>/<turn>/mcp/...): the MCP call's own run tells of it.
-func inMCPCall(run string) bool {
-	parts := strings.SplitN(run, "/", 5)
-	return len(parts) == 5 && parts[3] == "mcp"
 }
 
 // observed makes the events of a run that started or settled.
