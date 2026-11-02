@@ -3,7 +3,9 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/provider"
 	"io"
 	"os"
 	"path/filepath"
@@ -801,5 +803,97 @@ func TestClaudeWaitsForLongCalls(t *testing.T) {
 	}
 	if want < tools.JobMaxTimeout.Milliseconds() {
 		t.Fatalf("Claude Code waits %d ms, less than bash_wait may (%v)", want, tools.JobMaxTimeout)
+	}
+}
+
+// noKey is a provider that will not answer: no key.
+type noKey struct{}
+
+func (noKey) Complete(context.Context, provider.Request) (provider.Response, error) {
+	return provider.Response{}, &provider.PermanentError{Err: errors.New("no API key")}
+}
+
+// decide() in a session on an agent that answers no schema (codex): the
+// API decides, and when it will not answer, Claude Code, as auto mode's
+// judge does.
+func TestFlowDecideFallsBackToClaudeCode(t *testing.T) {
+	e := setupFakeClaude(t, fakeClaudeRun{Decide: json.RawMessage(`{"value": "large"}`)})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(e.dir, "k.db"), Engine: workflows.EngineCodex, Provider: noKey{},
+		ClaudePath: os.Args[0], Owner: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/size.star": `
+def main(input):
+    d = decide("How big is this change?", type = "choice", choices = ["small", "medium", "large"])
+    return "%s %s" % (d.ok, d.value)
+`})
+	if _, text, _ := flowTurn(t, r, ws, "size", ""); text != "True large" {
+		t.Fatalf("reply %q", text)
+	}
+	if st := e.starts(t); len(st) != 1 {
+		t.Fatalf("claude was started as %+v", st)
+	}
+}
+
+// What is known of each engine, in one place.
+func TestEngineFacts(t *testing.T) {
+	for _, c := range []struct {
+		engine      string
+		agent, turn string
+		dry, schema bool
+	}{
+		{"", "", "", true, true},
+		{workflows.EngineAPI, "", "", true, true},
+		{workflows.EngineClaudeCode, "", workflows.ActClaudeTurn, true, true},
+		{workflows.EngineCodex, codexAgent, workflows.ActCodexTurn, false, false},
+		{workflows.EngineCopilot, copilotAgent, workflows.ActCopilotTurn, true, false},
+		{workflows.EngineACP + "gemini", "gemini", workflows.ActACPTurn, false, false},
+		{workflows.EngineACP + copilotAgent, copilotAgent, workflows.ActACPTurn, true, false},
+		{workflows.EngineACP, "", "", false, false},
+		{"bogus", "", "", false, false},
+	} {
+		f := factsOf(c.engine)
+		if f.agent != c.agent || f.turn != c.turn || f.dry != c.dry || f.schema != c.schema {
+			t.Errorf("%q: %+v", c.engine, f)
+		}
+	}
+	if !cliTurnPlan("kairo.call/"+workflows.ActACPTurn) || cliTurnPlan(workflows.ActACPTurn) || cliTurnPlan("kairo.call/"+workflows.ActModel) {
+		t.Error("cliTurnPlan")
+	}
+}
+
+// Neither the API (no key) nor Claude Code (not there) can decide: the
+// flow is told both, at once, not after retries.
+func TestFlowDecideNeitherAnswers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Engine: workflows.EngineCodex, Provider: noKey{},
+		ClaudePath: filepath.Join(t.TempDir(), "no-claude"), Owner: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/size.star": `
+def main(input):
+    d = decide("How big is this change?", type = "choice", choices = ["small", "medium", "large"])
+    return "%s %s" % (d.ok, d.value)
+`})
+	s, err := r.CreateSession(ctx, "neither", workflows.SessionInput{Dir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := r.RunFlow(ctx, s, "size", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.WaitTurn(ctx, s, n)
+	if err == nil || !strings.Contains(err.Error(), "the API: no API key") || !strings.Contains(err.Error(), "Claude Code:") {
+		t.Fatalf("the turn: %v", err)
 	}
 }

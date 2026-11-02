@@ -44,12 +44,6 @@ func (r *Runtime) canTry(ctx context.Context, turn string) error {
 	return nil
 }
 
-// dryEngine reports whether a try of a flow may run its agents on engine:
-// one whose every tool goes through KairoCode's.
-func dryEngine(engine string) bool {
-	return engine == "" || engine == workflows.EngineAPI || engine == workflows.EngineClaudeCode || registryAgent(engine) == copilotAgent
-}
-
 // TryFlow tries the flow an approval would write (ADR 0017), with args as
 // the words after /flow <name>: the call keeps waiting, and the try runs
 // below it; tools that do more than read are not called. The approval is

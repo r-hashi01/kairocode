@@ -59,16 +59,7 @@ func (r *Runtime) judge(t *kairo.TaskContext, in workflows.PermissionInput, rule
 	if err != nil {
 		return workflows.PermissionOutput{}, err
 	}
-	var d workflows.DecideOutput
-	if r.cfg.Provider != nil {
-		d, err = r.apiDecide(t, judgeModel, prompt, schema)
-	} else {
-		d, err = r.claudeDecide(t, in.Call.Dir, prompt, "", schema)
-	}
-	if err != nil && r.cfg.Provider != nil && t.Err() == nil {
-		// The API would not answer (no key, say): the user's Claude Code.
-		d, err = r.claudeDecide(t, in.Call.Dir, prompt, "", schema)
-	}
+	d, err := r.decideBy(t, in.Call.Dir, judgeModel, prompt, schema)
 	if err != nil {
 		if t.Err() != nil {
 			return workflows.PermissionOutput{}, t.Err()

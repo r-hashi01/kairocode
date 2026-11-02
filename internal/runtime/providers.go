@@ -28,19 +28,6 @@ const (
 // its id.
 var agentAliases = map[string]string{"codex": codexAgent, "copilot": copilotAgent, "claude": "claude-acp"}
 
-// registryAgent is the registry id of an ACP engine; "" if engine is not one.
-func registryAgent(engine string) string {
-	switch {
-	case engine == workflows.EngineCodex:
-		return codexAgent
-	case engine == workflows.EngineCopilot:
-		return copilotAgent
-	case strings.HasPrefix(engine, workflows.EngineACP):
-		return strings.TrimPrefix(engine, workflows.EngineACP)
-	}
-	return ""
-}
-
 // engineOf is the engine of provider id: an agent's id is its ACP engine.
 func engineOf(id string) (string, bool) {
 	switch id {

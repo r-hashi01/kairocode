@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -52,21 +51,9 @@ func (r *Runtime) engineFor(engine, model string) (string, string, error) {
 	if engine == ProviderAnthropic {
 		engine = workflows.EngineAPI
 	}
-	switch engine {
-	case workflows.EngineAPI:
-		if r.cfg.Provider == nil {
-			return "", "", errors.New("this KairoCode has no model provider for the api engine")
-		}
-		if model == "" {
-			model = provider.DefaultModel
-		}
-	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
-		// The model is the CLI's own default unless one is named.
-	default:
-		if !strings.HasPrefix(engine, workflows.EngineACP) || engine == workflows.EngineACP {
-			return "", "", fmt.Errorf("unknown engine %q", engine)
-		}
-		// An agent of ACP's registry: its own model unless one is named.
+	model, err := engineModel(engine, model, r.cfg.Provider != nil)
+	if err != nil {
+		return "", "", err
 	}
 	return engine, model, nil
 }

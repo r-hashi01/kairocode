@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -120,17 +121,15 @@ func (r *Runtime) flowDecide(t *kairo.TaskContext, in workflows.DecideInput) (wo
 	}
 	prompt := m.Text()
 	var out workflows.DecideOutput
-	if engine == workflows.EngineCodex || engine == workflows.EngineCopilot {
-		// Their CLIs answer no schema here: the API decides if there is
-		// one, else Claude Code, each with its default model (ADR 0014).
-		engine, model = workflows.EngineClaudeCode, ""
-		if r.cfg.Provider != nil {
-			engine, model = workflows.EngineAPI, provider.DefaultModel
-		}
-	}
-	if engine == workflows.EngineClaudeCode {
+	switch {
+	case !factsOf(engine).schema:
+		// An agent that answers no schema here (codex, copilot, one of
+		// ACP's registry): the API decides, else Claude Code, each with
+		// its default model (ADR 0014).
+		out, err = r.decideBy(t, in.Dir, provider.DefaultModel, prompt, schema)
+	case engine == workflows.EngineClaudeCode:
 		out, err = r.claudeDecide(t, in.Dir, prompt, model, schema)
-	} else {
+	default:
 		out, err = r.apiDecide(t, model, prompt, schema)
 	}
 	if err != nil {
@@ -172,4 +171,29 @@ func (r *Runtime) apiDecide(t *kairo.TaskContext, model, prompt string, schema j
 		out.Error = "the model declined to decide"
 	}
 	return out, nil
+}
+
+// decideBy has the API decide (with apiModel) if there is a provider, and
+// Claude Code if there is none or the API would not answer (no key, say):
+// for those that need a decision whatever engine the session runs on.
+func (r *Runtime) decideBy(t *kairo.TaskContext, dir, apiModel, prompt string, schema json.RawMessage) (workflows.DecideOutput, error) {
+	if r.cfg.Provider == nil {
+		return r.claudeDecide(t, dir, prompt, "", schema)
+	}
+	out, apiErr := r.apiDecide(t, apiModel, prompt, schema)
+	if apiErr == nil || t.Err() != nil {
+		return out, apiErr
+	}
+	out, err := r.claudeDecide(t, dir, prompt, "", schema)
+	if err == nil {
+		return out, nil
+	}
+	// Neither answered: both are said. An API that will not answer
+	// however often it is asked (no key) is not asked again, nor Claude
+	// Code with it.
+	var permanent *provider.PermanentError
+	if errors.As(apiErr, &permanent) {
+		return out, fmt.Errorf("the API: %v; Claude Code: %v", apiErr, err)
+	}
+	return out, errors.Join(apiErr, err)
 }

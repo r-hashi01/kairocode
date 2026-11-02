@@ -21,16 +21,6 @@ import (
 // ProviderAnthropic is the API engine's name as a provider (ADR 0014).
 const ProviderAnthropic = "anthropic"
 
-// cliTurnPlan reports whether plan is a run of a CLI engine's turn.
-func cliTurnPlan(plan string) bool {
-	switch plan {
-	case "kairo.call/" + workflows.ActClaudeTurn, "kairo.call/" + workflows.ActCodexTurn, "kairo.call/" + workflows.ActCopilotTurn,
-		"kairo.call/" + workflows.ActACPTurn:
-		return true
-	}
-	return false
-}
-
 // maxCarried is how much of the conversation, at most, a CLI session that
 // starts after a switch of engine is given (its latest part).
 const maxCarried = 60_000

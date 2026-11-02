@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -159,22 +158,17 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		}
 		cfg.Engine = e
 	}
-	switch cfg.Engine {
-	case "", workflows.EngineAPI:
+	if cfg.Engine == "" {
 		cfg.Engine = workflows.EngineAPI
-		if cfg.Provider == nil {
-			return nil, errors.New("runtime: the API engine needs a model provider")
-		}
-		if cfg.Model == "" {
-			cfg.Model = provider.DefaultModel
-		}
-	case workflows.EngineClaudeCode, workflows.EngineCodex, workflows.EngineCopilot:
-		// The model is the CLI's own default unless one is named.
-	default:
-		if !strings.HasPrefix(cfg.Engine, workflows.EngineACP) {
-			return nil, fmt.Errorf("runtime: unknown engine %q", cfg.Engine)
-		}
 	}
+	model, err := engineModel(cfg.Engine, cfg.Model, cfg.Provider != nil)
+	if errors.Is(err, errNoAPIProvider) {
+		return nil, errors.New("runtime: the API engine needs a model provider")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtime: %w", err)
+	}
+	cfg.Model = model
 	// A session may ask for any engine whatever the default. With NoCLIs
 	// (tests), the user's own CLIs are not found unless named.
 	if os.Getenv(NoCLIs) == "1" {
