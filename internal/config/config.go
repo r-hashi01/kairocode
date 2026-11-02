@@ -34,8 +34,15 @@ func Home() string {
 // marketplaces, credentials.
 func UserDir() string { return filepath.Join(Home(), "kairocode") }
 
-// UserFile is the user's kairocode.json.
-func UserFile() string { return filepath.Join(UserDir(), File) }
+// UserFile is the user's kairocode.json; "" with no home to find it in
+// (read, it is not there): a path relative to the daemon's folder could be
+// a project's, which must not set what is the user's alone.
+func UserFile() string {
+	if Home() == "" {
+		return ""
+	}
+	return filepath.Join(UserDir(), File)
+}
 
 // ProjectFile is the kairocode.json of the project in dir.
 func ProjectFile(dir string) string { return filepath.Join(dir, File) }

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,5 +61,8 @@ func TestNoHomeNoUserSettings(t *testing.T) {
 	}
 	if l, ok, err := User(); ok || err != nil {
 		t.Fatalf("the user's settings were read from %s: %v", l.Path, err)
+	}
+	if _, err := os.ReadFile(UserFile()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("UserFile %q, read: %v", UserFile(), err)
 	}
 }
