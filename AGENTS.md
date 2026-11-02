@@ -28,6 +28,7 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/tools` | 組み込みのツール。1 ファイル 1 ツールで、`tools.Def` に作用の型を書く | ここで I/O する |
 | `internal/provider` | モデルのプロバイダーのアダプター（Anthropic と、テスト用の fake） | ここで I/O する |
 | `internal/plugins` | プラグインとマーケットプレイス（ADR 0025、0027）: 入れる・更新する・消す、一覧、プラグインの定義（`kairocode-plugin.json`、Claude Code のプラグイン）を読む。サーバーにつなぐのと、鍵を使うのは runtime | ここで I/O する（入れるときに git を動かす） |
+| `internal/secrets` | プラグインの鍵の保存（ADR 0025）: macOS のキーチェーン、Linux の Secret Service、なければ利用者だけが読めるファイル。値を記録に残さない（不変条件 6） | ここで I/O する |
 | `internal/store` | メッセージの保存（`kc_message`、内容のハッシュで引く。1 度だけ書く） | ここで I/O する |
 | `internal/daemon` | データの置き場ごとに 1 つのデーモン（ADR 0008）。ロック、`server.json`、Unix ソケットの上の HTTP、何もしないときの終了。ほかのプロセスが使うクライアントと、デーモンの自動の起動 | ここで I/O する |
 | `internal/api` | デーモンとクライアントのあいだの型（セッション、出来事、承認、プロバイダー、プラグイン、フローの実行）と、名前の付いたエラー。runtime はこれを別名で使い、tui と acp は runtime ではなくこれを使う（`TestClientsDoNotImportTheRuntime`） | なし（型と小さな関数だけ） |
@@ -39,6 +40,7 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/flowfile` | プロジェクトのフローのスクリプト（`.kairocode/workflows/<名前>.star` と下書き）の場所、一覧、読み書き。作業ディレクトリの中（`os.Root`）でだけ読み書きする | フローのファイルだけ |
 | `internal/flowchart` | フローの形（ADR 0003）。Starlark のスクリプトの構文の木から、プリミティブの呼び出しを、順番・分岐・繰り返し・並列の形で読む。木の形の文字の図も | なし（読むだけ） |
 | `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力を持つ。フローの図と編集のため、フローのスクリプトを `internal/flowfile` で読み書きする。runtime は import しない（型は `internal/api`） | 端末の入出力と、`internal/flowfile` を通したフローのファイルだけ |
+| `internal/clipboard` | クリップボードの画像を読む OS のコマンド（ADR 0026）と、貼った画像の保存。利用者がキーを押したときだけ動く | ここで I/O する |
 | `internal/tui/screen` | 端末の画面の下の領域を描き、会話をその上に書く（ADR 0033。Codex と同じ仕組み）。生モードと端末の設定 | 端末の入出力だけ |
 | `internal/lsp` | 書いたファイルの、言語サーバーの診断のエラー（ADR 0009）。サーバーは sandbox の中で起動し、デーモンの中で持ち続け、使われなければ止める | ここで I/O する |
 | `internal/config` | 設定の置き場所（利用者の `$XDG_CONFIG_HOME/kairocode` と、プロジェクトの `kairocode.json`）と、その読み出し（利用者の分、プロジェクトの分の順の層）。各節の意味は、読む側が決める | 設定のファイルを読むだけ |
