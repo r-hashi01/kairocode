@@ -136,7 +136,9 @@ func crashChild() {
 		panic(err)
 	}
 	// KC_ENGINE: the session's engine; codex is the fake ACP agent.
-	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash", CodexPath: os.Args[0]})
+	// KC_LEASE: how long what it drives stays its after it is killed.
+	lease, _ := time.ParseDuration(os.Getenv("KC_LEASE"))
+	r, err := Open(ctx, Config{DB: os.Getenv("KC_DB"), Provider: fake, Owner: "crash", CodexPath: os.Args[0], Lease: lease})
 	if err != nil {
 		panic(err)
 	}
@@ -146,6 +148,17 @@ func crashChild() {
 	}
 	if _, err := r.Send(ctx, s, "what does main do?"); err != nil {
 		panic(err)
+	}
+	// KC_SIGNAL_PENDING: the file is written once something waits for a
+	// person (where the test kills the child).
+	if f := os.Getenv("KC_SIGNAL_PENDING"); f != "" {
+		for {
+			if ps, _ := r.Pending(ctx, s); len(ps) > 0 {
+				os.WriteFile(f, nil, 0o600)
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	// KC_APPROVE_ALL: what waits for a person is allowed, as it comes.
 	for os.Getenv("KC_APPROVE_ALL") == "1" {

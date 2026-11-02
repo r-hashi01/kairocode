@@ -43,6 +43,33 @@ func claudeSettings(dir string) []string {
 	return append(out, filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json"))
 }
 
+// claudeHooksOff says whether Claude Code's hooks are not to be read at
+// all (ADR 0018, 9 節): kairocode.json's "agents": {"claudeHooks": "off"};
+// "ask", the default, asks before each one first runs. The user's sets it;
+// a project's can only turn them off. A value not known is taken as off.
+func claudeHooksOff(dir string) bool {
+	off := false
+	for i, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			Agents struct {
+				ClaudeHooks string `json:"claudeHooks"`
+			} `json:"agents"`
+		}
+		if json.Unmarshal(b, &cfg) != nil || cfg.Agents.ClaudeHooks == "" {
+			continue
+		}
+		got := cfg.Agents.ClaudeHooks != "ask"
+		if i == 0 || got {
+			off = got
+		}
+	}
+	return off
+}
+
 // claudeHooks reads Claude Code's command hooks of dir (ADR 0018):
 // {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type":
 // "command", "command": "...", "timeout": 60}]}]}}. A file that cannot be

@@ -103,8 +103,19 @@ const (
 	// Its name is a tool's, so its end is told as the call's.
 	ActTaskArgs   = "task.args"
 	ActTaskResult = ActToolPrefix + "task.result"
+	// ActAskUserArgs reads an ask_user call (ADR 0018, 7): its question
+	// and answers to choose from; ActAskUserResult answers the call with
+	// the user's answer. Its name is a tool's, so its end is told as the
+	// call's.
+	ActAskUserArgs   = "ask_user.args"
+	ActAskUserResult = ActToolPrefix + "ask_user.result"
 	// TaskTool is the tool the model hands a task to a subagent with.
 	TaskTool = "task"
+	// AskUserTool asks the user and waits for the answer in the turn (ADR
+	// 0018, 7). AskUserElse is the answer offered with the model's: the
+	// user answers in words of their own, in the next message.
+	AskUserTool = "ask_user"
+	AskUserElse = "Something else: I will say it in my next message"
 	// ActHookTrust keeps that the user allowed a project's hook.
 	ActHookTrust = "hook.trust"
 
@@ -414,6 +425,14 @@ type FlowSource struct {
 }
 
 // TaskArgs are a task call's: the subagent, and what it is to do.
+// AskUserArgs is an ask_user call's question and answers (ADR 0018, 7).
+type AskUserArgs struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options"`
+	// Error: the arguments are not a question's; it goes back to the model.
+	Error string `json:"error,omitempty"`
+}
+
 type TaskArgs struct {
 	Agent  string `json:"agent"`
 	Prompt string `json:"prompt"`
@@ -611,6 +630,9 @@ type AskRequest struct {
 	Rule    string `json:"rule"`
 	// Preview is what the call would do (a flow's shape), to show.
 	Preview string `json:"preview,omitempty"`
+	// Options make it a question to the user (ask_user over MCP, ADR 0018,
+	// 7): Subject is the question, Options its answers.
+	Options []string `json:"options,omitempty"`
 }
 
 type MCPAskInput struct {

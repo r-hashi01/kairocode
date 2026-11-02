@@ -523,3 +523,53 @@ func TestHookCache(t *testing.T) {
 		t.Fatal("a .claude/.cache that is a link was used")
 	}
 }
+
+// agents.claudeHooks (ADR 0018, 9 節): "off" in the user's kairocode.json,
+// Claude Code's hooks are not read; a project's cannot turn them back on,
+// but can turn them off; "ask" and nothing are as before, and a value not
+// known is taken as off.
+func TestClaudeHooksOff(t *testing.T) {
+	for _, c := range []struct {
+		user, project string
+		off           bool
+	}{
+		{"", "", false},
+		{`{"agents": {"claudeHooks": "ask"}}`, "", false},
+		{`{"agents": {"claudeHooks": "off"}}`, "", true},
+		{`{"agents": {"claudeHooks": "off"}}`, `{"agents": {"claudeHooks": "ask"}}`, true},
+		{`{"agents": {"claudeHooks": "ask"}}`, `{"agents": {"claudeHooks": "off"}}`, true},
+		{`{"agents": {"claudeHooks": "never"}}`, "", true},
+	} {
+		userSettings(t, c.user)
+		dir := t.TempDir()
+		if c.project != "" {
+			os.WriteFile(filepath.Join(dir, ConfigFile), []byte(c.project), 0o644)
+		}
+		if got := claudeHooksOff(dir); got != c.off {
+			t.Errorf("user %s, project %s: off %v, want %v", c.user, c.project, got, c.off)
+		}
+	}
+
+	// Off, a project's Claude Code hook is not asked about, and the turn
+	// goes on.
+	userSettings(t, `{"agents": {"claudeHooks": "off"}}`)
+	ws := workspaceWith(t, `{}`)
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	if err := os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), []byte(hookSettings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "done"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "off", workflows.SessionInput{Dir: ws})
+	n, err := r.Send(ctx, s, "do it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := r.Pending(ctx, s); len(p) != 0 {
+		t.Fatalf("asked about: %+v", p)
+	}
+}

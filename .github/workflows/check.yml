@@ -7,6 +7,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # a release is made only once it passes (release.yml)
 
 permissions:
   contents: read

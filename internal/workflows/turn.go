@@ -186,8 +186,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			break
 		}
 		hookRounds++
-		note, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user",
-			Text: "A check that runs when you finish did not pass:\n" + blocked + "\nPut it right, then finish."})
+		note, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user", Text: stopNote(agent, ext, blocked)})
 		if err != nil {
 			return TurnOutput{}, err
 		}
@@ -273,6 +272,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 		cut := reply.Stop == "refusal" || reply.Stop == "max_tokens"
 		inputs := make([]ToolInput, len(reply.Calls))
 		gates := make([]Gate, len(reply.Calls))
+		asked := make([]*ToolOutput, len(reply.Calls)) // ask_user's answers
 		for i, c := range reply.Calls {
 			inputs[i] = ToolInput{Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i, Ext: ext[c.Name].Def}
 			switch {
@@ -310,6 +310,17 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 				if g.Judged {
 					refused++
 				}
+				if _, custom := ext[c.Name]; g.Action == ActToolPrefix+AskUserTool && !custom && !in.Dry {
+					// (A custom tool of that name, in a turn from before
+					// ask_user, stays the custom tool it was.)
+					// Asked and waited for here, one by one as approvals
+					// are, not in Parallel: the call's result is the answer.
+					r, err := askUser(ctx, fmt.Sprintf("ask_%d_%d", out.Steps, i), inputs[i])
+					if err != nil {
+						return err
+					}
+					asked[i] = &r
+				}
 				if r, ok := ext[c.Name]; ok && g.Action == ActToolPrefix+c.Name {
 					// An external tool runs by its effect (ADR 0022).
 					g.Action = ActToolExtReal
@@ -324,6 +335,10 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 		calls := make([]func(*kairo.Context) error, len(reply.Calls))
 		for i := range reply.Calls {
 			calls[i] = func(ctx *kairo.Context) error {
+				if asked[i] != nil {
+					results[i] = *asked[i]
+					return nil
+				}
 				run := runGated
 				if gates[i].Action == ActToolPrefix+TaskTool {
 					run = func(ctx *kairo.Context, _ Gate, ti ToolInput) (ToolOutput, error) { return runTask(ctx, *in, ti) }
@@ -408,6 +423,58 @@ func compactTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, err
 		return TurnOutput{}, err
 	}
 	return TurnOutput{Head: head, Reply: reply, Usage: usage, Compacted: true}, nil
+}
+
+// askUser asks the user an ask_user call's question (ADR 0018, 7), as a
+// flow's question of id in this run, waits for the answer, and answers the
+// call with it. A call that is not a question's goes back to the model.
+func askUser(ctx *kairo.Context, id string, call ToolInput) (ToolOutput, error) {
+	q, err := kairo.Call[AskUserArgs](ctx, ActAskUserArgs, call)
+	if err != nil {
+		return ToolOutput{}, err
+	}
+	if q.Error != "" {
+		return kairo.Call[ToolOutput](ctx, ActAskUserResult, TaskResultInput{Call: call.Call, Text: q.Error, IsError: true})
+	}
+	answer, err := askAndWait(ctx, id, q.Question, q.Options)
+	if err != nil {
+		return ToolOutput{}, err
+	}
+	return kairo.Call[ToolOutput](ctx, ActAskUserResult, TaskResultInput{Call: call.Call, Text: answerText(answer)})
+}
+
+// askAndWait asks the user question, with options and AskUserElse to
+// choose from, and waits for the answer (kairo.WaitFor: the process may
+// stop meanwhile, invariant 7).
+func askAndWait(ctx *kairo.Context, id, question string, options []string) (string, error) {
+	opts := append(slices.Clone(options), AskUserElse)
+	if _, err := kairo.Call[bool](ctx, ActFlowAsk, FlowAskInput{ID: id, Question: question, Options: opts}); err != nil {
+		return "", err
+	}
+	a, err := kairo.WaitFor[FlowAnswer](ctx, SignalAnswerPrefix+id)
+	return a.Option, err
+}
+
+// answerText is the user's answer, as the model is told it.
+func answerText(answer string) string {
+	if answer == AskUserElse {
+		return "The user will answer in their own words, in their next message: end your turn now, without other calls."
+	}
+	return "The user answered: " + answer
+}
+
+// stopNote is what the model is told when a check at the turn's end did
+// not pass. A turn whose agent has ask_user is told to ask with it, should
+// its reply have been a question (ADR 0018, 7): else the check sends the
+// model back to work and the question is lost under it. A turn without it
+// (one started before it) is told as before.
+func stopNote(agent Agent, ext map[string]ExtRef, blocked string) string {
+	if _, custom := ext[AskUserTool]; slices.Contains(agent.Names, AskUserTool) && !custom {
+		return "A check that runs when you finish did not pass:\n" + blocked +
+			"\nIf your reply was a question to the user, do nothing else: ask it with ask_user, and go on once answered. " +
+			"Otherwise put it right, then finish."
+	}
+	return "A check that runs when you finish did not pass:\n" + blocked + "\nPut it right, then finish."
 }
 
 // runTask runs a task call (FR-13): a subagent, as a turn of its own (a
@@ -596,11 +663,22 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string
 				break
 			}
 			hookRounds++
-			note = "A check that runs when you finish did not pass:\n" + blocked + "\nPut it right, then finish."
+			note = stopNote(agent, ext, blocked)
 			continue
 		}
-		var answers []string
-		for _, a := range r.Asks {
+		var answers, replies []string
+		for j, a := range r.Asks {
+			if len(a.Options) > 0 {
+				// ask_user over MCP (ADR 0018, 7): the question is asked
+				// here, as approvals are waited for, and claude told the
+				// answer as it goes on.
+				ans, err := askAndWait(ctx, fmt.Sprintf("ask_%d_%d", round, j), a.Subject, a.Options)
+				if err != nil {
+					return TurnOutput{}, err
+				}
+				replies = append(replies, fmt.Sprintf("- %q: %s", a.Subject, answerText(ans)))
+				continue
+			}
 			ap, err := waitApproval(ctx, SignalApprovePrefix+MCPCallPrefix+a.Key, &tryEnv{in: in})
 			if err != nil {
 				return TurnOutput{}, err
@@ -617,8 +695,17 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string
 			}
 			answers = append(answers, fmt.Sprintf("- %s %q: %s", a.Tool, a.Subject, verdict))
 		}
-		note = "The user answered the calls that waited for approval:\n" + strings.Join(answers, "\n") +
-			"\nMake the approved calls again now, and go on with the task. Do not make the declined ones."
+		note = ""
+		if len(answers) > 0 {
+			note = "The user answered the calls that waited for approval:\n" + strings.Join(answers, "\n") +
+				"\nMake the approved calls again now, and go on with the task. Do not make the declined ones."
+		}
+		if len(replies) > 0 {
+			if note != "" {
+				note += "\n\n"
+			}
+			note += "You asked the user (ask_user):\n" + strings.Join(replies, "\n") + "\nGo on with the task with the answers."
+		}
 	}
 	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: []string{in.Message, out.Reply}})
 	if err != nil {

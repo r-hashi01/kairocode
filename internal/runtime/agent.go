@@ -372,8 +372,10 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 			return workflows.Agent{}, err
 		}
 		// Claude Code's hooks are KairoCode's to run, on every engine, in
-		// its sandbox (ADR 0018).
-		hooks = append(hooks, claudeHooks(in.Dir)...)
+		// its sandbox (ADR 0018), unless they are turned off.
+		if !claudeHooksOff(in.Dir) {
+			hooks = append(hooks, claudeHooks(in.Dir)...)
+		}
 	}
 	if def.Workflow != "" && !flowchart.ValidName(def.Workflow) {
 		return workflows.Agent{}, fmt.Errorf("the agent %q: workflow %q is not a flow's name", in.Agent, def.Workflow)
