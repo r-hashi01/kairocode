@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -63,7 +64,7 @@ func readClaudeMarket(files fs.FS, where string) (Marketplace, error) {
 	if !folderName(cm.Name) {
 		return Marketplace{}, fmt.Errorf("%s: the marketplace's name %q cannot be a folder's", where, cm.Name)
 	}
-	m := Marketplace{Name: cm.Name, Description: cmpOr(cm.Description, cm.Metadata.Description), Claude: true, files: files}
+	m := Marketplace{Name: cm.Name, Description: cmp.Or(cm.Description, cm.Metadata.Description), Claude: true, files: files}
 	root := strings.TrimPrefix(path.Clean(cm.Metadata.PluginRoot), "./")
 	for _, e := range cm.Plugins {
 		if e.Name == "" {
@@ -127,7 +128,7 @@ func claudeSource(mp *MarketPlugin, raw json.RawMessage, root string) string {
 	case "url", "git-subdir":
 		mp.Source, mp.Path = s.URL, s.Path
 	default:
-		return fmt.Sprintf("its source is %s, which KairoCode does not install", cmpOr(s.Source, "of no kind"))
+		return fmt.Sprintf("its source is %s, which KairoCode does not install", cmp.Or(s.Source, "of no kind"))
 	}
 	mp.Ref, mp.SHA = s.Ref, s.SHA
 	return checkGitSource(*mp)

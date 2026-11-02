@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -141,10 +142,10 @@ func pluginUpdate(ctx context.Context, name string, stdout io.Writer) error {
 		return err
 	}
 	if before == after {
-		fmt.Fprintf(stdout, "%s is up to date (%s).\n", name, cmpOr(after, "no version"))
+		fmt.Fprintf(stdout, "%s is up to date (%s).\n", name, cmp.Or(after, "no version"))
 		return nil
 	}
-	fmt.Fprintf(stdout, "Updated %s: %s → %s. Turns under way go on with what they started with.\n", name, cmpOr(before, "?"), cmpOr(after, "?"))
+	fmt.Fprintf(stdout, "Updated %s: %s → %s. Turns under way go on with what they started with.\n", name, cmp.Or(before, "?"), cmp.Or(after, "?"))
 	return nil
 }
 
@@ -232,14 +233,7 @@ func pluginKeys(p opencode.Plugin) (string, []struct{ Name, Description string }
 	for _, k := range m.Auth.Keys {
 		keys = append(keys, struct{ Name, Description string }{k.Name, k.Description})
 	}
-	return cmpOr(m.Auth.Type, "none"), keys, nil
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
+	return cmp.Or(m.Auth.Type, "none"), keys, nil
 }
 
 // pluginConnect asks for a plugin's credentials, keeps them in the key

@@ -2,6 +2,7 @@ package flowchart
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -83,7 +84,7 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 			case Ask:
 				steps = append(steps, step{n: n, phase: phase, loop: loop})
 				askers := append([]string(nil), st.askers...)
-				if !contains(askers, phase) {
+				if !slices.Contains(askers, phase) {
 					askers = append(askers, phase)
 				}
 				st = state{asked: true, askers: askers}
@@ -215,7 +216,7 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 		switch s.n.Kind {
 		case Agent:
 			key = "agent " + s.n.Title
-			if s.n.Title != "plan" && !contains(writers, s.n.Title) {
+			if s.n.Title != "plan" && !slices.Contains(writers, s.n.Title) {
 				writers = append(writers, s.n.Title)
 			}
 		case Decide:
@@ -309,13 +310,4 @@ func nonEmpty(s []string, or string) []string {
 		}
 	}
 	return out
-}
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

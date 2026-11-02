@@ -80,11 +80,7 @@ func (r *Runtime) historyCompact(t *kairo.TaskContext, in workflows.CompactInput
 		ms = later
 	}
 	if err != nil {
-		var permanent *provider.PermanentError
-		if t.Err() != nil || errors.As(err, &permanent) {
-			return workflows.CompactOutput{}, err
-		}
-		return workflows.CompactOutput{}, kairo.Retryable(err) // a summary is safe to ask for again
+		return workflows.CompactOutput{}, modelErr(t, err)
 	}
 	text := ""
 	for _, p := range resp.Message.Parts {

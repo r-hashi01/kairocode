@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -112,7 +114,7 @@ func claudePlugin(dir string) (pluginManifest, string, error) {
 		if err := json.Unmarshal(b, &mcpFile); err != nil {
 			return m, path, fmt.Errorf("%s: %w", filepath.Join(dir, ".mcp.json"), err)
 		}
-		names := slices.Sorted(mapKeys(mcpFile.MCPServers))
+		names := slices.Sorted(maps.Keys(mcpFile.MCPServers))
 		if len(names) > 1 {
 			return m, path, fmt.Errorf("its .mcp.json has %d servers: KairoCode takes a plugin of one", len(names))
 		}
@@ -195,7 +197,7 @@ func pluginServers(dir string) ([]extServer, []extDecl) {
 		s.Spec = fingerprint([]any{s.Command, s.Env, s.URL, s.Headers, pluginVersion(p), pluginCommit(p.Dir), s.Auth, s.ClientID})
 		servers = append(servers, s)
 		// A plugin's effects are for its own tools only.
-		for _, pat := range slices.Sorted(mapKeys(p.Manifest.Tools)) {
+		for _, pat := range slices.Sorted(maps.Keys(p.Manifest.Tools)) {
 			if e := p.Manifest.Tools[pat].Effect; e != "" {
 				decls = append(decls, extDecl{Pattern: p.Name + "_" + pat, Effect: e, Project: p.Project, Source: p.Source})
 			}
@@ -251,11 +253,11 @@ func (r *Runtime) PluginsIn(ctx context.Context, dir string) ([]PluginInfo, erro
 	var out []PluginInfo
 	for _, p := range readPlugins(dir) {
 		pi := PluginInfo{Name: p.Name, Description: p.Manifest.Description, Version: pluginVersion(p), Source: p.Source,
-			Project: p.Project, Auth: cmpOr(p.Manifest.Auth.Type, "none")}
+			Project: p.Project, Auth: cmp.Or(p.Manifest.Auth.Type, "none")}
 		if strings.HasSuffix(p.Source, filepath.Join(".claude-plugin", "plugin.json")) {
 			pi.Unused = claudeUnused(p.Dir)
 		}
-		for _, n := range slices.Sorted(mapKeys(skills)) {
+		for _, n := range slices.Sorted(maps.Keys(skills)) {
 			if strings.HasPrefix(skills[n].Path, p.Dir+string(filepath.Separator)) {
 				pi.Skills = append(pi.Skills, n)
 			}
@@ -307,13 +309,6 @@ func PluginsText(list []PluginInfo) string {
 		}
 	}
 	return b.String()
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 // pluginState is a plugin's server's state, and its tools.

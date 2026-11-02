@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -559,7 +560,7 @@ type acpClient struct {
 
 	// replaying: session/load is replaying the session; replayed, what the
 	// user said in it (to find the turn's mark).
-	replaying atomicBool
+	replaying atomic.Bool
 	mu        sync.Mutex
 	replayed  strings.Builder
 	reply     strings.Builder
@@ -567,14 +568,6 @@ type acpClient struct {
 	nterm     int
 	uses      map[string]int // asks for an agent's own call, by its key
 }
-
-type atomicBool struct {
-	mu sync.Mutex
-	v  bool
-}
-
-func (b *atomicBool) Store(v bool) { b.mu.Lock(); b.v = v; b.mu.Unlock() }
-func (b *atomicBool) Load() bool   { b.mu.Lock(); defer b.mu.Unlock(); return b.v }
 
 // acpTerminal is a command an agent ran: done when made (KairoCode runs it
 // as its bash tool), its output kept for the agent to read.

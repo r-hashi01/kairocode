@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -152,12 +151,7 @@ func (r *Runtime) apiDecide(t *kairo.TaskContext, model, prompt string, schema j
 		Messages: []msg.Message{{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: prompt}}}},
 	})
 	if err != nil {
-		var permanent *provider.PermanentError
-		if t.Err() != nil || errors.As(err, &permanent) {
-			return workflows.DecideOutput{}, err
-		}
-		// As a model call: safe to repeat, so kairo tries again.
-		return workflows.DecideOutput{}, kairo.Retryable(err)
+		return workflows.DecideOutput{}, modelErr(t, err)
 	}
 	out := workflows.DecideOutput{Usage: resp.Usage}
 	for _, p := range resp.Message.Parts {

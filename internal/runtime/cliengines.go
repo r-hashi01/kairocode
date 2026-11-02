@@ -2,13 +2,11 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -31,13 +29,6 @@ func cliTurnPlan(plan string) bool {
 		return true
 	}
 	return false
-}
-
-// engineSessionName is the name KairoCode gives the session of engine for
-// the turns of session in epoch (AGENTS.md, invariant 8).
-func engineSessionName(engine, session string, epoch int) string {
-	h := sha256.Sum256([]byte("kairocode/" + engine + "-session:" + session + ":" + strconv.Itoa(epoch)))
-	return "kairocode-" + hex.EncodeToString(h[:12])
 }
 
 // maxCarried is how much of the conversation, at most, a CLI session that
@@ -119,7 +110,7 @@ func cliEnv(keep ...string) []string {
 		name, _, _ := strings.Cut(kv, "=")
 		upper := strings.ToUpper(name)
 		switch {
-		case slicesContains(keep, name):
+		case slices.Contains(keep, name):
 		case name == "CLAUDECODE", name == "CLAUDE_CODE_ENTRYPOINT", name == "CLAUDE_CODE_SSE_PORT":
 			continue
 		case strings.Contains(upper, "KEY"), strings.Contains(upper, "TOKEN"),
@@ -129,15 +120,6 @@ func cliEnv(keep ...string) []string {
 		env = append(env, kv)
 	}
 	return env
-}
-
-func slicesContains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // cliModels are the models a CLI says it has: Codex's catalog (codex debug

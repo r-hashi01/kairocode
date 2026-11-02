@@ -1,7 +1,10 @@
 package workflows
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
@@ -236,4 +239,86 @@ func loadExternal(ctx *kairo.Context, in TurnInput, agent Agent) (Agent, map[str
 	}
 	agent.Tools, agent.Names = out.Tools, out.Names
 	return agent, out.Ext, nil
+}
+
+// runHooks runs the hooks of event (ADR 0003) that match, in order, with
+// args, and returns the message of the first that does not pass ("" if
+// all pass). tag tells this time from the event's others in the turn (the
+// round, the call). A hook is asked about before it first runs (and again
+// after its script changes); one the user declines, or the rules deny, is
+// not run.
+func runHooks(ctx *kairo.Context, in TurnInput, agent Agent, event, tag, args string, match func(Hook) bool) (string, error) {
+	for i, h := range agent.Hooks {
+		if h.Command != "" || h.Event != event || match != nil && !match(h) {
+			continue // a command hook runs in commandHooks
+		}
+		expect := ""
+		if h.Project {
+			hookArgs, err := json.Marshal(map[string]string{"name": h.Flow, "event": h.Event})
+			if err != nil {
+				return "", err
+			}
+			call := ToolInput{Dir: in.Dir, Call: fmt.Sprintf("hook_%d_%s_%d", in.N, tag, i), Args: hookArgs}
+			d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{
+				Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Loopback: agent.Loopback}, Tool: HookTool, Call: call})
+			if err != nil {
+				return "", err
+			}
+			if d.Action == "deny" {
+				continue
+			}
+			if d.Action == "ask" {
+				a, err := kairo.WaitFor[Approval](ctx, SignalApprovePrefix+call.Call)
+				if err != nil {
+					return "", err
+				}
+				if !a.OK {
+					continue
+				}
+				if _, err := kairo.Call[bool](ctx, ActHookTrust, d.Trust); err != nil {
+					return "", err
+				}
+			}
+			expect = d.Script
+		}
+		fo, err := kairo.Child[FlowOutput](ctx, Flow, FlowInput{
+			Session: in.Session, N: in.N, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model, Call: FlowCall{Name: h.Flow, Args: args},
+			Hook: fmt.Sprintf("%s/%s/%d", h.Event, tag, i), Expect: expect,
+		})
+		var failed *kairo.WorkflowError
+		if errors.As(err, &failed) {
+			return h.Flow + " failed: " + failed.Message, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if fo.Broken {
+			// The hook's script does not run: nothing the model can put
+			// right. It is not sent back.
+			continue
+		}
+		if !fo.OK {
+			return h.Flow + ": " + fo.Message, nil
+		}
+	}
+	return "", nil
+}
+
+// hookBlockedTurn ends a turn a turn.start hook blocked: the user's message
+// and why, the model not asked.
+func hookBlockedTurn(ctx *kairo.Context, in TurnInput, why string) (TurnOutput, error) {
+	reply, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "assistant", Text: "[A hook stopped this request: " + why + "]"})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	head, err := kairo.Call[string](ctx, ActHistoryExtend, HistoryExtendInput{Prev: in.History, Messages: []string{in.Message, reply}})
+	if err != nil {
+		return TurnOutput{}, err
+	}
+	return TurnOutput{Head: head, Reply: reply, Stopped: "hook"}, nil
+}
+
+// hasHook reports whether the agent has a hook of event.
+func hasHook(agent Agent, event string) bool {
+	return slices.ContainsFunc(agent.Hooks, func(h Hook) bool { return h.Event == event })
 }

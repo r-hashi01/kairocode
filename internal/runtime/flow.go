@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
@@ -260,4 +261,28 @@ func FlowHelp(dir, name string) (string, error) {
 		return "", fmt.Errorf("the flow %q: %w", name, perr) // a link out of the project, say
 	}
 	return "", fmt.Errorf("there is no flow %q (%s/%s.star), nor a draft of one", name, FlowsDir, name)
+}
+
+// reviewKey names a flow_publish call and the draft it was decided on.
+func reviewKey(in workflows.ToolInput, draft string) string {
+	return strings.Join([]string{in.Dir, in.Message, in.Call, in.At, string(in.Args), draft}, "\x00")
+}
+
+// draftHash is the hash of the draft a flow_publish call (its args) names
+// in dir, as it is now ("absent" if there is none).
+func draftHash(dir string, args json.RawMessage) string {
+	var a struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(args, &a)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "absent"
+	}
+	defer root.Close()
+	src, err := tools.DraftOf(tools.Env{Root: root, Dir: dir}, a.Name)
+	if err != nil {
+		return "absent"
+	}
+	return tools.Hash(src)
 }
