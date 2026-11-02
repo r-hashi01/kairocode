@@ -233,3 +233,13 @@ KairoCode が ACP（ADR 0002）のクライアントになり、各エージェ�
   - ほかのプロバイダーのモデルは、ACP の拡張のメソッド `_kairocode/models` で読みます。
   - `/model <名前>` と打てば、今のプロバイダーのモデルを直接選べます。
   - テスト: `TestModelProviderFirst`。
+
+## 追記（2026-11-02、利用者の了承）: まだ送っていない選択を DB に置く
+
+実装（段 1）では、`/provider`、`/model`、`/mode` の選択を、次の出来事で送るまでデーモンのメモリに置いていました。送る前にデーモンが止まる（何もしないときの終了、更新、落ちる）と、選択は黙って失われ、画面に出ていた設定と次のターンが食い違いました。
+
+- まだ送っていない選択は、`kc_switch`（セッションごとに 1 行。選択の JSON と、変わった回数 `seq`）に置きます（`internal/store`）。`Runtime.SetProvider`、`SetMode` が書き、`Settings` と `signal` が読みます。
+- `signal` は、選択を出来事に付けて送り、送れたら、読んだときの `seq` の行だけを消します。送る間に選択が変わったら、変わった方が次の出来事を待ちます。
+- 送ってから消すまでの間にデーモンが止まると、同じ選択がもう一度送られます。セッションはその値をすでに持っているので、何も変わりません（プロバイダーが同じなら `Epoch` も進まない）。記録の形（`SessionEvent.Switch`）は変わりません。
+- セッションを閉じると、待っていた選択も消します（次の出来事が無いので）。
+- テスト: `internal/runtime`（`TestSwitchSurvivesAReopen`、`TestSwitchSentAgainChangesNothing`）、`internal/store`（`TestSwitchClearedAsSent`）。

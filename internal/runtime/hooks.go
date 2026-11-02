@@ -15,6 +15,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -104,12 +105,7 @@ func (r *Runtime) hookCheck(t *kairo.TaskContext, in workflows.PermissionInput, 
 	if err := json.Unmarshal(in.Call.Args, &args); err != nil {
 		return out, err
 	}
-	root, err := os.OpenRoot(in.Call.Dir)
-	if err != nil {
-		return out, err
-	}
-	defer root.Close()
-	src, err := root.ReadFile(filepath.Join(flowchart.Dir, args.Name+".star"))
+	src, err := flowfile.Read(in.Call.Dir, args.Name, false)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return out, err
 	}

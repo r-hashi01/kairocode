@@ -16,6 +16,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -370,7 +371,11 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 		if tools.Loopback(args) {
 			// This machine's network, in the sandbox (ADR 0031): as bash's
 			// rules say, unless sandbox.loopback says to ask or refuse.
-			switch loopbackSetting(in.Call.Dir) {
+			setting := permission.Action(in.Policy.Loopback) // as the turn started
+			if setting == "" {                               // a turn from before it was kept
+				setting = loopbackSetting(in.Call.Dir)
+			}
+			switch setting {
 			case permission.Deny:
 				return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "sandbox.loopback is \"deny\"", Subject: subj}, false, nil
 			case permission.Ask:
@@ -560,7 +565,7 @@ func (r *Runtime) flowBefore(dir, name string) (*flowchart.Chart, []byte, bool) 
 		return nil, nil, false
 	}
 	defer root.Close()
-	path := filepath.Join(flowchart.Dir, name+".star")
+	path := flowfile.Path(name, false)
 	fi, err := root.Lstat(path)
 	if err != nil {
 		return nil, nil, false
@@ -1200,10 +1205,10 @@ func (r *Runtime) reviewSections(ctx context.Context, name, src, old string) []P
 		return out
 	case unreadable:
 		return append(out, PreviewSection{Name: "Changes",
-			Text: "replaces  " + filepath.Join(flowchart.Dir, name+".star") + "  (not readable as a flow)"})
+			Text: "replaces  " + flowfile.Path(name, false) + "  (not readable as a flow)"})
 	}
 	// It replaces a flow: said, whether or not its changes can be drawn.
-	replaces := PreviewSection{Name: "Changes", Text: "replaces  " + filepath.Join(flowchart.Dir, name+".star")}
+	replaces := PreviewSection{Name: "Changes", Text: "replaces  " + flowfile.Path(name, false)}
 	_, before, err := r.Store.Get(ctx, old)
 	if err != nil {
 		return append(out, replaces)
@@ -1224,7 +1229,7 @@ func (r *Runtime) reviewSections(ctx context.Context, name, src, old string) []P
 		sec.Details = append(sec.Details, detail)
 		sec.Refs = append(sec.Refs, [2]int{src.First, src.Last})
 	}
-	add("replaces  "+filepath.Join(flowchart.Dir, name+".star"), "", flowchart.Lines{})
+	add("replaces  "+flowfile.Path(name, false), "", flowchart.Lines{})
 	add("", "", flowchart.Lines{})
 	if len(cs) == 0 {
 		add("  no step changed", "", flowchart.Lines{})

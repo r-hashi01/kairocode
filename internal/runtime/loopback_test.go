@@ -136,3 +136,33 @@ def main(input):
 		t.Errorf("its TMPDIR is still there: %v", err)
 	}
 }
+
+// sandbox.loopback is kept as the turn started, with the rules (invariant
+// 2): changed to deny while the turn runs, its loopback call later in it
+// is still allowed.
+func TestLoopbackKeptAsTheTurnStarted(t *testing.T) {
+	sandboxtest.Require(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := workspaceWith(t, `{"bash": "allow"}`)
+	dir := t.TempDir()
+	hold, release := filepath.Join(dir, "held"), filepath.Join(dir, "release")
+	loopback := provider.FakeTool{Name: "bash", Input: json.RawMessage(`{"command":"echo ran > ran.txt","sandbox":"loopback"}`)}
+	r := open(t, filepath.Join(dir, "k.db"), &provider.Fake{HoldAt: 1, HoldFile: hold, ReleaseFile: release, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "read", Input: json.RawMessage(`{"path": "main.go"}`)}}},
+		{Tools: []provider.FakeTool{loopback}},
+		{Text: "done"},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "kept", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "go")
+	waitUntil(t, ctx, "the second model call", func() bool { _, err := os.Stat(hold); return err == nil })
+	os.WriteFile(filepath.Join(ws, ConfigFile), []byte(`{"permission": {"bash": "allow"}, "sandbox": {"loopback": "deny"}}`), 0o644)
+	os.WriteFile(release, nil, 0o600)
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "ran.txt")); err != nil {
+		t.Fatal("the turn's loopback call went by the setting changed after it started:", err)
+	}
+}

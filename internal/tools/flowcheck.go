@@ -6,10 +6,10 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 )
 
 // FlowCheckTool checks a flow's script without running it (ADR 0003): the
@@ -44,10 +44,10 @@ func runFlowCheck(_ context.Context, env Env, input json.RawMessage) Result {
 	defer root.Close()
 	// Its draft, if it has one (ADR 0030): what is being written; else the
 	// published flow.
-	path := filepath.Join(flowchart.DraftsDir, in.Name+".star")
+	path := flowfile.Path(in.Name, true)
 	src, err := root.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		path = filepath.Join(flowchart.Dir, in.Name+".star")
+		path = flowfile.Path(in.Name, false)
 		src, err = root.ReadFile(path)
 	}
 	if err != nil {

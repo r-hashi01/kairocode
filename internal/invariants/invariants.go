@@ -31,10 +31,7 @@ var workflowImports = map[string]bool{
 	"strings": true, "time": true, "unicode": true, "unicode/utf8": true,
 	"crypto/sha256":                     true,
 	"github.com/r-hashi01/kairo/sdk/go": true, // the workflow context: Call, Parallel, WaitFor, Child
-	module + "/internal/msg":            true,
-	module + "/internal/permission":     true,
-	module + "/internal/plan":           true,
-	module + "/internal/tools":          true, // for the Def and Effect types
+	module + "/internal/msg":            true, // the message types, pure
 	// Starlark (ADR 0003): a language with no clock, randomness or I/O,
 	// whose dicts keep their order; flows run in it inside the workflow.
 	"go.starlark.net/starlark":       true,

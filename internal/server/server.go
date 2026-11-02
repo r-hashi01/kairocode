@@ -103,11 +103,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// Fail writes err as the API's error response: the daemon's client is
+// checked against it (TestErrorsCrossTheSocket).
+func Fail(w http.ResponseWriter, code int, err error) { fail(w, code, err) }
+
 func fail(w http.ResponseWriter, code int, err error) {
 	if errors.Is(err, runtime.ErrSessionFailed) {
 		code = http.StatusGone // it takes no more (ADR 0021)
 	}
-	writeJSON(w, code, map[string]string{"error": err.Error()})
+	body := map[string]string{"error": err.Error()}
+	if c := ErrorCode(err); c != "" { // the client gives back the same error
+		body["code"] = c
+	}
+	writeJSON(w, code, body)
 }
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {

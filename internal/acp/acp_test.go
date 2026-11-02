@@ -608,6 +608,16 @@ func TestACPApprovalSurvivesRestart(t *testing.T) {
 	if !said {
 		t.Fatalf("the turn's message is not shown again: %d updates", len(replayed))
 	}
+	// And the call that waits, as the call it is (its approval comes next).
+	called := false
+	for _, m := range replayed {
+		if m.Method == "session/update" && updateOf(t, m).SessionUpdate == "tool_call" && updateOf(t, m).Kind == "edit" {
+			called = true
+		}
+	}
+	if !called {
+		t.Fatalf("the call that waits is not shown again: %d updates", len(replayed))
+	}
 	req, _ := d.until(isMethod("session/request_permission"))
 	allow(d, req, "allow_once")
 	for {

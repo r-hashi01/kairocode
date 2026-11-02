@@ -116,10 +116,9 @@ type Runtime struct {
 
 	approveMu sync.Mutex // serializes answers (Approve)
 
-	// switches are the switches of provider and model (ADR 0014) that wait
-	// for their session's next event.
+	// switchMu serializes changes to the switches waiting for their
+	// session's next event (ADR 0014), kept in the store.
 	switchMu sync.Mutex
-	switches map[string]*workflows.Switch
 
 	closeOnce sync.Once
 	closeErr  error
@@ -893,17 +892,22 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 	if err != nil {
 		return 0, err
 	}
-	sw := r.takeSwitch(session)
+	// The switch is removed once sent; not sent, it waits for the next
+	// event. Sent but not removed (the daemon stopped between), it goes
+	// again with the next: the session already has it, so it changes
+	// nothing.
+	sw, seq, err := r.pendingSwitch(ctx, session)
+	if err != nil {
+		return 0, err
+	}
 	ev.Switch = sw
 	if err := r.K.Signal(ctx, session, workflows.SignalMessage, ev); err != nil {
-		if sw != nil { // not sent: it waits for the next event
-			r.switchMu.Lock()
-			if r.switches[session] == nil {
-				r.switches[session] = sw
-			}
-			r.switchMu.Unlock()
-		}
 		return 0, err
+	}
+	if sw != nil {
+		if err := r.Store.ClearSwitch(ctx, session, seq); err != nil {
+			r.logf("the switch sent to %s stays to be sent again: %v", session, err)
+		}
 	}
 	return n, nil
 }
@@ -1014,7 +1018,16 @@ func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
 func (r *Runtime) CloseSession(ctx context.Context, session string) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
-	return r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventClose})
+	if err := r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventClose}); err != nil {
+		return err
+	}
+	// A switch waiting has no next event to go with: not kept.
+	if _, seq, err := r.Store.Switch(ctx, session); err == nil && seq != 0 {
+		if err := r.Store.ClearSwitch(ctx, session, seq); err != nil {
+			r.logf("the switch waiting for %s, closed, stays: %v", session, err)
+		}
+	}
+	return nil
 }
 
 // sent counts the events a session has been sent: each is a finished wait
@@ -1167,8 +1180,9 @@ func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Messag
 		return nil, err
 	}
 	type asked struct {
-		n int
-		h string
+		n   int
+		h   string
+		run string
 	}
 	var live []asked
 	for _, t := range runs {
@@ -1179,7 +1193,7 @@ func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Messag
 		if json.Unmarshal(input(t), &in) != nil || in.Sub || in.Undo != nil || in.Compact || in.Message == "" {
 			continue
 		}
-		live = append(live, asked{in.N, in.Message})
+		live = append(live, asked{in.N, in.Message, t.RunID})
 	}
 	slices.SortFunc(live, func(a, b asked) int { return a.n - b.n })
 	for _, l := range live {
@@ -1188,8 +1202,92 @@ func (r *Runtime) HistoryLive(ctx context.Context, session string) ([]msg.Messag
 			return nil, err
 		}
 		ms = append(ms, m)
+		so, err := r.turnSoFar(ctx, l.run)
+		if err != nil {
+			return nil, err
+		}
+		ms = append(ms, so...)
 	}
 	return ms, nil
+}
+
+// turnSoFar is what a turn under way has done so far, as messages: the
+// model's replies and the results of its calls (the API engine's), or its
+// calls over MCP and their results (a CLI engine's, whose replies come at
+// the turn's end). A call still waiting has its call and no result.
+func (r *Runtime) turnSoFar(ctx context.Context, turn string) ([]msg.Message, error) {
+	steps, err := r.K.Children(ctx, turn)
+	if err != nil {
+		return nil, err
+	}
+	var out []msg.Message
+	seen := map[string]bool{}
+	add := func(h string) error {
+		if h == "" || seen[h] {
+			return nil
+		}
+		seen[h] = true
+		m, err := r.Store.Message(ctx, h)
+		if err != nil {
+			return err
+		}
+		out = append(out, m)
+		return nil
+	}
+	for _, c := range steps {
+		if c.Status != "completed" {
+			continue
+		}
+		var o struct {
+			Message string `json:"message"`
+		}
+		switch plan := strings.TrimPrefix(c.Plan, "kairo.call/"); {
+		case plan == workflows.ActModel,
+			strings.HasPrefix(plan, workflows.ActToolPrefix) && !strings.HasSuffix(plan, workflows.ActPlanSuffix):
+			if json.Unmarshal(c.Output, &o) == nil {
+				if err := add(o.Message); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	// A CLI engine's calls, over MCP: a run of their own each (kairo-gap
+	// #17), its input the call.
+	runs, err := r.Store.MCPRuns(ctx, turn)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range runs {
+		info, err := r.K.Get(ctx, id)
+		if errors.Is(err, kairo.ErrUnknownRun) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var in workflows.MCPCallInput
+		if json.Unmarshal(input(info), &in) != nil {
+			continue
+		}
+		out = append(out, msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.ToolUse, ID: id, Name: in.Tool, Input: in.Args}}})
+		if info.Status != "completed" {
+			continue // still running, or waiting: its call alone
+		}
+		o, err := kairo.Await[workflows.ToolOutput](ctx, r.K, id)
+		if err != nil || o.Message == "" {
+			continue
+		}
+		res, err := r.Store.Message(ctx, o.Message)
+		if err != nil {
+			return nil, err
+		}
+		text := ""
+		if len(res.Parts) > 0 {
+			text = res.Parts[0].Text
+		}
+		out = append(out, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.ToolResult, ToolUseID: id, Text: text, IsError: o.IsError}}})
+	}
+	return out, nil
 }
 
 // Reply is the text of an assistant message.

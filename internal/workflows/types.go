@@ -576,6 +576,10 @@ type Agent struct {
 	Planned []string `json:"planned,omitempty"`
 	// Permissions are the rules as they were when the turn started, by hash.
 	Permissions string `json:"permissions"`
+	// Loopback is the sandbox.loopback setting as the turn started (ADR
+	// 0031): allow, ask or deny; empty in a turn from before it was kept
+	// (then read as the call is checked).
+	Loopback string `json:"loopback,omitempty"`
 	// ReadOnly: the agent may only read (plan mode, FR-12).
 	ReadOnly bool `json:"read_only,omitempty"`
 	// Hooks are the flows bound to the turn's events, as they were when it
@@ -598,6 +602,8 @@ type Policy struct {
 	// Dry: in a try of a flow (ADR 0017), a call that does more than read
 	// is not made.
 	Dry bool `json:"dry,omitempty"`
+	// Loopback: the agent's, as recorded (Agent.Loopback).
+	Loopback string `json:"loopback,omitempty"`
 }
 
 type PermissionInput struct {

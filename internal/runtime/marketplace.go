@@ -17,6 +17,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/r-hashi01/kairocode/internal/atomicfile"
 )
 
 // Plugin marketplaces (ADR 0027): catalogs of plugins, by name and where
@@ -138,11 +140,7 @@ func writeAdded(list []addedMarket) error {
 		return err
 	}
 	b, _ := json.MarshalIndent(list, "", "  ")
-	tmp := marketsFile() + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, marketsFile())
+	return atomicfile.Write(marketsFile(), append(b, '\n'), 0o600)
 }
 
 // builtIn is the marketplace KairoCode comes with.

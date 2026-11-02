@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/r-hashi01/kairocode/internal/atomicfile"
 )
 
 // Plugins' credentials (ADR 0025): kept in the system's key store (macOS's
@@ -185,21 +187,5 @@ func (f *fileSecrets) Delete(key string) error {
 
 // writeJSONBytes replaces path with b, mode 0600, all at once.
 func writeJSONBytes(path string, b []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(append(bytes.TrimSpace(b), '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.Write(path, append(bytes.TrimSpace(b), '\n'), 0o600)
 }
