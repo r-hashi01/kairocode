@@ -42,3 +42,22 @@ func TestLayers(t *testing.T) {
 		t.Fatalf("an unreadable one: %+v %v", ls, err)
 	}
 }
+
+// With no home to find it in, the user has no settings: not a file of
+// that name in the daemon's folder, which could be a project's.
+func TestNoHomeNoUserSettings(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if Home() != "" {
+		t.Skip("a home is found without $HOME here")
+	}
+	for _, d := range []string{"kairocode", ".config/kairocode"} {
+		os.MkdirAll(filepath.Join(cwd, d), 0o700)
+		os.WriteFile(filepath.Join(cwd, d, File), []byte(`{"http": {"allowPrivate": true}}`), 0o600)
+	}
+	if l, ok, err := User(); ok || err != nil {
+		t.Fatalf("the user's settings were read from %s: %v", l.Path, err)
+	}
+}

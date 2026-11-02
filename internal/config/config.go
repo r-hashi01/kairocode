@@ -50,15 +50,25 @@ type Layer struct {
 // Layers are the user's kairocode.json, then the project's in dir (none
 // for dir ""), each if it is there. One there but not readable is left
 // out and told in the error, with the others still given: a reader that
-// goes on without it may.
+// goes on without it may. With no home to find it in (Home ""), the user
+// has none: a path relative to the daemon's folder could be a project's,
+// which must not set what is the user's alone.
 func Layers(dir string) ([]Layer, error) {
-	paths := []string{UserFile()}
+	type file struct {
+		path    string
+		project bool
+	}
+	var files []file
+	if Home() != "" {
+		files = append(files, file{UserFile(), false})
+	}
 	if dir != "" {
-		paths = append(paths, ProjectFile(dir))
+		files = append(files, file{ProjectFile(dir), true})
 	}
 	var out []Layer
 	var errs []error
-	for i, p := range paths {
+	for _, f := range files {
+		p := f.path
 		b, err := os.ReadFile(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -67,7 +77,7 @@ func Layers(dir string) ([]Layer, error) {
 			errs = append(errs, err)
 			continue
 		}
-		out = append(out, Layer{Path: p, Project: i == 1, Data: b})
+		out = append(out, Layer{Path: p, Project: f.project, Data: b})
 	}
 	return out, errors.Join(errs...)
 }
@@ -84,7 +94,8 @@ func (l Layer) Decode(v any) error {
 // User is the user's kairocode.json, if it is there: for the settings a
 // project's cannot set.
 func User() (Layer, bool, error) {
-	ls, err := Layers("")
+	ls, err := Layers("") // the user's alone: none without a home
+
 	if err != nil || len(ls) == 0 {
 		return Layer{}, false, err
 	}
