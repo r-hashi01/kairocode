@@ -116,10 +116,9 @@ type Runtime struct {
 
 	approveMu sync.Mutex // serializes answers (Approve)
 
-	// switches are the switches of provider and model (ADR 0014) that wait
-	// for their session's next event.
+	// switchMu serializes changes to the switches waiting for their
+	// session's next event (ADR 0014), kept in the store.
 	switchMu sync.Mutex
-	switches map[string]*workflows.Switch
 
 	closeOnce sync.Once
 	closeErr  error
@@ -893,17 +892,22 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 	if err != nil {
 		return 0, err
 	}
-	sw := r.takeSwitch(session)
+	// The switch is removed once sent; not sent, it waits for the next
+	// event. Sent but not removed (the daemon stopped between), it goes
+	// again with the next: the session already has it, so it changes
+	// nothing.
+	sw, seq, err := r.pendingSwitch(ctx, session)
+	if err != nil {
+		return 0, err
+	}
 	ev.Switch = sw
 	if err := r.K.Signal(ctx, session, workflows.SignalMessage, ev); err != nil {
-		if sw != nil { // not sent: it waits for the next event
-			r.switchMu.Lock()
-			if r.switches[session] == nil {
-				r.switches[session] = sw
-			}
-			r.switchMu.Unlock()
-		}
 		return 0, err
+	}
+	if sw != nil {
+		if err := r.Store.ClearSwitch(ctx, session, seq); err != nil {
+			r.logf("the switch sent to %s stays to be sent again: %v", session, err)
+		}
 	}
 	return n, nil
 }
@@ -1014,7 +1018,16 @@ func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
 func (r *Runtime) CloseSession(ctx context.Context, session string) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
-	return r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventClose})
+	if err := r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventClose}); err != nil {
+		return err
+	}
+	// A switch waiting has no next event to go with: not kept.
+	if _, seq, err := r.Store.Switch(ctx, session); err == nil && seq != 0 {
+		if err := r.Store.ClearSwitch(ctx, session, seq); err != nil {
+			r.logf("the switch waiting for %s, closed, stays: %v", session, err)
+		}
+	}
+	return nil
 }
 
 // sent counts the events a session has been sent: each is a finished wait

@@ -97,6 +97,13 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			body BLOB NOT NULL,
 			try INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE INDEX IF NOT EXISTS kc_flow_run_dir ON kc_flow_run (dir, started)`,
+		// A session's switch of provider, model or mode not yet sent with
+		// its next event (ADR 0014, 追記 2026-11-02): body is the switch's
+		// JSON, seq counts its changes so only the one sent is removed.
+		`CREATE TABLE IF NOT EXISTS kc_switch (
+			session TEXT PRIMARY KEY,
+			body BLOB NOT NULL,
+			seq INTEGER NOT NULL)`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)
@@ -246,6 +253,30 @@ func (s *Store) SetClaudeProc(ctx context.Context, session string, pid int) erro
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO kc_claude_proc (session, pid) VALUES (?, ?) ON CONFLICT (session) DO UPDATE SET pid = excluded.pid`,
 		session, pid)
+	return err
+}
+
+// Switch is session's switch not yet sent (nil body: none) and the count
+// of its changes, to give ClearSwitch.
+func (s *Store) Switch(ctx context.Context, session string) (body []byte, seq int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT body, seq FROM kc_switch WHERE session = ?`, session).Scan(&body, &seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+	return body, seq, err
+}
+
+// SetSwitch keeps body as session's switch not yet sent.
+func (s *Store) SetSwitch(ctx context.Context, session string, body []byte) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_switch (session, body, seq) VALUES (?, ?, 1)
+		ON CONFLICT (session) DO UPDATE SET body = excluded.body, seq = kc_switch.seq + 1`, session, body)
+	return err
+}
+
+// ClearSwitch removes session's switch once sent, unless it changed after
+// Switch gave seq: the changed one waits for the next event.
+func (s *Store) ClearSwitch(ctx context.Context, session string, seq int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM kc_switch WHERE session = ? AND seq = ?`, session, seq)
 	return err
 }
 

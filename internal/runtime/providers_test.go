@@ -1030,3 +1030,75 @@ func TestAuthRequired(t *testing.T) {
 		}
 	}
 }
+
+// A switch chosen and not yet sent is kept in the store (ADR 0014, 追記
+// 2026-11-02): the daemon stopped and opened again, the next turn takes it.
+func TestSwitchSurvivesAReopen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := filepath.Join(t.TempDir(), "k.db")
+	fake := &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}, {Text: "b"}, {Text: "c"}}}
+	r := open(t, db, fake)
+	s, _ := r.CreateSession(ctx, "kept", workflows.SessionInput{Dir: repo(t)})
+	turn(t, r, s, "one")
+	if _, err := r.SetMode(ctx, s, "plan"); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+
+	r = open(t, db, fake)
+	if st, err := r.Settings(ctx, s); err != nil || st.Mode != "plan" {
+		t.Fatalf("settings after the reopen: %+v %v", st, err)
+	}
+	turn(t, r, s, "two")
+	if a := agentOf(t, ctx, r, s, 1); a.Name != "plan" {
+		t.Fatalf("turn 1 ran in %s", a.Name)
+	}
+	if b, _, err := r.Store.Switch(ctx, s); err != nil || b != nil {
+		t.Fatalf("the switch sent is still waiting: %s %v", b, err)
+	}
+	turn(t, r, s, "three")
+	if a := agentOf(t, ctx, r, s, 2); a.Name != "plan" {
+		t.Fatalf("turn 2 ran in %s", a.Name)
+	}
+}
+
+// A switch sent but not removed (the daemon stopped between) goes again
+// with the next event, and changes nothing: the session has it already.
+func TestSwitchSentAgainChangesNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}, {Text: "b"}, {Text: "c"}}})
+	s, _ := r.CreateSession(ctx, "again", workflows.SessionInput{Dir: repo(t)})
+	turn(t, r, s, "one")
+	if _, err := r.Switch(ctx, s, "anthropic", "claude-other", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.SetMode(ctx, s, "plan"); err != nil {
+		t.Fatal(err)
+	}
+	sent, _, _ := r.Store.Switch(ctx, s)
+	turn(t, r, s, "two")
+	if err := r.Store.SetSwitch(ctx, s, sent); err != nil {
+		t.Fatal(err)
+	}
+	turn(t, r, s, "three")
+	in := func(n int) workflows.TurnInput {
+		run, _, err := r.TurnRun(ctx, s, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tin workflows.TurnInput
+		if err := json.Unmarshal(input(run), &tin); err != nil {
+			t.Fatal(err)
+		}
+		return tin
+	}
+	a, b := in(1), in(2)
+	if a.Model != "claude-other" || a.Mode != "plan" {
+		t.Fatalf("turn 1 did not take the switch: %+v", a)
+	}
+	if a.Engine != b.Engine || a.Model != b.Model || a.Effort != b.Effort || a.Mode != b.Mode || a.Epoch != b.Epoch || a.Agent != b.Agent {
+		t.Fatalf("the switch sent again changed the session:\n%+v\n%+v", a, b)
+	}
+}

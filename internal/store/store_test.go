@@ -199,3 +199,27 @@ func TestGrantLetsOneRun(t *testing.T) {
 		t.Fatal("an answer about another call was used")
 	}
 }
+
+// A switch sent is removed only as it was sent: one changed in between
+// waits for the next event.
+func TestSwitchClearedAsSent(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	if b, _, err := s.Switch(ctx, "s/1"); err != nil || b != nil {
+		t.Fatalf("none yet: %s %v", b, err)
+	}
+	s.SetSwitch(ctx, "s/1", []byte(`{"mode":"plan"}`))
+	_, sent, _ := s.Switch(ctx, "s/1")
+	s.SetSwitch(ctx, "s/1", []byte(`{"mode":"auto"}`))
+	if err := s.ClearSwitch(ctx, "s/1", sent); err != nil {
+		t.Fatal(err)
+	}
+	b, seq, _ := s.Switch(ctx, "s/1")
+	if string(b) != `{"mode":"auto"}` {
+		t.Fatalf("the change was removed with the one sent: %s", b)
+	}
+	s.ClearSwitch(ctx, "s/1", seq)
+	if b, _, _ := s.Switch(ctx, "s/1"); b != nil {
+		t.Fatalf("still waiting: %s", b)
+	}
+}

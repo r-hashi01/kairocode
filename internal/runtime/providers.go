@@ -315,9 +315,10 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 			model = r.cfg.Model
 		}
 	}
-	r.switchMu.Lock()
-	sw := r.switches[session]
-	r.switchMu.Unlock()
+	sw, _, err := r.pendingSwitch(ctx, session)
+	if err != nil {
+		return Settings{}, err
+	}
 	if sw != nil {
 		if sw.Engine != "" && sw.Engine != engine {
 			engine, model, effort = sw.Engine, "", ""
@@ -413,7 +414,12 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 		}
 	}
 	r.switchMu.Lock()
-	if prev := r.switches[session]; prev != nil {
+	defer r.switchMu.Unlock()
+	prev, _, err := r.pendingSwitch(ctx, session)
+	if err != nil {
+		return Settings{}, err
+	}
+	if prev != nil {
 		if sw.Engine == "" || sw.Engine == prev.Engine {
 			if sw.Engine == "" {
 				sw.Engine = prev.Engine
@@ -429,11 +435,9 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 			sw.Mode = prev.Mode // a mode set waits too
 		}
 	}
-	if r.switches == nil {
-		r.switches = map[string]*workflows.Switch{}
+	if err := r.setSwitch(ctx, session, sw); err != nil {
+		return Settings{}, err
 	}
-	r.switches[session] = &sw
-	r.switchMu.Unlock()
 	return r.Settings(ctx, session)
 }
 
@@ -450,27 +454,42 @@ func (r *Runtime) SetMode(ctx context.Context, session, mode string) (Settings, 
 		return Settings{}, err
 	}
 	r.switchMu.Lock()
-	if r.switches == nil {
-		r.switches = map[string]*workflows.Switch{}
-	}
-	// A new switch, never one changed in place: Settings reads one it
-	// took out of the map without the lock.
+	defer r.switchMu.Unlock()
 	var sw workflows.Switch
-	if prev := r.switches[session]; prev != nil {
+	prev, _, err := r.pendingSwitch(ctx, session)
+	if err != nil {
+		return Settings{}, err
+	}
+	if prev != nil {
 		sw = *prev
 	}
 	sw.Mode = mode
-	r.switches[session] = &sw
-	r.switchMu.Unlock()
+	if err := r.setSwitch(ctx, session, sw); err != nil {
+		return Settings{}, err
+	}
 	return r.Settings(ctx, session)
 }
 
-// takeSwitch is the switch the session's next event carries, if any; it is
-// then the session's to record.
-func (r *Runtime) takeSwitch(session string) *workflows.Switch {
-	r.switchMu.Lock()
-	defer r.switchMu.Unlock()
-	sw := r.switches[session]
-	delete(r.switches, session)
-	return sw
+// pendingSwitch is the switch the session's next event carries, if any
+// (ADR 0014, 追記 2026-11-02), and the count of its changes, for
+// Store.ClearSwitch once it is sent. It is kept in the store, so a switch
+// chosen survives the daemon's stopping before the next message.
+func (r *Runtime) pendingSwitch(ctx context.Context, session string) (*workflows.Switch, int64, error) {
+	b, seq, err := r.Store.Switch(ctx, session)
+	if err != nil || b == nil {
+		return nil, 0, err
+	}
+	var sw workflows.Switch
+	if err := json.Unmarshal(b, &sw); err != nil {
+		return nil, 0, fmt.Errorf("the switch waiting for %s: %w", session, err)
+	}
+	return &sw, seq, nil
+}
+
+func (r *Runtime) setSwitch(ctx context.Context, session string, sw workflows.Switch) error {
+	b, err := json.Marshal(sw)
+	if err != nil {
+		return err
+	}
+	return r.Store.SetSwitch(ctx, session, b)
 }
