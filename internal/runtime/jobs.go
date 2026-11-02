@@ -412,11 +412,13 @@ func (m *jobManager) recover() {
 		if !e.IsDir() || fileThere(m.path(id, jobFileNotified)) {
 			continue
 		}
+		// On the runtime's background: stopped and waited for as it
+		// closes, not left telling a closed runtime.
 		if fileThere(m.path(id, jobFileStatus)) || !m.alive(id) {
-			go m.done(id)
+			m.r.background(func(context.Context) { m.done(id) })
 			continue
 		}
-		go m.outlive(id)
+		m.r.background(func(ctx context.Context) { m.outlive(ctx, id) })
 	}
 }
 
@@ -426,17 +428,32 @@ func (m *jobManager) recover() {
 // this is for one that cannot (killed, or the daemon not reached). The
 // wait is the kernel's on the lock, not a poll; it ends with the runner,
 // which runs out of time at the latest.
-func (m *jobManager) outlive(id string) {
+//
+// The runtime closing (ctx) ends the wait here: the lock, when it comes,
+// is let go of with nothing told (the next runtime finds the command
+// ended, and tells of it).
+func (m *jobManager) outlive(ctx context.Context, id string) {
 	f, err := os.OpenFile(m.path(id, jobFileLock), os.O_RDWR, 0o600)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return
+	got := make(chan error, 1)
+	go func() { got <- syscall.Flock(int(f.Fd()), syscall.LOCK_EX) }()
+	select {
+	case err := <-got:
+		if err == nil {
+			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		}
+		f.Close()
+		if err == nil {
+			m.done(id)
+		}
+	case <-ctx.Done():
+		go func() { // ends with the runner, which runs out of time at the latest
+			<-got
+			f.Close()
+		}()
 	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	m.done(id)
 }
 
 // JobDone is told by a command's runner that it ended (the daemon's
