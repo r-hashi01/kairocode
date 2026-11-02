@@ -21,6 +21,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/secrets"
 )
 
 // kairocode plugin (ADR 0025): the plugins of a directory and their state;
@@ -247,13 +248,13 @@ func pluginConnect(ctx context.Context, data, dir, name string, in *os.File, std
 		if err := runtime.PluginOAuth(ctx, dir, name, func(u string) error { return openBrowser(stdout, u) }); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Connected %s; its tokens are kept in %s.\n", name, runtime.Secrets().Where())
+		fmt.Fprintf(stdout, "Connected %s; its tokens are kept in %s.\n", name, secrets.Open().Where())
 		return notifyConnected(ctx, data, name)
 	case "key":
 	default:
 		return fmt.Errorf("%s: auth type %q is not known", name, kind)
 	}
-	store := runtime.Secrets()
+	store := secrets.Open()
 	lines := bufio.NewReader(in)
 	for _, k := range keys {
 		prompt := k.Name
@@ -285,7 +286,7 @@ func pluginDisconnect(ctx context.Context, data, dir, name string, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	store := runtime.Secrets()
+	store := secrets.Open()
 	for _, k := range append(keys, struct{ Name, Description string }{Name: "oauth"}) {
 		if err := store.Delete(runtime.PluginSecretKey(p, k.Name)); err != nil {
 			return err

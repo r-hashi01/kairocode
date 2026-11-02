@@ -1,4 +1,9 @@
-package runtime
+// Package secrets keeps plugins' credentials (ADR 0025): in the system's
+// key store (macOS's keychain through security, Linux's Secret Service
+// through secret-tool), else in a file only the user can read. A value is
+// read when a plugin's server is started or reached, and never recorded
+// (invariant 6).
+package secrets
 
 import (
 	"bytes"
@@ -16,13 +21,8 @@ import (
 	"github.com/r-hashi01/kairocode/internal/config"
 )
 
-// Plugins' credentials (ADR 0025): kept in the system's key store (macOS's
-// keychain through security, Linux's Secret Service through secret-tool),
-// else in a file only the user can read. A value is read when a plugin's
-// server is started or reached, and never recorded (invariant 6).
-
-// SecretStore keeps credentials by key ("<plugin>/<name>").
-type SecretStore interface {
+// Store keeps credentials by key ("<plugin>/<name>").
+type Store interface {
 	Get(key string) (string, bool, error)
 	Set(key, value string) error
 	Delete(key string) error
@@ -33,9 +33,9 @@ type SecretStore interface {
 // secretService is the name values are kept under in the key store.
 const secretService = "kairocode"
 
-// Secrets is this machine's store: KAIROCODE_SECRETS=file (or no key store
+// Open is this machine's store: KAIROCODE_SECRETS=file (or no key store
 // here) keeps them in credentials.json of the user's config directory.
-func Secrets() SecretStore {
+func Open() Store {
 	if os.Getenv("KAIROCODE_SECRETS") != "file" {
 		switch {
 		case runtime.GOOS == "darwin" && onPath("security"):
