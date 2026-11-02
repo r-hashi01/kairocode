@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/r-hashi01/kairocode/internal/plugins"
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/secrets"
 )
 
 // A plugin is installed from git at its commit, connected with a key read
@@ -53,13 +53,13 @@ func TestPluginInstallConnectRemove(t *testing.T) {
 	if strings.Contains(out.String(), "kc-test-cli-key") {
 		t.Fatal("the key was shown")
 	}
-	if v, ok, _ := runtime.Secrets().Get("notes/token"); !ok || v != "kc-test-cli-key" {
+	if v, ok, _ := secrets.Open().Get("notes/token"); !ok || v != "kc-test-cli-key" {
 		t.Fatalf("kept: %q %v", v, ok)
 	}
 	if err := pluginDisconnect(ctx, data, t.TempDir(), "notes", &out); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := runtime.Secrets().Get("notes/token"); ok {
+	if _, ok, _ := secrets.Open().Get("notes/token"); ok {
 		t.Fatal("kept after disconnecting")
 	}
 	if err := pluginRemove("notes", &out); err != nil {

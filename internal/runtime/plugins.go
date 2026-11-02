@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/plugins"
+	"github.com/r-hashi01/kairocode/internal/secrets"
 	"maps"
 	"path/filepath"
 	"regexp"
@@ -40,6 +41,9 @@ func pluginCommit(dir string) string { return plugins.Commit(dir) }
 
 // plugin is a plugin as read.
 type plugin = plugins.Plugin
+
+// Secrets is this machine's store of plugins' credentials.
+func Secrets() secrets.Store { return secrets.Open() }
 
 // readPlugins reads dir's plugins.
 func readPlugins(dir string) []plugin { return plugins.Read(dir) }

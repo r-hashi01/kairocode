@@ -9,7 +9,6 @@ import (
 	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"github.com/r-hashi01/kairocode/internal/locale"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
-	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -193,258 +191,8 @@ func (a *agent) setDir(session, dir string) {
 func invalid(err error) error { return &rpcError{Code: codeInvalidParams, Message: err.Error()} }
 
 func (a *agent) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
-	switch method {
-	case "initialize":
-		return map[string]any{
-			"protocolVersion": ProtocolVersion,
-			"agentCapabilities": map[string]any{
-				"loadSession":         true,
-				"sessionCapabilities": map[string]any{"list": map[string]any{}},
-				"promptCapabilities":  map[string]any{"image": true, "audio": false, "embeddedContext": true},
-			},
-			"authMethods": []any{},
-			"agentInfo":   map[string]any{"name": "kairocode", "version": a.o.Version},
-		}, nil
-	case "session/new":
-		var p struct {
-			Cwd string `json:"cwd"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		if !filepath.IsAbs(p.Cwd) {
-			return nil, invalid(errors.New("cwd must be an absolute path"))
-		}
-		s, err := a.b.CreateSession(ctx, workflows.SessionInput{Dir: p.Cwd, Engine: a.o.Engine, Model: a.o.Model})
-		if err != nil {
-			return nil, err
-		}
-		a.setDir(s, p.Cwd)
-		opts, err := a.configOptions(ctx, s)
-		if err != nil {
-			return nil, err
-		}
-		modes, err := a.modes(ctx, s)
-		if err != nil {
-			return nil, err
-		}
-		w, err := a.watch(s)
-		if err != nil {
-			return nil, err
-		}
-		return then{Result: map[string]any{"sessionId": s, "configOptions": opts, "modes": modes}, After: a.afterNew(ctx, w, s)}, nil
-	case "session/list":
-		var p struct {
-			Cwd    string `json:"cwd"`
-			Cursor string `json:"cursor"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		return a.listSessions(ctx, p.Cwd, p.Cursor)
-	case "session/load":
-		var p struct {
-			SessionID string `json:"sessionId"`
-			Cwd       string `json:"cwd"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		if filepath.IsAbs(p.Cwd) {
-			a.setDir(p.SessionID, p.Cwd)
-		}
-		if err := a.replay(ctx, p.SessionID); err != nil {
-			return nil, err
-		}
-		// Worked out before the watch, which may ask the client about the
-		// session at once: the answer to the load comes first.
-		opts, err := a.configOptions(ctx, p.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		modes, err := a.modes(ctx, p.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		// What waits for a person is asked again: the watch is told it
-		// first, and asks once the answer to the load is written.
-		w, err := a.watch(p.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		a.offerCommands(ctx, p.SessionID)
-		return then{Result: map[string]any{"configOptions": opts, "modes": modes}, After: w.release}, nil
-	case "session/set_mode":
-		var p struct {
-			SessionID string `json:"sessionId"`
-			ModeID    string `json:"modeId"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		if _, err := a.b.SetMode(ctx, p.SessionID, p.ModeID); err != nil {
-			return nil, invalid(err)
-		}
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": p.ModeID})
-		return map[string]any{}, nil
-	case LoginMethodsRPC, LoginRPC:
-		var p struct {
-			Provider string `json:"provider"`
-			Method   string `json:"method"`
-			Done     bool   `json:"done"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || p.Provider == "" {
-			return nil, invalid(errors.New(`want {"provider": "<id>"}`))
-		}
-		if method == LoginMethodsRPC {
-			ms, err := a.b.LoginMethods(ctx, p.Provider)
-			if err != nil {
-				return nil, invalid(err)
-			}
-			if ms == nil {
-				ms = []api.AuthMethod{}
-			}
-			return map[string]any{"methods": ms}, nil
-		}
-		if err := a.b.Login(ctx, p.Provider, p.Method, p.Done); err != nil {
-			return nil, invalid(err)
-		}
-		return map[string]any{}, nil
-	case PluginsRPC:
-		var p struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" {
-			return nil, invalid(errors.New(`want {"sessionId": "<id>"}`))
-		}
-		list, err := a.b.Plugins(ctx, p.SessionID)
-		if err != nil {
-			return nil, invalid(err)
-		}
-		v := PluginsView{Installed: list}
-		v.Catalog, v.Marketplaces, v.Errors = plugins.Catalog()
-		return v, nil
-	case FlowRunsRPC:
-		var p struct {
-			Dir  string `json:"dir"`
-			Flow string `json:"flow"`
-			Only string `json:"only"`
-			N    int    `json:"n"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		runs, err := a.b.FlowRuns(ctx, p.Dir, p.Flow, p.Only, p.N)
-		if err != nil {
-			return nil, invalid(err)
-		}
-		if runs == nil {
-			runs = []api.FlowRun{}
-		}
-		return map[string]any{"runs": runs}, nil
-	case GoOnRPC:
-		var p struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" {
-			return nil, invalid(errors.New(`want {"sessionId": "<session>"}`))
-		}
-		dir := a.dirOf(p.SessionID)
-		if dir == "" {
-			return nil, invalid(errors.New("no such session here: " + p.SessionID))
-		}
-		s, turn, err := a.b.Fork(ctx, p.SessionID, -1, false)
-		if err != nil {
-			return nil, err
-		}
-		a.setDir(s, dir)
-		w, err := a.watch(s)
-		if err != nil {
-			return nil, err
-		}
-		return then{Result: map[string]any{"sessionId": s, "turn": turn}, After: a.afterNew(ctx, w, s)}, nil
-	case FlowRunRPC:
-		var p struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
-			return nil, invalid(errors.New(`want {"id": "<run>"}`))
-		}
-		f, err := a.b.FlowRun(ctx, p.ID)
-		if err != nil {
-			return nil, invalid(err)
-		}
-		return f, nil
-	case PluginRPC:
-		var p struct {
-			Args []string `json:"args"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || len(p.Args) == 0 {
-			return nil, invalid(errors.New(`want {"args": [...]}`))
-		}
-		return map[string]any{"text": pluginChange(ctx, p.Args)}, nil
-	case ModelsMethod:
-		var p struct {
-			Provider string `json:"provider"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || p.Provider == "" {
-			return nil, invalid(errors.New(`want {"provider": "<id>"}`))
-		}
-		ms, err := a.b.Models(ctx, p.Provider)
-		if err != nil {
-			return nil, invalid(err)
-		}
-		if ms == nil {
-			ms = []string{}
-		}
-		return map[string]any{"models": ms}, nil
-	case InstallMethod:
-		var p struct {
-			Provider string `json:"provider"`
-			Version  string `json:"version"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil || p.Provider == "" {
-			return nil, invalid(errors.New(`want {"provider": "<id>", "version": "<the version shown>"}`))
-		}
-		info, err := a.b.InstallProvider(ctx, p.Provider, p.Version)
-		if err != nil {
-			return nil, invalid(err)
-		}
-		return info, nil
-	case "session/set_config_option":
-		var p struct {
-			SessionID string `json:"sessionId"`
-			ConfigID  string `json:"configId"`
-			Value     string `json:"value"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		opts, err := a.setConfig(ctx, p.SessionID, p.ConfigID, p.Value)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"configOptions": opts}, nil
-	case "session/prompt":
-		return a.prompt(ctx, params)
-	case "session/cancel":
-		// The turn under way stops (ADR 0011); its session/prompt answers
-		// "cancelled". A notification: it does not hold up the messages
-		// after it while the daemon finds the turn.
-		var p struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, invalid(err)
-		}
-		a.wg.Add(1)
-		go func() {
-			defer a.wg.Done()
-			if _, err := a.b.Cancel(a.ctx, p.SessionID); err != nil && !errors.Is(err, api.ErrNoTurnToCancel) {
-				a.o.Logger.Warn("acp: cancelling the turn", "session", p.SessionID, "err", err)
-			}
-		}()
-		return nil, nil
+	if h, ok := handlers[method]; ok {
+		return h(a, ctx, params)
 	}
 	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 }
@@ -452,59 +200,14 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 // prompt runs a turn and answers when it ends.
 func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error) {
 	var p struct {
-		SessionID string `json:"sessionId"`
-		Prompt    []struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			URI      string `json:"uri"`
-			Data     string `json:"data"`     // an image's, in base64
-			MimeType string `json:"mimeType"` // an image's
-			Resource struct {
-				URI  string `json:"uri"`
-				Text string `json:"text"`
-			} `json:"resource"`
-		} `json:"prompt"`
+		SessionID string        `json:"sessionId"`
+		Prompt    []promptBlock `json:"prompt"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, invalid(err)
 	}
-	var text, files []string
-	var images []api.Image
-	dir := a.dirOf(p.SessionID)
-	for _, b := range p.Prompt {
-		switch b.Type {
-		case "text":
-			text = append(text, b.Text)
-		case "image":
-			data, err := base64.StdEncoding.DecodeString(b.Data)
-			if err != nil {
-				return nil, invalid(fmt.Errorf("image %d: not base64", len(images)+1))
-			}
-			images = append(images, api.Image{MediaType: b.MimeType, Data: data})
-		case "resource_link":
-			// A file of the session's folder is put in; anything else
-			// stays a link.
-			if f := attachment(dir, b.URI); dir != "" && f != "" {
-				files = append(files, f)
-			} else {
-				text = append(text, b.URI)
-			}
-		case "resource":
-			// What the editor put in itself (embeddedContext).
-			if b.Resource.Text != "" {
-				files = append(files, fmt.Sprintf("<file uri=%q>\n%s\n</file>", b.Resource.URI, strings.TrimRight(b.Resource.Text, "\n")))
-			}
-		}
-	}
-	if len(text) > 0 && len(files) > 0 {
-		text = append(text, "\n"+strings.Join(files, "\n\n"))
-	} else {
-		text = append(text, files...)
-	}
-	if len(text) == 0 && len(images) == 0 {
-		return nil, invalid(errors.New("the prompt has no text"))
-	}
-	if err := api.CheckImages(images); err != nil {
+	text, images, err := promptParts(a.dirOf(p.SessionID), p.Prompt)
+	if err != nil {
 		return nil, invalid(err)
 	}
 	// Watching before sending: no update of the turn is missed.
@@ -530,38 +233,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	case name == "/redo":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Redo(ctx, s) }, true
 	case name == "/fork":
-		n, files, bad := -1, false, ""
-		for _, f := range strings.Fields(args) {
-			if f == "--files" {
-				files = true
-			} else if v, err := strconv.Atoi(f); err == nil && v >= 0 {
-				n = v
-			} else {
-				bad = f
-			}
-		}
-		text := "Usage: /fork [turn] [--files]"
-		s, from, err := "", 0, error(nil)
-		if bad == "" { // nothing is made for a request it did not understand
-			s, from, err = a.b.Fork(ctx, p.SessionID, n, files)
-		}
-		switch {
-		case bad != "":
-		case errors.Is(err, api.ErrNoForkPoint):
-			text = "There is no finished turn to fork from there."
-		case errors.Is(err, api.ErrForkWhileRunning), errors.Is(err, api.ErrNoSnapshot):
-			text = err.Error()
-		case err != nil:
-			return nil, err
-		default:
-			text = fmt.Sprintf("Forked from turn %d as a new session; this one is as it was. To go on in it: kairocode chat -session %s", from,
-				strings.TrimPrefix(s, "s/"))
-			if files {
-				text += "\nThe working files are being put back as they were after that turn (/undo in the new session takes it back)."
-			}
-		}
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.forkCommand(ctx, p.SessionID, args)
 	case name == "/compact":
 		start, quiet = func(ctx context.Context, s, _ string) (int, error) { return a.b.Compact(ctx, s) }, true
 	case name == "/provider" && strings.HasPrefix(strings.TrimSpace(args), "install "):
@@ -571,8 +243,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		if _, err := a.b.InstallProvider(ctx, id, ""); err != nil {
 			text = "Could not install " + id + ": " + err.Error()
 		}
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.say(p.SessionID, text), nil
 	case name == "/log":
 		// Without a turn: the session's record (ADR 0023).
 		text := ""
@@ -581,24 +252,19 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 		} else {
 			text = l.Text()
 		}
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.say(p.SessionID, text), nil
 	case name == "/mcp":
 		// Without a turn: the MCP servers and custom tools (ADR 0022).
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.mcpText(ctx, p.SessionID))})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.say(p.SessionID, a.mcpText(ctx, p.SessionID)), nil
 	case name == "/plugin":
 		// Without a turn: the plugins and their state (ADR 0025).
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.pluginText(ctx, p.SessionID, strings.Fields(args)))})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.say(p.SessionID, a.pluginText(ctx, p.SessionID, strings.Fields(args))), nil
 	case name == "/skills":
 		// Without a turn: the skills, and what of them is not taken.
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.skillsText(ctx, p.SessionID))})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.say(p.SessionID, a.skillsText(ctx, p.SessionID)), nil
 	case name == "/login":
 		// Without a turn: the ways to sign in, or one taken (ADR 0015).
-		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.loginCommand(ctx, p.SessionID, strings.Fields(args)))})
-		return map[string]any{"stopReason": "end_turn"}, nil
+		return a.say(p.SessionID, a.loginCommand(ctx, p.SessionID, strings.Fields(args))), nil
 	case name == "/provider" || name == "/model" || name == "/effort":
 		// Without a turn: the settings change, or are listed (ADR 0014).
 		return a.settingsCommand(ctx, p.SessionID, name[1:], strings.TrimSpace(args))
@@ -612,12 +278,10 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			if err != nil {
 				text = err.Error()
 			}
-			a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(strings.TrimRight(text, "\n"))})
-			return map[string]any{"stopReason": "end_turn"}, nil
+			return a.say(p.SessionID, strings.TrimRight(text, "\n")), nil
 		}
 		if flow == "runs" { // the runs kept, without a turn (ADR 0029)
-			a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(a.flowRunsText(ctx, p.SessionID))})
-			return map[string]any{"stopReason": "end_turn"}, nil
+			return a.say(p.SessionID, a.flowRunsText(ctx, p.SessionID)), nil
 		}
 		if flow == "new" { // the model writes one from the words (ADR 0003)
 			start = func(ctx context.Context, s, _ string) (int, error) { return a.b.NewFlow(ctx, s, rest) }
@@ -753,4 +417,103 @@ func (a *agent) listSessions(ctx context.Context, cwd, cursor string) (any, erro
 		out["nextCursor"] = last.Updated.UTC().Format(time.RFC3339Nano) + "|" + last.ID
 	}
 	return out, nil
+}
+
+// promptBlock is a block of a prompt: text, an image, a link to a file or
+// a file's content.
+type promptBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	URI      string `json:"uri"`
+	Data     string `json:"data"`     // an image's, in base64
+	MimeType string `json:"mimeType"` // an image's
+	Resource struct {
+		URI  string `json:"uri"`
+		Text string `json:"text"`
+	} `json:"resource"`
+}
+
+// promptParts are a prompt's text (its files of dir put in after it) and
+// its images; what the model would not take is refused.
+func promptParts(dir string, blocks []promptBlock) ([]string, []api.Image, error) {
+	var text, files []string
+	var images []api.Image
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			text = append(text, b.Text)
+		case "image":
+			data, err := base64.StdEncoding.DecodeString(b.Data)
+			if err != nil {
+				return nil, nil, fmt.Errorf("image %d: not base64", len(images)+1)
+			}
+			images = append(images, api.Image{MediaType: b.MimeType, Data: data})
+		case "resource_link":
+			// A file of the session's folder is put in; anything else
+			// stays a link.
+			if f := attachment(dir, b.URI); dir != "" && f != "" {
+				files = append(files, f)
+			} else {
+				text = append(text, b.URI)
+			}
+		case "resource":
+			// What the editor put in itself (embeddedContext).
+			if b.Resource.Text != "" {
+				files = append(files, fmt.Sprintf("<file uri=%q>\n%s\n</file>", b.Resource.URI, strings.TrimRight(b.Resource.Text, "\n")))
+			}
+		}
+	}
+	if len(text) > 0 && len(files) > 0 {
+		text = append(text, "\n"+strings.Join(files, "\n\n"))
+	} else {
+		text = append(text, files...)
+	}
+	if len(text) == 0 && len(images) == 0 {
+		return nil, nil, errors.New("the prompt has no text")
+	}
+	if err := api.CheckImages(images); err != nil {
+		return nil, nil, err
+	}
+	return text, images, nil
+}
+
+// say answers a prompt without a turn: text, and the end.
+func (a *agent) say(session, text string) map[string]any {
+	a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(text)})
+	return map[string]any{"stopReason": "end_turn"}
+}
+
+// forkCommand is /fork [turn] [--files], without a turn (ADR 0021).
+func (a *agent) forkCommand(ctx context.Context, session, args string) (any, error) {
+	n, files, bad := -1, false, ""
+	for _, f := range strings.Fields(args) {
+		if f == "--files" {
+			files = true
+		} else if v, err := strconv.Atoi(f); err == nil && v >= 0 {
+			n = v
+		} else {
+			bad = f
+		}
+	}
+	text := "Usage: /fork [turn] [--files]"
+	s, from, err := "", 0, error(nil)
+	if bad == "" { // nothing is made for a request it did not understand
+		s, from, err = a.b.Fork(ctx, session, n, files)
+	}
+	switch {
+	case bad != "":
+	case errors.Is(err, api.ErrNoForkPoint):
+		text = "There is no finished turn to fork from there."
+	case errors.Is(err, api.ErrForkWhileRunning), errors.Is(err, api.ErrNoSnapshot):
+		text = err.Error()
+	case err != nil:
+		return nil, err
+	default:
+		text = fmt.Sprintf("Forked from turn %d as a new session; this one is as it was. To go on in it: kairocode chat -session %s", from,
+			strings.TrimPrefix(s, "s/"))
+		if files {
+			text += "\nThe working files are being put back as they were after that turn (/undo in the new session takes it back)."
+		}
+	}
+	return a.say(session, text), nil
 }
