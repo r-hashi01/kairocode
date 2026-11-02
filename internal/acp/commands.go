@@ -278,19 +278,16 @@ func pluginChange(ctx context.Context, args []string) string {
 		}
 	}
 	one := len(args) == 2
+	said := plugins.Said{Prefix: "/plugin"}
 	switch {
 	case args[0] == "install" && one:
 		got, err := plugins.InstallPlugin(ctx, args[1])
 		if err != nil {
 			return "Not installed: " + err.Error()
 		}
-		text := "Installed " + got.Name
-		if got.Version != "" {
-			text += " " + got.Version
-		}
-		text += " from " + got.From + "."
+		text := said.Installed(got)
 		if got.Auth != "none" {
-			text += " It needs credentials: /plugin connect " + got.Name
+			text += " " + said.NeedsCredentials(got.Name)
 		}
 		return text
 	case args[0] == "update" && one:
@@ -298,15 +295,12 @@ func pluginChange(ctx context.Context, args []string) string {
 		if err != nil {
 			return "Not updated: " + err.Error()
 		}
-		if before == after {
-			return args[1] + " is up to date."
-		}
-		return fmt.Sprintf("Updated %s: %s → %s. Turns under way go on with what they started with.", args[1], before, after)
+		return said.Updated(args[1], before, after)
 	case args[0] == "remove" && one:
 		if err := plugins.RemovePlugin(args[1]); err != nil {
 			return "Not removed: " + err.Error()
 		}
-		return "Removed " + args[1] + ". Its credentials are kept until /plugin disconnect " + args[1] + "."
+		return said.Removed(args[1])
 	case args[0] == "marketplace" && (len(args) == 1 || args[1] == "list") && len(args) <= 2:
 		return strings.TrimRight(plugins.MarketplacesText(), "\n")
 	case args[0] == "marketplace" && len(args) == 3 && args[1] == "add":
@@ -314,18 +308,18 @@ func pluginChange(ctx context.Context, args []string) string {
 		if err != nil {
 			return "Not added: " + err.Error()
 		}
-		return fmt.Sprintf("Added the marketplace %s (%d plugins). /plugin shows them.", m.Name, len(m.Plugins))
+		return said.MarketAdded(m)
 	case args[0] == "marketplace" && len(args) == 3 && args[1] == "update":
 		before, after, err := plugins.UpdateMarketplace(ctx, args[2])
 		if err != nil {
 			return "Not updated: " + err.Error()
 		}
-		return fmt.Sprintf("%s: %s → %s.", args[2], before, after)
+		return said.MarketUpdated(args[2], before, after)
 	case args[0] == "marketplace" && len(args) == 3 && args[1] == "remove":
 		if err := plugins.RemoveMarketplace(args[2]); err != nil {
 			return "Not removed: " + err.Error()
 		}
-		return "Removed the marketplace " + args[2] + ". The plugins installed from it stay."
+		return said.MarketRemoved(args[2])
 	}
 	return "/plugin [list | install <name[@marketplace]> | update <name> | remove <name> | connect <name> | disconnect <name> | marketplace [list | add <git URL, owner/repo or folder> | update <name> | remove <name>]]"
 }

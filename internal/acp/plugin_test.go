@@ -24,7 +24,7 @@ func TestPluginChange(t *testing.T) {
 	}{
 		{[]string{"install", "exa"}, "Installed exa 1.0.0 from kairocode. It needs credentials: /plugin connect exa"},
 		{[]string{"install", "exa"}, "Not installed: a plugin named exa is installed already"},
-		{[]string{"update", "exa"}, "exa is up to date."},
+		{[]string{"update", "exa"}, "exa is up to date (1.0.0)."},
 		{[]string{"marketplace"}, "kairocode: built in, 2 plugins"},
 		{[]string{"marketplace", "remove", "kairocode"}, "Not removed: kairocode is built in"},
 		{[]string{"remove", "exa"}, "Removed exa. Its credentials are kept until /plugin disconnect exa."},

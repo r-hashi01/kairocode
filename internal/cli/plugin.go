@@ -107,6 +107,9 @@ func pluginList(ctx context.Context, data, dir string, stdout io.Writer) error {
 	return err
 }
 
+// said is how kairocode plugin tells what it did.
+var said = plugins.Said{Prefix: "kairocode plugin"}
+
 // pluginInstall installs a plugin (ADR 0027): name or name@market of a
 // marketplace, a git URL, or a folder. Its credentials are asked for
 // next, if its marketplace says so and this is a terminal.
@@ -115,18 +118,14 @@ func pluginInstall(ctx context.Context, data, dir, arg string, in *os.File, stdo
 	if err != nil {
 		return err
 	}
-	at := ""
-	if got.Version != "" {
-		at = " " + got.Version
-	}
-	fmt.Fprintf(stdout, "Installed %s%s from %s.\n", got.Name, at, got.From)
+	fmt.Fprintln(stdout, said.Installed(got))
 	if got.Auth == "none" {
 		return nil
 	}
 	if got.ConnectNow && isTerminal(in) {
 		return pluginConnect(ctx, data, dir, got.Name, in, stdout)
 	}
-	fmt.Fprintf(stdout, "It needs credentials: kairocode plugin connect %s\n", got.Name)
+	fmt.Fprintln(stdout, said.NeedsCredentials(got.Name))
 	return nil
 }
 
@@ -142,11 +141,7 @@ func pluginUpdate(ctx context.Context, name string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if before == after {
-		fmt.Fprintf(stdout, "%s is up to date (%s).\n", name, cmp.Or(after, "no version"))
-		return nil
-	}
-	fmt.Fprintf(stdout, "Updated %s: %s → %s. Turns under way go on with what they started with.\n", name, cmp.Or(before, "?"), cmp.Or(after, "?"))
+	fmt.Fprintln(stdout, said.Updated(name, before, after))
 	return nil
 }
 
@@ -156,7 +151,7 @@ func pluginRemove(name string, stdout io.Writer) error {
 	if err := plugins.RemovePlugin(name); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Removed %s. Its credentials are kept until kairocode plugin disconnect %s.\n", name, name)
+	fmt.Fprintln(stdout, said.Removed(name))
 	return nil
 }
 
@@ -179,24 +174,20 @@ func pluginMarketplace(ctx context.Context, args []string, stdout io.Writer) err
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Added the marketplace %s (%d plugins). kairocode plugin list shows them.\n", m.Name, len(m.Plugins))
+		fmt.Fprintln(stdout, said.MarketAdded(m))
 		return nil
 	case "update":
 		before, after, err := plugins.UpdateMarketplace(ctx, args[0])
 		if err != nil {
 			return err
 		}
-		if before == after {
-			fmt.Fprintf(stdout, "%s is up to date (%s).\n", args[0], after)
-		} else {
-			fmt.Fprintf(stdout, "Updated %s: %s → %s. kairocode plugin update <name> brings its plugins up to it.\n", args[0], before, after)
-		}
+		fmt.Fprintln(stdout, said.MarketUpdated(args[0], before, after))
 		return nil
 	case "remove":
 		if err := plugins.RemoveMarketplace(args[0]); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Removed the marketplace %s. The plugins installed from it stay.\n", args[0])
+		fmt.Fprintln(stdout, said.MarketRemoved(args[0]))
 		return nil
 	}
 	return usage
