@@ -697,7 +697,7 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 	for _, n := range r.policy.Planned {
 		planned = planned || n == name
 	}
-	g, err := gateTool(r.ctx, Policy{Rules: r.policy.Permissions, ReadOnly: r.policy.ReadOnly, Dry: r.in.Dry}, name, planned, in, nil, nil)
+	g, err := gateTool(r.ctx, Policy{Rules: r.policy.Permissions, ReadOnly: r.policy.ReadOnly, Dry: r.in.Dry, Loopback: r.policy.Loopback}, name, planned, in, nil, nil)
 	if err != nil {
 		return nil, r.fail(err)
 	}

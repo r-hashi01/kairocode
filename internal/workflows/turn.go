@@ -299,7 +299,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 						continue
 					}
 				}
-				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry}
+				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback}
 				if in.Mode == ModeAuto && refused < MaxAutoRefusals {
 					policy.Auto, policy.Request = true, in.Message
 				}
@@ -533,7 +533,7 @@ func runHooks(ctx *kairo.Context, in TurnInput, agent Agent, event, tag, args st
 			}
 			call := ToolInput{Dir: in.Dir, Call: fmt.Sprintf("hook_%d_%s_%d", in.N, tag, i), Args: hookArgs}
 			d, err := kairo.Call[PermissionOutput](ctx, ActPermissionCheck, PermissionInput{
-				Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly}, Tool: HookTool, Call: call})
+				Policy: Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Loopback: agent.Loopback}, Tool: HookTool, Call: call})
 			if err != nil {
 				return "", err
 			}
@@ -852,7 +852,7 @@ func ran(g Gate) bool {
 // autoPolicy is a CLI engine's turn's policy: in auto mode, judged
 // against the turn's message (ADR 0016).
 func autoPolicy(agent Agent, in TurnInput) Policy {
-	p := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry}
+	p := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback}
 	if in.Mode == ModeAuto {
 		p.Auto, p.Request = true, in.Message
 	}

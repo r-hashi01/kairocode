@@ -370,7 +370,11 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 		if tools.Loopback(args) {
 			// This machine's network, in the sandbox (ADR 0031): as bash's
 			// rules say, unless sandbox.loopback says to ask or refuse.
-			switch loopbackSetting(in.Call.Dir) {
+			setting := permission.Action(in.Policy.Loopback) // as the turn started
+			if setting == "" {                               // a turn from before it was kept
+				setting = loopbackSetting(in.Call.Dir)
+			}
+			switch setting {
 			case permission.Deny:
 				return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "sandbox.loopback is \"deny\"", Subject: subj}, false, nil
 			case permission.Ask:

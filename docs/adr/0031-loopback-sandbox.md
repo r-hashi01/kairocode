@@ -85,6 +85,14 @@ Linux の `loopback` でホームの下のソケットに届くことが分か�
 
 Linux に、パスの上の Unix ソケットへの接続をパスで制限する仕組み（Landlock）が入り、広く使えるようになったら、それを重ねることを見直します（2026 年 4 月の時点ではレビュー中だった）。
 
+## 追記（2026-11-02）: `sandbox.loopback` は、ターンの始めの値で決める
+
+`sandbox.loopback` の設定は、権限の規則と同じく、ターンの始めに記録します（不変条件 2）。これまでは、`permission.check` が呼ばれるたびに設定のファイルを読んでいたので、ターンの途中で設定を変えると、同じターンの後の呼び出しが新しい値で決まっていました。
+
+- `agent.load` が、設定の値を `Agent.Loopback` として返します。ワークフローは、それを `Policy.Loopback` として `permission.check` に渡します（`internal/workflows/types.go`）。
+- `permission.check` は、`Policy.Loopback` があればそれで決めます。空なのは、記録する前に始まったターンです。そのときだけ、今までどおり設定を読みます（記録された入力は変えない）。
+- テスト: `internal/runtime`（`TestLoopbackKeptAsTheTurnStarted`）。ターンの途中で `deny` に変えても、そのターンの `loopback` の呼び出しは、始めの値で通る。
+
 ## 結果
 
 - KairoCode のエージェントは、検査を聞かれずに sandbox の中で動かせます。外に出すのは、入れ子の sandbox が要るテストを含めた全部を動かすときだけです。

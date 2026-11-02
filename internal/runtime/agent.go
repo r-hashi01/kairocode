@@ -408,6 +408,9 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		Planned:     planned,
 		Permissions: rulesHash,
 		ReadOnly:    readOnly,
+		// Kept with the rules: a change to the setting meanwhile does not
+		// change the turn's checks (ADR 0031, invariant 2).
+		Loopback: string(loopbackSetting(in.Dir)),
 	}, nil
 }
 
