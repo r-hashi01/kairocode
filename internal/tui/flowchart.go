@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"maps"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 )
 
 // States of a box of a flow's chart.
@@ -599,13 +598,7 @@ func FlowGraph(dir, name string, width int) (string, error) {
 	if !flowchart.ValidName(name) {
 		return "", fmt.Errorf("%q is not a flow's name", name)
 	}
-	// Read as flow.load reads it: within dir, links and all.
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	src, err := root.ReadFile(filepath.Join(flowchart.Dir, name+".star"))
+	src, err := flowfile.Read(dir, name, false) // as flow.load reads it
 	if err != nil {
 		return "", fmt.Errorf("the flow %q: %w", name, err)
 	}
@@ -619,25 +612,9 @@ func FlowGraph(dir, name string, width int) (string, error) {
 // readFlows is the scripts of the project's flows in dir, by name.
 func readFlows(dir string) map[string]string {
 	out := map[string]string{}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return out
-	}
-	defer root.Close()
-	f, err := root.Open(flowchart.Dir)
-	if err != nil {
-		return out
-	}
-	entries, _ := f.ReadDir(-1)
-	f.Close()
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), ".star")
-		if !ok || e.IsDir() || !flowchart.ValidName(name) {
-			continue
-		}
-		if b, err := root.ReadFile(filepath.Join(flowchart.Dir, e.Name())); err == nil {
-			out[name] = string(b)
-		}
+	scripts, _ := flowfile.List(dir, false)
+	for _, s := range scripts {
+		out[s.Name] = string(s.Src)
 	}
 	return out
 }

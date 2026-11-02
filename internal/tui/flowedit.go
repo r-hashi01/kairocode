@@ -1,13 +1,12 @@
 package tui
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 )
 
 // flowEdit is a flow being changed on its chart (/flow edit, ADR 0003):
@@ -54,17 +53,9 @@ func (e *flowEdit) chosen() *flowchart.Node {
 	return b[e.sel]
 }
 
-// flowPath is the script of flow name in dir.
-func flowPath(name string) string { return filepath.Join(flowchart.Dir, name+".star") }
-
 // openFlowEdit starts changing flow name of dir on its chart.
 func openFlowEdit(dir, name string) (*flowEdit, error) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	src, err := root.ReadFile(flowPath(name))
+	src, err := flowfile.Read(dir, name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -91,19 +82,7 @@ func (m *model) applyEdit(src []byte, err error) {
 		e.note = "not changed: " + err.Error()
 		return
 	}
-	root, err := os.OpenRoot(m.o.Dir)
-	if err != nil {
-		e.note = err.Error()
-		return
-	}
-	defer root.Close()
-	tmp := flowPath(e.name) + ".edit"
-	if err := root.WriteFile(tmp, src, 0o644); err != nil {
-		e.note = err.Error()
-		return
-	}
-	if err := root.Rename(tmp, flowPath(e.name)); err != nil {
-		_ = root.Remove(tmp)
+	if err := flowfile.Write(m.o.Dir, e.name, src); err != nil {
 		e.note = err.Error()
 		return
 	}

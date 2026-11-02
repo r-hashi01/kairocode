@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"path"
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 )
 
 // FlowPublishTool makes a flow's draft the flow that runs (ADR 0030): it
@@ -37,7 +37,7 @@ func DraftOf(env Env, name string) ([]byte, error) {
 	if !flowchart.ValidName(name) {
 		return nil, errors.New("not a flow's name")
 	}
-	p := path.Join(flowchart.DraftsDir, name+".star")
+	p := flowfile.Path(name, true)
 	for _, dir := range []string{".kairocode", flowchart.Dir, flowchart.DraftsDir} {
 		if st, err := env.Root.Lstat(dir); err == nil && st.Mode()&fs.ModeSymlink != 0 {
 			return nil, errors.New(dir + " is a symbolic link: drafts are not read through it")
@@ -74,7 +74,7 @@ func planFlowPublish(_ context.Context, env Env, input json.RawMessage) Planned 
 	if problems := flowchart.Check(in.Name, src); len(problems) > 0 {
 		return fail("not published: the draft has problems; fix them with flow_write:\n%s", strings.Join(problems, "\n"))
 	}
-	p := path.Join(flowchart.Dir, in.Name+".star")
+	p := flowfile.Path(in.Name, false)
 	before, err := current(env, p)
 	if err != nil {
 		return fail("%v", err)

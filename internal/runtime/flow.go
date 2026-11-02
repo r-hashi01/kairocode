@@ -8,15 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 	"go.starlark.net/syntax"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
@@ -35,21 +33,13 @@ func flowLoad(t *kairo.TaskContext, in workflows.FlowLoadInput) (workflows.FlowS
 	if !FlowName(in.Name) {
 		return workflows.FlowSource{Error: fmt.Sprintf("%q is not a flow's name (letters, digits, - and _)", in.Name)}, nil
 	}
-	root, err := os.OpenRoot(in.Dir)
-	if err != nil {
-		return workflows.FlowSource{}, err
-	}
-	defer root.Close()
-	dir := FlowsDir
-	if in.Draft {
-		dir = flowchart.DraftsDir // a draft, run as a try (ADR 0030)
-	}
-	b, err := root.ReadFile(filepath.Join(dir, in.Name+".star"))
+	// A draft is run as a try (ADR 0030).
+	b, err := flowfile.Read(in.Dir, in.Name, in.Draft)
 	if errors.Is(err, fs.ErrNotExist) {
 		if in.Draft {
-			return workflows.FlowSource{Error: fmt.Sprintf("there is no draft of the flow %q (%s/%s.star)", in.Name, dir, in.Name)}, nil
+			return workflows.FlowSource{Error: fmt.Sprintf("there is no draft of the flow %q (%s)", in.Name, flowfile.Path(in.Name, true))}, nil
 		}
-		return workflows.FlowSource{Error: fmt.Sprintf("there is no flow %q (%s/%s.star)", in.Name, FlowsDir, in.Name)}, nil
+		return workflows.FlowSource{Error: fmt.Sprintf("there is no flow %q (%s)", in.Name, flowfile.Path(in.Name, false))}, nil
 	}
 	if err != nil {
 		return workflows.FlowSource{}, err
@@ -146,7 +136,7 @@ func (r *Runtime) Flows(ctx context.Context, session string) ([]FlowInfo, error)
 	if err != nil {
 		return nil, err
 	}
-	drafts, err := scripts(dir, flowchart.DraftsDir)
+	drafts, err := scripts(dir, true)
 	for i := range drafts {
 		drafts[i].Draft = true
 	}
@@ -155,31 +145,19 @@ func (r *Runtime) Flows(ctx context.Context, session string) ([]FlowInfo, error)
 
 // flowsIn are the flows of the project in dir, by name (published: not
 // their drafts).
-func flowsIn(dir string) ([]FlowInfo, error) { return scripts(dir, FlowsDir) }
+func flowsIn(dir string) ([]FlowInfo, error) { return scripts(dir, false) }
 
-// scripts are the flows' scripts in sub of dir, by name.
-func scripts(dir, sub string) ([]FlowInfo, error) {
-	entries, err := os.ReadDir(filepath.Join(dir, sub))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+// scripts are the flows' scripts of dir (its drafts with draft), by name.
+func scripts(dir string, draft bool) ([]FlowInfo, error) {
+	list, err := flowfile.List(dir, draft)
 	if err != nil {
 		return nil, err
 	}
 	var out []FlowInfo
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), ".star")
-		if !ok || e.IsDir() || !FlowName(name) {
-			continue
-		}
-		f := FlowInfo{Name: name}
-		if b, err := os.ReadFile(filepath.Join(dir, sub, e.Name())); err == nil {
-			f.Description = description(e.Name(), b, "DESCRIPTION")
-			f.Args = description(e.Name(), b, "ARGS")
-		}
-		out = append(out, f)
+	for _, s := range list {
+		file := s.Name + ".star"
+		out = append(out, FlowInfo{Name: s.Name, Description: description(file, s.Src, "DESCRIPTION"), Args: description(file, s.Src, "ARGS")})
 	}
-	slices.SortFunc(out, func(a, b FlowInfo) int { return strings.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
@@ -267,8 +245,8 @@ func FlowHelp(dir, name string) (string, error) {
 	if !FlowName(name) {
 		return "", fmt.Errorf("%q is not a flow's name", name)
 	}
-	pub, perr := os.ReadFile(filepath.Join(dir, FlowsDir, name+".star"))
-	draft, derr := os.ReadFile(filepath.Join(dir, flowchart.DraftsDir, name+".star"))
+	pub, perr := flowfile.Read(dir, name, false)
+	draft, derr := flowfile.Read(dir, name, true)
 	switch {
 	case perr == nil:
 		h, err := flowchart.Help(name, pub, false)
@@ -278,6 +256,8 @@ func FlowHelp(dir, name string) (string, error) {
 		return h, err
 	case derr == nil:
 		return flowchart.Help(name, draft, true)
+	case !errors.Is(perr, fs.ErrNotExist):
+		return "", fmt.Errorf("the flow %q: %w", name, perr) // a link out of the project, say
 	}
 	return "", fmt.Errorf("there is no flow %q (%s/%s.star), nor a draft of one", name, FlowsDir, name)
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 )
 
 // FlowWriteTool writes a flow's draft (ADR 0003, 0030): with
@@ -65,7 +66,7 @@ func planFlowWrite(_ context.Context, env Env, input json.RawMessage) Planned {
 	if err != nil {
 		return fail("not written: %v", err)
 	}
-	p := path.Join(flowchart.DraftsDir, in.Name+".star")
+	p := flowfile.Path(in.Name, true)
 	before, err := current(env, p)
 	if err != nil {
 		return fail("%v", err)
@@ -88,7 +89,7 @@ func applyFlowWrite(_ context.Context, env Env, data json.RawMessage) Result {
 	// be written in .kairocode.
 	dir := path.Dir(w.Path)
 	name, ok := strings.CutSuffix(path.Base(w.Path), ".star")
-	if !ok || !flowchart.ValidName(name) || (dir != flowchart.Dir && dir != flowchart.DraftsDir) || w.Path != path.Join(dir, name+".star") {
+	if !ok || !flowchart.ValidName(name) || (dir != flowchart.Dir && dir != flowchart.DraftsDir) || w.Path != flowfile.Path(name, dir == flowchart.DraftsDir) {
 		return failed("%s is not a flow's script", w.Path)
 	}
 	// Each directory on the way is itself, not a link to somewhere else
