@@ -52,8 +52,12 @@ kairocode run -detach "…"            # 人の承認が要るところで止め
 kairocode resume <session>           # その続き
 kairocode approvals <session>        # 待っている承認の一覧
 kairocode approve [-deny] <key>      # 承認に答える（どの端末からでも）
+kairocode answer <key> <answer>      # フローの質問に答える
 kairocode log <session>              # セッションの記録（ターン、モデルの入出力、ツール、待ち、使用量）
 kairocode sessions                   # このフォルダのセッション
+kairocode fork [-files] <session> [turn]   # 過去のターンから、別のセッションとして続ける
+kairocode plugin install <name>      # プラグイン（MCP サーバーとスキル）を入れる。connect で鍵を渡す
+kairocode usage -session <session>   # モデルの呼び出しに使ったトークン
 ```
 
 `kairocode help` にすべてのコマンドがあります。セッションは、データの置き場（既定は `~/.local/share/kairocode`）ごとに 1 つのデーモンが動かします。デーモンはコマンドが自動で起動し、使われなければ 10 分で止まります。
@@ -73,6 +77,7 @@ kairocode sessions                   # このフォルダのセッション
 - 画像: Ctrl+V（クリップボードの画像。画像だけなら Cmd+V でも）、または端末に画像のファイルを落とすと、入力欄に `[Image #1]` と入り、メッセージと一緒に送られます。Linux では `wl-paste` か `xclip` が要ります
 - 大きな貼り付け（10 行か 1000 文字を超えるもの）は、入力欄では `[Pasted text #1 +42 lines]` と畳まれ、送るときに元の文に戻ります
 - ターン中に打ったメッセージは、ターンが終わってから送られます
+- 時間のかかるコマンド（テスト、ビルド、サーバー）は、モデルが裏で動かして、後から出力を読んだり終わりを待ったりできます。デーモンが入れ替わっても、コマンドは動き続けます
 - 通知: 端末を見ていない（焦点が外れている）ときに、承認や質問で待つとき、ターンが終わったときに、端末の通知（iTerm2・WezTerm・Ghostty・kitty）かベルで知らせます。`~/.config/kairocode/kairocode.json` の `"notify"` で `"unfocused"`（既定）・`"always"`・`"never"` を選べます
 - セッションが保存先の誤りで止まったときは、最後に終わったターンから新しいセッションで自動で続けます（元のセッションの記録は残ります）
 
@@ -113,9 +118,26 @@ def main(input):
 }
 ```
 
-KairoCode が動かすコマンドは、OS の sandbox の中で動きます。書けるのは作業ディレクトリと一時ディレクトリだけで、その中でも `.git`・`.kairocode`・`.claude` などは守られます。sandbox の外で動かすときは、既定では毎回人に聞きます。
+KairoCode が動かすコマンドは、OS の sandbox の中で動きます。書けるのは作業ディレクトリと一時ディレクトリだけで、その中でも `.git`・`.kairocode`・`.claude` などは守られます。ネットワークは使えません。sandbox の外で動かすときは、既定では毎回人に聞きます。
 
-プロジェクトの設定（権限、hook、MCP サーバー）は、そのフォルダを信頼すると答えるまで読みません。
+テストのように手元のサーバーにつなぐコマンドは、モデルが「手元の通信だけ」の sandbox（`loopback`）を選べます。この機械の中の口には届きますが、外の機械と、KairoCode 自身の承認の口には届きません。気になるなら `"sandbox": {"loopback": "ask"}`（毎回聞く）か `"deny"` にします。
+
+プロジェクトの設定（権限、hook、MCP サーバー）は、そのフォルダを信頼すると答えるまで読みません。Claude Code の設定に書かれた hook（コマンド）は、初めて動く前に、sandbox の中で動かすか、外で動かすか、動かさないかを聞きます。`"agents": {"claudeHooks": "off"}` で読まないようにできます。
+
+### `kairocode.json` で決められること
+
+| 項目 | 意味 | 置ける場所 |
+|---|---|---|
+| `permission` | ツールごとの規則（上を参照） | 利用者、プロジェクト |
+| `sandbox.loopback` | 手元の通信だけの sandbox を `allow`（既定）・`ask`・`deny` | 利用者（プロジェクトは厳しくすることだけ） |
+| `hooks` | ターンの終わりなどに動かすフロー | 利用者、プロジェクト |
+| `mcp`、`tools` | MCP サーバーと、コマンドで書く自分のツール | 利用者、プロジェクト |
+| `lsp` | 書いたファイルの診断に使う言語サーバー（`false` で止める） | 利用者、プロジェクト |
+| `agents.claudeHooks` | Claude Code の hook を `ask`（既定）か `off` | 利用者（プロジェクトは `off` にすることだけ） |
+| `http` | `http`・`fetch` のツールが使う鍵（`auth`）と、手元のアドレスを許すか（`allowPrivate`） | 利用者 |
+| `models.<名前>.context` | モデルの文脈の長さ（要約を始める目安） | 利用者 |
+| `flowHistory` | フローの実行を残す数（`keep`）と日数（`days`） | 利用者 |
+| `notify`、`language` | 通知の出し方、表示の言語 | 利用者 |
 
 ## 開発
 
