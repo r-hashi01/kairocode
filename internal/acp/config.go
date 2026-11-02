@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -25,7 +25,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 		return nil, err
 	}
 	// Those that run here first, then those to install, then the rest.
-	rank := func(p runtime.ProviderInfo) int {
+	rank := func(p api.ProviderInfo) int {
 		switch {
 		case p.Available:
 			return 0
@@ -34,7 +34,7 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 		}
 		return 2
 	}
-	slices.SortStableFunc(ps, func(a, b runtime.ProviderInfo) int { return rank(a) - rank(b) })
+	slices.SortStableFunc(ps, func(a, b api.ProviderInfo) int { return rank(a) - rank(b) })
 	var providers []map[string]any
 	for _, p := range ps {
 		o := map[string]any{"value": p.ID, "name": p.Name}
@@ -48,9 +48,9 @@ func (a *agent) configOptions(ctx context.Context, session string) ([]map[string
 			o["description"] = "cannot run here: " + p.Reason
 		case !p.Available:
 			o["description"] = "not available here"
-		case p.Auth != nil && p.Auth.State == runtime.AuthNeeded:
+		case p.Auth != nil && p.Auth.State == api.AuthNeeded:
 			o["description"] = "sign-in needed: /login " + p.ID
-		case p.Auth != nil && p.Auth.State == runtime.AuthSignedIn:
+		case p.Auth != nil && p.Auth.State == api.AuthSignedIn:
 			o["description"] = "signed in"
 		case p.Description != "":
 			o["description"] = p.Description
@@ -130,7 +130,7 @@ func (a *agent) modes(ctx context.Context, session string) (map[string]any, erro
 		return nil, err
 	}
 	var available []map[string]any
-	for _, id := range runtime.Modes {
+	for _, id := range api.Modes {
 		n := modeNames[id]
 		available = append(available, map[string]any{"id": id, "name": n[0], "description": n[1]})
 	}

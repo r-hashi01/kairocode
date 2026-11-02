@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // /plugin connect, disconnect and install run in the terminal (they may
@@ -33,11 +33,11 @@ func TestPluginCommand(t *testing.T) {
 func TestPluginsScreen(t *testing.T) {
 	d, a := start(t, Options{})
 	a.plugins = acp.PluginsView{
-		Catalog: []runtime.CatalogPlugin{
+		Catalog: []api.CatalogPlugin{
 			{Name: "github", Marketplace: "kairocode", Description: "GitHub: issues and pull requests"},
 			{Name: "exa", Marketplace: "kairocode", Description: "Web search by Exa"},
 		},
-		Marketplaces: []runtime.MarketInfo{{Name: "kairocode", BuiltIn: true, Plugins: 2}},
+		Marketplaces: []api.MarketInfo{{Name: "kairocode", BuiltIn: true, Plugins: 2}},
 	}
 	typed(d, "/plugin")
 	if !d.m.View().AltScreen {
@@ -101,12 +101,12 @@ func TestPluginsScreen(t *testing.T) {
 func TestPluginsScreenUnsupported(t *testing.T) {
 	d, a := start(t, Options{})
 	a.plugins = acp.PluginsView{
-		Catalog: []runtime.CatalogPlugin{
+		Catalog: []api.CatalogPlugin{
 			{Name: "pkg", Marketplace: "cc", Unsupported: "its source is npm, which KairoCode does not install"},
 			{Name: "notes", Marketplace: "cc", Installed: true},
 		},
-		Installed:    []runtime.PluginInfo{{Name: "notes", Auth: "none", State: "connected", Unused: []string{"commands", "subagents"}}},
-		Marketplaces: []runtime.MarketInfo{{Name: "cc", Claude: true, Source: "https://github.com/someone/cc.git", Commit: "abcdef012345", Plugins: 2}},
+		Installed:    []api.PluginInfo{{Name: "notes", Auth: "none", State: "connected", Unused: []string{"commands", "subagents"}}},
+		Marketplaces: []api.MarketInfo{{Name: "cc", Claude: true, Source: "https://github.com/someone/cc.git", Commit: "abcdef012345", Plugins: 2}},
 	}
 	typed(d, "/plugin")
 	if v := d.view(); !strings.Contains(v, "× pkg") {

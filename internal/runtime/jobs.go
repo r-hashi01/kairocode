@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -470,8 +471,7 @@ func (r *Runtime) JobDone(id string) error {
 	return nil
 }
 
-// ErrClosing: the runtime is closing; what it is told, the next is to be.
-var ErrClosing = errors.New("the daemon is closing: tell the next")
+var ErrClosing = api.ErrClosing
 
 // RunJob is a command's runner (kairocode jobs run <folder>): it runs the
 // command in its sandbox, its output to the folder, until it ends, is

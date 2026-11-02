@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"io/fs"
 	"os"
 	"strings"
@@ -115,16 +116,7 @@ func (r *Runtime) flowText(t *kairo.TaskContext, hash string) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-// FlowInfo is a flow a session can run.
-type FlowInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	// Draft: a draft, which runs only as a try (/flow <name> --draft, ADR
-	// 0030).
-	Draft bool `json:"draft,omitempty"`
-	// Args: what it is to be given (its ARGS).
-	Args string `json:"args,omitempty"`
-}
+type FlowInfo = api.FlowInfo
 
 // Flows are the flows of the session's project, by name, with their
 // DESCRIPTION; then their drafts.
@@ -184,8 +176,7 @@ func description(name string, src []byte, constant string) string {
 	return ""
 }
 
-// ErrNoFlowName: /flow was given no name.
-var ErrNoFlowName = errors.New("/flow needs a flow's name: /flow <name> [what to give it]")
+var ErrNoFlowName = api.ErrNoFlowName
 
 // RunFlow starts a turn that runs the flow name with args (/flow name
 // args). The message the conversation keeps is what was typed.
@@ -239,29 +230,7 @@ func (r *Runtime) flowStep(t *kairo.TaskContext, in workflows.FlowStep) (bool, e
 	return true, nil
 }
 
-// FlowHelp is what the flow name of the project in dir is to be given and
-// what it does (/flow <name> --help): of its published script, else of
-// its draft (ADR 0030).
-func FlowHelp(dir, name string) (string, error) {
-	if !FlowName(name) {
-		return "", fmt.Errorf("%q is not a flow's name", name)
-	}
-	pub, perr := flowfile.Read(dir, name, false)
-	draft, derr := flowfile.Read(dir, name, true)
-	switch {
-	case perr == nil:
-		h, err := flowchart.Help(name, pub, false)
-		if err == nil && derr == nil {
-			h += "\nIt has a draft as well: /flow " + name + " --draft tries it, --publish publishes it.\n"
-		}
-		return h, err
-	case derr == nil:
-		return flowchart.Help(name, draft, true)
-	case !errors.Is(perr, fs.ErrNotExist):
-		return "", fmt.Errorf("the flow %q: %w", name, perr) // a link out of the project, say
-	}
-	return "", fmt.Errorf("there is no flow %q (%s/%s.star), nor a draft of one", name, FlowsDir, name)
-}
+var FlowHelp = flowfile.FlowHelp
 
 // reviewKey names a flow_publish call and the draft it was decided on.
 func reviewKey(in workflows.ToolInput, draft string) string {

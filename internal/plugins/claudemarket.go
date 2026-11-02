@@ -1,4 +1,4 @@
-package runtime
+package plugins
 
 import (
 	"cmp"
@@ -72,7 +72,7 @@ func readClaudeMarket(files fs.FS, where string) (Marketplace, error) {
 		}
 		mp := MarketPlugin{Name: e.Name, Description: e.Description}
 		mp.Unsupported = claudeSource(&mp, e.Source, root)
-		if !folderName(e.Name) || !extName.MatchString(e.Name) {
+		if !folderName(e.Name) || !NamePattern.MatchString(e.Name) {
 			mp.Unsupported = "its name cannot be a KairoCode plugin's (letters, digits, - and _)"
 		}
 		lay := &claudeLayout{Name: e.Name, Description: e.Description, Version: e.Version}
@@ -225,9 +225,9 @@ func noLink(dir, rel string) error {
 	return nil
 }
 
-// claudeUnused is what of a Claude Code plugin at dir KairoCode does not
+// ClaudeUnused is what of a Claude Code plugin at dir KairoCode does not
 // use: its commands, subagents, hooks, language servers and output styles.
-func claudeUnused(dir string) []string {
+func ClaudeUnused(dir string) []string {
 	var out []string
 	var m map[string]json.RawMessage
 	if b, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json")); err == nil {

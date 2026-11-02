@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"maps"
 	"slices"
 	"strings"
@@ -15,37 +16,9 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// Pending is what waits for the user: a tool call, for approval before it
-// runs (Kind "approval") or, cut off while it ran, to be told whether it
-// took effect (Kind "review", invariant 4); or a flow's question (Kind
-// "question": Subject is the question, Options its answers, ADR 0003).
-type Pending struct {
-	Kind string `json:"kind"`
-	// Key names the request: give it to Approve, or a question's to
-	// Answer.
-	Key     string   `json:"key"`
-	Turn    string   `json:"turn"`
-	Tool    string   `json:"tool"`
-	Subject string   `json:"subject"`
-	Rule    string   `json:"rule"`
-	Options []string `json:"options,omitempty"`
-	// Preview is what the call would do (a flow's shape), to show; and in
-	// its sections, for a client that shows them apart.
-	Preview  string           `json:"preview,omitempty"`
-	Sections []PreviewSection `json:"sections,omitempty"`
-	// Try, for a flow's write: the flow, to try it first (ADR 0017).
-	// Trying: a try of it is under way; an answer given now is taken when
-	// it ends.
-	Try    *TryTarget `json:"try,omitempty"`
-	Trying bool       `json:"trying,omitempty"`
-	// tried: the last try of it, as a section; noTry: it cannot be tried
-	// (a flow's own call).
-	tried []PreviewSection
-	noTry bool
-}
+type Pending = api.Pending
 
-// KindQuestion is a Pending that is a flow's question.
-const KindQuestion = "question"
+const KindQuestion = api.KindQuestion
 
 // Pending lists the calls of a session that wait for approval.
 func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error) {
@@ -53,7 +26,7 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 	if err != nil {
 		return nil, err
 	}
-	var out []Pending
+	var calls []pendingCall
 	for _, turn := range turns {
 		if turn.Workflow != workflows.Turn {
 			continue
@@ -62,16 +35,18 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, p...)
+		calls = append(calls, p...)
 	}
-	for i := range out {
-		if h, name := previewScript(out[i].Preview); h != "" && name != "" && !out[i].noTry && !out[i].Trying {
+	out := make([]Pending, len(calls))
+	for i, c := range calls {
+		out[i] = c.Pending
+		if h, name := previewScript(out[i].Preview); h != "" && name != "" && !c.noTry && !out[i].Trying {
 			out[i].Try = &TryTarget{Name: name, Script: h}
 		}
 		out[i].Preview, out[i].Sections = r.fullPreview(ctx, out[i].Preview)
-		out[i].Sections = append(out[i].Sections, out[i].tried...)
-		if len(out[i].tried) > 0 {
-			out[i].Preview += "\n\n── Try ──\n" + out[i].tried[0].Text
+		out[i].Sections = append(out[i].Sections, c.tried...)
+		if len(c.tried) > 0 {
+			out[i].Preview += "\n\n── Try ──\n" + c.tried[0].Text
 		}
 	}
 	return out, nil
@@ -81,7 +56,7 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 // below it: a flow, an agent a flow runs (ADR 0003), down to any depth. An
 // approval's key names the run that waits for it, which its answer goes
 // to.
-func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) ([]Pending, error) {
+func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) ([]pendingCall, error) {
 	// A finished run waits for nothing, but an MCP call of a turn that was
 	// cut off may still wait to be reviewed.
 	var calls []kairo.RunInfo
@@ -91,7 +66,7 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			return nil, err
 		}
 	}
-	var out []Pending
+	var out []pendingCall
 	checks := map[string]workflows.PermissionOutput{}
 	tool := map[string]string{}
 	questions := map[string]workflows.FlowAskInput{}
@@ -170,8 +145,8 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 				In workflows.HookRunInput `json:"in"`
 			}
 			_ = json.Unmarshal(c.Input, &in)
-			out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: "hook", Subject: in.In.Hook.Command,
-				Rule: "cut off while it ran: did it take effect?"})
+			out = append(out, pendingCall{Pending: Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: "hook", Subject: in.In.Hook.Command,
+				Rule: "cut off while it ran: did it take effect?"}})
 			continue
 		}
 		if c.Status == "blocked" {
@@ -184,13 +159,13 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			if args, err := r.toolArgs(ctx, in.In); err == nil {
 				subj = subject(name, args)
 			}
-			out = append(out, Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: name, Subject: subj,
-				Rule: "cut off while it ran: did it take effect?"})
+			out = append(out, pendingCall{Pending: Pending{Kind: "review", Key: reviewPrefix + c.RunID, Turn: top, Tool: name, Subject: subj,
+				Rule: "cut off while it ran: did it take effect?"}})
 			continue
 		}
 		if id, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalAnswerPrefix); ok && !c.Finished() {
 			q := questions[id]
-			out = append(out, Pending{Kind: KindQuestion, Key: run.RunID + "#" + id, Turn: top, Subject: q.Question, Options: q.Options})
+			out = append(out, pendingCall{Pending: Pending{Kind: KindQuestion, Key: run.RunID + "#" + id, Turn: top, Subject: q.Question, Options: q.Options}})
 			continue
 		}
 		call, ok := strings.CutPrefix(c.Plan, "kairo.wait/"+workflows.SignalApprovePrefix)
@@ -208,12 +183,21 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 	return out, nil
 }
 
+// pendingCall is a Pending as it is gathered: with the last try of it, as
+// a section (tried), and whether it cannot be tried (noTry: a flow's own
+// call).
+type pendingCall struct {
+	Pending
+	tried []PreviewSection
+	noTry bool
+}
+
 // approvalIn is the approval of call, which run waits for (or will, once
 // its try ends: trying).
 func (r *Runtime) approvalIn(ctx context.Context, run kairo.RunInfo, top, call string, o workflows.PermissionOutput, tool string,
-	calls []kairo.RunInfo, trying bool) Pending {
-	p := Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool, Subject: o.Subject, Rule: o.Rule,
-		Preview: o.Preview, Trying: trying,
+	calls []kairo.RunInfo, trying bool) pendingCall {
+	p := pendingCall{Pending: Pending{Kind: "approval", Key: run.RunID + "#" + call, Turn: top, Tool: tool, Subject: o.Subject, Rule: o.Rule,
+		Preview: o.Preview, Trying: trying},
 		noTry: run.Workflow == workflows.Flow} // a flow's own call takes no try
 	if h, _ := previewScript(o.Preview); h != "" && !trying {
 		if s, ok := r.lastTry(ctx, calls, h, call); ok {
@@ -225,9 +209,7 @@ func (r *Runtime) approvalIn(ctx context.Context, run kairo.RunInfo, top, call s
 
 const reviewPrefix = "review:"
 
-// ErrQuestion: a flow's question was given a yes or no, or an answer that
-// is not one of its options.
-var ErrQuestion = errors.New("not an answer to this question")
+var ErrQuestion = api.ErrQuestion
 
 // Answer answers a flow's question (Pending of Kind "question") with one
 // of its options. As with Approve, only the first answer goes through.
@@ -262,9 +244,7 @@ func (r *Runtime) Answer(ctx context.Context, key, option string) error {
 	return nil
 }
 
-// ErrAnswered: the request was answered already (by another client), or
-// waits no more.
-var ErrAnswered = errors.New("already answered, or no longer waiting")
+var ErrAnswered = api.ErrAnswered
 
 // Approve answers the request key names (see Pending), any time after the
 // request. Only the first answer goes through: one given while the request

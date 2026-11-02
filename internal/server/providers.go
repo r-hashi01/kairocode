@@ -8,7 +8,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/agents"
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // getTurn waits for the turn to finish (the request's context bounds the
@@ -21,7 +21,7 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 // loginMethods are the ways to sign in to a provider.
 func (s *Server) loginMethods(w http.ResponseWriter, r *http.Request) {
 	ms, err := s.rt.LoginMethods(r.Context(), r.PathValue("id"))
-	if errors.Is(err, runtime.ErrNoProvider) {
+	if errors.Is(err, api.ErrNoProvider) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
@@ -30,7 +30,7 @@ func (s *Server) loginMethods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ms == nil {
-		ms = []runtime.AuthMethod{}
+		ms = []api.AuthMethod{}
 	}
 	writeJSON(w, http.StatusOK, ms)
 }
@@ -62,7 +62,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 // user chose to.
 func (s *Server) installProvider(w http.ResponseWriter, r *http.Request) {
 	p, err := s.rt.InstallProvider(r.Context(), r.PathValue("id"), r.URL.Query().Get("version"))
-	if errors.Is(err, runtime.ErrNoProvider) {
+	if errors.Is(err, api.ErrNoProvider) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
@@ -80,7 +80,7 @@ func (s *Server) installProvider(w http.ResponseWriter, r *http.Request) {
 // efforts are a provider's efforts to choose from (none: it has none).
 func (s *Server) efforts(w http.ResponseWriter, r *http.Request) {
 	es, err := s.rt.Efforts(r.Context(), r.PathValue("id"))
-	if errors.Is(err, runtime.ErrNoProvider) {
+	if errors.Is(err, api.ErrNoProvider) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
@@ -97,7 +97,7 @@ func (s *Server) efforts(w http.ResponseWriter, r *http.Request) {
 // models are a provider's models to choose from.
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	ms, err := s.rt.Models(r.Context(), r.PathValue("id"))
-	if errors.Is(err, runtime.ErrNoProvider) {
+	if errors.Is(err, api.ErrNoProvider) {
 		fail(w, http.StatusNotFound, err)
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) switchSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New(`want {"provider": "...", "model": "...", "effort": "...", "mode": "..."}`))
 		return
 	}
-	var st runtime.Settings
+	var st api.Settings
 	var err error
 	if in.Mode != "" {
 		st, err = s.rt.SetMode(r.Context(), sessionOf(r), in.Mode)
@@ -147,10 +147,10 @@ func (s *Server) switchSettings(w http.ResponseWriter, r *http.Request) {
 		st, err = s.rt.Switch(r.Context(), sessionOf(r), in.Provider, in.Model, in.Effort)
 	}
 	switch {
-	case errors.Is(err, kairo.ErrUnknownRun), errors.Is(err, runtime.ErrNoProvider):
+	case errors.Is(err, kairo.ErrUnknownRun), errors.Is(err, api.ErrNoProvider):
 		fail(w, http.StatusNotFound, err)
 		return
-	case errors.Is(err, runtime.ErrUnavailable), errors.Is(err, runtime.ErrNotInstalled):
+	case errors.Is(err, api.ErrUnavailable), errors.Is(err, api.ErrNotInstalled):
 		fail(w, http.StatusConflict, err)
 		return
 	case err != nil:

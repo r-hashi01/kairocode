@@ -3,9 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"net/http"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,45 +14,11 @@ import (
 	"github.com/r-hashi01/kairocode/internal/store"
 )
 
-// Image is an image the user gives with a message (ADR 0026).
-type Image struct {
-	MediaType string
-	Data      []byte
-}
+type Image = api.Image
 
-// ErrBadImage: an image is not taken (its kind, its size, how many).
-var ErrBadImage = errors.New("image not taken")
+var ErrBadImage = api.ErrBadImage
 
-// CheckImages refuses, before anything is stored, what the model would:
-// a kind it does not read, more than MaxImageBytes, more than MaxImages.
-// The bytes must be of the kind said. Errors name no content.
-func CheckImages(images []Image) error {
-	if len(images) > msg.MaxImages {
-		return fmt.Errorf("%w: %d images, at most %d in a message", ErrBadImage, len(images), msg.MaxImages)
-	}
-	total := 0
-	for _, im := range images {
-		total += len(im.Data)
-	}
-	if total > msg.MaxRequestImageBytes {
-		return fmt.Errorf("%w: the images are %d bytes together, at most %d", ErrBadImage, total, msg.MaxRequestImageBytes)
-	}
-	for i, im := range images {
-		if !slices.Contains(msg.ImageTypes, im.MediaType) {
-			return fmt.Errorf("%w: image %d is %q; %s are read", ErrBadImage, i+1, im.MediaType, strings.Join(msg.ImageTypes, ", "))
-		}
-		if len(im.Data) == 0 {
-			return fmt.Errorf("%w: image %d is empty", ErrBadImage, i+1)
-		}
-		if len(im.Data) > msg.MaxImageBytes {
-			return fmt.Errorf("%w: image %d is %d bytes, at most %d", ErrBadImage, i+1, len(im.Data), msg.MaxImageBytes)
-		}
-		if got := http.DetectContentType(im.Data); got != im.MediaType {
-			return fmt.Errorf("%w: image %d is said to be %s, but is %s", ErrBadImage, i+1, im.MediaType, got)
-		}
-	}
-	return nil
-}
+var CheckImages = api.CheckImages
 
 // SendImages is Send with images: one user message, the text and then the
 // images, each stored once by its hash.

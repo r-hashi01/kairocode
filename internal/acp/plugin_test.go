@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // /plugin install, update, remove and marketplace are done by the agent,
@@ -67,7 +67,7 @@ func TestPluginsRPC(t *testing.T) {
 	if len(v.Installed) != 1 || v.Installed[0].Name != "exa" || !strings.HasPrefix(v.Installed[0].State, "not connected") {
 		t.Fatalf("after installing: %+v", v.Installed)
 	}
-	if i := slices.IndexFunc(v.Catalog, func(p runtime.CatalogPlugin) bool { return p.Name == "exa" }); i < 0 || !v.Catalog[i].Installed {
+	if i := slices.IndexFunc(v.Catalog, func(p api.CatalogPlugin) bool { return p.Name == "exa" }); i < 0 || !v.Catalog[i].Installed {
 		t.Fatalf("the catalog: %+v", v.Catalog)
 	}
 }
@@ -90,12 +90,12 @@ func TestFlowRunsRPC(t *testing.T) {
 	if _, err := b.r.WaitTurn(ctx, s, n); err != nil {
 		t.Fatal(err)
 	}
-	var out struct{ Runs []runtime.FlowRun }
+	var out struct{ Runs []api.FlowRun }
 	for {
 		if err := json.Unmarshal(c.call(FlowRunsRPC, map[string]any{"dir": ws}), &out); err != nil {
 			t.Fatal(err)
 		}
-		if len(out.Runs) == 1 && out.Runs[0].Status == runtime.FlowRunOK {
+		if len(out.Runs) == 1 && out.Runs[0].Status == api.FlowRunOK {
 			break
 		}
 		select {
@@ -104,7 +104,7 @@ func TestFlowRunsRPC(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	var f runtime.FlowRun
+	var f api.FlowRun
 	if err := json.Unmarshal(c.call(FlowRunRPC, map[string]any{"id": out.Runs[0].ID}), &f); err != nil || f.Name != "hello" || f.View == nil {
 		t.Fatalf("%+v %v", f, err)
 	}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/tools"
 )
 
@@ -110,7 +110,7 @@ func (a *agent) watch(session string) (*sessionWatch, error) {
 		for {
 			for ev := range events {
 				a.event(session, ev)
-				if ev.Type == runtime.EventTurnEnd {
+				if ev.Type == api.EventTurnEnd {
 					w.end(ev.N)
 				}
 			}
@@ -132,11 +132,11 @@ func (a *agent) watch(session string) (*sessionWatch, error) {
 }
 
 // event maps one event to ACP.
-func (a *agent) event(session string, ev runtime.Event) {
+func (a *agent) event(session string, ev api.Event) {
 	switch ev.Type {
-	case runtime.EventToken:
+	case api.EventToken:
 		a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(ev.Text)})
-	case runtime.EventToolStart:
+	case api.EventToolStart:
 		a.update(session, toolCall(ev.Call, ev.Tool, ev.Input, "in_progress"))
 		if ev.Tool == tools.TodoTool.Name {
 			// The model's todo list is the session's plan (ADR 0022).
@@ -148,15 +148,15 @@ func (a *agent) event(session string, ev runtime.Event) {
 				a.update(session, map[string]any{"sessionUpdate": "plan", "entries": entries})
 			}
 		}
-	case runtime.EventToolEnd:
+	case api.EventToolEnd:
 		a.update(session, toolResult(ev.Call, ev.Tool, ev.Output, ev.IsError))
-	case runtime.EventApprovalRequested, runtime.EventReviewRequested, runtime.EventQuestionRequested:
+	case api.EventApprovalRequested, api.EventReviewRequested, api.EventQuestionRequested:
 		a.ask(session, *ev.Pending)
-	case runtime.EventFlow:
+	case api.EventFlow:
 		if ev.Flow != nil {
 			a.update(session, flowPlan(ev.Flow))
 		}
-	case runtime.EventApprovalResolved, runtime.EventReviewResolved, runtime.EventQuestionResolved:
+	case api.EventApprovalResolved, api.EventReviewResolved, api.EventQuestionResolved:
 		a.mu.Lock()
 		if cancel := a.asks[ev.Key]; cancel != nil {
 			cancel() // answered elsewhere: the client's request is withdrawn

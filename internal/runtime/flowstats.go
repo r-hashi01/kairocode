@@ -4,40 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// How a flow came to run.
 const (
-	FromCommand = "command" // /flow <name>
-	FromHook    = "hook"    // a hook (turn.end, tool.after, session.start)
-	FromAgent   = "agent"   // an agent's workflow:
+	FromCommand = api.FromCommand
+	FromHook    = api.FromHook
+	FromAgent   = api.FromAgent
 )
 
-// FlowStat is what the records say of one flow of a project: how often it
-// ran, from where, and how it ended. A flow of the project that never ran
-// has no runs.
-type FlowStat struct {
-	Name   string `json:"name"`
-	Runs   int    `json:"runs"`
-	OK     int    `json:"ok"`
-	Failed int    `json:"failed"` // said no, could not run, failed or was cancelled
-	// Runs that are neither OK, Failed nor Running ended in a way that is no
-	// longer kept.
-	Running int            `json:"running"`
-	From    map[string]int `json:"from,omitempty"`
-	Last    time.Time      `json:"last,omitzero"`
-	// Defined: the project has its script now.
-	Defined bool `json:"defined"`
-}
+type FlowStat = api.FlowStat
 
 // FlowStats are the flows the sessions in dir ran, and the project's flows
 // that none ran, by name. Only what the records keep is counted: the runs

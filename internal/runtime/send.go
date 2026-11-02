@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"path/filepath"
 	"slices"
 
@@ -82,9 +83,7 @@ func (r *Runtime) sendMessage(ctx context.Context, session, h string) (int, erro
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h})
 }
 
-// ErrNoUndo: the session started before undo existed (version 3 or
-// older): it would take an undo for a message.
-var ErrNoUndo = errors.New("this session started before undo existed: start a new session to undo")
+var ErrNoUndo = api.ErrNoUndo
 
 // Undo asks the session to put the working files back as they were before
 // its last turn in effect (design 7). It returns the number of the turn
@@ -149,14 +148,9 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 	return n, nil
 }
 
-// ErrSessionFailed: the session stopped on an error (a store's, say:
-// kairo-gap #16) and takes no more messages. It goes on in a session forked
-// from its last finished turn (ADR 0021).
-var ErrSessionFailed = errors.New("this session stopped on an error and takes no more messages")
+var ErrSessionFailed = api.ErrSessionFailed
 
-// FailedNote is put before the first message of a session forked from one
-// that failed (ADR 0021): the turn cut short may have changed files.
-const FailedNote = "[The session this one goes on from stopped on an error during a turn. That turn may have changed the working files; look before going on.]"
+const FailedNote = api.FailedNote
 
 // failed returns ErrSessionFailed, with why, if the session ended on an
 // error: a finished run that Await says failed (kairo records a code
@@ -177,12 +171,9 @@ func (r *Runtime) failed(ctx context.Context, session string) error {
 	return nil
 }
 
-// StoppedCancelled is why a turn the user stopped ended, as clients are
-// told it (a turn's Stopped).
-const StoppedCancelled = "cancelled"
+const StoppedCancelled = api.StoppedCancelled
 
-// ErrNoTurnToCancel: the session's last turn has ended (or none was sent).
-var ErrNoTurnToCancel = errors.New("no turn is running")
+var ErrNoTurnToCancel = api.ErrNoTurnToCancel
 
 // Cancel stops the session's turn under way (ADR 0011): kairo cancels it,
 // with what it waits for and the steps under way. It returns the turn's

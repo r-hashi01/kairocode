@@ -19,6 +19,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -518,5 +519,89 @@ def main(input):
 	}
 	if !strings.Contains(tries[0].Line(), "triage (try)") {
 		t.Fatalf("listed as %q", tries[0].Line())
+	}
+}
+
+// A copied plugin is at a hash of its files, which goes into its servers'
+// fingerprint: changed without a new version, it is another (turns under
+// way do not call it; ADR 0025). The markers a plugin brings are not
+// taken, nor the links in it.
+func TestCopiedPluginIsAtItsFiles(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ctx := context.Background()
+	acme := t.TempDir()
+	pluginJSON(t, filepath.Join(acme, plugins.MarketplaceManifest), plugins.Marketplace{Name: "acme", Description: "the acme plugins",
+		Plugins: []plugins.MarketPlugin{{Name: "notes", Source: "./notes"}}})
+	pluginJSON(t, filepath.Join(acme, "notes", plugins.ManifestFile), map[string]any{"name": "notes",
+		"mcp": map[string]any{"type": "local", "command": []string{"./server.sh"}}})
+	server := filepath.Join(acme, "notes", "server.sh")
+	os.WriteFile(server, []byte("#!/bin/sh\necho one\n"), 0o700)
+	pluginJSON(t, filepath.Join(acme, "notes", ".kairocode-source"), map[string]string{"marketplace": plugins.BuiltIn, "plugin": "github"})
+	os.WriteFile(filepath.Join(acme, "notes", ".kairocode-commit"), []byte("fixed\n"), 0o600)
+	os.Symlink("/etc/hosts", filepath.Join(acme, "notes", "hosts"))
+	if _, err := plugins.AddMarketplace(ctx, acme); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugins.InstallPlugin(ctx, "notes"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(plugins.UserPluginsDir(), "notes")
+	spec := func() string {
+		servers, _ := pluginServers(t.TempDir())
+		for _, s := range servers {
+			if s.Plugin == "notes" {
+				return s.Spec
+			}
+		}
+		t.Fatal("no server of notes")
+		return ""
+	}
+	first, at := spec(), plugins.Commit(dir)
+	if len(at) != 12 || at == "fixed" {
+		t.Fatalf("at %q", at)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, ".kairocode-source")); !strings.Contains(string(b), `"acme"`) {
+		t.Fatalf("its origin: %s", b)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "hosts")); err == nil {
+		t.Fatal("a link was copied")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "server.sh")); err != nil || fi.Mode()&0o100 == 0 {
+		t.Fatalf("server.sh: %v %v", fi, err)
+	}
+	os.WriteFile(server, []byte("#!/bin/sh\necho two\n"), 0o700)
+	if _, _, err := plugins.UpdatePlugin(ctx, "notes"); err != nil {
+		t.Fatal(err)
+	}
+	if spec() == first || plugins.Commit(dir) == at {
+		t.Fatal("changed files, and the same fingerprint")
+	}
+}
+
+func pluginJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	b, _ := json.Marshal(v)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A Claude Code plugin's tools declare no effect: its manifest's are not
+// taken, and so its server's are real (invariant 3).
+func TestClaudePluginToolsAreReal(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	pluginJSON(t, filepath.Join(plugins.UserPluginsDir(), "tools", ".claude-plugin", "plugin.json"), map[string]any{"name": "tools",
+		"tools": map[string]any{"*": map[string]string{"effect": "read"}}, "mcp": map[string]any{"url": "https://evil.example.com"}})
+	pluginJSON(t, filepath.Join(plugins.UserPluginsDir(), "tools", ".mcp.json"), map[string]any{"mcpServers": map[string]any{
+		"tools": map[string]any{"type": "http", "url": "https://tools.example.com/mcp"}}})
+	servers, decls := pluginServers(t.TempDir())
+	if len(servers) != 1 || servers[0].URL != "https://tools.example.com/mcp" {
+		t.Fatalf("servers %+v", servers)
+	}
+	for _, d := range decls {
+		if d.Effect != "real" {
+			t.Fatalf("a Claude Code plugin's tools declared %+v", d)
+		}
 	}
 }

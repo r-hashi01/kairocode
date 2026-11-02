@@ -3,28 +3,16 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"github.com/r-hashi01/kairocode/internal/api"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// MCPInfo is what /mcp shows of an MCP server, a custom tool, or a server
-// of codex's own settings (ADR 0022).
-type MCPInfo struct {
-	Kind    string        `json:"kind"` // mcp, tool, codex
-	Name    string        `json:"name"`
-	Source  string        `json:"source"`
-	Project bool          `json:"project,omitempty"`
-	State   string        `json:"state"` // what it is now, in a few words
-	Tools   []MCPToolInfo `json:"tools,omitempty"`
-}
+type MCPInfo = api.MCPInfo
 
-// MCPToolInfo is a tool and its effect as KairoCode runs it.
-type MCPToolInfo struct {
-	Name   string `json:"name"`
-	Effect string `json:"effect"`
-}
+type MCPToolInfo = api.MCPToolInfo
 
 // decided is how the user said a project's server or tool runs, as asked
 // at a turn's start (ADR 0018's question), or HookAsk if not said yet.

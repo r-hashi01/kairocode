@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"os/exec"
 	"slices"
 	"strings"
@@ -15,24 +16,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// ProviderInfo is a provider a session can switch to (ADR 0014, 0015): who
-// runs the model loop, whether it can here, and, for an agent of ACP's
-// registry not installed yet, what installing it fetches.
-type ProviderInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"` // "api", "cli" or "acp"
-	Description string `json:"description,omitempty"`
-	// Available: it can run here now. Else Installable says the user can
-	// install it (Version from Source); else Reason says why not.
-	Available   bool   `json:"available"`
-	Installable bool   `json:"installable,omitempty"`
-	Version     string `json:"version,omitempty"`
-	Source      string `json:"source,omitempty"`
-	Reason      string `json:"reason,omitempty"`
-	// Auth is its sign-in, for one that runs here.
-	Auth *AuthInfo `json:"auth,omitempty"`
-}
+type ProviderInfo = api.ProviderInfo
 
 // The registry's ids of the agents ADR 0014 named codex and copilot.
 const (
@@ -213,11 +197,9 @@ func (r *Runtime) InstallProvider(ctx context.Context, id, version string) (Prov
 // anthropicModels are the API's models offered for /model.
 var anthropicModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"}
 
-// ErrNoProvider: no such provider. ErrNotInstalled: an agent of the
-// registry not installed (yet).
 var (
-	ErrNoProvider   = errors.New("no such provider")
-	ErrNotInstalled = errors.New("not installed")
+	ErrNoProvider   = api.ErrNoProvider
+	ErrNotInstalled = api.ErrNotInstalled
 )
 
 // efforts are the efforts of the providers that have them, where the
@@ -276,14 +258,7 @@ func (r *Runtime) Models(ctx context.Context, id string) ([]string, error) {
 	return nil, nil // the agent's own; any name may be given
 }
 
-// Settings are a session's provider and model: those its next turn runs
-// with. Model "" is the provider's default.
-type Settings struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort,omitempty"` // "": the provider's default
-	Mode     string `json:"mode"`             // manual, plan (ADR 0016)
-}
+type Settings = api.Settings
 
 // Settings are what the session's next turn runs with: its latest turn's,
 // or its own, with a switch not yet sent applied.
@@ -342,8 +317,7 @@ func (r *Runtime) Settings(ctx context.Context, session string) (Settings, error
 	return Settings{Provider: providerOf(engine), Model: model, Effort: effort, Mode: mode}, nil
 }
 
-// ErrUnavailable: the provider cannot run here.
-var ErrUnavailable = errors.New("not available here")
+var ErrUnavailable = api.ErrUnavailable
 
 // Switch sets the provider (id, "" to keep it), the model and the effort
 // ("" to keep them) of the session's turns from its next one on (ADR
@@ -441,8 +415,7 @@ func (r *Runtime) Switch(ctx context.Context, session, id, model, effort string)
 	return r.Settings(ctx, session)
 }
 
-// Modes are the modes a session can be in (ADR 0016).
-var Modes = []string{workflows.ModeManual, workflows.ModeAuto, workflows.ModePlan}
+var Modes = api.Modes
 
 // SetMode sets the session's mode from its next turn on (ADR 0016),
 // recorded with its next message as a switch is.

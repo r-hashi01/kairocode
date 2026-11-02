@@ -19,6 +19,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/daemon"
 	"github.com/r-hashi01/kairocode/internal/opencode"
+	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
@@ -98,8 +99,8 @@ func pluginList(ctx context.Context, data, dir string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	text := runtime.PluginsText(list)
-	if more := runtime.AvailableText("kairocode plugin install"); more != "" {
+	text := plugins.PluginsText(list)
+	if more := plugins.AvailableText("kairocode plugin install"); more != "" {
 		text += "\n" + more
 	}
 	_, err = io.WriteString(stdout, text)
@@ -110,7 +111,7 @@ func pluginList(ctx context.Context, data, dir string, stdout io.Writer) error {
 // marketplace, a git URL, or a folder. Its credentials are asked for
 // next, if its marketplace says so and this is a terminal.
 func pluginInstall(ctx context.Context, data, dir, arg string, in *os.File, stdout io.Writer) error {
-	got, err := runtime.InstallPlugin(ctx, arg)
+	got, err := plugins.InstallPlugin(ctx, arg)
 	if err != nil {
 		return err
 	}
@@ -137,7 +138,7 @@ func isTerminal(f *os.File) bool {
 
 // pluginUpdate brings an installed plugin up to date.
 func pluginUpdate(ctx context.Context, name string, stdout io.Writer) error {
-	before, after, err := runtime.UpdatePlugin(ctx, name)
+	before, after, err := plugins.UpdatePlugin(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func pluginUpdate(ctx context.Context, name string, stdout io.Writer) error {
 // pluginRemove removes an installed plugin; its credentials stay until
 // disconnected.
 func pluginRemove(name string, stdout io.Writer) error {
-	if err := runtime.RemovePlugin(name); err != nil {
+	if err := plugins.RemovePlugin(name); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Removed %s. Its credentials are kept until kairocode plugin disconnect %s.\n", name, name)
@@ -171,17 +172,17 @@ func pluginMarketplace(ctx context.Context, args []string, stdout io.Writer) err
 	}
 	switch verb {
 	case "list":
-		_, err := io.WriteString(stdout, runtime.MarketplacesText())
+		_, err := io.WriteString(stdout, plugins.MarketplacesText())
 		return err
 	case "add":
-		m, err := runtime.AddMarketplace(ctx, args[0])
+		m, err := plugins.AddMarketplace(ctx, args[0])
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Added the marketplace %s (%d plugins). kairocode plugin list shows them.\n", m.Name, len(m.Plugins))
 		return nil
 	case "update":
-		before, after, err := runtime.UpdateMarketplace(ctx, args[0])
+		before, after, err := plugins.UpdateMarketplace(ctx, args[0])
 		if err != nil {
 			return err
 		}
@@ -192,7 +193,7 @@ func pluginMarketplace(ctx context.Context, args []string, stdout io.Writer) err
 		}
 		return nil
 	case "remove":
-		if err := runtime.RemoveMarketplace(args[0]); err != nil {
+		if err := plugins.RemoveMarketplace(args[0]); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Removed the marketplace %s. The plugins installed from it stay.\n", args[0])
@@ -222,7 +223,7 @@ func pluginKeys(p opencode.Plugin) (string, []struct{ Name, Description string }
 			} `json:"keys"`
 		} `json:"auth"`
 	}
-	b, err := os.ReadFile(filepath.Join(p.Dir, runtime.PluginManifest))
+	b, err := os.ReadFile(filepath.Join(p.Dir, plugins.ManifestFile))
 	if err != nil {
 		return "none", nil, nil // a Claude Code plugin: nothing to connect
 	}

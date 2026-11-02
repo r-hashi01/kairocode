@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"maps"
 	"os/exec"
 	"slices"
@@ -66,8 +67,7 @@ func (r *Runtime) Commands(ctx context.Context, session string) ([]opencode.Comm
 	return out, nil
 }
 
-// ErrNoCommand: the session has no command of that name.
-var ErrNoCommand = errors.New("no such command")
+var ErrNoCommand = api.ErrNoCommand
 
 // RunCommand runs command name with args in session: its template is
 // expanded as opencode expands it (its !`commands` run in the sandbox,
@@ -140,12 +140,7 @@ func (r *Runtime) runSkill(ctx context.Context, session, dir, name, args string)
 	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h})
 }
 
-// SkillsInfo are a session's skills, by name, and the SKILL.md files not
-// taken, and why (/skills).
-type SkillsInfo struct {
-	Skills   []opencode.Skill        `json:"skills"`
-	Problems []opencode.SkillProblem `json:"problems,omitempty"`
-}
+type SkillsInfo = api.SkillsInfo
 
 // Skills are the skills of the session's working directory, and what of
 // them is not taken.

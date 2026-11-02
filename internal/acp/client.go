@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/jsonrpc"
-	"github.com/r-hashi01/kairocode/internal/runtime"
 )
 
 // Client is the client side of ACP: what an editor does, for KairoCode's own
@@ -136,17 +136,17 @@ func (cl *Client) PluginChange(ctx context.Context, args ...string) (string, err
 
 // FlowRuns are the flows' runs of dir ("" any), of flow ("" any), the
 // latest first, at most n (only KairoCode's agent has this; ADR 0029).
-func (cl *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error) {
+func (cl *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
 	var out struct {
-		Runs []runtime.FlowRun `json:"runs"`
+		Runs []api.FlowRun `json:"runs"`
 	}
 	err := cl.c.Call(ctx, FlowRunsRPC, map[string]any{"dir": dir, "flow": flow, "only": only, "n": n}, &out)
 	return out.Runs, err
 }
 
 // FlowRun is a flow's run, with its chart and steps.
-func (cl *Client) FlowRun(ctx context.Context, id string) (runtime.FlowRun, error) {
-	var f runtime.FlowRun
+func (cl *Client) FlowRun(ctx context.Context, id string) (api.FlowRun, error) {
+	var f api.FlowRun
 	err := cl.c.Call(ctx, FlowRunRPC, map[string]any{"id": id}, &f)
 	return f, err
 }
@@ -551,7 +551,7 @@ func (cl *Client) Prompt(ctx context.Context, session, text string, files ...str
 	err := cl.c.Call(ctx, "session/prompt", map[string]any{"sessionId": session, "prompt": blocks}, &out)
 	var re *jsonrpc.Error
 	if errors.As(err, &re) && re.Code == CodeSessionFailed {
-		return "", fmt.Errorf("%w%s", runtime.ErrSessionFailed, strings.TrimPrefix(re.Message, runtime.ErrSessionFailed.Error()))
+		return "", fmt.Errorf("%w%s", api.ErrSessionFailed, strings.TrimPrefix(re.Message, api.ErrSessionFailed.Error()))
 	}
 	return out.StopReason, err
 }

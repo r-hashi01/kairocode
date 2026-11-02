@@ -9,7 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
+	"github.com/r-hashi01/kairocode/internal/plugins"
 )
 
 // builtinCommands are the slash commands KairoCode itself has.
@@ -31,10 +32,10 @@ var builtinCommands = []map[string]any{
 
 // PluginsView is what the terminal's /plugin shows.
 type PluginsView struct {
-	Installed    []runtime.PluginInfo    `json:"installed"`
-	Catalog      []runtime.CatalogPlugin `json:"catalog"`
-	Marketplaces []runtime.MarketInfo    `json:"marketplaces"`
-	Errors       []string                `json:"errors,omitempty"`
+	Installed    []api.PluginInfo    `json:"installed"`
+	Catalog      []api.CatalogPlugin `json:"catalog"`
+	Marketplaces []api.MarketInfo    `json:"marketplaces"`
+	Errors       []string            `json:"errors,omitempty"`
 }
 
 // offerCommands tells the client the slash commands: KairoCode's, then the
@@ -259,8 +260,8 @@ func (a *agent) pluginText(ctx context.Context, session string, args []string) s
 	if err != nil {
 		return "The plugins could not be listed: " + err.Error()
 	}
-	text := runtime.PluginsText(list)
-	if more := runtime.AvailableText("/plugin install"); more != "" {
+	text := plugins.PluginsText(list)
+	if more := plugins.AvailableText("/plugin install"); more != "" {
 		text += "\n" + more
 	}
 	return strings.TrimRight(text, "\n")
@@ -279,7 +280,7 @@ func pluginChange(ctx context.Context, args []string) string {
 	one := len(args) == 2
 	switch {
 	case args[0] == "install" && one:
-		got, err := runtime.InstallPlugin(ctx, args[1])
+		got, err := plugins.InstallPlugin(ctx, args[1])
 		if err != nil {
 			return "Not installed: " + err.Error()
 		}
@@ -293,7 +294,7 @@ func pluginChange(ctx context.Context, args []string) string {
 		}
 		return text
 	case args[0] == "update" && one:
-		before, after, err := runtime.UpdatePlugin(ctx, args[1])
+		before, after, err := plugins.UpdatePlugin(ctx, args[1])
 		if err != nil {
 			return "Not updated: " + err.Error()
 		}
@@ -302,26 +303,26 @@ func pluginChange(ctx context.Context, args []string) string {
 		}
 		return fmt.Sprintf("Updated %s: %s → %s. Turns under way go on with what they started with.", args[1], before, after)
 	case args[0] == "remove" && one:
-		if err := runtime.RemovePlugin(args[1]); err != nil {
+		if err := plugins.RemovePlugin(args[1]); err != nil {
 			return "Not removed: " + err.Error()
 		}
 		return "Removed " + args[1] + ". Its credentials are kept until /plugin disconnect " + args[1] + "."
 	case args[0] == "marketplace" && (len(args) == 1 || args[1] == "list") && len(args) <= 2:
-		return strings.TrimRight(runtime.MarketplacesText(), "\n")
+		return strings.TrimRight(plugins.MarketplacesText(), "\n")
 	case args[0] == "marketplace" && len(args) == 3 && args[1] == "add":
-		m, err := runtime.AddMarketplace(ctx, args[2])
+		m, err := plugins.AddMarketplace(ctx, args[2])
 		if err != nil {
 			return "Not added: " + err.Error()
 		}
 		return fmt.Sprintf("Added the marketplace %s (%d plugins). /plugin shows them.", m.Name, len(m.Plugins))
 	case args[0] == "marketplace" && len(args) == 3 && args[1] == "update":
-		before, after, err := runtime.UpdateMarketplace(ctx, args[2])
+		before, after, err := plugins.UpdateMarketplace(ctx, args[2])
 		if err != nil {
 			return "Not updated: " + err.Error()
 		}
 		return fmt.Sprintf("%s: %s → %s.", args[2], before, after)
 	case args[0] == "marketplace" && len(args) == 3 && args[1] == "remove":
-		if err := runtime.RemoveMarketplace(args[2]); err != nil {
+		if err := plugins.RemoveMarketplace(args[2]); err != nil {
 			return "Not removed: " + err.Error()
 		}
 		return "Removed the marketplace " + args[2] + ". The plugins installed from it stay."

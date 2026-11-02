@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
@@ -81,7 +82,7 @@ func TestSessionMessageTurn(t *testing.T) {
 type sse struct{ r *bufio.Reader }
 
 // next returns the next event's id, type and data.
-func (s sse) next(t *testing.T) (id, typ string, data runtime.Event) {
+func (s sse) next(t *testing.T) (id, typ string, data api.Event) {
 	t.Helper()
 	for {
 		line, err := s.r.ReadString('\n')
@@ -168,7 +169,7 @@ func TestSSEDeliversTurnEvents(t *testing.T) {
 	}
 	stream := sse{bufio.NewReader(resp.Body)}
 	id, typ, ev := stream.next(t)
-	if typ != runtime.EventApprovalRequested || ev.Pending == nil || id != strconv.FormatInt(ev.Seq, 10) {
+	if typ != api.EventApprovalRequested || ev.Pending == nil || id != strconv.FormatInt(ev.Seq, 10) {
 		t.Fatalf("first event %s %s %+v", id, typ, ev)
 	}
 	call("POST", "/approvals", map[string]any{"key": ev.Pending.Key, "ok": true}).Body.Close()
@@ -177,13 +178,13 @@ func TestSSEDeliversTurnEvents(t *testing.T) {
 		t.Fatalf("a second answer got %d", resp.StatusCode)
 	}
 	var got []string
-	for typ != runtime.EventTurnEnd {
+	for typ != api.EventTurnEnd {
 		_, typ, ev = stream.next(t)
-		if typ != runtime.EventToken {
+		if typ != api.EventToken {
 			got = append(got, typ)
 		}
 	}
-	want := []string{runtime.EventApprovalResolved, runtime.EventToolEnd, runtime.EventTurnEnd}
+	want := []string{api.EventApprovalResolved, api.EventToolEnd, api.EventTurnEnd}
 	if !slices.Equal(got, want) || ev.Reply != "done" {
 		t.Fatalf("events %v, want %v; turn end %+v", got, want, ev)
 	}
@@ -311,7 +312,7 @@ func TestFlowsOverHTTP(t *testing.T) {
 		return resp.StatusCode
 	}
 	call("POST", "/sessions", map[string]string{"dir": ws}, &map[string]any{})
-	var flows []runtime.FlowInfo
+	var flows []api.FlowInfo
 	if code := call("GET", "/sessions/one/flows", nil, &flows); code != http.StatusOK || len(flows) != 1 || flows[0].Description != "Says hello" {
 		t.Fatalf("flows: %d %+v", code, flows)
 	}

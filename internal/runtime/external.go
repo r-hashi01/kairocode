@@ -21,6 +21,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/config"
+	"github.com/r-hashi01/kairocode/internal/plugins"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -46,23 +47,12 @@ const (
 )
 
 // extName is a name the model's API takes.
-var extName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+var extName = plugins.NamePattern
 
-type mcpConfig struct {
-	Type        string            `json:"type"` // local, remote
-	Command     []string          `json:"command"`
-	Environment map[string]string `json:"environment"`
-	URL         string            `json:"url"`
-	Headers     map[string]string `json:"headers"`
-	Enabled     *bool             `json:"enabled"`
-}
-
-type toolConfig struct {
-	Effect      string          `json:"effect"`
-	Description string          `json:"description"`
-	Schema      json.RawMessage `json:"schema"`
-	Command     []string        `json:"command"`
-}
+type (
+	mcpConfig  = plugins.MCPConfig
+	toolConfig = plugins.ToolConfig
+)
 
 // extServer is an MCP server of the configuration. Spec fingerprints all
 // of it (ExtSource.Spec).

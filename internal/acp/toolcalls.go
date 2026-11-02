@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/locale"
-	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -18,7 +18,7 @@ import (
 // took effect) and gives the answer to the daemon. The request waits in
 // kairo, not here: if the client goes away unanswered, the next session/load
 // asks again (ADR 0002).
-func (a *agent) ask(session string, p runtime.Pending) {
+func (a *agent) ask(session string, p api.Pending) {
 	a.mu.Lock()
 	if a.asks[p.Key] != nil {
 		a.mu.Unlock()
@@ -36,7 +36,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 	answers := map[string]bool{"allow_once": true, "reject_once": false}
 	title := strings.TrimSpace(p.Tool + " " + p.Subject)
 	ruleText := p.Rule // the rule, as the title says it
-	question := p.Kind == runtime.KindQuestion
+	question := p.Kind == api.KindQuestion
 	kind := toolKind(p.Tool)
 	if question {
 		// A flow's question (ADR 0003): its options, each of a reject kind
@@ -159,7 +159,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			if _, err := fmt.Sscanf(resp.Outcome.OptionID, "answer_%d", &i); err != nil || i < 0 || i >= len(p.Options) {
 				return // not an answer offered: it still waits in kairo
 			}
-			if err := a.b.Answer(a.ctx, p.Key, p.Options[i]); err != nil && !errors.Is(err, runtime.ErrAnswered) {
+			if err := a.b.Answer(a.ctx, p.Key, p.Options[i]); err != nil && !errors.Is(err, api.ErrAnswered) {
 				a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
 			}
 			return
@@ -167,7 +167,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 		if resp.Outcome.OptionID == TryOption && p.Try != nil {
 			// The words to try it with come as the reason; the approval
 			// is asked again when the try ends.
-			if err := a.b.TryFlow(a.ctx, p.Key, resp.Meta.Reason); err != nil && !errors.Is(err, runtime.ErrAnswered) {
+			if err := a.b.TryFlow(a.ctx, p.Key, resp.Meta.Reason); err != nil && !errors.Is(err, api.ErrAnswered) {
 				a.o.Logger.Warn("acp: trying the flow", "key", p.Key, "err", err)
 			}
 			return
@@ -177,7 +177,7 @@ func (a *agent) ask(session string, p runtime.Pending) {
 			return
 		}
 		// A refusal may say what to do instead: the model is told.
-		if err := a.b.Approve(a.ctx, p.Key, ok, resp.Meta.Reason); err != nil && !errors.Is(err, runtime.ErrAnswered) {
+		if err := a.b.Approve(a.ctx, p.Key, ok, resp.Meta.Reason); err != nil && !errors.Is(err, api.ErrAnswered) {
 			a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
 		}
 	}()
@@ -202,9 +202,9 @@ func flowPlan(v *flowchart.View) map[string]any {
 				}
 				status := "pending"
 				switch v.States[n.Key()] {
-				case runtime.FlowRunning, runtime.FlowWaiting:
+				case api.FlowRunning, api.FlowWaiting:
 					status = "in_progress"
-				case runtime.FlowDone, runtime.FlowFailed:
+				case api.FlowDone, api.FlowFailed:
 					status = "completed"
 				}
 				entries = append(entries, map[string]any{"content": content, "priority": "medium", "status": status})
@@ -282,7 +282,7 @@ func toolResult(id, tool, output string, isError bool) map[string]any {
 // localized is a section of a flow's review in lang: KairoCode's own
 // words in it, and in its chart's boxes what KairoCode says a call sends.
 // The script, and a change's before and after, are as written.
-func localized(lang string, s runtime.PreviewSection) runtime.PreviewSection {
+func localized(lang string, s api.PreviewSection) api.PreviewSection {
 	if s.Name == "Script" {
 		return s
 	}

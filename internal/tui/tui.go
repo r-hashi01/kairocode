@@ -26,8 +26,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/r-hashi01/kairocode/internal/acp"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
-	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/tui/screen"
 )
 
@@ -57,8 +57,8 @@ type Agent interface {
 	Plugins(ctx context.Context, session string) (acp.PluginsView, error)
 	PluginChange(ctx context.Context, args ...string) (string, error)
 	// FlowRuns and FlowRun are /flow runs' screen (ADR 0029).
-	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]runtime.FlowRun, error)
-	FlowRun(ctx context.Context, id string) (runtime.FlowRun, error)
+	FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error)
+	FlowRun(ctx context.Context, id string) (api.FlowRun, error)
 	// GoOn goes on from a session that failed, in a new one forked from its
 	// last finished turn (ADR 0021).
 	GoOn(ctx context.Context, session string) (string, int, error)
@@ -801,9 +801,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.print(faint.Render(fmt.Sprintf("  ⎿  Now in session %s, from turn %d of %s, which is kept (kairocode log %s).",
 			short(msg.session), msg.turn, short(old), strings.TrimPrefix(old, "s/"))))
 		m.running, m.began = true, time.Now()
-		return m.send(runtime.FailedNote+"\n\n"+msg.text, msg.files)
+		return m.send(api.FailedNote+"\n\n"+msg.text, msg.files)
 	case turnDoneMsg:
-		if errors.Is(msg.err, runtime.ErrSessionFailed) && m.ctx.Err() == nil && msg.text != "" {
+		if errors.Is(msg.err, api.ErrSessionFailed) && m.ctx.Err() == nil && msg.text != "" {
 			// It took nothing: the message goes on in a new session.
 			m.flushLive()
 			m.print(warn.Render("  ⎿  " + shortError(msg.err.Error())))

@@ -5,6 +5,7 @@
 package invariants
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/importer"
@@ -262,7 +263,7 @@ func Secrets(roots ...string) ([]string, error) {
 var commandStarters = []string{"internal/sandbox/", "internal/agents/", "internal/runtime/claude.go", "internal/runtime/cliengines.go", "internal/runtime/acpengine.go", "internal/tui/login.go", "internal/daemon/spawn.go",
 	"internal/runtime/secrets.go",     // the key store's commands, security and secret-tool (ADR 0025)
 	"internal/cli/plugin.go",          // the browser, for a plugin's OAuth (ADR 0025)
-	"internal/runtime/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
+	"internal/plugins/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
 	"scripts/envcheck/",               // check.sh's look at whether a sandbox can be started here
 	"internal/runtime/jobs.go",        // the runner of a command in the background: this binary (ADR 0028)
 	"internal/tui/clipboard.go"}       // osascript, wl-paste or xclip, to read the clipboard's image (ADR 0026)
@@ -339,4 +340,43 @@ func Commands(root string) ([]string, error) {
 		return nil
 	})
 	return out, err
+}
+
+// clientPackages are the packages that only show and take input: they talk
+// to the daemon through internal/api's types (and acp's protocol), never to
+// the runtime itself, so what they show cannot reach past the daemon.
+var clientPackages = []string{"internal/tui/", "internal/acp/"}
+
+// ClientImports lists the non-test files of clientPackages under root that
+// import internal/runtime.
+func ClientImports(root string) ([]string, error) {
+	var out []string
+	fset := token.NewFileSet()
+	for _, pkg := range clientPackages {
+		err := filepath.WalkDir(filepath.Join(root, pkg), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() && d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			f, err := parser.ParseFile(fset, p, nil, parser.ImportsOnly)
+			if err != nil {
+				return err
+			}
+			for _, imp := range f.Imports {
+				if path, _ := strconv.Unquote(imp.Path.Value); path == module+"/internal/runtime" {
+					out = append(out, fmt.Sprintf("%s: a client imports internal/runtime (use internal/api)", fset.Position(imp.Pos())))
+				}
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return out, nil
 }

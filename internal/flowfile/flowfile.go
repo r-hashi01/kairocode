@@ -6,6 +6,7 @@ package flowfile
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -100,4 +101,28 @@ func Write(dir, name string, src []byte) error {
 		return err
 	}
 	return nil
+}
+
+// FlowHelp is what the flow name of the project in dir is to be given and
+// what it does (/flow <name> --help): of its published script, else of
+// its draft (ADR 0030).
+func FlowHelp(dir, name string) (string, error) {
+	if !flowchart.ValidName(name) {
+		return "", fmt.Errorf("%q is not a flow's name", name)
+	}
+	pub, perr := Read(dir, name, false)
+	draft, derr := Read(dir, name, true)
+	switch {
+	case perr == nil:
+		h, err := flowchart.Help(name, pub, false)
+		if err == nil && derr == nil {
+			h += "\nIt has a draft as well: /flow " + name + " --draft tries it, --publish publishes it.\n"
+		}
+		return h, err
+	case derr == nil:
+		return flowchart.Help(name, draft, true)
+	case !errors.Is(perr, fs.ErrNotExist):
+		return "", fmt.Errorf("the flow %q: %w", name, perr) // a link out of the project, say
+	}
+	return "", fmt.Errorf("there is no flow %q (%s/%s.star), nor a draft of one", name, flowchart.Dir, name)
 }

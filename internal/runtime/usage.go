@@ -3,25 +3,16 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"github.com/r-hashi01/kairocode/internal/api"
 	"slices"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// SessionUsage is what a session's model calls used, as they recorded it.
-type SessionUsage struct {
-	Session string      `json:"session"`
-	Turns   []TurnUsage `json:"turns"`
-	Total   msg.Usage   `json:"total"`
-}
+type SessionUsage = api.SessionUsage
 
-// TurnUsage is what one turn's model calls used so far.
-type TurnUsage struct {
-	N        int       `json:"n"`
-	Finished bool      `json:"finished"`
-	Usage    msg.Usage `json:"usage"`
-}
+type TurnUsage = api.TurnUsage
 
 // Usage adds up the usage the session's model calls recorded (the API's
 // model calls, and Claude Code's runs), turn by turn: a turn under way

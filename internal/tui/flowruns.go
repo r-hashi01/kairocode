@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/r-hashi01/kairocode/internal/runtime"
+	"github.com/r-hashi01/kairocode/internal/api"
 )
 
 // The flows' runs, to look back at (/flow runs, ADR 0029): the folder's
@@ -15,25 +15,25 @@ import (
 
 // runsScreen is /flow runs' screen.
 type runsScreen struct {
-	runs   []runtime.FlowRun
+	runs   []api.FlowRun
 	loaded bool
 	filter string
 	sel    int
 	// run: the one shown (with its chart and steps), and how far down.
-	run    *runtime.FlowRun
+	run    *api.FlowRun
 	lines  []string
 	scroll int
 }
 
 // flowRunsMsg: the folder's runs, read for /flow runs.
 type flowRunsMsg struct {
-	runs []runtime.FlowRun
+	runs []api.FlowRun
 	err  error
 }
 
 // flowRunMsg: one run, read to show.
 type flowRunMsg struct {
-	run runtime.FlowRun
+	run api.FlowRun
 	err error
 }
 
@@ -55,7 +55,7 @@ func (m *model) readFlowRun(id string) tea.Cmd {
 }
 
 // showRun lays a run out as lines: its chart, then its steps.
-func (m *model) showRun(f runtime.FlowRun) {
+func (m *model) showRun(f api.FlowRun) {
 	w := max(m.width-1, 20)
 	var lines []string
 	if f.View != nil {
@@ -69,12 +69,12 @@ func (m *model) showRun(f runtime.FlowRun) {
 }
 
 // visible are the runs the filter leaves.
-func (s *runsScreen) visible() []runtime.FlowRun {
+func (s *runsScreen) visible() []api.FlowRun {
 	f := strings.ToLower(s.filter)
 	if f == "" {
 		return s.runs
 	}
-	var out []runtime.FlowRun
+	var out []api.FlowRun
 	for _, r := range s.runs {
 		if strings.Contains(strings.ToLower(r.Line()), f) {
 			out = append(out, r)
@@ -152,11 +152,11 @@ func (m *model) runsKey(key string) tea.Cmd {
 // runStatus colours a run's status.
 func runStatus(status string) string {
 	switch status {
-	case runtime.FlowRunOK:
+	case api.FlowRunOK:
 		return good.Render(status)
-	case runtime.FlowRunRunning:
+	case api.FlowRunRunning:
 		return accent.Render(status)
-	case runtime.FlowRunCancelled:
+	case api.FlowRunCancelled:
 		return warn.Render(status)
 	}
 	return bad.Render(status)
