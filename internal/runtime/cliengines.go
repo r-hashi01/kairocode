@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -119,7 +120,7 @@ func cliEnv(keep ...string) []string {
 		name, _, _ := strings.Cut(kv, "=")
 		upper := strings.ToUpper(name)
 		switch {
-		case slicesContains(keep, name):
+		case slices.Contains(keep, name):
 		case name == "CLAUDECODE", name == "CLAUDE_CODE_ENTRYPOINT", name == "CLAUDE_CODE_SSE_PORT":
 			continue
 		case strings.Contains(upper, "KEY"), strings.Contains(upper, "TOKEN"),
@@ -129,15 +130,6 @@ func cliEnv(keep ...string) []string {
 		env = append(env, kv)
 	}
 	return env
-}
-
-func slicesContains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // cliModels are the models a CLI says it has: Codex's catalog (codex debug

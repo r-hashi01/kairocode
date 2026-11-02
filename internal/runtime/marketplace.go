@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -522,8 +523,8 @@ func placePlugin(tmp, dest, name string, origin pluginOrigin) (Installed, error)
 	if old != "" {
 		os.RemoveAll(old)
 	}
-	auth := cmpOr(m.Auth.Type, "none")
-	return Installed{Name: name, Version: cmpOr(m.Version, pluginCommit(dest)), Auth: auth}, nil
+	auth := cmp.Or(m.Auth.Type, "none")
+	return Installed{Name: name, Version: cmp.Or(m.Version, pluginCommit(dest)), Auth: auth}, nil
 }
 
 // treeHash is a hash of the files in dir (their paths and contents, .git
@@ -732,7 +733,7 @@ func UpdatePlugin(ctx context.Context, name string) (before, after string, err e
 		return "", "", fmt.Errorf("no plugin %q is installed", name)
 	}
 	m, _ := manifestOf(dir)
-	before = cmpOr(m.Version, pluginCommit(dir))
+	before = cmp.Or(m.Version, pluginCommit(dir))
 	var origin pluginOrigin
 	if b, err := os.ReadFile(filepath.Join(dir, originFile)); err == nil {
 		_ = json.Unmarshal(b, &origin)
@@ -767,7 +768,7 @@ func UpdatePlugin(ctx context.Context, name string) (before, after string, err e
 		if err != nil {
 			return "", "", err
 		}
-		return before, cmpOr(got.Version, mk.Commit), nil
+		return before, cmp.Or(got.Version, mk.Commit), nil
 	}
 	if !isGit(dir) {
 		return "", "", fmt.Errorf("%s was copied from a folder: remove it and install it again", name)
@@ -783,7 +784,7 @@ func UpdatePlugin(ctx context.Context, name string) (before, after string, err e
 		return "", "", err
 	}
 	m, _ = manifestOf(dir)
-	return before, cmpOr(m.Version, head[:12]), nil
+	return before, cmp.Or(m.Version, head[:12]), nil
 }
 
 // RemovePlugin removes an installed plugin; its credentials stay until

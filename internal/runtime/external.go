@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -134,10 +135,10 @@ func redact(s extServer, text string) string {
 		return text
 	}
 	vals := []string{s.URL}
-	for _, k := range slices.Sorted(mapKeys(s.Headers)) {
+	for _, k := range slices.Sorted(maps.Keys(s.Headers)) {
 		vals = append(vals, s.Headers[k])
 	}
-	for _, k := range slices.Sorted(mapKeys(s.Env)) {
+	for _, k := range slices.Sorted(maps.Keys(s.Env)) {
 		vals = append(vals, s.Env[k])
 	}
 	store := Secrets()
@@ -224,7 +225,7 @@ func externals(dir string) ([]extServer, []extCustom, []extDecl, error) {
 			if err := json.Unmarshal(b, &cfg); err != nil {
 				continue // Claude Code's file, of a form it may change: not KairoCode's to fail on
 			}
-			for _, name := range slices.Sorted(mapKeys(cfg.MCPServers)) {
+			for _, name := range slices.Sorted(maps.Keys(cfg.MCPServers)) {
 				s := cfg.MCPServers[name]
 				es := extServer{Name: name, Source: f.path, Project: f.project, Env: s.Env, URL: s.URL, Headers: s.Headers}
 				if s.Command != "" {
@@ -242,7 +243,7 @@ func externals(dir string) ([]extServer, []extCustom, []extDecl, error) {
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", f.path, err)
 		}
-		for _, name := range slices.Sorted(mapKeys(cfg.MCP)) {
+		for _, name := range slices.Sorted(maps.Keys(cfg.MCP)) {
 			s := cfg.MCP[name]
 			if s.Enabled != nil && !*s.Enabled {
 				continue
@@ -252,7 +253,7 @@ func externals(dir string) ([]extServer, []extCustom, []extDecl, error) {
 			es.Spec = fingerprint([]any{es.Command, es.Env, es.URL, es.Headers})
 			servers = append(servers, es)
 		}
-		for _, name := range slices.Sorted(mapKeys(cfg.Tools)) {
+		for _, name := range slices.Sorted(maps.Keys(cfg.Tools)) {
 			t := cfg.Tools[name]
 			if len(t.Command) > 0 {
 				customs = append(customs, extCustom{Name: name, Source: f.path, Project: f.project, Config: t})
@@ -266,16 +267,6 @@ func externals(dir string) ([]extServer, []extCustom, []extDecl, error) {
 	servers = append(servers, ps...)
 	decls = append(decls, pd...)
 	return servers, customs, decls, nil
-}
-
-func mapKeys[V any](m map[string]V) func(func(string) bool) {
-	return func(yield func(string) bool) {
-		for k := range m {
-			if !yield(k) {
-				return
-			}
-		}
-	}
 }
 
 // externalSources are what agent.load records of dir's MCP servers and
@@ -292,10 +283,10 @@ func externalSources(dir string) ([]workflows.ExtSource, error) {
 		if s.URL != "" && len(s.Command) == 0 {
 			e.Command, e.Remote = shownURL(s.URL), true
 		}
-		for _, k := range slices.Sorted(mapKeys(s.Env)) {
+		for _, k := range slices.Sorted(maps.Keys(s.Env)) {
 			e.Given = append(e.Given, "the environment variable "+k)
 		}
-		for _, k := range slices.Sorted(mapKeys(s.Headers)) {
+		for _, k := range slices.Sorted(maps.Keys(s.Headers)) {
 			e.Given = append(e.Given, "the header "+k)
 		}
 		out = append(out, e)
@@ -744,7 +735,7 @@ func (e *extServers) session(dir string, s extServer, mode string) (*mcp.ClientS
 		if mode != workflows.HookSandbox {
 			cmd.Env = os.Environ() // the user's own server, or one they let out: as they run it
 		}
-		for _, k := range slices.Sorted(mapKeys(s.Env)) {
+		for _, k := range slices.Sorted(maps.Keys(s.Env)) {
 			v, err := value(s, s.Env[k])
 			if err != nil {
 				stop()
@@ -759,7 +750,7 @@ func (e *extServers) session(dir string, s extServer, mode string) (*mcp.ClientS
 			stop()
 			return nil, err
 		}
-		for _, k := range slices.Sorted(mapKeys(s.Headers)) { // a credential not there yet: not connected
+		for _, k := range slices.Sorted(maps.Keys(s.Headers)) { // a credential not there yet: not connected
 			if _, err := value(s, s.Headers[k]); err != nil {
 				stop()
 				return nil, err
@@ -899,7 +890,7 @@ func (e *extServers) close() {
 	conns := e.conns
 	e.conns = nil
 	e.mu.Unlock()
-	for _, k := range slices.Sorted(mapKeys(conns)) {
+	for _, k := range slices.Sorted(maps.Keys(conns)) {
 		conns[k].close()
 	}
 }

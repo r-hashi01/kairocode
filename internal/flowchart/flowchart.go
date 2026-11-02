@@ -8,6 +8,7 @@ package flowchart
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -435,7 +436,7 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 			}
 			uses := b.uses(a)
 			for _, u := range uses {
-				if !contains(n.Uses, u) {
+				if !slices.Contains(n.Uses, u) {
 					n.Uses = append(n.Uses, u)
 				}
 			}
@@ -690,7 +691,7 @@ func (b *builder) uses(e syntax.Expr) []string {
 		if id.Name == "input" {
 			what, known = "your words", true
 		}
-		if known && !contains(out, what) {
+		if known && !slices.Contains(out, what) {
 			out = append(out, what)
 		}
 		return true
