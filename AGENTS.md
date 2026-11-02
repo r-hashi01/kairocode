@@ -43,7 +43,7 @@ KairoCode は、kairo（耐久ワークフローのランタイム）の上に�
 | `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
 | `cmd/kairocode` | エントリーポイント | — |
 
-ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、Starlark（`go.starlark.net`。ADR 0003）、`internal/msg`、`internal/plan`、`internal/tools` の型、決定的な標準ライブラリ）。`internal/msg`（メッセージの型）と `internal/plan`（動的なワークフローの計画の型と検査）は、純粋なパッケージとして足す予定です。
+ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、Starlark（`go.starlark.net`。ADR 0003）、`internal/msg`（メッセージの型。純粋なパッケージ）、決定的な標準ライブラリ）。ほかの内部のパッケージの型が要るときは、純粋なパッケージに分けてから、リストに足します。
 
 ## 破ってはいけない不変条件
 

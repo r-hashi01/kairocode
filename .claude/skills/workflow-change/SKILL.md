@@ -12,7 +12,7 @@ description: Checklist for changing KairoCode workflow code (internal/workflows 
 
 ## 実装中に守ること
 - `internal/workflows` では、SDK の `*kairo.Context`（`kairo.Call`、`kairo.Parallel`、`kairo.WaitFor`、`kairo.Child`、`ctx.Now`、`ctx.Random`、`ctx.Sleep`）以外で外を見ません。hook と `TestWorkflowCodeIsDeterministic` が、import の許可リスト、時計、goroutine、`select`、map の走査を検査します。
-- 許可された import 先（`internal/msg`、`internal/plan`）に I/O や時計を入れるのも同じく禁止です。検査では見つけられないので、自分で確かめます。
+- 許可された import 先（`internal/msg`）に I/O や時計を入れるのも同じく禁止です。検査では見つけられないので、自分で確かめます。
 - パッケージの変数、`Parallel` の中での結果の順番、エラーの文面に結果を依存させません。
 - モデルの呼び出しの入力は、ハッシュの列にします（不変条件 5）。
 
