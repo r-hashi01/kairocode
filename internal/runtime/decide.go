@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -179,9 +180,20 @@ func (r *Runtime) decideBy(t *kairo.TaskContext, dir, apiModel, prompt string, s
 	if r.cfg.Provider == nil {
 		return r.claudeDecide(t, dir, prompt, "", schema)
 	}
-	out, err := r.apiDecide(t, apiModel, prompt, schema)
-	if err != nil && t.Err() == nil {
-		return r.claudeDecide(t, dir, prompt, "", schema)
+	out, apiErr := r.apiDecide(t, apiModel, prompt, schema)
+	if apiErr == nil || t.Err() != nil {
+		return out, apiErr
 	}
-	return out, err
+	out, err := r.claudeDecide(t, dir, prompt, "", schema)
+	if err == nil {
+		return out, nil
+	}
+	// Neither answered: both are said. An API that will not answer
+	// however often it is asked (no key) is not asked again, nor Claude
+	// Code with it.
+	var permanent *provider.PermanentError
+	if errors.As(apiErr, &permanent) {
+		return out, fmt.Errorf("the API: %v; Claude Code: %v", apiErr, err)
+	}
+	return out, errors.Join(apiErr, err)
 }

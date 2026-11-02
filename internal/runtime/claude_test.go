@@ -866,3 +866,34 @@ func TestEngineFacts(t *testing.T) {
 		t.Error("cliTurnPlan")
 	}
 }
+
+// Neither the API (no key) nor Claude Code (not there) can decide: the
+// flow is told both, at once, not after retries.
+func TestFlowDecideNeitherAnswers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Engine: workflows.EngineCodex, Provider: noKey{},
+		ClaudePath: filepath.Join(t.TempDir(), "no-claude"), Owner: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/size.star": `
+def main(input):
+    d = decide("How big is this change?", type = "choice", choices = ["small", "medium", "large"])
+    return "%s %s" % (d.ok, d.value)
+`})
+	s, err := r.CreateSession(ctx, "neither", workflows.SessionInput{Dir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := r.RunFlow(ctx, s, "size", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.WaitTurn(ctx, s, n)
+	if err == nil || !strings.Contains(err.Error(), "the API: no API key") || !strings.Contains(err.Error(), "Claude Code:") {
+		t.Fatalf("the turn: %v", err)
+	}
+}

@@ -246,9 +246,9 @@ KairoCode が ACP（ADR 0002）のクライアントになり、各エージェ�
 
 ## 追記（2026-11-02、利用者の了承）: スキーマで答えられないエンジンの decide
 
-フローの `decide` は、スキーマで答えられないエンジン（codex、copilot、ACP のレジストリのエージェント）のセッションでは、API に判断させ、API が無ければ Claude Code に判断させていました。auto モードの判定役は、それに加えて、API が答えない（キーが無いなど）ときにも Claude Code に切り替えていました。
+フローの `decide` は、codex と copilot のセッションでは、API に判断させ、API が無ければ Claude Code に判断させていました。ACP のレジストリのエージェントのセッションでは、そのエージェントのモデルの名前のまま API に聞いていました（API が無ければ動かない）。auto モードの判定役は、API が無いか、API が答えない（キーが無いなど）ときに、Claude Code に切り替えていました。
 
-- 両方とも同じ順にそろえます（`Runtime.decideBy`）: プロバイダーがあれば API（既定のモデル）、無いか API が答えなければ Claude Code。
+- 両方とも同じ順にそろえます（`Runtime.decideBy`）: プロバイダーがあれば API（フローは既定のモデル、判定役は `judgeModel`）、無いか API が答えなければ Claude Code。両方とも答えなければ、両方の理由を返します。API がやり直しても答えない種類の失敗（キーが無いなど）なら、やり直しません。
 - ACP のレジストリのエージェントのセッションも、codex と同じく扱います。前は、そのエージェントのモデルの名前のまま API に聞いていました。
 - どのエンジンがスキーマで答えるか、試しに流せるか、どのアクションがそのターンを動かすかは、`internal/runtime/engines.go` の `factsOf` の 1 か所にまとめました。
 - テスト: `internal/runtime`（`TestFlowDecideFallsBackToClaudeCode`、`TestEngineFacts`）。
