@@ -176,12 +176,7 @@ const hookLimit = 60 * time.Second
 func (r *Runtime) hookCommandAction(t *kairo.TaskContext, in workflows.HookRunInput) (workflows.HookRunOutput, error) {
 	stdin := map[string]any{"session_id": in.Session, "transcript_path": "", "cwd": in.Dir, "hook_event_name": in.Hook.Claude}
 	if in.Tool != "" {
-		name := in.Tool
-		if n, ok := map[string]string{"bash": "Bash", "edit": "Edit", "write": "Write", "read": "Read", "grep": "Grep",
-			"glob": "Glob", "list": "LS", "task": "Task", "skill": "Skill"}[in.Tool]; ok {
-			name = n
-		}
-		stdin["tool_name"] = name
+		stdin["tool_name"] = workflows.ClaudeName(in.Tool)
 		if in.Call != nil {
 			if args, err := r.toolArgs(t, *in.Call); err == nil {
 				stdin["tool_input"] = json.RawMessage(args)
