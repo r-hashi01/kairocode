@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/r-hashi01/kairocode/internal/atomicfile"
 )
 
 // RegistryURL is ACP's registry of agents.
@@ -328,21 +330,7 @@ func (m *Manager) Install(ctx context.Context, id, version string) (Installed, e
 // writeAtomic writes b to name whole: a reader sees the old file or the
 // new one.
 func writeAtomic(name string, b []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+"-")
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(b)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), name)
-	}
-	if err != nil {
-		os.Remove(f.Name())
-	}
-	return err
+	return atomicfile.Write(name, b, 0o600) // as os.CreateTemp made it before
 }
 
 // safeName is s as one path element.

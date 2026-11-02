@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/r-hashi01/kairocode/internal/atomicfile"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 )
 
@@ -142,27 +143,7 @@ func writeJSONFile(path string, v any, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".settings-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(append(b, '\n')); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Chmod(perm); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
+	return atomicfile.Write(path, append(b, '\n'), perm)
 }
 
 // copilotRepoHooks refuses a working directory whose repository defines
