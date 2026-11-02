@@ -285,9 +285,11 @@ type model struct {
 	// of them being chosen (/provider, /model).
 	config []acp.ConfigOption
 	pick   *pick
-	// plugins: /plugin's screen (ADR 0027); runs, /flow runs' (ADR 0029).
+	// plugins: /plugin's screen (ADR 0027); runs, /flow runs' (ADR 0029);
+	// flows, /flow's.
 	plugins *browser
 	runs    *runsScreen
+	flows   *flowsScreen
 	// history: what was sent, oldest first (↑ ↓); histAt, the one shown
 	// (len: none); draft, what was being typed before it.
 	history []string
@@ -545,7 +547,7 @@ func (m *model) start() tea.Cmd {
 // not redrawn, and stays there. Leaving one puts the conversation back as
 // it was, and what was to be written above it is written then.
 func (m *model) full() bool {
-	if m.plugins != nil || m.runs != nil {
+	if m.plugins != nil || m.runs != nil || m.flows != nil {
 		return true
 	}
 	return len(m.asks) > 0 && m.asks[0].review != nil && !m.asks[0].instead
@@ -1381,6 +1383,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.pluginsKey(key)
 	case m.runs != nil:
 		return m.runsKey(key)
+	case m.flows != nil:
+		return m.flowsKey(key)
 	case m.pick != nil:
 		return m.pickKey(key)
 	case m.edit != nil:
@@ -1484,6 +1488,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		if (text == "/plugin" || text == "/plugins") && m.session != "" { // to browse (ADR 0027)
 			return m.openPlugins()
 		}
+		if text == "/flow" { // the folder's flows, to pick one
+			return m.openFlows()
+		}
 		if text == "/flow runs" { // the flows' runs, to look back at (ADR 0029)
 			return m.openFlowRuns()
 		}
@@ -1575,7 +1582,8 @@ func (m *model) help() string {
 	lines = append(lines, bold.Render("Keys"),
 		"  enter          send (during a turn: after it)",
 		"  esc            stop the turn",
-		"  /flow edit <name>   change a flow on its chart; /flow graph <name> draws it",
+		"  /flow          pick a flow: run it, change it on its chart, or look back at its runs",
+		"  /flow runs     all the flows' runs; /flow edit <name>, /flow graph <name>",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
 		"  tab            complete a command, or a path after @",
 		"  @path          put a file (or a folder's list) of this folder in the message",
@@ -1693,6 +1701,8 @@ func (m *model) View() tea.View {
 		b.WriteString(m.pluginsView(w))
 	case m.runs != nil:
 		b.WriteString(m.runsView(w))
+	case m.flows != nil:
+		b.WriteString(m.flowsView(w))
 	case m.pick != nil:
 		b.WriteString(m.pickView(w))
 	case m.edit != nil:

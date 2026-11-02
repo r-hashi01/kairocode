@@ -189,7 +189,7 @@ func (a *agent) listFlows(ctx context.Context, session string) (any, error) {
 	}
 	text := "There are no flows yet: they are .kairocode/workflows/<name>.star."
 	if len(fs) > 0 {
-		lines := []string{"Flows (/flow <name> [what to give it]; /flow <name> --help says what):"}
+		lines := []string{"Flows here. /flow <name> [what to give it] runs one; /flow <name> --help says what it takes and does; /flow runs, the runs to look back at:"}
 		for _, f := range fs {
 			name := f.Name
 			if f.Args != "" {
