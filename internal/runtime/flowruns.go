@@ -5,15 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -308,8 +306,8 @@ func (r *Runtime) FlowRunByID(ctx context.Context, id string) (FlowRun, error) {
 // days: the user's kairocode.json, {"flowHistory": {"keep": 200, "days": 90}}.
 func flowHistory() (keep, days int) {
 	keep, days = flowRunsKeep, flowRunsDays
-	b, err := os.ReadFile(filepath.Join(userConfigDir(), ConfigFile))
-	if errors.Is(err, fs.ErrNotExist) || err != nil {
+	l, ok, err := config.User()
+	if !ok || err != nil {
 		return keep, days
 	}
 	var cfg struct {
@@ -318,7 +316,7 @@ func flowHistory() (keep, days int) {
 			Days int `json:"days"`
 		} `json:"flowHistory"`
 	}
-	if json.Unmarshal(b, &cfg) == nil {
+	if l.Decode(&cfg) == nil {
 		if cfg.FlowHistory.Keep > 0 {
 			keep = cfg.FlowHistory.Keep
 		}

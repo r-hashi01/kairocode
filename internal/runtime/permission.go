@@ -2,9 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,6 +10,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -19,9 +18,8 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// ConfigFile is the name of KairoCode's settings file, in a project and in
-// the user's config directory.
-const ConfigFile = "kairocode.json"
+// ConfigFile is the name of KairoCode's settings file (config.File).
+const ConfigFile = config.File
 
 // defaultRules come first; the user's and the project's rules follow, and
 // of the rules that match a call the last one wins (ADR 0002).
@@ -56,38 +54,26 @@ var defaultRules = []permission.Rule{
 	{Tool: "bash_wait", Action: permission.Allow},
 }
 
-// userConfigDir is where the user's kairocode.json lives.
-func userConfigDir() string {
-	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "kairocode")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "kairocode")
-}
-
 // loadRules reads the permission rules for a working directory: the
 // defaults, then the user's, then the project's, then the agent's own
 // (layers, each in kairocode.json's form). "~/" and "$HOME/" in a pattern
 // are the home directory.
 func loadRules(dir string, agent []json.RawMessage) ([]permission.Rule, error) {
 	rules := append([]permission.Rule(nil), defaultRules...)
-	for _, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
-		b, err := os.ReadFile(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
+	layers, err := config.Layers(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range layers {
 		var cfg struct {
 			Permission json.RawMessage `json:"permission"`
 		}
-		if err := json.Unmarshal(b, &cfg); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+		if err := l.Decode(&cfg); err != nil {
+			return nil, err
 		}
 		r, err := permission.Parse(cfg.Permission)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s: %w", l.Path, err)
 		}
 		rules = append(rules, r...)
 	}
@@ -120,17 +106,14 @@ func loadRules(dir string, agent []json.RawMessage) ([]permission.Rule, error) {
 func loopbackSetting(dir string) permission.Action {
 	rank := map[permission.Action]int{permission.Allow: 0, permission.Ask: 1, permission.Deny: 2}
 	setting := permission.Allow
-	for i, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
+	layers, _ := config.Layers(dir) // one not readable: as if not there
+	for _, l := range layers {
 		var cfg struct {
 			Sandbox struct {
 				Loopback permission.Action `json:"loopback"`
 			} `json:"sandbox"`
 		}
-		if json.Unmarshal(b, &cfg) != nil {
+		if l.Decode(&cfg) != nil {
 			continue
 		}
 		got := cfg.Sandbox.Loopback
@@ -140,7 +123,7 @@ func loopbackSetting(dir string) permission.Action {
 		if _, ok := rank[got]; !ok {
 			got = permission.Ask // a value it does not know: not looser than asking
 		}
-		if i == 0 || rank[got] > rank[setting] {
+		if !l.Project || rank[got] > rank[setting] {
 			setting = got
 		}
 	}

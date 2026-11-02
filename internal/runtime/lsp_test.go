@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/lsp"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
@@ -32,7 +33,7 @@ func fakeLSP(t *testing.T, ws, log string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(userConfigDir(), ConfigFile)
+	path := config.UserFile()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

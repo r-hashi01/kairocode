@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/config"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -43,14 +44,8 @@ func project(dir string) []string {
 // wins, as for its settings files (opencode.json).
 func Dirs(dir string) []string {
 	var out []string
-	config := os.Getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			config = filepath.Join(home, ".config")
-		}
-	}
-	if config != "" {
-		out = append(out, filepath.Join(config, "opencode"))
+	if home := config.Home(); home != "" {
+		out = append(out, filepath.Join(home, "opencode"))
 	}
 	for _, d := range project(dir) {
 		out = append(out, filepath.Join(d, ".opencode"))
@@ -71,14 +66,8 @@ func DefinitionDirs(dir string) []string {
 	if home, err := os.UserHomeDir(); err == nil {
 		out = append(out, filepath.Join(home, ".claude"), filepath.Join(home, ".agents"))
 	}
-	config := os.Getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			config = filepath.Join(home, ".config")
-		}
-	}
-	if config != "" {
-		out = append(out, filepath.Join(config, "opencode"))
+	if home := config.Home(); home != "" {
+		out = append(out, filepath.Join(home, "opencode"))
 	}
 	for _, d := range project(dir) {
 		out = append(out, filepath.Join(d, ".claude"), filepath.Join(d, ".agents"), filepath.Join(d, ".opencode"))

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/atomicfile"
+	"github.com/r-hashi01/kairocode/internal/config"
 )
 
 // Plugin marketplaces (ADR 0027): catalogs of plugins, by name and where
@@ -80,10 +81,10 @@ type addedMarket struct {
 }
 
 // UserPluginsDir is the folder of the user's plugins.
-func UserPluginsDir() string { return filepath.Join(userConfigDir(), "plugins") }
+func UserPluginsDir() string { return filepath.Join(config.UserDir(), "plugins") }
 
-func marketsFile() string { return filepath.Join(userConfigDir(), "marketplaces.json") }
-func marketsDir() string  { return filepath.Join(userConfigDir(), "marketplaces") }
+func marketsFile() string { return filepath.Join(config.UserDir(), "marketplaces.json") }
+func marketsDir() string  { return filepath.Join(config.UserDir(), "marketplaces") }
 
 // folderName says name can be a folder's: not empty, no separator, not
 // starting with a dot.
@@ -137,7 +138,7 @@ func readAdded() ([]addedMarket, error) {
 }
 
 func writeAdded(list []addedMarket) error {
-	if err := os.MkdirAll(userConfigDir(), 0o700); err != nil {
+	if err := os.MkdirAll(config.UserDir(), 0o700); err != nil {
 		return err
 	}
 	b, _ := json.MarshalIndent(list, "", "  ")

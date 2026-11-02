@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
 	"slices"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"github.com/r-hashi01/kairocode/internal/permission"
@@ -31,18 +30,16 @@ var hookEvents = []string{workflows.HookSessionStart, workflows.HookToolAfter, w
 // (and when its script changes).
 func loadHooks(dir string) ([]workflows.Hook, error) {
 	var out []workflows.Hook
-	for _, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
-		b, err := os.ReadFile(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
+	layers, err := config.Layers(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range layers {
+		path := l.Path
 		var cfg struct {
 			Hooks map[string][]json.RawMessage `json:"hooks"`
 		}
-		if err := json.Unmarshal(b, &cfg); err != nil {
+		if err := json.Unmarshal(l.Data, &cfg); err != nil {
 			return nil, fmt.Errorf("%s: hooks: %w", path, err)
 		}
 		for _, event := range slices.Sorted(func(yield func(string) bool) {

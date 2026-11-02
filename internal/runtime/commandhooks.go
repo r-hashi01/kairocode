@@ -16,6 +16,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -49,21 +50,18 @@ func claudeSettings(dir string) []string {
 // a project's can only turn them off. A value not known is taken as off.
 func claudeHooksOff(dir string) bool {
 	off := false
-	for i, path := range []string{filepath.Join(userConfigDir(), ConfigFile), filepath.Join(dir, ConfigFile)} {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
+	layers, _ := config.Layers(dir) // one not readable: as if not there
+	for _, l := range layers {
 		var cfg struct {
 			Agents struct {
 				ClaudeHooks string `json:"claudeHooks"`
 			} `json:"agents"`
 		}
-		if json.Unmarshal(b, &cfg) != nil || cfg.Agents.ClaudeHooks == "" {
+		if l.Decode(&cfg) != nil || cfg.Agents.ClaudeHooks == "" {
 			continue
 		}
 		got := cfg.Agents.ClaudeHooks != "ask"
-		if i == 0 || got {
+		if !l.Project || got {
 			off = got
 		}
 	}

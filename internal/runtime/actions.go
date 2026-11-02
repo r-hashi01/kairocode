@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"os"
 	"path/filepath"
@@ -173,7 +174,7 @@ func (r *Runtime) lspErrors(ctx context.Context, dir, path string, content []byt
 	if err != nil {
 		return ""
 	}
-	servers, err := lsp.Servers(filepath.Join(userConfigDir(), ConfigFile), filepath.Join(real, ConfigFile))
+	servers, err := lsp.Servers(config.UserFile(), config.ProjectFile(real))
 	if err != nil {
 		r.logf("lsp: %v", err) // what is left out; the servers given are used
 	}

@@ -20,6 +20,7 @@ import (
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/store"
@@ -130,7 +131,7 @@ func externals(dir string) ([]extServer, []extCustom, []extDecl, error) {
 		project bool
 		claude  bool // Claude Code's own: one that cannot be read is passed over
 	}
-	files := []file{{path: filepath.Join(userConfigDir(), ConfigFile)}, {path: filepath.Join(dir, ConfigFile), project: true},
+	files := []file{{path: config.UserFile()}, {path: config.ProjectFile(dir), project: true},
 		{path: filepath.Join(dir, ".mcp.json"), project: true, claude: true}}
 	if home != "" {
 		files = slices.Insert(files, 1, file{path: filepath.Join(home, ".claude.json"), claude: true})

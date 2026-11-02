@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/r-hashi01/kairocode/internal/atomicfile"
+	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 )
 
@@ -35,7 +36,7 @@ const copilotMark = "kairocode-disabled-hooks"
 
 // ownHooks is the user's agents.ownHooks.
 func ownHooks() (bool, error) {
-	path := filepath.Join(userConfigDir(), ConfigFile)
+	path := config.UserFile()
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -100,7 +101,7 @@ func (r *Runtime) copilotHooks(own bool, env map[string]string) error {
 			}
 			return fmt.Errorf("copilot's %s is not JSON, so KairoCode cannot turn copilot's own hooks off "+
 				"(ADR 0018): correct it, or let copilot run them with \"agents\": {\"ownHooks\": true} in %s",
-				path, filepath.Join(userConfigDir(), ConfigFile))
+				path, config.UserFile())
 		}
 		if fi, err := os.Stat(path); err == nil {
 			perm = fi.Mode().Perm()
@@ -194,7 +195,7 @@ func copilotRepoHooks(dir string) error {
 	return fmt.Errorf("this repository defines hooks for copilot (%s), which copilot would run outside KairoCode's sandbox "+
 		"with no one asked, and which cannot be turned off for one run (ADR 0018): use another provider here, "+
 		"or let copilot run them with \"agents\": {\"ownHooks\": true} in %s",
-		strings.Join(found, ", "), filepath.Join(userConfigDir(), ConfigFile))
+		strings.Join(found, ", "), config.UserFile())
 }
 
 // codexMCPNames are the MCP servers codex's own settings at path name
@@ -271,7 +272,7 @@ func codexHome(env map[string]string) string {
 // ownMCP is the user's agents.ownMCP: codex may start the MCP servers of
 // the user's own codex settings (not a project's).
 func ownMCP() (bool, error) {
-	path := filepath.Join(userConfigDir(), ConfigFile)
+	path := config.UserFile()
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil

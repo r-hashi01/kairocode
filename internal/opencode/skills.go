@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"fmt"
+	"github.com/r-hashi01/kairocode/internal/config"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -38,10 +39,8 @@ func SkillDirs(dir string) []string {
 	for _, c := range Dirs(dir) {
 		out = append(out, filepath.Join(c, "skill"), filepath.Join(c, "skills"))
 	}
-	if cfg := os.Getenv("XDG_CONFIG_HOME"); cfg != "" {
-		out = append(out, filepath.Join(cfg, "kairocode", "skills"))
-	} else if homeErr == nil {
-		out = append(out, filepath.Join(home, ".config", "kairocode", "skills"))
+	if config.Home() != "" {
+		out = append(out, filepath.Join(config.UserDir(), "skills"))
 	}
 	for _, d := range project(dir) {
 		out = append(out, filepath.Join(d, ".kairocode", "skills"))
@@ -66,10 +65,8 @@ type Plugin struct {
 // name taken comes after it, and is told apart by Project.
 func PluginDirs(dir string) []Plugin {
 	var roots []Plugin
-	if cfg := os.Getenv("XDG_CONFIG_HOME"); cfg != "" {
-		roots = append(roots, Plugin{Dir: filepath.Join(cfg, "kairocode", "plugins")})
-	} else if home, err := os.UserHomeDir(); err == nil {
-		roots = append(roots, Plugin{Dir: filepath.Join(home, ".config", "kairocode", "plugins")})
+	if config.Home() != "" {
+		roots = append(roots, Plugin{Dir: filepath.Join(config.UserDir(), "plugins")})
 	}
 	for _, d := range project(dir) {
 		roots = append(roots, Plugin{Dir: filepath.Join(d, ".kairocode", "plugins"), Project: true})
