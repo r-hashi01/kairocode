@@ -1319,7 +1319,7 @@ func TestACPTryFlow(t *testing.T) {
 	c.answer(req, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": TryOption},
 		"_meta": map[string]any{ReasonMeta: "a late parcel"}})
 	again, _ := c.until(isMethod("session/request_permission"))
-	for _, want := range []string{"── Try ──", "words                     a late parcel", "Dear customer"} {
+	for _, want := range []string{"### Try", "words                     a late parcel", "Dear customer"} {
 		if !strings.Contains(string(again.Params), want) {
 			t.Fatalf("no %q in the approval asked again: %s", want, again.Params)
 		}

@@ -244,6 +244,7 @@ func contentSections(raw json.RawMessage) []Section {
 			continue
 		}
 		s := Section{Name: name, Text: strings.TrimPrefix(c.Content.Text, "\n\n── "+name+" ──\n")}
+		_ = json.Unmarshal(c.Content.Meta[TextMeta], &s.Text) // as it is, the block's being Markdown
 		_ = json.Unmarshal(c.Content.Meta[RefsMeta], &s.Refs) // none: no line is shown more of
 		_ = json.Unmarshal(c.Content.Meta[DetailsMeta], &s.Details)
 		if ch := c.Content.Meta[ChartMeta]; len(ch) > 0 && string(ch) != "null" {
