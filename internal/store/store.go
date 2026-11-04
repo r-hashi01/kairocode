@@ -103,6 +103,15 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			session TEXT PRIMARY KEY,
 			body BLOB NOT NULL,
 			seq INTEGER NOT NULL)`,
+		// The runs a flow that went another way left running, as they hold a
+		// call whose outcome may be unknown (ADR 0003, addendum 2026-11-04):
+		// listed with the session's waits, though nothing above them waits
+		// for them. top is the session's turn they are under.
+		`CREATE TABLE IF NOT EXISTS kc_kept (
+			run TEXT PRIMARY KEY,
+			session TEXT NOT NULL,
+			top TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS kc_kept_session ON kc_kept (session)`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)

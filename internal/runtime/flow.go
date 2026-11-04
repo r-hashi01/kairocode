@@ -224,10 +224,85 @@ func (r *Runtime) flowStep(t *kairo.TaskContext, in workflows.FlowStep) (bool, e
 			In workflows.FlowStep `json:"in"`
 		}
 		if json.Unmarshal(k.Input, &before) == nil && before.In.Seq == in.Seq && before.In.Sig != in.Sig {
-			return false, nil
+			return false, r.cancelLeft(t, kids)
 		}
 	}
 	return true, nil
+}
+
+// cancelLeft cancels the flow's child workflows that have not finished, as
+// the flow stops for going another way (ADR 0003, addendum 2026-11-04):
+// what a run before started and the flow will never wait for now (its
+// agents' turns) would otherwise go on after it, resumed from the record.
+// One that holds a call whose outcome may be unknown (a tool's call not
+// finished, or blocked) is left as it is: cancelled, it would drop the
+// question whether that call took effect (invariant 4). It is noted in the
+// store, so Pending lists what it waits for though nothing above it does.
+// A cancel of a run already settled does nothing, and a note made again
+// is the same note, so doing it again (this action is unprotected) is safe.
+// kairo#2: kairo lets a child outlive its parent; its calls that are not
+// workflows cannot be cancelled one by one, and are left as they are. Nor
+// is the check and the cancel one step: a tool's call that starts between
+// them is cancelled with the turn, not left to be reviewed.
+func (r *Runtime) cancelLeft(t *kairo.TaskContext, kids []kairo.RunInfo) error {
+	for _, k := range kids {
+		if k.Plan != "kairo.workflow" || k.Finished() {
+			continue
+		}
+		open, err := r.openCall(t, k.RunID)
+		if err != nil {
+			return kairo.Retryable(err)
+		}
+		if open {
+			if err := r.Store.Keep(t, sessionOf(k.RunID), turnOf(k.RunID), k.RunID); err != nil {
+				return kairo.Retryable(err)
+			}
+			continue
+		}
+		if err := r.K.Cancel(t, k.RunID); err != nil {
+			return kairo.Retryable(err)
+		}
+	}
+	return nil
+}
+
+// openCall says whether a call under run id, other than a model's, has not
+// finished (running, or blocked: its outcome may be unknown); the MCP calls
+// of a CLI engine's turn too, which are runs of their own (kairo#4).
+func (r *Runtime) openCall(t *kairo.TaskContext, id string) (bool, error) {
+	mcpRuns, err := r.Store.MCPRuns(t, id)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range mcpRuns {
+		steps, err := r.K.Children(t, m)
+		if err != nil && !errors.Is(err, kairo.ErrUnknownRun) {
+			return false, err
+		}
+		for _, st := range steps {
+			if !st.Finished() {
+				return true, nil
+			}
+		}
+	}
+	kids, err := r.K.Children(t, id)
+	if err != nil {
+		return false, err
+	}
+	for _, k := range kids {
+		if k.Finished() {
+			continue
+		}
+		if strings.HasPrefix(k.Plan, "kairo.call/") && k.Plan != "kairo.call/"+workflows.ActModel {
+			return true, nil
+		}
+		if k.Plan == "kairo.workflow" {
+			if open, err := r.openCall(t, k.RunID); err != nil || open {
+				return open, err
+			}
+		}
+	}
+	return false, nil
 }
 
 var FlowHelp = flowfile.FlowHelp

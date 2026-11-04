@@ -146,7 +146,12 @@ func crashChild() {
 	if err != nil {
 		panic(err)
 	}
-	if _, err := r.Send(ctx, s, "what does main do?"); err != nil {
+	// KC_FLOW: run that flow (with KC_FLOW_ARGS) instead of asking.
+	if flow := os.Getenv("KC_FLOW"); flow != "" {
+		if _, err := r.RunFlow(ctx, s, flow, os.Getenv("KC_FLOW_ARGS")); err != nil {
+			panic(err)
+		}
+	} else if _, err := r.Send(ctx, s, "what does main do?"); err != nil {
 		panic(err)
 	}
 	// KC_SIGNAL_PENDING: the file is written once something waits for a
