@@ -53,6 +53,9 @@ func listFiles(dir string) tea.Cmd {
 type completion struct {
 	label, desc string
 	value       string // the input as it is when chosen
+	// offered: a command's option. Enter sends what is typed (/flow alone,
+	// /provider codex), unless one was moved to; tab takes it.
+	offered bool
 }
 
 // mentionAt is the @word the input ends in: what is before it and what is

@@ -71,6 +71,7 @@ kairocode usage -session <session>   # モデルの呼び出しに使ったト�
 - `/flow`: フロー（下を参照）
 - `/plugin`、`/skills`、`/mcp`: プラグイン、スキル、MCP サーバー
 - `/log`、`/resume`、`/review`
+- コマンドの名前の後に空白を打つと、そのコマンドが取るもの（`/plugin install <name>`、`/flow new`、フローの名前、`/model` のモデルなど）が出ます。Tab か ↑↓ で選び、Enter はそのまま送ります
 - Shift+Tab: 承認のモード（manual・auto・plan）を切り替える。入力欄の `>` の色がモードの色になります
 - Esc: 今のターンを止める。Ctrl-C を 2 回で抜ける
 - `@パス`: ファイルを添える。Shift+Enter で改行

@@ -290,6 +290,10 @@ type model struct {
 	plugins *browser
 	runs    *runsScreen
 	flows   *flowsScreen
+	// flowOpts: /flow's options, the folder's flows among them (nil: to
+	// read); compMoved, a completion was moved to (↑ ↓).
+	flowOpts  []acp.CommandOption
+	compMoved bool
 	// history: what was sent, oldest first (↑ ↓); histAt, the one shown
 	// (len: none); draft, what was being typed before it.
 	history []string
@@ -817,6 +821,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.flushLive()
 		m.endFlow()
 		m.inReply = false
+		m.flowOpts = nil          // a turn may have written a flow
 		if m.flowsBefore != nil { // the flows the turn made or changed (/flow new, and after)
 			for _, c := range changedFlows(m.flowsBefore, readFlows(m.o.Dir), m.width-1) {
 				m.block(c)
@@ -1443,6 +1448,7 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 			} else {
 				m.compSel = (m.compSel + 1) % len(c)
 			}
+			m.compMoved = true
 			return nil
 		}
 		// The messages queued for the turn's end, taken back into the
@@ -1468,14 +1474,14 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		if c := m.completions(); len(c) > 0 {
-			if v := c[min(m.compSel, len(c)-1)].value; text != strings.TrimSpace(v) {
-				m.input.SetValue(v)
+			if v := c[min(m.compSel, len(c)-1)]; text != strings.TrimSpace(v.value) && (!v.offered || m.compMoved) {
+				m.input.SetValue(v.value)
 				m.input.CursorEnd()
 				return nil
 			}
 		}
 		m.input.Reset()
-		m.compSel = 0
+		m.compSel, m.compMoved = 0, false
 		switch text {
 		case "":
 			return nil
@@ -1537,7 +1543,11 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.submit(text)
 	}
 	var cmd tea.Cmd
+	before := m.input.Value()
 	m.input, cmd = m.input.Update(k)
+	if m.input.Value() != before {
+		m.compMoved = false
+	}
 	m.compSel = min(m.compSel, max(len(m.completions())-1, 0))
 	return cmd
 }
@@ -1550,10 +1560,13 @@ func (m *model) commands() []acp.Command {
 }
 
 // completions are the commands that begin with what is typed, while a
-// command's name is being typed.
+// command's name is being typed; then what it takes after its name.
 func (m *model) completions() []completion {
 	v := m.input.Value()
 	if c := m.fileCompletions(v); c != nil {
+		return c
+	}
+	if c := m.optionCompletions(v); c != nil {
 		return c
 	}
 	if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \n") {
@@ -1585,7 +1598,7 @@ func (m *model) help() string {
 		"  /flow          pick a flow: run it, change it on its chart, or look back at its runs",
 		"  /flow runs     all the flows' runs; /flow edit <name>, /flow graph <name>",
 		"  shift+enter    a new line (also alt+enter, ctrl+j)",
-		"  tab            complete a command, or a path after @",
+		"  tab            complete a command, what it takes after its name, or a path after @",
 		"  @path          put a file (or a folder's list) of this folder in the message",
 		"  shift+tab      the next mode: manual, auto, plan",
 		"  ctrl+e         the next effort (how hard the model thinks), where the provider has one",
@@ -1738,11 +1751,17 @@ func (m *model) View() tea.View {
 			cursor = c
 		}
 		b.WriteString(box + "\n")
-		for i, c := range m.completions() {
+		comps := m.completions()
+		col := 14 // the labels' column: as wide as the widest
+		for _, c := range comps {
+			col = max(col, len([]rune(c.label)))
+		}
+		for i, c := range comps {
+			line := fmt.Sprintf("  %-*s %s", col, c.label, c.desc)
 			if i == m.compSel {
-				b.WriteString(accent.Render(fmt.Sprintf("  %-14s %s", c.label, c.desc)) + "\n")
+				b.WriteString(accent.Render(line) + "\n")
 			} else {
-				b.WriteString(faint.Render(fmt.Sprintf("  %-14s %s", c.label, c.desc)) + "\n")
+				b.WriteString(faint.Render(line) + "\n")
 			}
 		}
 	}

@@ -18,16 +18,37 @@ var builtinCommands = []map[string]any{
 	{"name": "undo", "description": "Put the working files back as they were before the last turn"},
 	{"name": "redo", "description": "Put back what the last undo took away"},
 	{"name": "compact", "description": "Summarize the conversation and go on from the summary (the earlier messages are kept)"},
-	{"name": "fork", "description": "Start another session from a turn of this one (the last, unless named); --files puts the files back as they were after it", "input": map[string]any{"hint": "[turn] [--files]"}},
-	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them; /flow runs, the runs to look back at)", "input": map[string]any{"hint": "<name> [what to give it]"}},
+	{"name": "fork", "description": "Start another session from a turn of this one (the last, unless named); --files puts the files back as they were after it", "input": map[string]any{"hint": "[turn] [--files]"},
+		"_meta": options(CommandOption{Name: "--files", Description: "put the files back as they were after the turn"})},
+	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them; /flow new, a new one; /flow runs, the runs to look back at)", "input": map[string]any{"hint": "<name> [what to give it] | new <what it does> | runs | <name> --help"},
+		"_meta": options(
+			CommandOption{Name: "new", Hint: "<what it does>", Description: "have a new flow written: a draft, drawn, then tried"},
+			CommandOption{Name: "runs", Description: "the flows' runs, to look back at"})},
 	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
 	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
 	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},
 	{"name": "skills", "description": "The skills here (/<skill> runs one), and SKILL.md files not taken, and why"},
 	{"name": "mcp", "description": "The MCP servers and custom tools here: how each runs, and their tools"},
-	{"name": "plugin", "description": "The plugins here, their state, and those to install; install, connect, update or remove <name>"},
+	{"name": "plugin", "description": "The plugins here, their state, and those to install; install, connect, update or remove <name>", "input": map[string]any{"hint": "[list | install <name> | update <name> | remove <name> | connect <name> | disconnect <name> | marketplace …]"},
+		"_meta": options(
+			CommandOption{Name: "list", Description: "the plugins here, their state, and those to install"},
+			CommandOption{Name: "install", Hint: "<name[@marketplace]>", Description: "install a plugin"},
+			CommandOption{Name: "update", Hint: "<name>", Description: "update a plugin"},
+			CommandOption{Name: "remove", Hint: "<name>", Description: "remove a plugin"},
+			CommandOption{Name: "connect", Hint: "<name>", Description: "give a plugin its credentials (in a terminal)"},
+			CommandOption{Name: "disconnect", Hint: "<name>", Description: "take a plugin's credentials away"},
+			CommandOption{Name: "marketplace", Description: "the marketplaces plugins come from"},
+			CommandOption{Name: "marketplace add", Hint: "<git URL, owner/repo or folder>", Description: "add a marketplace"},
+			CommandOption{Name: "marketplace update", Hint: "<name>", Description: "update a marketplace"},
+			CommandOption{Name: "marketplace remove", Hint: "<name>", Description: "remove a marketplace"})},
 	{"name": "log", "description": "The session's record: each turn, model call, tool call and result, what waited, and what was used"},
+}
+
+// options is a command's _meta with the words it takes after its name,
+// for KairoCode's terminal to offer as they are typed.
+func options(o ...CommandOption) map[string]any {
+	return map[string]any{OptionsMeta: o}
 }
 
 // PluginsView is what the terminal's /plugin shows.
