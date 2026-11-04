@@ -2,7 +2,7 @@
 
 - Status: Proposed (2026-10-22; on hold by the user's decision. To be revisited when circumstances arise such as KairoCode itself billing, or narrowing the models that can be used)
 - Date: 2026-10-21
-- Related: requirements FR-26 (limits) and FR-27 (rate limits), design section 5 ("budget decisions are made from recorded values") and section 9 (kairo gap #4), invariants 2 and 7
+- Related: requirements FR-26 (limits) and FR-27 (rate limits), design section 5 ("budget decisions are made from recorded values") and section 9 (not offered by kairo), invariants 2 and 7
 
 ## Context
 
@@ -10,7 +10,7 @@ Requirement FR-26 is "be able to set limits per session on the number of steps, 
 
 What exists today is only a limit on the number of steps per turn (`Agent.MaxSteps`, default 50). Usage (`msg.Usage`) is recorded for each model call.
 
-kairo's `RunLimits` cannot be specified from the code-written API (kairo gap #4). The design says "KairoCode decides the budget on its side instead".
+kairo's `RunLimits` cannot be specified from the code-written API (not offered by kairo). The design says "KairoCode decides the budget on its side instead".
 
 ## Decision
 
@@ -50,5 +50,5 @@ Where this shows in the implementation: `internal/workflows/turn.go` (the decisi
 
 ## Alternatives considered
 
-- **Wait for kairo's `RunLimits` (kairo gap #4):** kairo's step limit does not know about KairoCode's tokens or cost. Deciding on KairoCode's side fits the requirements better.
+- **Wait for kairo's `RunLimits` (not offered by kairo):** kairo's step limit does not know about KairoCode's tokens or cost. Deciding on KairoCode's side fits the requirements better.
 - **Decide limits inside the action (inside `model`):** it would stop on an unrecorded value (the total at that moment), and where it stops could change on resume. Decide inside the workflow, from recorded usage.

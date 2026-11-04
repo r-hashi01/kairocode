@@ -156,7 +156,7 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 		checks[in.In.Call.Call] = o
 		tool[in.In.Call.Call] = in.In.Tool
 	}
-	// The MCP calls of a turn are runs of their own (kairo-gap #17): their
+	// The MCP calls of a turn are runs of their own (kairo#4): their
 	// cut-off steps are listed with the turn's.
 	if run.Workflow == workflows.Turn {
 		mcpRuns, err := r.Store.MCPRuns(ctx, run.RunID)
@@ -301,8 +301,8 @@ func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason strin
 	// kairo's Signal and Resolve end the wait (or the review) within the
 	// call, so under approveMu a request that waits has not been answered.
 	// This holds within one process: the one daemon of a data directory
-	// (ADR 0008). Processes sharing a database would need more (kairo-gap
-	// #21). Pending lists the waits of the session's turns and of the runs
+	// (ADR 0008). Processes sharing a database would need more (kairo#7).
+	// Pending lists the waits of the session's turns and of the runs
 	// below them (flows, their agents).
 	i := slices.IndexFunc(pending, func(p Pending) bool { return p.Key == key })
 	if i < 0 {

@@ -29,7 +29,7 @@ func RunSessionV3(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 			// message. Anything else (the turn's version is not in this
 			// process, driving stopped, the store failed) is not an outcome
 			// of the turn: going on would start turn n+1 on a history that
-			// may still change (kairo-gap #16 for store errors).
+			// may still change (kairo#5 for store errors).
 			var failed *kairo.WorkflowError
 			if errors.As(err, &failed) || errors.Is(err, kairo.ErrCancelled) {
 				continue
@@ -73,7 +73,7 @@ func RunSessionV6(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 
 // RunSession is a session of version 7: RunSessionV6, and a turn is taken
 // as its run was recorded, cancelled or not, whatever its result said when
-// it came (kairo-gap #22: a turn stopped just as it ended returns its value
+// it came (kairo#3: a turn stopped just as it ended returns its value
 // live and is read back cancelled).
 func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 	return runSession(ctx, in, true, true, true)
@@ -153,7 +153,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 		var failed *kairo.WorkflowError
 		isFailure := err != nil && errors.As(err, &failed)
 		if settle && (err == nil || isFailure || errors.Is(err, kairo.ErrCancelled)) {
-			// kairo-gap #22: a turn's value or failure, live, may be of a
+			// kairo#3: a turn's value or failure, live, may be of a
 			// run kairo recorded cancelled, which read back is
 			// ErrCancelled. The record decides, live and read back alike:
 			// the call is made for any outcome of the turn, so both make

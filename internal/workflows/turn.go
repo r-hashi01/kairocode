@@ -281,7 +281,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 			default:
 				// Checked one by one, outside Parallel: before kairo 0.4.0, a
 				// wait for approval inside a Parallel branch was not reached
-				// by its signal (kairo-gap #18). It stays so, so the turn's
+				// by its signal (fixed in kairo 0.4.0). It stays so, so the turn's
 				// calls keep their ids.
 				// In auto mode the judge decides, until it has refused
 				// MaxAutoRefusals calls; then the user is asked.

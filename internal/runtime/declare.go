@@ -39,7 +39,7 @@ func (r *Runtime) declare() {
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
 		// Version 6 finishes as it started: a turn is taken as its result
-		// said (kairo-gap #22).
+		// said (kairo#3).
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(workflows.SessionVersion6), kairo.Draining())
 		// Version 5 finishes as it started: no switch of engine or model.
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV5, kairo.WorkflowVersion(workflows.SessionVersion5), kairo.Draining())

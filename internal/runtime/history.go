@@ -153,8 +153,7 @@ func (r *Runtime) turnSoFar(ctx context.Context, turn string) ([]msg.Message, er
 			}
 		}
 	}
-	// A CLI engine's calls, over MCP: a run of their own each (kairo-gap
-	// #17), its input the call.
+	// A CLI engine's calls, over MCP: a run of their own each (kairo#4), its input the call.
 	runs, err := r.Store.MCPRuns(ctx, turn)
 	if err != nil {
 		return nil, err

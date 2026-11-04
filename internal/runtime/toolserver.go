@@ -282,7 +282,7 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 			return nil, err
 		}
 		if errors.Is(err, kairo.ErrUnknownRun) {
-			// kairo-gap #17: kairo removed the run before its turn ended.
+			// kairo#4: kairo removed the run before its turn ended.
 			return errorResult("The result of this call is lost (it ran long ago, before an interruption). " +
 				"Do not make it again; tell the user."), nil
 		}
@@ -308,7 +308,7 @@ func (s *mcpServer) call(ctx context.Context, t *mcpTurn, tool string, args json
 }
 
 // claim picks the run a call is, from KairoCode's own record of the turn's
-// MCP calls (kairo may have removed old runs: kairo-gap #17):
+// MCP calls (kairo may have removed old runs: kairo#4):
 //
 //   - the first run of its content whose result is not known to have
 //     reached Claude Code and that no other handler waits on: the call is
@@ -362,7 +362,7 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	if len(t.hooks) > 0 {
 		in.Session = t.session
 	}
-	// kairo-gap #17: the run is a root of its own, not a child of the turn.
+	// kairo#4: the run is a root of its own, not a child of the turn.
 	if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
 		return "", false, err
 	}

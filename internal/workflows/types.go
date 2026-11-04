@@ -19,7 +19,7 @@ const (
 	Turn           = "turn"
 	TurnVersion    = "4"
 	// SessionVersion6 is the version before a session read back how each
-	// turn's run was recorded (kairo-gap #22). Its runs finish with
+	// turn's run was recorded (kairo#3). Its runs finish with
 	// RunSessionV6.
 	SessionVersion6 = "6"
 	// SessionVersion5 is the version before a message could switch the
@@ -124,7 +124,7 @@ const (
 	// 0011).
 	ActHistoryCancelled = "history.cancelled"
 	// ActTurnSettled says how a turn's run was recorded once the session
-	// has its result: cancelled or not (kairo-gap #22).
+	// has its result: cancelled or not (kairo#3).
 	ActTurnSettled = "turn.settled"
 	// ActSnapshot records the working files as a tree, and ActRestore puts
 	// them back as a tree has them (design 7).
@@ -579,7 +579,7 @@ type ToolCall struct {
 // kairo.Parallel numbered each call afresh, so without them a second
 // Parallel that repeated a call (the same message and call id, which a
 // provider with sequential ids could produce) got the first one's record
-// instead of running (invariant 8, kairo-gap #13). They stay, so the calls
+// instead of running (invariant 8, fixed in kairo 0.4.0). They stay, so the calls
 // keep their ids.
 //
 // A call that came over MCP (ADR 0007) has no stored message: its
@@ -616,7 +616,7 @@ type HistoryExtendInput struct {
 }
 
 // TurnSettledInput names a turn of a session; TurnSettledOutput says
-// whether its run was recorded cancelled (kairo-gap #22).
+// whether its run was recorded cancelled (kairo#3).
 type TurnSettledInput struct {
 	Session string `json:"session"`
 	N       int    `json:"n"`

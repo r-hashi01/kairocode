@@ -16,7 +16,7 @@ Steps:
    - Actions in `internal/runtime` and `internal/provider`: Whether the model call's input is a list of hashes (that no body is in it). Whether it rewrites `kc_message`. Whether API keys can get into an action's input or output, records, logs, or the text of errors.
    - Waits: Whether it adds polling, `time.Ticker`, or an implementation that holds an approval wait inside the process.
    - Tests: Whether they use a real provider or the network. Whether a real effect changed without a kill-and-resume test (`TestCrash...`). Whether expected values were relaxed.
-4. Read `docs/adr/README.md`, and open the ADRs the diff touches. Check that it does not contradict an ADR, and that it is not a kind of change that needs an ADR ("Recording design decisions (ADR)" in AGENTS.md) without one. If the ADR it relies on is still `Proposed`, report that too. Also check that it does not quietly work around a gap on kairo's side on KairoCode's side (whether it is written in `docs/kairo-gaps.md`).
+4. Read `docs/adr/README.md`, and open the ADRs the diff touches. Check that it does not contradict an ADR, and that it is not a kind of change that needs an ADR ("Recording design decisions (ADR)" in AGENTS.md) without one. If the ADR it relies on is still `Proposed`, report that too. Also check that it does not quietly work around a gap on kairo's side on KairoCode's side (whether there is an issue on r-hashi01/kairo for it, and a `// kairo#N` comment on the workaround).
 5. If needed, actually check a suspect point with `go test -count=1 -run <Test> ./<pkg>`.
 
 Output:

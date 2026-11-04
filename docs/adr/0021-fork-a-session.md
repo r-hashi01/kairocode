@@ -65,7 +65,7 @@ Where this shows in the implementation: `internal/workflows` (`SessionInput.From
 
 ## Addendum (2026-10-28, Accepted (2026-10-28): continue a session that stopped on a failure from its last turn)
 
-This is a remedy for kairo-gap #16. When `Child` or `Call` inside a workflow returns a temporary storage error (SQLite busy and so on), the session returns with the error to avoid forking the conversation, and kairo records the session (the root) as failed. No more messages can be sent to that session. Today, sending stops with "session … ended before turn n", and the user cannot tell what happened or how to continue.
+This is a remedy for r-hashi01/kairo#5. When `Child` or `Call` inside a workflow returns a temporary storage error (SQLite busy and so on), the session returns with the error to avoid forking the conversation, and kairo records the session (the root) as failed. No more messages can be sent to that session. Today, sending stops with "session … ended before turn n", and the user cannot tell what happened or how to continue.
 
 Decision (proposal):
 

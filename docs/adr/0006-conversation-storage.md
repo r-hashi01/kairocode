@@ -38,7 +38,7 @@ There are three differences from the design.
 
 - The input of a tool's action is `{dir, message, call, step, index}`.
   - `message` and `call` are used to read the call's arguments from `kc_message`. This is so that large arguments, such as the content of a file to be written, do not go into kairo's record a second time.
-  - `step` and `index` tell apart calls with the same input (invariant 8, kairo's gap #13).
+  - `step` and `index` tell apart calls with the same input (invariant 8, fixed in kairo 0.4.0).
 
 ### 4. The session runs turns as children, in order (M0's "to decide")
 
@@ -67,7 +67,7 @@ There are three differences from the design.
 - `permissions` was added to the `kind` of `kc_message`. The permission rules at the start of a turn (ADR 0002) are recorded by hash.
 - Three tables were added (all for the Claude Code engine, ADR 0007).
   - `kc_claude_proc`: the PID of the session's `claude` process. Used to stop old processes that were left behind.
-  - `kc_mcp_call`: the record of MCP calls. It holds which `claude` process a call came from, and whether its result was confirmed to have arrived. The choice does not change even if kairo deletes old runs (kairo's gap #17).
+  - `kc_mcp_call`: the record of MCP calls. It holds which `claude` process a call came from, and whether its result was confirmed to have arrived. The choice does not change even if kairo deletes old runs (r-hashi01/kairo#4).
   - `kc_mcp_grant`: the user's answers to MCP calls. One answer is used by only one run (`used_by`).
 - The apply of a file write still has a small window between checking the current file and replacing it. A change a person saves in that window can be overwritten (it never writes twice). Also, write's "before writing" is the hash of the file at the time of the plan, not at the time the model read it.
 

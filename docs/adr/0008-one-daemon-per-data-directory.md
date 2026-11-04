@@ -6,7 +6,7 @@
 
 ## Context
 
-In M1, we made it possible to give an approval from another process (`TestApprovalFromAnotherProcess`). But with SQLite, there is no way to be told about what another process did (a signal, the end of a run). kairo notices by rereading waiting runs in its sweep every lease period (30 seconds by default) (kairo's gap #15). Communication between live processes is in effect polling. The user decided: "I want to avoid polling as much as possible. I want it event-driven" (2026-10-09).
+In M1, we made it possible to give an approval from another process (`TestApprovalFromAnotherProcess`). But with SQLite, there is no way to be told about what another process did (a signal, the end of a run). kairo notices by rereading waiting runs in its sweep every lease period (30 seconds by default) (r-hashi01/kairo#8). Communication between live processes is in effect polling. The user decided: "I want to avoid polling as much as possible. I want it event-driven" (2026-10-09).
 
 The sweep has two roles.
 
@@ -74,11 +74,11 @@ We showed the user the results of comparing with Codex's daemon (the daemon of `
    - At first, this was implemented by closing the entrance to action handlers and waiting for running handlers to finish. Review found the following two problems, and it was removed.
      - A step refused at the entrance uses up its attempts within the same process even if it returns "can be retried". A real action has a single attempt, so it is settled as a failure at once.
      - kairo checks "was it closed" after a handler returns, and if closed, does not record the result. So even the result of a handler it waited for can be lost (reproduced 2 times in 40).
-   - Stopping between steps needs an API on kairo's side that "starts no new steps, records the results of the running ones, and then closes" (kairo's gap #20). → In the addendum below, this now uses kairo 0.4.1's `Drain`.
+   - Stopping between steps needs an API on kairo's side that "starts no new steps, records the results of the running ones, and then closes" (r-hashi01/kairo#1). → In the addendum below, this now uses kairo 0.4.1's `Drain`.
 
 ### Addendum (2026-10-15): stop between steps with kairo 0.4.1's `Drain`
 
-We filed kairo's gap #20 as an issue (r-hashi01/kairo#1), and `k.Drain(ctx)` went into kairo 0.4.0. We moved to 0.4.1, and when the daemon stops (`daemon stop`, version replacement, stopping when idle, signals), it now follows this order.
+We filed this as r-hashi01/kairo#1, and `k.Drain(ctx)` went into kairo 0.4.0. We moved to 0.4.1, and when the daemon stops (`daemon stop`, version replacement, stopping when idle, signals), it now follows this order.
 
 1. Start draining. No new step starts in this daemon, and workflows stop at their next call (the next daemon continues from there).
 2. Delete `server.json` and close the listener. By the time `server.json` is gone, draining has started.
@@ -89,10 +89,10 @@ We filed kairo's gap #20 as an issue (r-hashi01/kairo#1), and `k.Drain(ctx)` wen
 - Sending Ctrl-C (SIGINT) or SIGTERM twice to a `kairocode daemon` running in the foreground makes it stop waiting and stop at once on the second one. Steps that were running are cut off and treated the same as a crash (`TestSecondSignalStopsTheDaemonNow`).
 - The time a started daemon waits for the lock (`WaitLock`) was set to `DefaultDrain` plus 10 seconds. It can start right after a daemon that is draining.
 - Version replacement still happens only when no step is running and no other client is present, as before. Otherwise, a client with a different version would end up waiting for the drain if a step were running.
-- In the same version, the IDs of `kairo.Parallel`'s second and later branches changed (the fix for kairo's gap #13). A turn that started on 0.3.0 and moved past its first step will, when resumed on 0.4.x, run its tool calls again with new IDs. There was no turn in progress at the time of the upgrade, so by the user's decision the workflow version was not raised (#13 in `docs/kairo-gaps.md`).
+- In the same version, the IDs of `kairo.Parallel`'s second and later branches changed (fixed in kairo 0.4.0). A turn that started on 0.3.0 and moved past its first step will, when resumed on 0.4.x, run its tool calls again with new IDs. There was no turn in progress at the time of the upgrade, so by the user's decision the workflow version was not raised.
 
 ## Alternatives considered
 
-- **Notify between processes even with SQLite (kairo's gap #19):** even with several processes running the same DB, things would be conveyed by events. But it needs a change on kairo SDK's side (adding a notifying hook to `Notifier`). For KairoCode the daemon shape is enough, but for other users of the SDK, it is proposed as a kairo ADR.
+- **Notify between processes even with SQLite (r-hashi01/kairo#8):** even with several processes running the same DB, things would be conveyed by events. But it needs a change on kairo SDK's side (adding a notifying hook to `Notifier`). For KairoCode the daemon shape is enough, but for other users of the SDK, it is proposed as a kairo ADR.
 - **Use PostgreSQL locally too (LISTEN/NOTIFY):** things would be conveyed by events. But it departs from requirement NFR-6 (the only required local infrastructure is SQLite).
 - **Shorten the sweep interval:** that only shortens the polling interval.
