@@ -61,7 +61,7 @@ func (r *Runtime) TurnRun(ctx context.Context, session string, n int) (kairo.Run
 
 // WaitTurn waits for turn n of a session to finish and returns its result.
 // It waits on runs starting and settling in this process, not on a timer
-// (kairo-gap #15: a turn another process starts is noticed only once found).
+// (kairo#8: a turn another process starts is noticed only once found).
 func (r *Runtime) WaitTurn(ctx context.Context, session string, n int) (workflows.TurnOutput, error) {
 	for {
 		changed := r.changes()

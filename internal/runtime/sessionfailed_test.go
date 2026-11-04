@@ -13,7 +13,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/provider"
 )
 
-// A session that failed (a store's error in it, kairo-gap #16) takes no
+// A session that failed (a store's error in it, kairo#5) takes no
 // more messages: Send says so, and why, instead of sending one to be lost
 // (ADR 0021). The failed run here is a workflow that fails as a session
 // does on a store's error.

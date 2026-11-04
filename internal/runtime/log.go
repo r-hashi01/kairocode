@@ -101,7 +101,7 @@ func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo) (LogEntry, error
 	for _, id := range mcp {
 		info, err := r.K.Get(ctx, id)
 		if err != nil {
-			continue // removed (kairo-gap #17)
+			continue // removed (kairo#4)
 		}
 		me := r.logRun(ctx, info)
 		if me.Runs, err = r.logRuns(ctx, id); err != nil {

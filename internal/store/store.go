@@ -66,7 +66,7 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		// The tool calls Claude Code made over MCP (ADR 0007): which run each
 		// is, from which claude run (proc), and whether its result is known
 		// to have reached Claude Code. Kept here as well as in kairo, which
-		// may remove a finished run before its turn ends (kairo-gap #17).
+		// may remove a finished run before its turn ends (kairo#4).
 		`CREATE TABLE IF NOT EXISTS kc_mcp_call (
 			run TEXT PRIMARY KEY,
 			turn TEXT NOT NULL,

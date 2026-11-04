@@ -6,7 +6,7 @@ Working instructions for coding agents (and people) working in this repository.
 - Design: `../kairo/docs/kairocode/design.md` (the language and how kairo is used are replaced by ADR 0001)
 - kairo's Go SDK: `../kairo/sdk/go/README.md`, `go doc github.com/r-hashi01/kairo/sdk/go`
 - How we proceed and each milestone's acceptance criteria: `docs/milestones.md`
-- What kairo is missing: `docs/kairo-gaps.md`
+- What kairo is missing: issues on [r-hashi01/kairo](https://github.com/r-hashi01/kairo/issues)
 - Design decisions on KairoCode's side: `docs/adr/`
 
 The requirements and the design live in the kairo repository. We assume `kairo` is cloned next to this one (`../kairo`).
@@ -69,7 +69,7 @@ Breaking them breaks the core of the requirements (does not break when it crashe
 
 - Decisions on KairoCode's side are written in `docs/adr/` (the `/adr` skill). As in kairo's ADR 0017, **a change that needs an ADR is implemented only after the user approves it.** Never approve an ADR you filed yourself.
 - Changes that need an ADR: adding, changing or relaxing the invariants above; adding a tool effect type; changing the run ID rules; changing a storage format such as `kc_message`; adding a dependency (other than the "allowed dependencies" below); departing from the requirements or the design; deciding an open question in design section 11.
-- **Propose what kairo is missing as a kairo ADR (the `/kairo-gap` skill).** Do not edit `../kairo` from this repository (a hook refuses it). If you put a workaround on KairoCode's side, write it in `docs/kairo-gaps.md` and add a `// kairo-gap #N:` comment in the code.
+- **File what kairo is missing as an issue on r-hashi01/kairo (the `/kairo-gap` skill).** Do not edit `../kairo` from this repository (a hook refuses it). If you put a workaround on KairoCode's side, say so in the issue and add a `// kairo#N:` comment in the code.
 
 ## How to work
 

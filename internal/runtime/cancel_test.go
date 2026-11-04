@@ -417,8 +417,8 @@ func endStoppedTurn(r **Runtime, fail bool) func(*kairo.Context, workflows.TurnI
 	}
 }
 
-// A turn stopped just as it ends, with a value or a failure (kairo-gap
-// #22), is taken as its run was recorded, cancelled, live and read back
+// A turn stopped just as it ends, with a value or a failure (kairo#3), is
+// taken as its run was recorded, cancelled, live and read back
 // alike: the session read back
 // gives the next turn the same input, so it is not run again under another
 // id. Version 6 took the value live and the cancellation read back.

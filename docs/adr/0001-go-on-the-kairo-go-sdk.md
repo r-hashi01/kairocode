@@ -41,7 +41,7 @@ On 2026-10-09 we confirmed the following two things on the published v0.3.0.
 
 ## Consequences
 
-- Of the gaps in design section 9, 1 (live output), 2 (settling), 3 (listing children), 5 (large output; `kc_message` keeps inputs and outputs small) and 7 (idempotent retries) are solved by kairo 0.3.0. 4 (run limits) is decided on KairoCode's side from the recorded usage. The remaining gaps are in `docs/kairo-gaps.md`.
+- Of the gaps in design section 9, 1 (live output), 2 (settling), 3 (listing children), 5 (large output; `kc_message` keeps inputs and outputs small) and 7 (idempotent retries) are solved by kairo 0.3.0. 4 (run limits) is decided on KairoCode's side from the recorded usage. The remaining gaps are issues on r-hashi01/kairo.
 - Whether workflows are deterministic is checked with go/ast and go/types (`internal/invariants`). The SDK's packages go into the import allowlist.
 - Tests that involve the clock are written with `kairotest` (which moves the clock), and tests that involve forced termination with a child process and a SQLite file.
 - Custom tools (FR-9) are added as MCP servers or outside commands. There is no way to write a tool in JavaScript.

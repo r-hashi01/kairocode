@@ -1,12 +1,14 @@
 ---
 name: kairo-gap
-description: Handle something KairoCode needs that kairo's Go engine does not provide (the code-first flow API, child-run listing, replay mode, a non-resident embedded mode, keeping finished calls while the parent runs, ...). Records it in docs/kairo-gaps.md and drafts a kairo ADR proposal instead of editing ../kairo. Use when an implementation hits a missing kairo API.
+description: Handle something KairoCode needs that kairo does not provide (an API, a guarantee, a mode). Files it as an issue on r-hashi01/kairo instead of editing ../kairo, and marks any workaround in KairoCode with the issue's number. Use when an implementation hits something missing in kairo.
 ---
 
 # kairo-gap
 
-1. Read `docs/kairo-gaps.md` and check whether the same gap is already there. Read `../kairo/engine/` (`go doc github.com/r-hashi01/kairo/engine` also works) and `../kairo/docs/adr/README.md`, and check that it is really missing (that it cannot be expressed with the engine's public API).
-2. If it is missing, add 1 row to the table in `docs/kairo-gaps.md`, or update the existing row (the requirements that use it, how much it is needed, the workaround).
-3. Decide whether to work around it on KairoCode's side. If you do, put a `// kairo-gap #N:` comment on the workaround code, and write it in the table's "workaround" column. If the workaround relaxes an invariant, do not work around it; stop and consult the user.
-4. Write a draft ADR for kairo's side in the form of kairo's `docs/adr/template.md`, and show it to the user. **Do not edit files in `../kairo`** (the hook refuses it). The user files it in the kairo repository, or in a separate session opened in the kairo repository.
-5. Tell the user, in 1–2 sentences, the gist of the gap, which milestone it blocks, and whether there is a workaround.
+What kairo is missing is tracked as issues on r-hashi01/kairo, not in this repository.
+
+1. Look for an issue on r-hashi01/kairo that already covers it (`gh issue list -R r-hashi01/kairo --state all --search …`). Read `../kairo/sdk/go/README.md` (`go doc github.com/r-hashi01/kairo/sdk/go` also works) and `../kairo/docs/adr/`, and check that it is really missing: that it cannot be done with kairo's public API.
+2. If there is no issue, open one in English (`gh issue create -R r-hashi01/kairo`): a summary, what was observed (the kairo version, a minimal sequence), why KairoCode needs it (the requirement or ADR), KairoCode's workaround if any, and a proposal (a draft of kairo's ADR when it is a design decision). If one exists, add what is new as a comment.
+3. Decide whether to work around it on KairoCode's side. If you do, put a `// kairo#N:` comment on the workaround code (N is the issue's number), and say so in the issue. If the workaround relaxes an invariant, do not work around it; stop and consult the user.
+4. **Do not edit files in `../kairo`** (the hook refuses it). Changes there are made in the kairo repository, after its own ADR is approved.
+5. Tell the user, in 1–2 sentences, the gist of the gap, the issue's link, which milestone it blocks, and whether there is a workaround.

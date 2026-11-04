@@ -285,7 +285,7 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 }
 
 // turnSettled says whether turn n of a session was recorded cancelled
-// (kairo-gap #22). The session has its result, so its run has settled: the
+// (kairo#3). The session has its result, so its run has settled: the
 // embedded runtime records a run's end before its parent is given it, and
 // a turn is kept as long as its session runs.
 func (r *Runtime) turnSettled(t *kairo.TaskContext, in workflows.TurnSettledInput) (workflows.TurnSettledOutput, error) {

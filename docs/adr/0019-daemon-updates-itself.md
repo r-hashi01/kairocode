@@ -63,7 +63,7 @@ Where this shows in the implementation: `internal/daemon` (the path in `Info`, `
 ## Alternatives considered
 
 - **Keep things as they are (swap only when idle, otherwise stop by hand):** reliable, but does not meet the request.
-- **Remove the daemon and have each client run kairo:** managing version swaps would no longer be needed. But closing a client stops the turn (it continues the next time it is opened), and notices between processes need a change to kairo's SDK (kairo gap #19) and a way to stream live output to other clients. By the user's decision, the daemon stays.
+- **Remove the daemon and have each client run kairo:** managing version swaps would no longer be needed. But closing a client stops the turn (it continues the next time it is opened), and notices between processes need a change to kairo's SDK (r-hashi01/kairo#8) and a way to stream live output to other clients. By the user's decision, the daemon stays.
 - **Do not stop the daemon while something waits on the clock:** things run on time, but it goes against NFR-4 (do not hold a process while waiting). The clock for unattended runs is handled by M4's suspend mode.
 - **When a client of a different version comes, swap even if it cuts off running work:** nothing breaks, but running real steps become blocked (needs confirmation), and the user gets asked more.
 - **The newer client wins (first come):** if an old client stays open, it goes back and forth. Treating the disk as the truth avoids that.

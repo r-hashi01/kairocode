@@ -119,7 +119,7 @@ func (r *Runtime) undo(ctx context.Context, session, kind string) (int, error) {
 func (r *Runtime) signal(ctx context.Context, session string, ev workflows.SessionEvent) (int, error) {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
-	// A session that failed takes nothing more (kairo-gap #16): said so,
+	// A session that failed takes nothing more (kairo#5): said so,
 	// not sent to be lost (ADR 0021, addendum 2026-10-28).
 	if err := r.failed(ctx, session); err != nil {
 		return 0, err
@@ -193,7 +193,7 @@ func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
 					Input workflows.TurnInput `json:"input"`
 				}
 				_ = json.Unmarshal(k.Input, &w)
-				// kairo-gap #22: were the turn's function to return between
+				// kairo#3: were the turn's function to return between
 				// the look above and this cancel, kairo would record the run
 				// cancelled while the session had its value. The session
 				// (version 7) reads back how the run was recorded and takes
@@ -248,7 +248,7 @@ func (r *Runtime) CloseSession(ctx context.Context, session string) error {
 // for the message signal (a signal sent before its wait finishes a wait made
 // for it, kairo ADR 0059).
 //
-// kairo-gap #14: Signal does not say which wait it filled, so the count is
+// kairo#6: Signal does not say which wait it filled, so the count is
 // right only while sends go through this process's sendMu.
 func (r *Runtime) sent(ctx context.Context, session string) (int, error) {
 	kids, err := r.K.Children(ctx, session)

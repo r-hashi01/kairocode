@@ -129,7 +129,7 @@ func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, ca
 		if err != nil {
 			return
 		}
-		// A CLI engine's tool calls are runs of their own (kairo-gap #17).
+		// A CLI engine's tool calls are runs of their own (kairo#4).
 		if mcp, err := r.Store.MCPRuns(ctx, id); err == nil {
 			for _, m := range mcp {
 				if info, err := r.K.Get(ctx, m); err == nil {

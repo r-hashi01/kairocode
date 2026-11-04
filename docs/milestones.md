@@ -44,7 +44,7 @@ Order of work (2026-10-09):
 5. The sandbox (ADR 0005). macOS and Linux.
 6. bash and blocked (needs confirmation). `TestCrashBashNeedsReview`.
 7. git commit and push. `TestCrashGitCommitOnce`.
-8. With the Claude Code engine, route real tools through MCP. Record results in our own table (the remedy for kairo gap #17). If the same real call as one that finished in the previous process comes in, ask a person.
+8. With the Claude Code engine, route real tools through MCP. Record results in our own table (the remedy for r-hashi01/kairo#4). If the same real call as one that finished in the previous process comes in, ask a person.
 9. `TestResumeAfterLongApproval`. Move the server's token to `server.json`.
 
 Acceptance criteria:

@@ -32,7 +32,7 @@ The first screen of the review (the overview, ADR 0003's addendum) shows what th
 4. **Relation to the pending approval**
    - The turn waiting for the `flow_write` approval stays stopped. The try run runs beside it as a separate child.
    - Add an event (`EventTryFlow`) to the session workflow that starts a try run, waited on alongside the approval. Bump the workflow version (kairo's ADR 0060).
-   - We need to wait for the approval signal and the try event at the same time. If kairo's SDK cannot express that (it cannot wait on two `WaitFor`s side by side), we do not build a workaround. We add it to `docs/kairo-gaps.md` and propose it as a kairo ADR (`/kairo-gap`). This is checked first in the implementation.
+   - We need to wait for the approval signal and the try event at the same time. If kairo's SDK cannot express that (it cannot wait on two `WaitFor`s side by side), we do not build a workaround. We file it as an issue on r-hashi01/kairo (`/kairo-gap`). This is checked first in the implementation.
 5. **How results are shown:** when the try run ends, the review gets a "Try" section.
    - The order of the steps it went through
    - "What it would have done" (the full text it would send to Slack, the diff of files it would write)
@@ -61,7 +61,7 @@ The first screen of the review (the overview, ADR 0003's addendum) shows what th
 - **How it waits (a change from decision 4)**
   - kairo's SDK has no way to wait on two signals at once. So instead of adding an event (`EventTryFlow`), the try request rides on the same signal as the approval (`Approval.Try`, `omitempty`).
   - Where the approval is waited on (`waitApproval`), on receiving `Try`, it runs the try flow as a child of the waiting run (`kairo.Child`, `FlowInput{Dry, Script}`), and when that ends it waits on the same signal again. There are two such places: a turn's tool, and the MCP approval of a CLI engine such as Claude Code. Approvals of tools inside a flow do not accept try runs.
-  - The session was not changed, so no kairo-gap was needed.
+  - The session was not changed, so nothing was missing on kairo's side.
   - The user agreed to this change to decision 4 (2026-10-20).
 - **Why the version is not bumped**
   - Everything added is `omitempty` fields (`Policy.Dry`, `TurnInput.Dry`, `FlowInput.Dry` and `Script`, `FlowLoadInput.Script`, `Approval.Try`) and paths taken only when `Dry` or `Try` is present.
@@ -86,7 +86,7 @@ The first screen of the review (the overview, ADR 0003's addendum) shows what th
     - An answer given in that time takes effect after the try run ends (the signal is passed to the next wait).
     - You cannot start another try during a try run (`ErrTrying`).
     - When the try run ends, the approval with the same key is announced again as "requested". The client asks again with the Try section.
-  - **"What it would have done" for CLI engines:** MCP calls from Claude Code and others are separate runs, not children of the turn (kairo-gap #17). The Try section follows those too (`TestTryFlowOnClaudeCode`. We checked that it fails if they are not followed).
+  - **"What it would have done" for CLI engines:** MCP calls from Claude Code and others are separate runs, not children of the turn (r-hashi01/kairo#4). The Try section follows those too (`TestTryFlowOnClaudeCode`. We checked that it fails if they are not followed).
   - **`flow_write` inside a flow:** what a flow's script writes directly gets no try run.
   - **Agents that can act without asking:** ACP agents with their own tools, such as codex, might write without asking.
     - So they are not run in a try run (decision 2's "refuse on engines that cannot be run read-only").

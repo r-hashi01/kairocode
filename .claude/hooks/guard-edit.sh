@@ -4,7 +4,7 @@
 #     the full check is internal/invariants)
 #   - anything: no API keys
 #   - runtime data (*.db): never edited by hand
-#   - ../kairo: a separate repository; gaps go through a kairo ADR (/kairo-gap)
+#   - ../kairo: a separate repository; gaps are issues on r-hashi01/kairo (/kairo-gap)
 #   - go.mod: a dependency outside the approved list needs the user's OK
 set -euo pipefail
 input=$(cat)
@@ -26,7 +26,7 @@ while [ ! -d "$dir" ]; do dir=$(dirname "$dir"); done
 abs=$(cd "$dir" && pwd -P)${file#"$dir"}
 case "$abs" in
   "$kairo"/*)
-    decide deny "$file is in the kairo repository. KairoCode does not edit kairo; record the gap in docs/kairo-gaps.md and propose a kairo ADR (/kairo-gap)." ;;
+    decide deny "$file is in the kairo repository. KairoCode does not edit kairo; file the gap as an issue on r-hashi01/kairo (/kairo-gap)." ;;
 esac
 
 case "$rel" in
