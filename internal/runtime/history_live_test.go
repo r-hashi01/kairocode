@@ -40,6 +40,7 @@ func liveParts(t *testing.T, r *Runtime, s string) []string {
 // it: what was asked, the calls made and their results, and the call
 // that waits (API engine).
 func TestHistoryLiveShowsTheTurnSoFar(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "read", Input: json.RawMessage(`{"path": "main.go"}`)}}},

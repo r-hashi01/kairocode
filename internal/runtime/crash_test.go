@@ -197,6 +197,7 @@ func waitForFile(t *testing.T, path string, cmd *exec.Cmd) {
 // followed by one that finishes the turn with the same reply. The model call
 // that had finished is not made again; only the one under way is (NFR-1).
 func TestCrashTurnResume(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -524,6 +525,7 @@ func TestCrashWriteConflict(t *testing.T) {
 // the call stops for review instead of running again; the user's answer
 // settles it and the turn goes on (invariant 4).
 func TestCrashBashNeedsReview(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
@@ -663,6 +665,7 @@ func TestCrashGitCommitOnce(t *testing.T) {
 // review, then that it was answered, the call's end and the turn's end
 // (issues #3, #7).
 func TestCrashEventsAfterRestart(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
@@ -775,6 +778,7 @@ func crashUndoChild() {
 // files, the undo is recorded once, and the next undo goes on from it
 // (design 7).
 func TestCrashUndo(t *testing.T) {
+	t.Parallel()
 	needSnapshots(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")

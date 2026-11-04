@@ -76,6 +76,7 @@ func files(t *testing.T, dir string) string {
 // from the records: each is a turn of its own, and the model is told
 // (design 7, M2).
 func TestUndoRedo(t *testing.T) {
+	t.Parallel()
 	needSnapshots(t)
 	ws := workspaceWith(t, `{"write": "allow"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: twoWrites})
@@ -129,6 +130,7 @@ func TestUndoRedo(t *testing.T) {
 
 // A new turn after an undo clears what could be redone, as in an editor.
 func TestUndoThenNewTurnClearsRedo(t *testing.T) {
+	t.Parallel()
 	needSnapshots(t)
 	ws := workspaceWith(t, `{"write": "allow"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: twoWrites})
@@ -148,6 +150,7 @@ func TestUndoThenNewTurnClearsRedo(t *testing.T) {
 // The session knows what to undo from its records alone: a runtime opened
 // again on the same database undoes the right turns.
 func TestUndoAfterRestart(t *testing.T) {
+	t.Parallel()
 	needSnapshots(t)
 	ws := workspaceWith(t, `{"write": "allow"}`)
 	db := filepath.Join(t.TempDir(), "k.db")
@@ -174,6 +177,7 @@ func TestUndoAfterRestart(t *testing.T) {
 // stays, and so does a file the turn's .gitignore came to ignore, after
 // the undo and after the redo (design 7).
 func TestUndoKeepsWhatIsNotTheTurns(t *testing.T) {
+	t.Parallel()
 	needSnapshots(t)
 	ws := workspaceWith(t, `{"write": "allow"}`)
 	if err := os.WriteFile(filepath.Join(ws, "x.log"), []byte("log\n"), 0o644); err != nil {
@@ -210,6 +214,7 @@ func TestUndoKeepsWhatIsNotTheTurns(t *testing.T) {
 // A session that started before undo existed refuses it, rather than take
 // it for a message.
 func TestUndoRefusedByAnOldSession(t *testing.T) {
+	t.Parallel()
 	db := filepath.Join(t.TempDir(), "k.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

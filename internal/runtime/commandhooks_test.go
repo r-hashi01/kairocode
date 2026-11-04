@@ -60,6 +60,7 @@ const hookSettings = `{"hooks": {
 // PostToolUse hook says goes with the result; a Stop hook that does not
 // pass sends the model back. Asked once: the next turn is not asked again.
 func TestClaudeHooksRunHere(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"write": "allow", "read": "allow"}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
@@ -121,6 +122,7 @@ func TestClaudeHooksRunHere(t *testing.T) {
 
 // A hook the user said not to run does not run.
 func TestClaudeHookNotRun(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
@@ -220,6 +222,7 @@ func crashHookChild() {
 // again unasked: the user is asked whether it took effect, and the turn
 // goes on (ADR 0018, invariant 4).
 func TestCrashHookRun(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
@@ -371,6 +374,7 @@ func TestCrashHookOnMCPCall(t *testing.T) {
 // A hook run in KairoCode's sandbox writes in the project and not outside
 // it; one the user let out of it (the "outside" answer) can (ADR 0018).
 func TestClaudeHookSandboxed(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	// Outside the project and the temporary directories, which the
 	// sandbox lets a command write.
@@ -420,6 +424,7 @@ func TestClaudeHookSandboxed(t *testing.T) {
 // time, true after. A hook that lets the turn end then is run twice, not
 // until the rounds run out. Outside the sandbox, so as to run in one too.
 func TestStopHookActive(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
 	hook := `in=$(cat); echo "$in" >> "$CLAUDE_PROJECT_DIR/stop.log"; case "$in" in *'"stop_hook_active":true'*) exit 0;; esac; echo 'check first' >&2; exit 2`
@@ -461,6 +466,7 @@ func TestStopHookActive(t *testing.T) {
 }
 
 func TestHookRepeat(t *testing.T) {
+	t.Parallel()
 	for run, want := range map[string]int{
 		"s/a/b/0123abcd.0": 0, "s/a/b/0123abcd.2": 2, "s/a.b/c": 0, "s/a/b/x.y": 0, "": 0,
 	} {
@@ -474,6 +480,7 @@ func TestHookRepeat(t *testing.T) {
 // .claude/.cache to keep its state in, and no more of .claude (ADR 0018,
 // 8): a check it runs can listen on localhost and note that it passed.
 func TestClaudeHookLoopbackAndCache(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
@@ -502,6 +509,7 @@ func TestClaudeHookLoopbackAndCache(t *testing.T) {
 }
 
 func TestHookCache(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	if _, ok := hookCache(ws); ok {
 		t.Fatal("a cache where there is no .claude")

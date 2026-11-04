@@ -70,6 +70,7 @@ func conversationOf(t *testing.T, r *Runtime, session string, withTools bool) []
 // conversation has what was asked and the note that it was stopped (ADR
 // 0011). A turn that has ended is not stopped.
 func TestCancelTurn(t *testing.T) {
+	t.Parallel()
 	hold := filepath.Join(t.TempDir(), "held")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: 0, HoldFile: hold, Script: []provider.FakeReply{
 		{Text: "never said"}, {Text: "second answer"},
@@ -125,6 +126,7 @@ func TestCancelTurn(t *testing.T) {
 // Stopped while it waits for approval: the wait goes, and the tool does not
 // run.
 func TestCancelWhileAwaitingApproval(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -162,6 +164,7 @@ func TestCancelWhileAwaitingApproval(t *testing.T) {
 // A session of version 4 finishes as it started: the stopped turn is not
 // kept.
 func TestCancelInAVersion4Session(t *testing.T) {
+	t.Parallel()
 	hold, release := filepath.Join(t.TempDir(), "held"), filepath.Join(t.TempDir(), "release")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -224,6 +227,7 @@ func crashCancelChild() {
 // TestCrashCancel: a process killed right after it stopped a turn is
 // followed by one in which the stopped turn is kept once, not twice.
 func TestCrashCancel(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("starts a child process and kills it")
 	}
@@ -267,6 +271,7 @@ func TestCrashCancel(t *testing.T) {
 // Stopped while a command runs: the command stops with the turn, and the
 // call cut off is not asked about (the user stopped it, ADR 0011).
 func TestCancelStopsARunningCommand(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"bash": "allow"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
@@ -312,6 +317,7 @@ func TestCancelStopsARunningCommand(t *testing.T) {
 // for stopped live only, the next turn's history, and so its run, would
 // differ on resume.
 func TestCancelledCallIsAFailure(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	hold, release, db := filepath.Join(dir, "held"), filepath.Join(dir, "release"), filepath.Join(dir, "k.db")
 	// The fake picks its reply by the assistant messages it is sent: with
@@ -369,6 +375,7 @@ func TestCancelledCallIsAFailure(t *testing.T) {
 // Cancel stops the turn under way, not the last message sent: one queued
 // behind it then runs.
 func TestCancelStopsTheTurnUnderWay(t *testing.T) {
+	t.Parallel()
 	hold := filepath.Join(t.TempDir(), "held")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: 0, HoldFile: hold, Script: []provider.FakeReply{
 		{Text: "never said"}, {Text: "second answer"},
@@ -416,6 +423,7 @@ func endStoppedTurn(r **Runtime, fail bool) func(*kairo.Context, workflows.TurnI
 // gives the next turn the same input, so it is not run again under another
 // id. Version 6 took the value live and the cancellation read back.
 func TestTurnStoppedAsItEnds(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		version string
 		fail    bool

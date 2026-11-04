@@ -252,6 +252,7 @@ func TestCodexOwnMCPServersOff(t *testing.T) {
 // writing mcp_servers (or an escape in a table or key) keeps codex from
 // starting, saying where, not what (ADR 0022).
 func TestCodexMCPNamesStrict(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	read := func(text string) ([]string, error) {
 		path := filepath.Join(dir, "config.toml")

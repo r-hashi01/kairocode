@@ -398,6 +398,7 @@ func TestClaudeEngineResumeDoesNotRepeatARealCall(t *testing.T) {
 }
 
 func TestClaudeSessionIDIsAStableUUID(t *testing.T) {
+	t.Parallel()
 	a, b := claudeSessionID("s/x"), claudeSessionID("s/x")
 	if a != b || claudeSessionID("s/y") == a || len(a) != 36 || a[14] != '4' {
 		t.Fatalf("%q %q", a, b)
@@ -842,6 +843,7 @@ def main(input):
 
 // What is known of each engine, in one place.
 func TestEngineFacts(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		engine      string
 		agent, turn string
@@ -870,6 +872,7 @@ func TestEngineFacts(t *testing.T) {
 // Neither the API (no key) nor Claude Code (not there) can decide: the
 // flow is told both, at once, not after retries.
 func TestFlowDecideNeitherAnswers(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Engine: workflows.EngineCodex, Provider: noKey{},

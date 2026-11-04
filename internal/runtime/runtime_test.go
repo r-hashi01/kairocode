@@ -60,6 +60,7 @@ func turn(t *testing.T, r *Runtime, session, text string) workflows.TurnOutput {
 
 // A turn that reads a file and answers: model, tool, model.
 func TestTurnRunsTools(t *testing.T) {
+	t.Parallel()
 	fake := &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "read", Input: json.RawMessage(`{"path":"main.go"}`)}}},
 		{Text: "main prints hi"},
@@ -106,6 +107,7 @@ func (f *flaky) Complete(ctx context.Context, r provider.Request) (provider.Resp
 // record (invariant 8): the failed turn left the history as it was, so only
 // the turn's number tells the two apart.
 func TestWorkflowIDs(t *testing.T) {
+	t.Parallel()
 	fake := &flaky{n: 3, p: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}}}} // 3 = kairo's attempts
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -141,6 +143,7 @@ func TestWorkflowIDs(t *testing.T) {
 // TestHistoryStoredOnce: over ten turns, each message is stored once, and no
 // model call is recorded with message text in it (NFR-5, invariant 5).
 func TestHistoryStoredOnce(t *testing.T) {
+	t.Parallel()
 	var script []provider.FakeReply
 	for i := range 10 {
 		script = append(script, provider.FakeReply{Text: "reply-" + string(rune('a'+i)) + "-text"})
@@ -191,6 +194,7 @@ func TestHistoryStoredOnce(t *testing.T) {
 
 // Ensures the observation-driven wait notices a turn started later.
 func TestWaitTurnBeforeItStarts(t *testing.T) {
+	t.Parallel()
 	fake := &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "x"}}}
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -223,6 +227,7 @@ func TestWaitTurnBeforeItStarts(t *testing.T) {
 // each is answered "not run", so the conversation the next turn sends is
 // still well formed.
 func TestCutOffReplyRunsNoTools(t *testing.T) {
+	t.Parallel()
 	fake := &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Text: "partial", Tools: []provider.FakeTool{{Name: "read", Input: json.RawMessage(`{"path":"main.go"}`)}}, Stop: provider.StopRefusal},
 		{Text: "next turn"},
@@ -265,6 +270,7 @@ func (c *counting) Complete(context.Context, provider.Request) (provider.Respons
 // A provider error that asking again cannot change fails the call at once;
 // others are tried again.
 func TestPermanentProviderErrorsAreNotRetried(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		err   error
 		calls int

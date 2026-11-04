@@ -48,6 +48,7 @@ func systemOf(t *testing.T, r *Runtime, a workflows.Agent) string {
 // body in place of the default prompt, its model, its steps, and its
 // permission over the project's (ADR 0002).
 func TestOpencodeAgent(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "allow"}`)
 	putFiles(t, ws, map[string]string{".opencode/agents/reviewer.md": "---\ndescription: Reviews\nmodel: anthropic/claude-sonnet-5-5\n" +
 		"steps: 3\npermission:\n  edit: deny\n---\nYou only review code.\n"})
@@ -79,6 +80,7 @@ func TestOpencodeAgent(t *testing.T) {
 // An agent that cannot run a session fails the turn with why: unknown, a
 // subagent, disabled, or of a provider other than Anthropic.
 func TestOpencodeAgentRefused(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		".opencode/agents/helper.md": "---\nmode: subagent\n---\nHelp.\n",
@@ -103,6 +105,7 @@ func TestOpencodeAgentRefused(t *testing.T) {
 // Skills are listed in the system prompt, and the skill tool gives the
 // model one of them; with no skill there is no skill tool.
 func TestOpencodeSkills(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "skill", Input: json.RawMessage(`{"name":"release"}`)}}},
@@ -139,6 +142,7 @@ func TestOpencodeSkills(t *testing.T) {
 // expanded ($1, !`command` in the sandbox, @file) into the user's message,
 // for the agent it names.
 func TestOpencodeCommand(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
@@ -190,6 +194,7 @@ func TestOpencodeCommand(t *testing.T) {
 // the user asked of it; a command of the name comes before it. The skills
 // list says what is not taken, and why.
 func TestSkillCommands(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	for path, body := range map[string]string{
 		".kairocode/skills/hello/SKILL.md":  "---\nname: hello\ndescription: Say hello well\n---\nGreet in three words.\n",
@@ -420,6 +425,7 @@ func TestClaudeCodeDefinitions(t *testing.T) {
 // are not shown it, and are denied; the list allows nothing the user's
 // rules do not.
 func TestClaudeAgentToolsList(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"read": "ask"}`)
 	for path, body := range map[string]string{
 		".claude/agents/looker.md":       "---\nname: looker\ndescription: Looks\ntools: Read, Grep\n---\nLook.\n",

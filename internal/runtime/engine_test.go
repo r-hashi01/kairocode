@@ -39,6 +39,7 @@ func agentOf(t *testing.T, ctx context.Context, r *Runtime, s string, n int) wor
 // A session runs with the engine and the model it was created with, not the
 // runtime's (the daemon's) defaults (ADR 0008).
 func TestEngineAndModelPerSession(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Provider: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}}},
@@ -85,6 +86,7 @@ func TestEngineAndModelPerSession(t *testing.T) {
 // and the same agent.load, not new ones, and the write made once. The
 // session's next turn runs at the current version.
 func TestOldVersionRunsFinishHere(t *testing.T) {
+	t.Parallel()
 	for _, v := range []string{workflows.TurnVersion2, workflows.TurnVersion3} {
 		t.Run("v"+v, func(t *testing.T) { oldVersionRunsFinishHere(t, v) })
 	}
@@ -161,6 +163,7 @@ func oldVersionRunsFinishHere(t *testing.T, version string) {
 // inputs encode to the same bytes, so the ids kairo derives from them (call
 // and child ids) are the ones version 2 recorded.
 func TestEmptyEngineKeepsVersion2Inputs(t *testing.T) {
+	t.Parallel()
 	type sessionV2 struct {
 		Dir   string `json:"dir"`
 		Agent string `json:"agent"`

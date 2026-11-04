@@ -16,6 +16,7 @@ import (
 // that come after it are not told again: a client does not see the end of
 // a reply after the turn's end (in the next turn's reply).
 func TestReplyToldWholeBeforeTheTurnEnds(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	s := "s/order"
 	w := r.ev.watch(s)

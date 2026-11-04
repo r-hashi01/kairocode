@@ -54,6 +54,7 @@ func waitedJob(t *testing.T, r *Runtime) string {
 // waits for its end: the wait is a signal, and the command's end wakes it
 // with its output and status (ADR 0028).
 func TestBackgroundCommandWaited(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/long.star": waitFlow})
@@ -98,6 +99,7 @@ func TestBackgroundCommandWaited(t *testing.T) {
 // runtime that is there when the command ends (through the daemon:
 // JobDone).
 func TestBackgroundWaitSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/long.star": waitFlow})
@@ -137,6 +139,7 @@ func TestBackgroundWaitSurvivesRestart(t *testing.T) {
 // A command not waited for, ended, is told to its session: a message
 // starts the next turn. One whose end was read is not told again.
 func TestBackgroundEndToldToTheSession(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/start.star": `
@@ -166,6 +169,7 @@ def main(input):
 // A command runs out of its time, or is stopped; a session has at most
 // jobsPerSession at once.
 func TestBackgroundTimeoutKillAndLimit(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
@@ -244,6 +248,7 @@ func crashJobChild() {
 // the wait up, and the command's end (told by its runner) ends it. The
 // command ran once, and was started once (ADR 0028, invariants 4 and 7).
 func TestCrashBackgroundWait(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	if testing.Short() {
 		t.Skip("starts a child process and kills it")
@@ -301,6 +306,7 @@ func TestCrashBackgroundWait(t *testing.T) {
 // A wait that ran out does not wait any more: the command's end, later,
 // is told to the session (ADR 0028, 5).
 func TestBackgroundWaitRanOutThenEnded(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/short.star": `
@@ -333,6 +339,7 @@ def main(input):
 // Two waits for one command in one run (calls at once) each have a signal
 // of their own: one does not take the other's.
 func TestBackgroundTwoWaitsInARun(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	e := jobEnv{m: r.jobs, session: "s/two", dir: repo(t), key: "two"}
@@ -359,6 +366,7 @@ func TestBackgroundTwoWaitsInARun(t *testing.T) {
 // A runner is alive while it holds its lock, not because its pid is some
 // process's (after a reboot, a pid is another's).
 func TestJobRunnerAlive(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	id := "bg_000000000001"
 	os.MkdirAll(r.jobs.path(id), 0o700)
@@ -394,6 +402,7 @@ func TestJobRunnerAlive(t *testing.T) {
 // and is started again by the command's runner when it ends. One with a
 // deadline has a timer: the daemon stays up while it waits (ADR 0028).
 func TestAwaitingWhileWaiting(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
@@ -454,6 +463,7 @@ func waiting(ctx context.Context, r *Runtime) bool {
 // meanwhile) still learns of its end when the runner is killed and cannot
 // tell it: its lock is let go with the process (ADR 0028).
 func TestRunnerKilledAfterRestart(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	db := filepath.Join(t.TempDir(), "k.db")
 	ws := repo(t)

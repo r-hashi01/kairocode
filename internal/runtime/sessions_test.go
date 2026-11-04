@@ -48,6 +48,7 @@ func TestSessions(t *testing.T) {
 // A session listed says what waits for a person in its turn under way;
 // answered, nothing does.
 func TestSessionsWaiting(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

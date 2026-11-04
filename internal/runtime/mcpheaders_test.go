@@ -61,6 +61,7 @@ func connectTo(t *testing.T, ctx context.Context, url string) *mcp.ClientSession
 // the call refused for the header is made once more after listing again.
 // The tool runs once each time.
 func TestMCPHeaderParams(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var marked atomic.Bool
