@@ -16,6 +16,7 @@ import (
 // nothing touches a closed runtime's folder (a TempDir's cleanup failed on
 // it, "directory not empty").
 func TestCloseDBWaitsForTheOpener(t *testing.T) {
+	t.Parallel()
 	for i := range 20 {
 		dir := t.TempDir()
 		db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "k.db")+"?_pragma=journal_mode(WAL)")

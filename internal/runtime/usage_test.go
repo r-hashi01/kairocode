@@ -15,6 +15,7 @@ import (
 // A session's usage is what its model calls recorded, by turn and in all
 // (FR-26; `kairocode usage`).
 func TestUsageOfASession(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "glob", Input: json.RawMessage(`{"pattern":"*.go"}`)}}},
 		{Text: "one"},

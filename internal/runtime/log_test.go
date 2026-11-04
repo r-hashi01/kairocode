@@ -16,6 +16,7 @@ import (
 // the tool calls with their arguments and results, the permission checks,
 // what waited for a person and the answer, and a compaction (ADR 0023).
 func TestSessionLog(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Summary: "SUMMARY-TEXT", Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{

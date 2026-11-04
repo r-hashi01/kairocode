@@ -45,6 +45,7 @@ func countLines(t *testing.T, path, line string) int {
 // asks the model again: from then on the model is given the summary, and
 // what it summarizes is kept (ADR 0020).
 func TestCompactNearTheContext(t *testing.T) {
+	t.Parallel()
 	calls := filepath.Join(t.TempDir(), "calls")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, CallLog: calls, Summary: "SUMMARY-TEXT",
 		Script: []provider.FakeReply{
@@ -98,6 +99,7 @@ func TestCompactNearTheContext(t *testing.T) {
 // A conversation longer than the model's context is compacted, and the
 // model asked again (ADR 0020).
 func TestCompactWhenTooLong(t *testing.T) {
+	t.Parallel()
 	calls := filepath.Join(t.TempDir(), "calls")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, CallLog: calls, Summary: "SUMMARY-TEXT",
 		Script:  []provider.FakeReply{{TooLong: true}},
@@ -117,6 +119,7 @@ func TestCompactWhenTooLong(t *testing.T) {
 // /compact: a turn that only compacts; the next turn goes on from the
 // summary, and the compacting turn is not one to undo (ADR 0020).
 func TestCompactCommand(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Summary: "SUMMARY-TEXT",
 		Script:  []provider.FakeReply{{Text: "first answer"}},
 		Replies: map[string]provider.FakeReply{"SUMMARY-TEXT": {Text: "second answer"}},
@@ -190,6 +193,7 @@ func crashCompactChild() {
 // the turn resumes with one summary in its conversation, and goes on from
 // it (ADR 0020).
 func TestCrashCompact(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -257,6 +261,7 @@ func TestCrashCompact(t *testing.T) {
 // A turn that ended near the context: the next turn compacts before its
 // first model call (ADR 0020).
 func TestCompactAtTheTurnsStart(t *testing.T) {
+	t.Parallel()
 	calls := filepath.Join(t.TempDir(), "calls")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, CallLog: calls, Summary: "SUMMARY-TEXT",
 		Script:  []provider.FakeReply{{Text: "a long answer", Input: nearContext}},
@@ -276,6 +281,7 @@ func TestCompactAtTheTurnsStart(t *testing.T) {
 // A conversation that stays too long is compacted three times at most;
 // the turn then stops, and says why (ADR 0020).
 func TestCompactGivesUp(t *testing.T) {
+	t.Parallel()
 	calls := filepath.Join(t.TempDir(), "calls")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, CallLog: calls, Summary: "SUMMARY-TEXT",
 		Script:  []provider.FakeReply{{TooLong: true}},
@@ -294,6 +300,7 @@ func TestCompactGivesUp(t *testing.T) {
 // message; a conversation too long to summarize is cut at a message of
 // the user's own words, never between a call and its result.
 func TestCompactRequestShape(t *testing.T) {
+	t.Parallel()
 	user := func(s string) msg.Message {
 		return msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: s}}}
 	}

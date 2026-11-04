@@ -83,6 +83,7 @@ func toolResultText(t *testing.T, r *Runtime, out workflows.TurnOutput) string {
 // the decision made when it was checked, and the next turn uses the new
 // settings (invariant 2).
 func TestPermissionRecordedAtTurnStart(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	script := append(append([]provider.FakeReply{}, writeScript...),
 		provider.FakeReply{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"more.txt","content":"x"}`)}}},
@@ -127,6 +128,7 @@ func TestPermissionRecordedAtTurnStart(t *testing.T) {
 }
 
 func TestDeclinedApproval(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -152,6 +154,7 @@ func TestDeclinedApproval(t *testing.T) {
 // Plan mode (FR-12): the plan agent is not given tools that act, and a call
 // of one does not run.
 func TestPlanModeOnlyReads(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx := context.Background()
@@ -184,6 +187,7 @@ func TestPlanModeOnlyReads(t *testing.T) {
 // TestEscalationAlwaysAsks: running outside the sandbox is asked even when
 // the rules allow bash; a command in the sandbox is not (ADR 0005).
 func TestEscalationAlwaysAsks(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"bash": "allow"}`)
 	script := []provider.FakeReply{
@@ -219,6 +223,7 @@ func TestEscalationAlwaysAsks(t *testing.T) {
 // meanwhile. The calls the turn finished before it waited are not made
 // again: the turn's tree is kept while it waits (kairo ADR 0054).
 func TestResumeAfterLongApproval(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask", "count": "allow"}`)
 	e := envAt(t.TempDir())
 	calls := filepath.Join(t.TempDir(), "calls")

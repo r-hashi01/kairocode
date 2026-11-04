@@ -701,6 +701,7 @@ func TestModelAndEffortKept(t *testing.T) {
 // reads; back in manual, in its own (ADR 0016). The mode is recorded with
 // the turn: Settings read it back.
 func TestPlanMode(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}, {Text: "b"}, {Text: "c"}}})
@@ -732,6 +733,7 @@ func TestPlanMode(t *testing.T) {
 // MaxAutoRefusals refusals in a turn, the user is asked; a command
 // outside the sandbox is asked whatever the judge would say.
 func TestAutoMode(t *testing.T) {
+	t.Parallel()
 	write := func(name string) provider.FakeTool {
 		return provider.FakeTool{Name: "write", Input: json.RawMessage(`{"path":"` + name + `","content":"x\n"}`)}
 	}
@@ -857,6 +859,7 @@ func TestAutoModeKeepsTheUsersAnswer(t *testing.T) {
 
 // A flow's write, asked about, carries the flow's shape to show the user.
 func TestFlowWriteAskShowsTheFlow(t *testing.T) {
+	t.Parallel()
 	src := "def main(input):\n    a = agent(agent = \"build\", prompt = \"draft an answer\")\n    return a\n"
 	in, _ := json.Marshal(map[string]any{"name": "inquiry-alert", "source": src,
 		"asked": []map[string]string{{"need": "draft an answer", "phase": "draft"}}})
@@ -1015,6 +1018,7 @@ func TestSignInToAnAgent(t *testing.T) {
 // Only an error that says so is a sign-in needed: agents use -32000 for
 // other failures too.
 func TestAuthRequired(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		err  error
 		want bool
@@ -1034,6 +1038,7 @@ func TestAuthRequired(t *testing.T) {
 // A switch chosen and not yet sent is kept in the store (ADR 0014, addendum
 // 2026-11-02): the daemon stopped and opened again, the next turn takes it.
 func TestSwitchSurvivesAReopen(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	db := filepath.Join(t.TempDir(), "k.db")
@@ -1066,6 +1071,7 @@ func TestSwitchSurvivesAReopen(t *testing.T) {
 // A switch sent but not removed (the daemon stopped between) goes again
 // with the next event, and changes nothing: the session has it already.
 func TestSwitchSentAgainChangesNothing(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}, {Text: "b"}, {Text: "c"}}})

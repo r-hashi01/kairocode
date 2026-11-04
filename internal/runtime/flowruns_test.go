@@ -24,6 +24,7 @@ def main(input):
 // A flow's run is kept once it ends, with its chart, each step's state and
 // its steps, and listed (ADR 0029).
 func TestFlowRunKept(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/reader.star": readFlow})
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
@@ -61,6 +62,7 @@ func TestFlowRunKept(t *testing.T) {
 // A run a process did not keep (it stopped) is kept when the next opens;
 // kept twice, it is one.
 func TestFlowRunKeptAfterRestart(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/reader.star": readFlow})
 	db := filepath.Join(t.TempDir(), "k.db")
@@ -142,6 +144,7 @@ func TestFlowRunsNotMadeAgain(t *testing.T) {
 // Tries are counted apart from runs: trying a flow often does not push its
 // runs out (ADR 0029, addendum).
 func TestFlowTriesCountedApart(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx := context.Background()
 	now := time.Now()

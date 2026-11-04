@@ -18,6 +18,7 @@ import (
 // (ADR 0021). The failed run here is a workflow that fails as a session
 // does on a store's error.
 func TestSendToAFailedSession(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

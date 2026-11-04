@@ -248,6 +248,7 @@ func TestProjectPluginGetsNoUsersKey(t *testing.T) {
 // Only a message turned away by a remote plugin's server is "refused": an
 // error's words (a tool's that ran, a local server's) are not (invariant 4).
 func TestPluginRefusedOnlyWhenTurnedAway(t *testing.T) {
+	t.Parallel()
 	remote := extServer{Plugin: "mail", URL: "https://example.invalid/mcp"}
 	local := extServer{Plugin: "mail", Command: []string{"x"}, URL: "https://example.invalid/mcp"}
 	turnedAway := fmt.Errorf("calling \"tools/call\": %w", &url.Error{Op: "Post", URL: remote.URL, Err: fmt.Errorf("%w (HTTP 401)", errRefused)})
@@ -318,6 +319,7 @@ func TestExamplePlugins(t *testing.T) {
 // A refusal is 401 or 403, or a 4xx that says the token is not good (as
 // GitHub answers a token not in its form): not any other answer.
 func TestTurnedAway(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		code int
 		auth string
@@ -344,6 +346,7 @@ func TestTurnedAway(t *testing.T) {
 // A refusal's answer is the server's, on one line, with the credentials
 // it says back put out before it is cut (invariant 6).
 func TestAnswerOf(t *testing.T) {
+	t.Parallel()
 	token := "kc-token-" + strings.Repeat("x", 40)
 	body := strings.Repeat("a", 280) + " token\n" + token + " was\tnot good"
 	resp := &http.Response{Status: "400 Bad Request", StatusCode: 400,
@@ -361,6 +364,7 @@ func TestAnswerOf(t *testing.T) {
 
 // A credential cut by the 2 KiB read is not shown in part.
 func TestAnswerOfCut(t *testing.T) {
+	t.Parallel()
 	token := "kc-token-" + strings.Repeat("y", 40)
 	body := strings.Repeat(" ", 2<<10-20) + "Bearer " + token
 	resp := &http.Response{Status: "401 Unauthorized", StatusCode: 401, Body: io.NopCloser(strings.NewReader(body))}
@@ -372,6 +376,7 @@ func TestAnswerOfCut(t *testing.T) {
 
 // A long credential is shown by its ends alone; a short one, not at all.
 func TestMasked(t *testing.T) {
+	t.Parallel()
 	for v, want := range map[string]string{
 		"ghp_" + strings.Repeat("Z", 32) + "wxyz": "ghp_…wxyz",
 		"kc-wrong-key":          "***",

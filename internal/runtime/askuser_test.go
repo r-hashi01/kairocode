@@ -41,6 +41,7 @@ func toolResults(t *testing.T, r *Runtime, s string) []string {
 // answer as a question (its answers, and the user's own words), and goes
 // on with it as the call's result. No approval is asked for asking.
 func TestAskUser(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{askUserCall}}, {Text: "PostgreSQL it is"},
 	}})
@@ -70,6 +71,7 @@ func TestAskUser(t *testing.T) {
 // The model's arguments that are not a question's go back to it, and
 // nothing is asked; the user's own words end the turn's asking.
 func TestAskUserArguments(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "ask_user", Input: json.RawMessage(`{"question": "Which?", "options": ["only one"]}`)}}},
 		{Tools: []provider.FakeTool{askUserCall}},
@@ -99,6 +101,7 @@ func TestAskUserArguments(t *testing.T) {
 // the answer goes on in the same turn: the model call before it is not
 // made again (invariant 7, NFR-1).
 func TestCrashAskUser(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -193,6 +196,7 @@ func TestClaudeEngineAskUser(t *testing.T) {
 // turn's end (ADR 0018, 7): the turn waits for the answer, and the Stop
 // hook runs once, after it, when the work is done.
 func TestAskUserBeforeStopHook(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{}`)
 	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
 	hook := `cat > /dev/null; echo ran >> "$CLAUDE_PROJECT_DIR/stop.log"`

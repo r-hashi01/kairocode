@@ -33,6 +33,7 @@ def main(input):
 // called, what it would have been given shown; the approval comes back
 // with what the try did, and waits on. Allowed then, the flow is written.
 func TestTryFlow(t *testing.T) {
+	t.Parallel()
 	in, _ := json.Marshal(map[string]any{"name": "reply", "source": triedFlow,
 		"asked": []map[string]string{{"need": "draft a reply", "phase": "draft"}, {"need": "save it", "phase": "save"}}})
 	ws := workspaceWith(t, `{"flow_publish": "ask", "write": "allow", "read": "allow"}`)
@@ -185,6 +186,7 @@ func crashTryChild() {
 // with the try after the restart; its write is still not made, and the
 // approval comes back with what the try did, still waiting (ADR 0017).
 func TestCrashTryFlow(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
@@ -308,6 +310,7 @@ func TestTryFlowOnClaudeCode(t *testing.T) {
 // A try is refused where its agents would run on an agent that may act
 // without asking (codex).
 func TestTryFlowRefusedOnCodex(t *testing.T) {
+	t.Parallel()
 	if dryEngine(workflows.EngineCodex) || !dryEngine(workflows.EngineCopilot) || !dryEngine(workflows.EngineClaudeCode) || !dryEngine("") {
 		t.Fatal("the engines a try runs on")
 	}
@@ -317,6 +320,7 @@ func TestTryFlowRefusedOnCodex(t *testing.T) {
 // sends; what it changes is not made of those marks: a step that stays as
 // it was is not a change.
 func TestReviewSections(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx := context.Background()
 	before := "def main(input):\n    d = agent(\"plan\", \"old\")\n    tool(\"mcp__s__post\", text = d.output)\n"

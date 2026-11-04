@@ -50,6 +50,7 @@ func flowTurn(t *testing.T, r *Runtime, ws, name, args string) (workflows.TurnOu
 // A flow (ADR 0003): agents at once, a tool, and main's result as the
 // turn's reply; the conversation keeps what was typed and the result.
 func TestFlowRuns(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/review.star": `
 DESCRIPTION = "Review the files given"
@@ -105,6 +106,7 @@ def main(input):
 // What a script gets wrong ends the flow with why, as the turn's reply, not
 // as a failure of the turn: an error, a limit, a flow that is not there.
 func TestFlowMistakesAreReplies(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		".kairocode/workflows/typo.star":    "def main(input):\n    return undefined_name\n",
@@ -133,6 +135,7 @@ func TestFlowMistakesAreReplies(t *testing.T) {
 // becomes meanwhile: read again by another process, it is the recorded one.
 // A subagent can be one of its agents.
 func TestFlowKeepsItsScript(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	dir := t.TempDir()
 	hold, db := filepath.Join(dir, "held"), filepath.Join(dir, "k.db")
@@ -173,6 +176,7 @@ func TestFlowKeepsItsScript(t *testing.T) {
 // flow's own tool() and its agents' tools. Each is listed with the
 // session's turn, and its answer reaches the run that waits (ADR 0003).
 func TestFlowAsksForApproval(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/notes.star": `
 def main(input):
@@ -220,6 +224,7 @@ def main(input):
 // one of a turn (invariant 4): listed with the turn, and settled by the
 // answer; the flow goes on.
 func TestFlowCutOffCallIsReviewed(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	ws := workspaceWith(t, `{"bash": "allow"}`)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/slow.star": `
@@ -319,6 +324,7 @@ func ended(ctx context.Context, r *Runtime, s string, n int) int {
 // run at once, nine of them ended, is followed by one that finishes the flow
 // running only the tenth again (ADR 0003, M3).
 func TestCrashWorkflowScriptResume(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("starts a child process and kills it")
 	}
@@ -377,6 +383,7 @@ def main(input):
 // ask() puts a question to the user and waits, without the process: its
 // answer is one of its options, given once (ADR 0003, invariant 7).
 func TestFlowAsks(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/plan.star": `
 def main(input):
@@ -445,6 +452,7 @@ def main(input):
 // decide() has the model decide, typed: a bool, a number, one of the
 // choices. A decision of another type, or none, is ok False.
 func TestFlowDecide(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		".kairocode/workflows/yes.star":    "def main(input):\n    d = decide(\"Do the tests pass?\")\n    return \"%s %s\" % (d.ok, d.value)\n",
@@ -509,6 +517,7 @@ func nextFlow(t *testing.T, ctx context.Context, events <-chan Event, cond func(
 // for the user, and done again once answered; one who watches from midway
 // is told how far it has gone (ADR 0003).
 func TestFlowEvents(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/steps.star": `
 def main(input):
@@ -562,6 +571,7 @@ def main(input):
 // An agent of a flow whose tool call waits for approval is shown waiting
 // for the user, not running.
 func TestFlowAgentWaiting(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/w.star": "def main(input):\n    agent(agent = \"build\", prompt = \"write notes\")\n"})
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
@@ -579,6 +589,7 @@ func TestFlowAgentWaiting(t *testing.T) {
 // on after the upgrade as version 1: the agent it had finished is not run
 // again (kairo ADR 0060).
 func TestFlowVersion1GoesOn(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/two.star": `
 def main(input):
@@ -630,6 +641,7 @@ def main(input):
 // it; it puts it right, the user lets it write, and the flow is there to
 // run (ADR 0003).
 func TestNewFlow(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	bad := "DESCRIPTION = \"Say hello\"\ndef main(input):\n    return f\"hello {input}\"\n"
 	good := "DESCRIPTION = \"Say hello\"\ndef main(input):\n    return \"hello \" + input[\"args\"]\n"
@@ -700,6 +712,7 @@ func TestNewFlow(t *testing.T) {
 // times. A project's hook is asked about before it first runs, not again
 // while its script is the same, and again once it changes.
 func TestTurnEndHookBlocks(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		ConfigFile:                        `{"hooks": {"turn.end": ["check"]}}`,
@@ -764,6 +777,7 @@ func TestTurnEndHookBlocks(t *testing.T) {
 // An agent whose definition names a workflow has its turns run by that
 // flow, given what the user said (ADR 0003).
 func TestAgentWorkflow(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		".opencode/agents/greeter.md":     "---\ndescription: Greets\nworkflow: greet\n---\n",
@@ -782,6 +796,7 @@ func TestAgentWorkflow(t *testing.T) {
 // question waits, it does not run (and the next turn asks about the new
 // one). A hook whose script does not run does not send the model back.
 func TestHookRunsTheScriptAllowed(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		ConfigFile:                        `{"hooks": {"turn.end": ["check", "gone"]}}`,
@@ -828,6 +843,7 @@ func TestHookRunsTheScriptAllowed(t *testing.T) {
 // LIMITS tokens: a flow stops once its agents have used more (the fake
 // reports 15 a call).
 func TestFlowTokenLimit(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/costly.star": `
 LIMITS = {"tokens": 20}
@@ -847,6 +863,7 @@ def main(input):
 // Stopping the turn stops its flow, and the flow's agents with it (ADR
 // 0011, FR-13).
 func TestCancelStopsTheFlow(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	hold := filepath.Join(t.TempDir(), "held")
 	putFiles(t, ws, map[string]string{".kairocode/workflows/long.star": `
@@ -894,6 +911,9 @@ def main(input):
 // another call where the run before made one (code changed under the same
 // version) stops there, without making it.
 func TestWorkflowScriptDivergence(t *testing.T) {
+	// Not in parallel: under load, the changed code sometimes reached the
+	// model before the divergence stopped the run (the model was called
+	// once). Looked into apart from this test's speed.
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/two.star": `
 def main(input):
@@ -938,6 +958,7 @@ def main(input):
 // typed (decided from the reply, as decide does); a decision that does not
 // fit the schema is ok False, with the reply as output.
 func TestAgentSchema(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/plan.star": `
 def main(input):
@@ -963,6 +984,7 @@ def main(input):
 // subagent of an agent that is not there fails as a result, not the turn.
 // A subagent is not given the task tool, nor is the plan agent.
 func TestTaskTool(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	task := func(agent, prompt string) provider.FakeTool {
 		b, _ := json.Marshal(map[string]string{"agent": agent, "prompt": prompt})
@@ -1073,6 +1095,7 @@ func subagentsEnded(ctx context.Context, r *Runtime, s string) int {
 // the first ended, is followed by one that finishes the turn running only
 // the second subagent again (FR-13, NFR-1).
 func TestCrashTaskResume(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("starts a child process and kills it")
 	}
@@ -1142,6 +1165,7 @@ func TestCrashTaskResume(t *testing.T) {
 // they name, and not after a call that did not run (here, of a tool the
 // agent lacks).
 func TestToolAfterAndSessionStartHooks(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{
 		ConfigFile:                             `{"hooks": {"session.start": ["guide"], "tool.after": [{"tool": "glob", "flow": "never"}, {"tool": "nope", "flow": "never"}, {"tool": "read", "flow": "after-read"}]}}`,
@@ -1221,6 +1245,7 @@ func TestToolAfterAndSessionStartHooks(t *testing.T) {
 // reviewed): one changed while the approval waits is not published (ADR
 // 0030).
 func TestPublishOnlyWhatWasReviewed(t *testing.T) {
+	t.Parallel()
 	ws := repo(t)
 	good, _ := json.Marshal(map[string]string{"name": "hello", "source": "def main(input):\n    return \"hello\"\n"})
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{

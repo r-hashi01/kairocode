@@ -42,6 +42,7 @@ func testPNG(t *testing.T, c color.Color) []byte {
 // Images not taken are refused before anything is stored, saying why and
 // not what they hold (ADR 0026).
 func TestCheckImages(t *testing.T) {
+	t.Parallel()
 	red := testPNG(t, color.RGBA{255, 0, 0, 255})
 	many := make([]Image, msg.MaxImages+1)
 	for i := range many {
@@ -75,6 +76,7 @@ func TestCheckImages(t *testing.T) {
 // in later turns; it is stored once, apart, and the message holds its
 // hash. The record shows its kind and size, not its bytes.
 func TestImagesReachTheModel(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	images := filepath.Join(dir, "images")
 	r := open(t, filepath.Join(dir, "k.db"), &provider.Fake{HoldAt: -1, ImageLog: images,
@@ -128,6 +130,7 @@ func TestImagesReachTheModel(t *testing.T) {
 // An engine that takes no images is given them as files, named in the
 // prompt: written once, by their content's hash.
 func TestImagesAsFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	r := open(t, filepath.Join(dir, "k.db"), &provider.Fake{HoldAt: -1})
 	ctx := context.Background()
@@ -195,6 +198,7 @@ func TestClaudeEngineImages(t *testing.T) {
 // are said in words, not sent again, so a long session does not grow past
 // what the model takes.
 func TestImagesKeptToWhatACallTakes(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx := context.Background()
 	var ms []msg.Message

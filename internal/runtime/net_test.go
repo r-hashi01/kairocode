@@ -34,6 +34,7 @@ func userSettings(t *testing.T, settings string) {
 // 0013): another argument the model adds (a path, a command) does not
 // stand for it. Other tools are judged as before.
 func TestNetSubject(t *testing.T) {
+	t.Parallel()
 	for args, want := range map[string]string{
 		`{"url": "https://API.github.com/repos/a/b/issues?state=open"}`:  "api.github.com/repos/a/b/issues",
 		`{"url": "http://127.0.0.1:8080"}`:                               "127.0.0.1:8080",
@@ -56,6 +57,7 @@ func TestNetSubject(t *testing.T) {
 // The person asked about a POST sees what it sends: the subject is only
 // its host and path.
 func TestHTTPPreview(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"http": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Tools: []provider.FakeTool{{Name: "http", Input: json.RawMessage(`{"url": "https://api.example/c?x=1", "headers": {"Content-Type": "application/json"}, "body": "{\"comment\": \"hello\"}"}`)}}},

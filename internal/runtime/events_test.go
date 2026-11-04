@@ -34,6 +34,7 @@ func next(t *testing.T, ctx context.Context, events <-chan Event) Event {
 // starts, the model calls a tool, the call waits for approval and gets it,
 // the tool ends, the turn ends (issue #3).
 func TestEventsOfATurn(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -91,6 +92,7 @@ func TestEventsOfATurn(t *testing.T) {
 // One who starts watching a session is told first what waits for a person
 // in it (issue #4: a client that joins, or comes back).
 func TestEventsReplayPendingOnJoin(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -111,6 +113,7 @@ func TestEventsReplayPendingOnJoin(t *testing.T) {
 
 // Watching ends with ctx: the channel is closed.
 func TestEventsEndWithTheContext(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -136,6 +139,7 @@ func TestEventsEndWithTheContext(t *testing.T) {
 // Closing the runtime ends every watch, and a watch begun after it ends at
 // once.
 func TestEventsEndWhenTheRuntimeCloses(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -196,6 +200,7 @@ func TestEventsOfAClaudeTurn(t *testing.T) {
 
 // The model's text streams to those who watch, as it comes (issue #2).
 func TestEventsStreamTokens(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "one two three"}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -228,6 +233,7 @@ func TestEventsStreamTokens(t *testing.T) {
 // A watcher that does not keep up is dropped, so the runtime never waits
 // for it: its channel closes, and it watches again (issue #3).
 func TestEventsDropASlowWatcher(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("word ", 1000)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: long}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -263,6 +269,7 @@ func TestEventsDropASlowWatcher(t *testing.T) {
 // through, the other is told it was already answered, and everyone who
 // watches is told the answer (issue #5).
 func TestApprovalToManyClients(t *testing.T) {
+	t.Parallel()
 	ws := workspaceWith(t, `{"write": "ask"}`)
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: writeScript})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

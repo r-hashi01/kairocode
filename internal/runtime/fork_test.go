@@ -32,6 +32,7 @@ func historyTexts(t *testing.T, r *Runtime, s string) []string {
 // A session forked from a turn goes on with that turn's conversation; the
 // session it came from is as it was (ADR 0021).
 func TestForkFromATurn(t *testing.T) {
+	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
 		{Text: "answer one"}, {Text: "answer two"}, {Text: "answer three"},
 	}})
@@ -68,6 +69,7 @@ func TestForkFromATurn(t *testing.T) {
 // --files: the fork's first turn puts the working files back as they were
 // after the turn, and /undo there takes them back (ADR 0021).
 func TestForkWithFiles(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	write := func(content string) provider.FakeReply {
 		in, _ := json.Marshal(map[string]string{"path": "x.txt", "content": content})
@@ -133,6 +135,7 @@ func TestForkOnClaudeCode(t *testing.T) {
 // --files from a turn that took no snapshot of its own (an undo): the
 // files it put back (ADR 0021).
 func TestForkFilesFromAnUndo(t *testing.T) {
+	t.Parallel()
 	sandboxtest.Require(t)
 	write := func(content string) provider.FakeReply {
 		in, _ := json.Marshal(map[string]string{"path": "x.txt", "content": content})
