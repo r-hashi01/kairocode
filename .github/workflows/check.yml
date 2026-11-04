@@ -18,17 +18,24 @@ concurrency:
 
 jobs:
   check:
+    # Named by the system, not its version: the ruleset of main requires
+    # "check (linux)" and "check (macos)", which a newer runner keeps.
+    name: check (${{ matrix.system }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        include:
+          - system: linux
+            os: ubuntu-26.04
+          - system: macos
+            os: macos-26
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: The Linux sandbox (bubblewrap, user namespaces)
@@ -36,8 +43,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
-          # Ubuntu 24.04 lets AppArmor refuse unprivileged user namespaces,
-          # which bubblewrap needs (ADR 0005).
+          # Ubuntu (24.04 and later) lets AppArmor refuse unprivileged user
+          # namespaces, which bubblewrap needs (ADR 0005).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: git identity for the tests that commit
         run: |
