@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/r-hashi01/kairocode/internal/api"
+	"github.com/r-hashi01/kairocode/internal/atomicfile"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -488,7 +489,8 @@ func RunJob(folder string) error {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(folder, jobFilePID), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+	// Whole or not there: kill reads it as soon as it is there.
+	if err := atomicfile.Write(filepath.Join(folder, jobFilePID), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		return err
 	}
 	b, err := os.ReadFile(filepath.Join(folder, jobFileSpec))
