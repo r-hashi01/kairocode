@@ -164,6 +164,9 @@ type agent struct {
 	// asks: requests for permission sent and not answered, by key. An
 	// answer from elsewhere cancels them.
 	asks map[string]context.CancelFunc
+	// drafts: the draft each flow_write under way writes, by call, to show
+	// with its result.
+	drafts map[string]map[string]any
 	// lang: the language a flow's review is put in (its words, not its
 	// labels).
 	lang string

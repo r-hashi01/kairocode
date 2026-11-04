@@ -8,6 +8,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/r-hashi01/kairocode/internal/clipboard"
@@ -928,7 +929,7 @@ func (m *model) take(u acp.Update) {
 			m.flowTool = u.Title
 		}
 	case "tool_call_update":
-		if u.Status != "completed" && u.Status != "failed" {
+		if u.Status != "completed" && u.Status != "failed" || settled(u.Meta) {
 			return
 		}
 		if m.flow != nil && m.tools[u.ToolCallID] == m.flowTool {
@@ -1908,4 +1909,12 @@ func (m *model) askView(w int) string {
 	}
 	b.WriteString("\n" + faint.Render(hint) + "\n")
 	return b.String()
+}
+
+// settled says an update only settles the call a request made with its
+// answer (for a client that marks the call by the option chosen): this
+// screen shows the answer its own way.
+func settled(meta json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	return len(meta) > 0 && json.Unmarshal(meta, &m) == nil && string(m[acp.SettledMeta]) == "true"
 }
