@@ -11,7 +11,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/acp"
 )
 
-// Signing in to a provider (ADR 0015, 追記): /login lists the ways its
+// Signing in to a provider (ADR 0015, addendum): /login lists the ways its
 // agent offers; a command is run here, in the terminal, the screen
 // handed to it until it ends; an agent's own way (a browser, say) is the
 // daemon's to carry out.

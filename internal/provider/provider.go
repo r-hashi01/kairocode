@@ -30,7 +30,7 @@ type Request struct {
 	Force   string
 	NoTools bool
 	// Effort, if set, is the model's effort for this call, in place of
-	// the provider's own (ADR 0014, 追記).
+	// the provider's own (ADR 0014, addendum).
 	Effort string
 }
 

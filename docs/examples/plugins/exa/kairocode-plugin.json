@@ -1,6 +1,6 @@
 {
   "name": "exa",
-  "description": "Exa の web 検索（API キー）",
+  "description": "Exa web search (API key)",
   "mcp": {
     "type": "remote",
     "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa,web_search_advanced_exa",
@@ -8,7 +8,7 @@
   },
   "auth": {
     "type": "key",
-    "keys": [{ "name": "api_key", "description": "Exa の API キー（https://dashboard.exa.ai/api-keys）" }]
+    "keys": [{ "name": "api_key", "description": "Your Exa API key (https://dashboard.exa.ai/api-keys)" }]
   },
   "tools": {
     "web_search_exa": { "effect": "read" },

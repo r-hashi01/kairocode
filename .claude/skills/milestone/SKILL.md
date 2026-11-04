@@ -5,13 +5,13 @@ description: Work through a KairoCode milestone (M0-M4 in docs/milestones.md) ac
 
 # milestone
 
-1. `docs/milestones.md` の「今の段階」と、その段階の中身・受け入れ条件を読みます。設計（`../kairo/docs/kairocode/design.md`）の関係する節と、要件の該当する FR / NFR も読みます。
-2. 段階の中に、ADR が要る判断（設計 11 節の未決事項、依存の追加、AGENTS.md の「設計判断の記録」に当たるもの）があるかを洗い出します。あれば先に `/adr` で起票し、利用者の承認を待ちます。待っている間は、ADR が要らない部分だけを進めます。
-3. kairo の側に足りないもの（`docs/kairo-gaps.md`）で、この段階に必須のものがあるかを確かめます。あれば `/kairo-gap` で扱いを決めます。
-4. 受け入れ条件を、まずテストとして書きます。落ちることを確かめます（落ちないなら、テストが条件を確かめていない）。
-   - 「二重に起きない」「再開できる」は、`TestCrash...` として書きます。先頭で `if testing.Short() { t.Skip(...) }` とし、テストのバイナリを子のプロセスとして起動し直し（`os.Args[0]`、`-test.run`、環境変数で役を渡す）、途中で `SIGKILL` して、同じ DB（`t.TempDir()`）で再開します。強制終了の時点は、fake のプロバイダーやツールの handler の中から合図（ファイルや標準出力の行）を出して決めます（固定の sleep で決めない）。
-   - 回数は、handler の中で数えて、DB かファイルに残し、親のプロセスで確かめます。
-5. 小さな単位で実装し、受け入れ条件のテストを 1 つずつ通します。ツールは `/tool-change`、ワークフローは `/workflow-change` の手順に従います。
-6. `/verify` を実行し、`durability-reviewer` に差分をレビューさせ、指摘を直します。
-7. `docs/milestones.md` の受け入れ条件にチェックを付けます。すべて通ったら、その段階の状態を「完了（日付）」にし、「今の段階」を次に進めます。
-8. 利用者には、通した受け入れ条件、起票した ADR と kairo の不足、残った課題を短く報告します。
+1. Read "Current stage" in `docs/milestones.md`, and that milestone's contents and acceptance criteria. Also read the related sections of the design (`../kairo/docs/kairocode/design.md`) and the matching FR / NFR of the requirements.
+2. List any decisions in the milestone that need an ADR (open questions in design section 11, adding a dependency, anything that falls under "Recording design decisions (ADR)" in AGENTS.md). If there are any, write them first with `/adr` and wait for the user's approval. While waiting, work only on the parts that do not need an ADR.
+3. Check whether any of the things missing on kairo's side (`docs/kairo-gaps.md`) are required for this milestone. If so, decide how to handle them with `/kairo-gap`.
+4. Write the acceptance criteria as tests first. Check that they fail (if they do not fail, the test does not check the criterion).
+   - Write "does not happen twice" and "can resume" as `TestCrash...`. Start with `if testing.Short() { t.Skip(...) }`, start the test binary again as a child process (`os.Args[0]`, `-test.run`, pass the role in an environment variable), `SIGKILL` it partway, and resume with the same DB (`t.TempDir()`). Decide the moment to kill it by having the fake provider or the tool's handler send a signal (a file or a line on standard output) (not with a fixed sleep).
+   - Count in the handler, keep the count in the DB or a file, and check it in the parent process.
+5. Implement in small units, and pass the acceptance tests one at a time. For tools, follow `/tool-change`; for workflows, follow `/workflow-change`.
+6. Run `/verify`, have `durability-reviewer` review the diff, and fix what it points out.
+7. Check off the acceptance criteria in `docs/milestones.md`. When all pass, set the milestone's status to "done (date)", and move "Current stage" to the next one.
+8. Report briefly to the user: the acceptance criteria that passed, the ADRs you wrote and the kairo gaps, and the remaining issues.

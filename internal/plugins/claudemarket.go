@@ -13,7 +13,7 @@ import (
 )
 
 // Claude Code's marketplaces (.claude-plugin/marketplace.json; ADR 0027,
-// 追記): read as KairoCode's, their plugins installed as Claude Code's
+// addendum): read as KairoCode's, their plugins installed as Claude Code's
 // plugins, which KairoCode reads (their skills, and their .mcp.json's one
 // server).
 

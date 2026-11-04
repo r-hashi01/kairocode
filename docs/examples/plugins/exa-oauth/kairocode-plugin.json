@@ -1,6 +1,6 @@
 {
   "name": "exa",
-  "description": "Exa の web 検索（OAuth でサインイン）",
+  "description": "Exa web search (sign in with OAuth)",
   "mcp": {
     "type": "remote",
     "url": "https://mcp.exa.ai/mcp?login"

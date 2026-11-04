@@ -431,7 +431,7 @@ func (r *Runtime) SetMode(ctx context.Context, session, mode string) (Settings, 
 }
 
 // pendingSwitch is the switch the session's next event carries, if any
-// (ADR 0014, 追記 2026-11-02), and the count of its changes, for
+// (ADR 0014, addendum 2026-11-02), and the count of its changes, for
 // Store.ClearSwitch once it is sent. It is kept in the store, so a switch
 // chosen survives the daemon's stopping before the next message.
 func (r *Runtime) pendingSwitch(ctx context.Context, session string) (*workflows.Switch, int64, error) {

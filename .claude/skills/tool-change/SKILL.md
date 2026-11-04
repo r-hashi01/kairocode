@@ -5,22 +5,22 @@ description: Checklist for adding or changing a KairoCode tool (built-in, MCP or
 
 # tool-change
 
-## 変更前に決めること
-- 作用の型は `tools.Read`、`tools.Idempotent`、`tools.Real` のどれか（設計 3 節の表）。迷ったら `Real` です。ゼロ値は `Real` ですが、`tools.Def` には必ず明示します（`TestToolsDeclareEffect`）。
-- `Idempotent` なら、何をもって「同じ入力で同じ結果」とするか。結果が不明なとき、何を見て確かめるか（ファイルの内容のハッシュ、git の tree / commit、ブランチの PR の有無）。確かめた結果が「すでに済んでいる」「まだ」「衝突」のどれになるか。
-- `Real` なら、結果が不明なときに人に何を聞くか（「このコマンドは実行されたか」）。答えは `k.Resolve` か `k.ResolveFailed` で kairo に返します。handler の失敗は、効いたかわからないなら `kairo.Unknown(err)`、効いていないと言えるときだけ `kairo.Retryable(err)` で包みます。
-- 権限の規則の対象になる「引数の形」は何か（`bash: git push*` のような照合に使う文字列）。plan のモードで使えるか（`Read` だけが使える）。
-- 結果の大きさ。大きくなりうるなら、本文は `kc_message` に入れ、記録にはハッシュだけを残します。
+## Decide before the change
+- Which effect type it is: `tools.Read`, `tools.Idempotent` or `tools.Real` (the table in design section 3). If unsure, it is `Real`. The zero value is `Real`, but always state it explicitly in `tools.Def` (`TestToolsDeclareEffect`).
+- If `Idempotent`: what counts as "the same input gives the same result". When the outcome is unknown, what to look at to check it (the hash of the file's contents, the git tree / commit, whether the branch has a PR). Whether the check's result is "already done", "not yet" or "conflict".
+- If `Real`: what to ask a person when the outcome is unknown ("was this command run?"). The answer goes back to kairo with `k.Resolve` or `k.ResolveFailed`. Wrap a handler failure in `kairo.Unknown(err)` when you do not know whether it took effect, and in `kairo.Retryable(err)` only when you can say it did not take effect.
+- What "shape of the arguments" the permission rules match against (the string used for matching like `bash: git push*`). Whether it can be used in plan mode (only `Read` can).
+- The size of the result. If it can get large, put the body in `kc_message` and keep only the hash in the record.
 
-## 実装中に守ること
-- 1 ファイル 1 ツールで、`internal/tools/<name>.go` に `tools.Def` を置きます。kairo への写し方は AGENTS.md の不変条件 3 のとおりで、`internal/runtime` が行います。`Idempotent` のツールは、`TaskContext.IdempotencyKey` を外への操作の冪等キーに使えます。
-- パスは作業ディレクトリの中に正規化し（シンボリックリンクも解決する）、外に出るものは確定した失敗にします。
-- 衝突や不正な入力は、Go のエラーではなく結果としてモデルに返します。
-- API キーや秘密を、入力・結果・エラーの文面に入れません。
+## Keep to these while implementing
+- One tool per file: put the `tools.Def` in `internal/tools/<name>.go`. The mapping to kairo is as in invariant 3 of AGENTS.md, and `internal/runtime` does it. An `Idempotent` tool can use `TaskContext.IdempotencyKey` as the idempotency key for outside operations.
+- Normalize paths to inside the working directory (resolving symbolic links too), and make anything that goes outside a definite failure.
+- Return conflicts and invalid input to the model as results, not as Go errors.
+- Do not put API keys or secrets in the input, the result, or the text of errors.
 
-## テスト
-- ツールの単体テスト（`internal/tools/<name>_test.go`）。
-- `Idempotent` と `Real` のツールは、強制終了と再開のテスト（`TestCrash...`）を足します。作用（ファイル、git の記録、handler の呼び出し回数）が 1 回分だけになることを確かめます。`Idempotent` は、途中で人が書き換えた場合の衝突も確かめます。
+## Tests
+- Unit tests for the tool (`internal/tools/<name>_test.go`).
+- For `Idempotent` and `Real` tools, add a kill-and-resume test (`TestCrash...`). Check that the effect (files, git records, the number of handler calls) happens exactly once. For `Idempotent`, also check the conflict when a person changed things partway.
 
-## 仕上げ
-- `/verify` を実行し、`durability-reviewer` に差分をレビューさせます。
+## Finish
+- Run `/verify`, and have `durability-reviewer` review the diff.

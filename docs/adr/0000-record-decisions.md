@@ -1,24 +1,24 @@
-# 0000 設計判断を ADR として記録する
+# 0000 Record design decisions as ADRs
 
-- 状態: 承認（2026-10-09）
-- 日付: 2026-10-08
-- 関連: kairo の ADR 0000、0017
+- Status: Accepted (2026-10-09)
+- Date: 2026-10-08
+- Related: kairo's ADR 0000, 0017
 
-## 背景
+## Context
 
-KairoCode は、要件と設計（kairo の `docs/kairocode/`）を元に、エージェントが実装の多くを進めます。判断の理由が会話の中にしか残らないと、後の作業で同じ議論を繰り返したり、不変条件を知らずに緩めたりします。
+KairoCode is built from the requirements and the design (kairo's `docs/kairocode/`), and agents do much of the implementation. If the reasons for a decision stay only in a conversation, later work repeats the same discussion, or relaxes an invariant without knowing it is one.
 
-## 決定
+## Decision
 
-- KairoCode の側の設計判断は `docs/adr/NNNN-slug.md` に書き、`docs/adr/README.md` に索引を置きます。
-- ADR が要る変更（AGENTS.md の「設計判断の記録」）は、「提案」で起票し、利用者の承認を得てから実装に入ります。
-- kairo の側の判断は kairo の ADR に書きます。KairoCode の ADR では、それを参照します。
+- Design decisions on KairoCode's side are written in `docs/adr/NNNN-slug.md`, with an index in `docs/adr/README.md`.
+- A change that needs an ADR (the "Recording design decisions (ADR)" section of AGENTS.md) is filed as "Proposed", and implementation starts only after the user's approval.
+- Decisions on kairo's side are written in kairo's ADRs. KairoCode's ADRs refer to them.
 
-## 結果
+## Consequences
 
-- `scripts/adr-lint.sh` が、番号の重複、必須の節、索引の漏れを検査します（`scripts/check.sh` から呼ばれる）。
-- `/adr` スキルが起票の手順を持ちます。
+- `scripts/adr-lint.sh` checks for duplicate numbers, required sections and entries missing from the index (it is called from `scripts/check.sh`).
+- The `/adr` skill holds the steps for filing one.
 
-## 検討した代替案
+## Alternatives considered
 
-- 設計（design.md）に追記していく: 判断の時点と理由が追いにくく、置き換えの関係も残らないため採りませんでした。
+- Keep adding to the design (design.md): we did not take this because the time and the reason of each decision are hard to follow, and supersession relationships are not kept.

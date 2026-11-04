@@ -1,71 +1,71 @@
-# 0020 履歴の圧縮: 文脈の上限が近づいたら要約して続け、前の記録は残す
+# 0020 Compacting the history: summarize and continue when the context limit is near, and keep the earlier record
 
-- 状態: 承認（2026-10-21）
-- 日付: 2026-10-21
-- 関連: 要件 FR-3、NFR-5、設計 2 節（「履歴の圧縮 = アクション `model`」）・2.2 節・5 節、不変条件 1・2・5、ADR 0007・0014（CLI のエンジン）
+- Status: Accepted (2026-10-21)
+- Date: 2026-10-21
+- Related: requirements FR-3, NFR-5, design section 2 ("compacting the history = the action `model`"), section 2.2 and section 5, invariants 1, 2 and 5, ADR 0007 and 0014 (CLI engines)
 
-## 背景
+## Context
 
-会話が長くなると、モデルの呼び出しの入力が文脈の上限を超え、ターンが失敗します。要件 FR-3 は「上限に近づいたら要約して続ける。要約の前の記録は消さずに残す」です。
+As a conversation grows, the input of a model call exceeds the context limit, and the turn fails. Requirement FR-3 says "when the limit is near, summarize and continue. Keep the record from before the summary instead of deleting it."
 
-今の履歴は、`kc_message` の `history` の鎖です（`store.Link{Prev, Messages}`）。`Conversation(head)` は鎖を根までたどり、すべてのメッセージを返します。
+Today the history is the `history` chain in `kc_message` (`store.Link{Prev, Messages}`). `Conversation(head)` follows the chain to the root and returns every message.
 
-CLI のエンジン（Claude Code、codex、copilot）は、会話を自分で持ち、自分で圧縮します。KairoCode が圧縮するのは、API のエンジンの会話です。
+CLI engines (Claude Code, codex, copilot) hold the conversation themselves and compact it themselves. What KairoCode compacts is the conversation of the API engine.
 
-## 決定
+## Decision
 
-1. **いつ:** API のエンジンのターンで、モデルを呼ぶ前に判定します。
-   - 材料は、直前のモデルの呼び出しの、記録された使用量（入力、キャッシュの読み書きの合計）です。それが、モデルの文脈の上限の 80% を超えていたら、圧縮してから呼びます。記録された値だけで決まるので、再開しても同じ所で圧縮します（不変条件 2）。
-   - モデルの文脈の上限は、モデルの名前から引く表（`internal/provider`）で決め、`agent.load` の出力に記録します（`Agent.Context`）。表にないモデルは、利用者の設定（`kairocode.json` の `models.<名前>.context`）か、既定の 200,000 です。
-   - 利用者が `/compact` で頼んだときも圧縮します（セッションの出来事。圧縮だけをするターン）。
-2. **どうやって:**
-   - 要約は、`model` のアクションの 1 ステップです（設計 2 節。作用は非保護）。入力は、今の会話のハッシュの列と、要約を頼むシステムの指示です（不変条件 5）。
-   - 要約を利用者のメッセージ 1 つとして `kc_message` に書き、`history.compact` のアクションで、鎖に「基点」のリンクを足します。
-     - `store.Link` に `Base bool`（`omitempty`）を足します。`Conversation` は、`Base` のリンクで止まり、それより前をたどりません。
-     - `Base` のリンクの `Prev` は、要約の前の鎖の頭を指したまま残します。要約の前の記録は消えず、閲覧（FR-24、ADR 0023）でたどれます。
-   - 残すもの: 要約、そのターンの利用者のメッセージ、ターンの中でそれまでに出たもの（ツールの呼び出しと結果）。
-3. **ターンの版を上げる:** 圧縮の呼び出しが新しく入るので、ターンのワークフローの版を 5 に上げ、版 4 を `Draining` で残します。版 4 のターンは圧縮しません（今の動きのまま）。
-4. **CLI のエンジン:** 圧縮しません（エージェントが自分で圧縮する）。`/compact` は、Claude Code には `/compact` を送り、codex と copilot には「このプロバイダーは自分で圧縮します」と伝えます。
-5. **要約の中身:** 頼んだこと、決まったこと、変えたファイル、残っている作業、利用者の好みを残すように指示します。指示の文面は KairoCode のコードに置きます（設定にしない。変えると記録の入力が変わるため、変えるときはターンの版を上げる）。
+1. **When:** in an API engine turn, decide before calling the model.
+   - The basis is the recorded usage of the previous model call (the sum of input and cache reads and writes). If it is over 80% of the model's context limit, compact and then call. It is decided only from recorded values, so on resume it compacts at the same point (invariant 2).
+   - The model's context limit is decided by a table looked up by model name (`internal/provider`), and recorded in `agent.load`'s output (`Agent.Context`). For models not in the table, it is the user's setting (`models.<name>.context` in `kairocode.json`) or the default 200,000.
+   - It also compacts when the user asks with `/compact` (a session event. A turn that only compacts).
+2. **How:**
+   - The summary is one step of the `model` action (design section 2. The effect is unprotected). Its input is the hash sequence of the current conversation and a system instruction asking for a summary (invariant 5).
+   - The summary is written to `kc_message` as one user message, and the `history.compact` action adds a "base" link to the chain.
+     - Add `Base bool` (`omitempty`) to `store.Link`. `Conversation` stops at a `Base` link and does not follow anything before it.
+     - A `Base` link's `Prev` keeps pointing at the head of the chain from before the summary. The record from before the summary is not deleted and can be followed when viewing (FR-24, ADR 0023).
+   - What is kept: the summary, the user's message of that turn, and what has come out in the turn so far (tool calls and results).
+3. **Bump the turn's version:** a compaction call is newly added, so the turn workflow's version goes up to 5, and version 4 stays as `Draining`. Version 4 turns do not compact (they behave as now).
+4. **CLI engines:** do not compact (the agent compacts itself). `/compact` sends `/compact` to Claude Code, and tells codex and copilot "this provider compacts by itself".
+5. **The summary's contents:** the instruction asks to keep what was asked, what was decided, files changed, remaining work, and the user's preferences. The instruction text lives in KairoCode's code (not a setting. Changing it changes the recorded input, so changing it bumps the turn's version).
 
-実装に現れるところ: `internal/workflows/turn.go`（判定と呼び出し）、`internal/runtime`（`history.compact`、要約の指示）、`internal/store`（`Link.Base`、`Conversation`）、`internal/provider`（上限の表）、`internal/acp` と `internal/tui`（`/compact`、圧縮したことの表示）。
+Where this shows in the implementation: `internal/workflows/turn.go` (deciding and calling), `internal/runtime` (`history.compact`, the summary instruction), `internal/store` (`Link.Base`, `Conversation`), `internal/provider` (the table of limits), `internal/acp` and `internal/tui` (`/compact`, showing that it compacted).
 
-## 結果
+## Consequences
 
-- 長い会話が、上限で失敗せずに続きます。要約の前の記録は残ります（NFR-5 の「同じ内容を二度保存しない」は保たれる）。
-- 圧縮は記録された使用量で決まるので、再開しても同じ所で 1 度だけ起きます。
-- テスト（実装のとき足す）
-  - 偽のプロバイダーが大きな使用量を返すと、次の呼び出しの前に圧縮し、その後の入力が要約から始まる。
-  - `Conversation` が `Base` で止まり、前の鎖は `Prev` でたどれる。
-  - 要約の最中に落ちて再開しても、要約は 1 度だけ（`TestCrashCompact`）。
-  - 版 4 のターンは圧縮しない。
-  - `/compact` で圧縮だけのターンが動く。
+- Long conversations continue without failing at the limit. The record from before the summary is kept (NFR-5's "do not store the same content twice" holds).
+- Compaction is decided by recorded usage, so on resume it happens once at the same point.
+- Tests (added during implementation)
+  - When the fake provider returns large usage, it compacts before the next call, and the input after that starts from the summary.
+  - `Conversation` stops at `Base`, and the earlier chain can be followed through `Prev`.
+  - Crashing in the middle of the summary and resuming still gives only one summary (`TestCrashCompact`).
+  - Version 4 turns do not compact.
+  - `/compact` runs a compaction-only turn.
 
-## 検討した代替案
+## Alternatives considered
 
-- **古いメッセージを捨てるだけ（要約しない）:** 安いですが、頼んだことや決まったことを失います。
-- **ツールの結果だけを短くする:** 長い会話の多くはツールの結果ですが、それだけでは上限に届く会話もあります。要約の前の段として、後で足せます。
-- **毎回、文脈の長さを数えて決める（トークンを数える API）:** 記録されない値で分岐することになります（不変条件 2）。記録された使用量で決めます。
+- **Just drop old messages (no summary):** cheap, but loses what was asked and what was decided.
+- **Shorten only tool results:** much of a long conversation is tool results, but some conversations reach the limit even without them. It can be added later as a stage before summarizing.
+- **Count the context length each time and decide (a token-counting API):** that would branch on an unrecorded value (invariant 2). Decide by recorded usage.
 
-## 実装（2026-10-21）
+## Implementation (2026-10-21)
 
-- **保存:** `store.Link` に `Base` を足し、`Store.Compacted` で基点のリンクを書きます。`Conversation` は基点で止まります。
-- **判定（`internal/workflows/turn.go` の `modelLoop`）:**
-  - 直前のモデルの呼び出しの記録された使用量（入力、キャッシュの読み書き、出力の合計）が、`Agent.Context` の 80% を超えていたら、次の呼び出しの前に `history.compact` を呼びます。
-  - モデルの呼び出しが「文脈より長い」で拒まれたときも圧縮します。プロバイダーの `ErrContextTooLong` を、`model` のアクションが `Stop: "context"` として記録します。そのため、再開しても同じ所で圧縮します。圧縮してから聞き直し、ステップには数えません。
-  - 1 つのターンで圧縮するのは 3 回までです。それでも長ければ、`Stopped: "context"` で止めます。
-- **`history.compact`（`internal/runtime/compact.go`）:** 会話を要約の指示（`provider.CompactSystem`）でモデルに渡します。要約を利用者のメッセージとして書き、基点のリンクを足します。基点の `Prev` は、要約する前の会話の全体（そのターンのそれまでを含む）です。要約の入力そのものが文脈より長ければ、古い側から半分ずつ削ります。削るのは、利用者自身の言葉のメッセージの境目です（ツールの呼び出しと結果を切り離さないため）。
-- **文脈の上限:** `agent.load` が API のエンジンのときだけ `Agent.Context` を記録します。値は、利用者の `kairocode.json` の `models.<名前>.context`、なければ `provider.ContextOf`（いまは 200,000）です。
-- **`/compact`:** セッションの出来事（`EventCompact`）で、圧縮だけをするターンを動かします（`compactTurn`）。このターンはファイルを変えないので、`/undo` の対象にしません（`TurnOutput.Compacted`）。ACP の組み込みのコマンドに足し、サーバーの `POST /sessions/{id}/compact` とデーモンのクライアントも足しました。
-- **決定から変えたこと**
-  - **ターンの版は上げていません（決定 3）。** 新しい呼び出しは、`agent.load` が記録した `Agent.Context` があるときだけ起きます。この変更の前の記録には無いので、再開しても同じ呼び出しの列です。ADR 0018 の「版を上げない理由」と同じです。`Stop: "context"` も、前の記録には無い値です。
-  - **残すもの（決定 2）:** 要約は、そのターンのそれまでのもの（利用者のメッセージ、ツールの呼び出しと結果）も含めて作り、圧縮の後はそのターンも要約から続けます。そのターンだけで文脈の上限に近いこともあり、前のターンだけの要約では足りないためです。
-  - **CLI のエンジンの `/compact`（決定 4）:** Claude Code にも `/compact` を送らず、「このプロバイダーは自分で圧縮します」と伝えます。KairoCode は Claude Code を `--disable-slash-commands` で動かすので、`/compact` を送れないためです。
-- **テスト:** `TestCompactNearTheContext`（要約から続き、前の記録が基点の `Prev` に残る）、`TestCompactWhenTooLong`、`TestCompactCommand`、`TestCompactCLIEngine`、`TestCrashCompact`（要約の最中に落ちても、要約は 1 つ）。判定を外すと `TestCompactNearTheContext` が、`Conversation` が基点で止まらないと `TestCompactNearTheContext` と `TestCrashCompact` が落ちることを確かめました。
-- **durability-reviewer の指摘で直したこと**
-  - **ターンの最初の呼び出しも判定する:** 前は、ターンの中の直前の呼び出しだけを見ていたので、各ターンの最初の呼び出しの前に圧縮しませんでした（ツールを使わない会話では、上限の近くで圧縮しなかった）。いまは、ターンの出力に最後の呼び出しの入力の量（`TurnOutput.LastInput`、記録された値）を残します。セッションは、それを次のターンの入力（`TurnInput.LastInput`、`omitempty`）に渡します。この欄が無い前の記録からは、今までと同じ入力のターンになります（ID は変わらない）。
-  - **3 回までは、ターン全体で数える:** 前は、`turn.end` のフックで戻るたびに数え直していました。
-  - **止まったターンにも返事を付ける:** 圧縮できずに `Stopped: "context"` で止まったターンには、その理由の返事を付けます。返事が空だと、サブエージェントとフローの親が失敗していました。
-  - **要約では、ツールを呼ばせない:** 要約の呼び出しに、エージェントのツールを渡したまま `tool_choice: none` にしました（会話の中のツールの呼び出しを API が受け付けるために、ツールは渡す）。要約が長さの上限で切れたら、そのことを書き添えます。
-  - テスト: `TestCompactAtTheTurnsStart`、`TestCompactGivesUp`（3 回で止まり、理由を返す）、`TestCompactRequestShape`（要約の依頼の置き場所と、削る境目）、`TestAnthropicPromptTooLong`（本物の 400 の応答の形から `ErrContextTooLong` になる）。
-- **まだ:** 版 3 のセッション（排水中）は、`/undo` と同じく `/compact` の出来事を見ません。
+- **Storage:** added `Base` to `store.Link`, and `Store.Compacted` writes the base link. `Conversation` stops at the base.
+- **Deciding (`modelLoop` in `internal/workflows/turn.go`):**
+  - If the recorded usage of the previous model call (the sum of input, cache reads and writes, and output) is over 80% of `Agent.Context`, it calls `history.compact` before the next call.
+  - It also compacts when a model call is refused as "longer than the context". The `model` action records the provider's `ErrContextTooLong` as `Stop: "context"`. So on resume it compacts at the same point. It compacts and then asks again, and this is not counted as a step.
+  - A turn compacts at most 3 times. If it is still too long, it stops with `Stopped: "context"`.
+- **`history.compact` (`internal/runtime/compact.go`):** passes the conversation to the model with the summary instruction (`provider.CompactSystem`). It writes the summary as a user message and adds the base link. The base's `Prev` is the whole conversation before summarizing (including that turn so far). If the summary's input itself is longer than the context, it trims half at a time from the old side. It trims at boundaries of messages in the user's own words (so tool calls and results are not separated).
+- **The context limit:** `agent.load` records `Agent.Context` only for the API engine. The value is `models.<name>.context` in the user's `kairocode.json`, or else `provider.ContextOf` (currently 200,000).
+- **`/compact`:** a session event (`EventCompact`) runs a turn that only compacts (`compactTurn`). This turn does not change files, so it is not a target of `/undo` (`TurnOutput.Compacted`). It was added to ACP's built-in commands, and the server's `POST /sessions/{id}/compact` and the daemon client were added too.
+- **Changed from the decision**
+  - **The turn's version was not bumped (decision 3).** The new call happens only when `agent.load` recorded `Agent.Context`. Records from before this change have none, so on resume the sequence of calls is the same. Same as ADR 0018's "why the version is not bumped". `Stop: "context"` is also a value earlier records do not have.
+  - **What is kept (decision 2):** the summary is made including that turn so far (the user's message, tool calls and results), and after compaction that turn also continues from the summary. That turn alone can be near the context limit, and a summary of only the earlier turns would not be enough.
+  - **`/compact` on CLI engines (decision 4):** `/compact` is not sent to Claude Code either; it says "this provider compacts by itself". KairoCode runs Claude Code with `--disable-slash-commands`, so it cannot send `/compact`.
+- **Tests:** `TestCompactNearTheContext` (continues from the summary; the earlier record stays in the base's `Prev`), `TestCompactWhenTooLong`, `TestCompactCommand`, `TestCompactCLIEngine`, `TestCrashCompact` (crash in the middle of the summary still gives one summary). We checked that removing the decision makes `TestCompactNearTheContext` fail, and that if `Conversation` does not stop at the base, `TestCompactNearTheContext` and `TestCrashCompact` fail.
+- **What was fixed after durability-reviewer's findings**
+  - **Also decide for a turn's first call:** before, it looked only at the previous call within the turn, so it did not compact before each turn's first call (in conversations without tools, it did not compact near the limit). Now the turn's output keeps the input size of the last call (`TurnOutput.LastInput`, a recorded value). The session passes it in the next turn's input (`TurnInput.LastInput`, `omitempty`). From earlier records without this field, the turn has the same input as before (the ID does not change).
+  - **The limit of 3 counts across the whole turn:** before, it counted again each time it came back through a `turn.end` hook.
+  - **A stopped turn also gets a reply:** a turn that stopped with `Stopped: "context"` because it could not compact gets a reply giving the reason. With an empty reply, the parents of subagents and flows failed.
+  - **The summary call does not let the model call tools:** the summary call keeps the agent's tools but sets `tool_choice: none` (the tools are passed so that the API accepts the tool calls in the conversation). If the summary is cut off at the length limit, a note saying so is added.
+  - Tests: `TestCompactAtTheTurnsStart`, `TestCompactGivesUp` (stops after 3 times and returns the reason), `TestCompactRequestShape` (where the summary request goes, and the trimming boundaries), `TestAnthropicPromptTooLong` (the shape of a real 400 response becomes `ErrContextTooLong`).
+- **Not yet:** version 3 sessions (draining) do not see the `/compact` event, the same as `/undo`.

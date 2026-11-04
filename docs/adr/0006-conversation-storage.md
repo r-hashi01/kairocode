@@ -1,87 +1,87 @@
-# 0006 会話は、内容のハッシュで引く 1 つの表と、ターンごとのリンクの鎖で持つ。セッションはターンを子として順に動かす
+# 0006 Keep the conversation in one table looked up by content hash, plus a chain of links per turn. The session runs turns as children, in order
 
-- 状態: 承認（2026-10-09）
-- 日付: 2026-10-09
-- 関連: 要件 NFR-5、FR-2、設計 2.1 節・2.2 節・5 節、ADR 0001、AGENTS.md の不変条件 5・8
+- Status: Accepted (2026-10-09)
+- Date: 2026-10-09
+- Related: requirements NFR-5, FR-2; design sections 2.1, 2.2 and 5; ADR 0001; invariants 5 and 8 in AGENTS.md
 
-## 背景
+## Context
 
-M0 の実装で、設計 2.2 節と 5 節の「メッセージの保存」と「履歴の渡し方」の細部を決めました。どれも AGENTS.md で ADR が要るとしている種類の判断（保存の形式、設計からのずれ）です。**この ADR は、実装の後に起票しました**（`durability-reviewer` の指摘による）。ADR 0000 の手順（承認を得てから実装する）を守れていませんでした。2026-10-09 に、実装のまま承認されました。
+While implementing M0, we settled the details of "storing messages" and "how history is passed" from design sections 2.2 and 5. All of these are the kind of decisions AGENTS.md says need an ADR (the storage format, departures from the design). **This ADR was filed after the implementation** (because `durability-reviewer` pointed it out). The procedure of ADR 0000 (implement only after approval) was not followed. On 2026-10-09 it was approved as implemented.
 
-設計との違いは 3 つです。
+There are three differences from the design.
 
-- 設計 5 節は、ターンの始めにアクション `history.load` が履歴のハッシュの列を返し、モデルの呼び出しの入力に `messages: [<ハッシュ>…]` を渡す形でした。この形だと、会話が長くなるほど、記録される入力が会話の長さに比例して大きくなります。ターンの入力にも、モデルの呼び出しの入力にも、毎回すべてのハッシュが入るからです。
-- 設計 2.2 節は、`kc_message` にメッセージだけを置く形でした。
-- 設計 2.1 節は、ターンの ID を `s/<ID>/t/<n>` としていましたが、これは ADR 0001 で SDK の規則に置き換え済みです。
+- In design section 5, at the start of a turn the action `history.load` returned the list of history hashes, and `messages: [<hash>…]` was passed in the input of the model call. With that shape, the longer the conversation, the larger the recorded inputs, in proportion to the conversation's length, because every hash goes into both the turn's input and the model call's input every time.
+- Design section 2.2 put only messages in `kc_message`.
+- Design section 2.1 had the turn ID as `s/<ID>/t/<n>`, but ADR 0001 has already replaced this with the SDK's rule.
 
-## 決定
+## Decision
 
-### 1. 内容のハッシュで引く 1 つの表
+### 1. One table looked up by content hash
 
-- `kc_message(hash TEXT PRIMARY KEY, kind TEXT NOT NULL, body BLOB NOT NULL)` を、kairo と同じ DB に置きます（`internal/store`）。
-- `kind` は 4 つです。
-  - `message`: 会話のメッセージ
-  - `history`: 下の 2 のリンク
-  - `system`: システムプロンプト
-  - `tools`: ツールの定義の一覧
-- ハッシュは `"sha256:" + hex(sha256(kind + "\0" + body))` です。種類を含めるのは、同じバイト列が別の種類として読まれないようにするためです。
-- 書き込みは `INSERT … ON CONFLICT (hash) DO NOTHING` だけです。行を書き換えたり消したりはしません（消すのは、セッションの保持期間の仕組みを足すときに別の ADR で決めます）。
+- `kc_message(hash TEXT PRIMARY KEY, kind TEXT NOT NULL, body BLOB NOT NULL)` is placed in the same DB as kairo (`internal/store`).
+- There are four `kind`s.
+  - `message`: a message of the conversation
+  - `history`: a link of 2 below
+  - `system`: a system prompt
+  - `tools`: a list of tool definitions
+- The hash is `"sha256:" + hex(sha256(kind + "\0" + body))`. The kind is included so that the same bytes are not read as a different kind.
+- Writes are only `INSERT … ON CONFLICT (hash) DO NOTHING`. Rows are never rewritten or deleted (deletion will be decided in a separate ADR when a mechanism for session retention is added).
 
-### 2. 会話は、ターンごとのリンクの鎖で持つ
+### 2. The conversation is kept as a chain of links, one per turn
 
-- リンクは `{"prev": <前のリンクのハッシュ>, "messages": [<そのターンのメッセージのハッシュ>…]}` です。会話は、最後のリンクのハッシュ 1 つ（head）で名指せます。
-- ターンの入力は `History`（head）です。モデルの呼び出しの入力は `{model, system, tools, history: head, turn: [このターンのメッセージのハッシュ]}` です。記録される入力の大きさは、会話の長さではなく、そのターンのステップの数に比例します。
-- ターンの終わりに、アクション `history.extend` が新しいリンクを書き、その head をターンの出力にします。
-- モデルの呼び出しのアクションは、鎖をたどって会話を組み立てます。
+- A link is `{"prev": <hash of the previous link>, "messages": [<hashes of that turn's messages>…]}`. A conversation can be named by a single hash of its last link (the head).
+- The turn's input is `History` (the head). The model call's input is `{model, system, tools, history: head, turn: [hashes of this turn's messages]}`. The size of the recorded input is proportional to the number of steps in that turn, not to the length of the conversation.
+- At the end of a turn, the action `history.extend` writes a new link and makes its head the turn's output.
+- The model call's action follows the chain to assemble the conversation.
 
-### 3. ツールの呼び出しは、アシスタントのメッセージと呼び出しの ID で名指す
+### 3. A tool call is named by the assistant message and the call's ID
 
-- ツールのアクションの入力は `{dir, message, call, step, index}` です。
-  - `message` と `call` で、呼び出しの引数を `kc_message` から読みます。書き込むファイルの中身のような大きな引数を、kairo の記録にもう一度入れないためです。
-  - `step` と `index` は、同じ入力の呼び出しを区別するためのものです（不変条件 8、kairo の不足 #13）。
+- The input of a tool's action is `{dir, message, call, step, index}`.
+  - `message` and `call` are used to read the call's arguments from `kc_message`. This is so that large arguments, such as the content of a file to be written, do not go into kairo's record a second time.
+  - `step` and `index` tell apart calls with the same input (invariant 8, kairo's gap #13).
 
-### 4. セッションは、ターンを子として順に動かす（M0 の「決めること」）
+### 4. The session runs turns as children, in order (M0's "to decide")
 
-- セッション（根、`s/<ID>`）が `kairo.WaitFor("message")` と `kairo.Child("turn", …)` を繰り返します。
-- ターンの入力には、ターンの番号 `N` を入れます（同じメッセージを送り直しても、別のターンになる）。
-- ターンの失敗と取り消しが記録されていれば、会話をそのままにして次のメッセージへ進みます。記録されていないエラー（ターンの版がこのプロセスに無い、駆動が止まった、保存先のエラー）では進みません。
-- この形を選んだ理由は、木の単位の削除と取り消しの伝わり方（kairo の ADR 0054）を使えることです。代わりに、再開するとセッションの関数が、ターンの数だけ記録を読み直します。読み直すのは、各ターンの結果（head など）だけで、ターンの中身は読み直しません。
+- The session (the root, `s/<ID>`) repeats `kairo.WaitFor("message")` and `kairo.Child("turn", …)`.
+- The turn's input includes the turn number `N` (resending the same message makes a different turn).
+- If a turn's failure or cancellation is recorded, it moves on to the next message, leaving the conversation as it is. On an error that is not recorded (the turn's version is not in this process, driving stopped, a storage error), it does not move on.
+- The reason for choosing this shape is that it can use per-tree deletion and how cancellation propagates (kairo's ADR 0054). In exchange, on resume, the session's function rereads the records once per turn. What it rereads is only each turn's result (the head and so on), not the turn's contents.
 
-### 5. 打ち切られた応答のツールの呼び出しは、実行せずに「実行していない」と答える
+### 5. Tool calls in a cut-off response are not run and are answered as "not run"
 
-- 拒否（`refusal`）や `max_tokens` で終わった応答に、ツールの呼び出しが含まれていることがあります。その場合、どの呼び出しも実行しません。
-- 代わりに、アクション `tool.skipped` が、それぞれに「実行していない」という tool_result を書きます。
-- アシスタントのメッセージは書き換えません。書き換えると、その thinking のブロックが無効になるからです。
+- A response that ended with a refusal (`refusal`) or `max_tokens` may contain tool calls. In that case, none of the calls are run.
+- Instead, the action `tool.skipped` writes a tool_result saying "not run" for each of them.
+- The assistant message is not rewritten, because rewriting it would invalidate its thinking blocks.
 
-### 追記（2026-10-09、M1）: ファイルの書き込みの計画
+### Addendum (2026-10-09, M1): the plan for writing files
 
-- `kind` に `content` を足しました。ファイルを書くツール（write、edit）の「計画」が、書いた後の中身をここに置きます。
-- 書き込みは 2 つの呼び出しです（設計 3.1 節）。
-  - 計画（`tool.<name>.plan`、作用は `Unprotected`）: 書く前のハッシュ、書いた後の中身のハッシュ、要約を記録します。
-  - 適用（`file.apply`、作用は `Real` と `IdempotentRetry`）: 今のファイルと比べて置き換えます。
-- 中身そのものは記録に入れず、ハッシュだけを入れます。
-- 適用の最中に落ちてやり直しても、今のファイルが「書いた後」と同じなら何もしないので、二重には書きません。`TestCrashWriteOnce`、`TestCrashWriteConflict` で確かめています。
+- `content` was added to `kind`. The "plan" of a tool that writes files (write, edit) puts the content after writing here.
+- A write is two calls (design section 3.1).
+  - The plan (`tool.<name>.plan`, effect `Unprotected`): records the hash before writing, the hash of the content after writing, and a summary.
+  - The apply (`file.apply`, effect `Real` and `IdempotentRetry`): compares with the current file and replaces it.
+- The content itself does not go into the record; only the hash does.
+- Even if it crashes during the apply and is retried, it does nothing if the current file is the same as "after writing", so it never writes twice. This is checked by `TestCrashWriteOnce` and `TestCrashWriteConflict`.
 
-### 追記（2026-10-09、M1 の続き）: 種類と表を足した
+### Addendum (2026-10-09, continuing M1): added a kind and tables
 
-- `kc_message` の `kind` に `permissions` を足しました。ターンの始めの権限の規則（ADR 0002）を、ハッシュで記録します。
-- 表を 3 つ足しました（どれも Claude Code のエンジン、ADR 0007）。
-  - `kc_claude_proc`: セッションの `claude` のプロセスの PID。残った古いプロセスを止めるのに使います。
-  - `kc_mcp_call`: MCP の呼び出しの記録。どの `claude` のプロセスから来たか、結果が届いたと確かめられたかを持ちます。kairo が古い実行を消しても選び方は変わりません（kairo の不足 #17）。
-  - `kc_mcp_grant`: MCP の呼び出しへの利用者の答え。1 つの答えは 1 つの実行にだけ使われます（`used_by`）。
-- ファイルの書き込みの適用には、今のファイルを確かめてから置き換えるまでの間に、小さな窓が残ります。その間に人が保存した変更は、上書きされ得ます（二重に書くことはない）。また、write の「書く前」は、計画のときのファイルのハッシュです。モデルが読んだときではありません。
+- `permissions` was added to the `kind` of `kc_message`. The permission rules at the start of a turn (ADR 0002) are recorded by hash.
+- Three tables were added (all for the Claude Code engine, ADR 0007).
+  - `kc_claude_proc`: the PID of the session's `claude` process. Used to stop old processes that were left behind.
+  - `kc_mcp_call`: the record of MCP calls. It holds which `claude` process a call came from, and whether its result was confirmed to have arrived. The choice does not change even if kairo deletes old runs (kairo's gap #17).
+  - `kc_mcp_grant`: the user's answers to MCP calls. One answer is used by only one run (`used_by`).
+- The apply of a file write still has a small window between checking the current file and replacing it. A change a person saves in that window can be overwritten (it never writes twice). Also, write's "before writing" is the hash of the file at the time of the plan, not at the time the model read it.
 
-## 結果
+## Consequences
 
-- テスト（M0 の受け入れ条件）:
-  - `TestHistoryStoredOnce`: 10 ターンで、`kind = message` の行がメッセージの数と等しく、モデルの呼び出しの記録に本文が入っていない。
-  - `TestWorkflowIDs`: 失敗したターンの後に同じメッセージを送り直すと、別のターンになる。
-  - `TestCutOffReplyRunsNoTools`: 打ち切られた応答のツールは実行されず、次のターンも正しく進む。
-- 不変条件 5（モデルの呼び出しの入力はハッシュ）は、この形で守られます。
-- 会話の鎖をたどる費用は、ターンの数に比例します。長いセッションで問題になったら、鎖の先頭をまとめたリンク（要約や圧縮の時点、FR-3）を足します。
+- Tests (M0's acceptance criteria):
+  - `TestHistoryStoredOnce`: over 10 turns, the number of rows with `kind = message` equals the number of messages, and the records of model calls contain no message bodies.
+  - `TestWorkflowIDs`: resending the same message after a failed turn makes a different turn.
+  - `TestCutOffReplyRunsNoTools`: the tools in a cut-off response are not run, and the next turn proceeds correctly.
+- Invariant 5 (the model call's input is hashes) is kept by this shape.
+- The cost of following the conversation's chain is proportional to the number of turns. If it becomes a problem in long sessions, a link that gathers the head of the chain (at the point of a summary or compaction, FR-3) will be added.
 
-## 検討した代替案
+## Alternatives considered
 
-- **設計どおり、ハッシュの列をそのまま入力に入れる:** 記録が、会話の長さとターンの数の積で増えます（NFR-5 の精神に反する）。
-- **ツールのアクションの入力に、呼び出しの引数を入れる:** 書き込みのような大きな引数が、`kc_message` と kairo の記録の両方に入ります。
-- **ターンを、セッションの子ではない根の実行（`WithID("s/<ID>/t/<n>")`）にする:** ID は分かりやすくなります。ただし、木の単位の削除と取り消しの伝わり方を使えず、ターンの順番と履歴の受け渡しを、ワークフローの外で管理する必要があります。
+- **Put the list of hashes into the input as is, as the design said:** the records grow with the product of the conversation's length and the number of turns (against the spirit of NFR-5).
+- **Put the call's arguments in the input of the tool's action:** large arguments, such as those for writing, would go into both `kc_message` and kairo's record.
+- **Make a turn a root run that is not a child of the session (`WithID("s/<ID>/t/<n>")`):** the ID would be easier to understand. But per-tree deletion and the propagation of cancellation could not be used, and the order of turns and passing history would have to be managed outside the workflow.

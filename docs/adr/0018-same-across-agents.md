@@ -1,289 +1,288 @@
-# 0018 エージェントが変わっても同じことができる: KairoCode の約束、足りないものの補い方、フックは KairoCode の sandbox で
+# 0018 The same things work whichever agent is used: KairoCode's promise, how missing pieces are filled in, hooks in KairoCode's sandbox
 
-- 状態: 承認（2026-10-21）
-- 日付: 2026-10-21
-- 関連: ADR 0002（opencode と Claude Code の定義、スキル）、0003（KairoCode のフック）、0005（sandbox、昇格）、0007（Claude Code のエンジン）、0014・0015（codex、copilot、ACP のエージェント）
+- Status: Accepted (2026-10-21)
+- Date: 2026-10-21
+- Related: ADR 0002 (opencode and Claude Code definitions, skills), 0003 (KairoCode's hooks), 0005 (sandbox, escalation), 0007 (the Claude Code engine), 0014 and 0015 (codex, copilot, ACP agents)
 
-## 背景
+## Context
 
-利用者の判断（2026-10-21）は、次の 3 つです。
+The user's decisions (2026-10-21) are these three.
 
-- 「何を渡すかを決めるのが KairoCode。読み込みはエージェント側でよい。足りないものは補う」
-- 「KairoCode として一定の品質で開発できるようにする。エージェントが変わっても同じことができなければならない」
-- 「フックは動かす。ただし KairoCode の sandbox 上で。sandbox を出るときは必ず承認を受ける」
+- "KairoCode decides what to pass. Loading can be done on the agent's side. Fill in whatever is missing."
+- "Make it possible to develop at a steady quality as KairoCode. The same things must work even when the agent changes."
+- "Run hooks. But on KairoCode's sandbox. Leaving the sandbox always needs approval."
 
-エージェントが自分で読むものを、モデルを呼ばずに確かめました（2026-10-21）。
+We checked, without calling a model, what each agent reads by itself (2026-10-21).
 
 | | Claude Code 2.1.305 | codex 0.163 | copilot 1.0.98 |
 |---|---|---|---|
-| 確かめ方 | 手元のサーバーに要求を受けさせて中身を見た | `codex debug prompt-input` | `copilot instruction list`・`skill list` |
-| AGENTS.md | 読まない | 読む | 読む |
-| CLAUDE.md（project） | 読む* | 読まない | 読む |
-| .claude/CLAUDE.md、CLAUDE.local.md、~/.claude/CLAUDE.md | 読む* | 読まない | 読まない |
-| .claude/skills、~/.claude/skills | 読む*（project・利用者） | 読まない | project だけ読む |
-| .agents/skills、~/.agents/skills | 読まない | 読む | 読む |
-| .opencode・.kairocode の skills | 読まない | 読まない | 読まない |
-| 自分のフック | 動かす* | 動かす（features.hooks） | 未確認 |
-| 自分のものとして足すもの | プラグイン | 同梱のスキル、プラグイン、~/.codex/AGENTS.md | 同梱のスキル、.github/skills、~/.copilot/skills |
+| How checked | Had a local server receive its request and looked at the contents | `codex debug prompt-input` | `copilot instruction list`, `skill list` |
+| AGENTS.md | Does not read | Reads | Reads |
+| CLAUDE.md (project) | Reads* | Does not read | Reads |
+| .claude/CLAUDE.md, CLAUDE.local.md, ~/.claude/CLAUDE.md | Reads* | Does not read | Does not read |
+| .claude/skills, ~/.claude/skills | Reads* (project, user) | Does not read | Reads project only |
+| .agents/skills, ~/.agents/skills | Does not read | Reads | Reads |
+| skills in .opencode, .kairocode | Does not read | Does not read | Does not read |
+| Its own hooks | Runs* | Runs (features.hooks) | Not checked |
+| What it adds as its own | Plugins | Bundled skills, plugins, ~/.codex/AGENTS.md | Bundled skills, .github/skills, ~/.copilot/skills |
 
-\* Claude Code は、自分の設定（`--setting-sources user,project,local`）を読むときだけ、CLAUDE.md とスキルを読みます。そのとき、設定のフックも、KairoCode の sandbox の外で動きます。
+\* Claude Code reads CLAUDE.md and skills only when it reads its own settings (`--setting-sources user,project,local`). In that case the hooks in those settings also run, outside KairoCode's sandbox.
 
-確かめたことは次のとおりです。
+What we checked:
 
-- `--settings` で渡したフックは、`--setting-sources ""` のときも動きました。
-- `disableAllHooks` を付けると、`--settings` で渡したフックも止まりました。
-- そのため、Claude Code に CLAUDE.md とスキルを自分で読ませると、利用者のフックを KairoCode の sandbox に入れる手立てがありません。
+- Hooks passed with `--settings` ran even with `--setting-sources ""`.
+- With `disableAllHooks`, hooks passed with `--settings` stopped too.
+- So if Claude Code is left to read CLAUDE.md and skills itself, there is no way to put the user's hooks into KairoCode's sandbox.
 
-## 決定
+## Decision
 
-1. **KairoCode の約束（どのエンジンでも同じ）**: モデルは、どのエンジンでも、次のものをちょうど 1 度ずつ受け取ります。
-   - 指示: `~/.claude/CLAUDE.md`、`AGENTS.md`、`CLAUDE.md`、`.claude/CLAUDE.md`、`CLAUDE.local.md`
-   - スキル: ADR 0002 の置き場所のすべて（`.claude`、`.agents`、`.opencode`、`.kairocode` と利用者のもの）
-   - KairoCode のツール、権限、sandbox。コマンド（`/name`）、スキル（`/skill`）、フロー
-   - フック（3）
-2. **読み方: 任せられるものは任せ、足りないものは KairoCode が補う**（`internal/runtime`、エンジンごとの表 `nativeReads`）
-   - API: KairoCode が全部を読みます。
-   - Claude Code: 自分で読ませると、フックが KairoCode の sandbox の外で動きます（背景）。そのため、これまでどおり `--setting-sources ""` で自分では読ませず、KairoCode が全部を補います。スキルは、KairoCode の skill ツール（MCP）で使います。
-   - codex: `AGENTS.md` と `.agents/skills`・`~/.agents/skills` は codex に任せます（ADR 0002 の追記の `project_doc_max_bytes = 0` と `skills.include_instructions = false` は外す）。KairoCode は、残り（CLAUDE.md の類、それ以外の置き場所のスキル）だけを補います。
-   - copilot: `AGENTS.md`・`CLAUDE.md`（project）と、`.claude/skills`・`.agents/skills`（project）・`~/.agents/skills` は copilot に任せます（`--no-custom-instructions` を外し、copilot 自身のスキルのツールを `--available-tools` に足す）。KairoCode は残りを補います。
-   - エージェントが自分のものとして足すもの（同梱のスキル、プラグイン、~/.codex/AGENTS.md など）は、そのエージェントの性質として残します。約束のものが欠けたり、二重になったりはしません。
-3. **フックは、どのエンジンでも KairoCode が動かす**（ADR 0003 の KairoCode のフックに合わせる）
-   - **読むもの:** Claude Code の書式のフック（`~/.claude/settings.json`、`.claude/settings.json`、`.claude/settings.local.json` の `hooks`）を、KairoCode が読みます。
-   - **事象の対応:**
+1. **KairoCode's promise (the same on every engine)**: on every engine, the model receives each of the following exactly once.
+   - Instructions: `~/.claude/CLAUDE.md`, `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`
+   - Skills: all the locations in ADR 0002 (`.claude`, `.agents`, `.opencode`, `.kairocode` and the user's)
+   - KairoCode's tools, permissions, sandbox. Commands (`/name`), skills (`/skill`), flows
+   - Hooks (3)
+2. **How things are read: leave to the agent what can be left, and KairoCode fills in what is missing** (`internal/runtime`, the per-engine table `nativeReads`)
+   - API: KairoCode reads everything.
+   - Claude Code: if it reads things itself, hooks run outside KairoCode's sandbox (Context). So, as before, it does not read them itself (`--setting-sources ""`), and KairoCode fills in everything. Skills are used through KairoCode's skill tool (MCP).
+   - codex: `AGENTS.md` and `.agents/skills`, `~/.agents/skills` are left to codex (drop `project_doc_max_bytes = 0` and `skills.include_instructions = false` from ADR 0002's addendum). KairoCode fills in only the rest (the CLAUDE.md family, skills in the other locations).
+   - copilot: `AGENTS.md`, `CLAUDE.md` (project), and `.claude/skills`, `.agents/skills` (project), `~/.agents/skills` are left to copilot (drop `--no-custom-instructions`, and add copilot's own skill tool to `--available-tools`). KairoCode fills in the rest.
+   - What an agent adds as its own (bundled skills, plugins, ~/.codex/AGENTS.md and so on) stays as part of that agent's nature. Nothing in the promise goes missing or appears twice.
+3. **KairoCode runs hooks on every engine** (in line with KairoCode's hooks in ADR 0003)
+   - **What is read:** KairoCode reads hooks in Claude Code's format (`hooks` in `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`).
+   - **Event mapping:**
      - `SessionStart` → `session.start`
-     - `UserPromptSubmit` → `turn.start`（新）
-     - `PreToolUse` → `tool.before`（新）。KairoCode のツールを呼ぶ前に動き、終了コード 2 なら呼び出しを止め、stderr をモデルに返します。
+     - `UserPromptSubmit` → `turn.start` (new)
+     - `PreToolUse` → `tool.before` (new). Runs before a KairoCode tool is called; exit code 2 stops the call and returns stderr to the model.
      - `PostToolUse` → `tool.after`
      - `Stop` → `turn.end`
-     - ほかの事象（Notification など）は、まだ動かしません。`/hooks` で、動かないことを示します。
-   - **入力:** Claude Code と同じ JSON（`session_id`、`cwd`、`hook_event_name`、`tool_name`、`tool_input` など）を stdin に渡します。
-   - **sandbox:** フックは、bash と同じ KairoCode の sandbox（作業ディレクトリに書ける、ネットワークなし）で動かします。
-   - **sandbox の外:** フックごとに（コマンドの内容のハッシュで）、初めて動く前に利用者に聞きます。答えは「sandbox で動かす」「sandbox の外で動かす」「動かさない」の 3 つで、記録します。sandbox の外で動くのは、利用者がそう答えたものだけです。フックの中身が変われば、また聞きます。
-   - **実行の記録:** フックの実行は KairoCode のアクションとして記録します（作用は実。落ちたら要確認、不変条件 4）。
-   - **エージェント自身のフック:** 止めます。Claude Code は `--setting-sources ""`、codex は `features.hooks = false` です。copilot は、フックの仕組みがあるかを実装のときに確かめ、あれば止めます。
-4. **品質の確かめ方**
-   - エンジンごとの「自分で読むもの」の表をコードに持ち、「約束 − 自分で読むもの = KairoCode が補うもの」をテストで守ります。
-   - `scripts/agent-probe.sh` を足します。手元の Claude Code、codex、copilot が実際に何を読むかを、モデルを呼ばずに確かめ（背景の表の確かめ方）、表と食い違えば知らせます。CLI を上げたときに流します。CLI が要るので `check.sh` には入れません。
-5. **知られている差:** codex は `AGENTS.md` を根から作業ディレクトリまで重ねて読みます。KairoCode は作業ディレクトリのものだけを読みます。差は表に書いておきます。
+     - Other events (Notification and so on) are not run yet. `/hooks` shows that they do not run.
+   - **Input:** the same JSON as Claude Code (`session_id`, `cwd`, `hook_event_name`, `tool_name`, `tool_input` and so on) on stdin.
+   - **Sandbox:** hooks run in the same KairoCode sandbox as bash (can write the working directory, no network).
+   - **Outside the sandbox:** for each hook (by the hash of the command's contents), the user is asked before it first runs. There are three answers, "run in the sandbox", "run outside the sandbox", "do not run", and the answer is recorded. Only hooks the user answered that way run outside the sandbox. If a hook's contents change, the user is asked again.
+   - **Recording runs:** a hook run is recorded as a KairoCode action (the effect is real. A crash leads to blocked (needs confirmation), invariant 4).
+   - **The agent's own hooks:** stopped. Claude Code with `--setting-sources ""`, codex with `features.hooks = false`. For copilot, whether it has a hook mechanism is checked during implementation, and if so it is stopped.
+4. **How quality is checked**
+   - The code holds a per-engine table of "what it reads itself", and a test keeps "the promise − what it reads itself = what KairoCode fills in".
+   - Add `scripts/agent-probe.sh`. It checks, without calling a model, what the local Claude Code, codex and copilot actually read (the method in the Context table), and reports if that disagrees with the table. Run it when a CLI is upgraded. It needs the CLIs, so it is not in `check.sh`.
+5. **A known difference:** codex reads `AGENTS.md` layered from the root down to the working directory. KairoCode reads only the one in the working directory. The difference is written in the table.
 
-## 結果
+## Consequences
 
-- どのエンジンでも、指示、スキル、フック、権限、sandbox が同じに効きます。エージェントの得意な読み方（codex と copilot のスキル）は、そのまま使えます。
-- フックは、sandbox の外へ出るものを必ず利用者が承認します。Claude Code のフックも、Claude Code の外（API、codex、copilot）で動きます。
-- テスト（実装のとき足す）
-  - 補うものの表（エンジンごと）。
-  - フックの事象の対応と、stdin の JSON。
-  - sandbox の外の承認（聞く、答えを記録、中身が変わればまた聞く）。
-  - `tool.before` の終了コード 2 で止まること。
-  - フックの実行の crash のテスト。
-  - 各エンジンでエージェント自身のフックが止まっていること。
+- On every engine, instructions, skills, hooks, permissions and the sandbox work the same. The agents' own good ways of reading (codex's and copilot's skills) are used as they are.
+- Any hook that leaves the sandbox is always approved by the user. Claude Code's hooks also run outside Claude Code (API, codex, copilot).
+- Tests (added during implementation)
+  - The table of what is filled in (per engine).
+  - The hook event mapping and the stdin JSON.
+  - Approval for outside the sandbox (ask, record the answer, ask again when the contents change).
+  - Stopping on exit code 2 from `tool.before`.
+  - A crash test of hook runs.
+  - The agent's own hooks are stopped on each engine.
 
-## 検討した代替案
+## Alternatives considered
 
-- **エージェントに何も読ませず、KairoCode が全部を渡す（今の形）:** 確実で揃いますが、利用者の「読み込みはエージェント側でよい」に合いません。また、codex と copilot のスキルの使い方を活かせません。Claude Code だけは、フックの理由でこの形を残します。
-- **Claude Code にも自分で読ませ、フックはそのまま:** フックが KairoCode の sandbox の外で、承認なしに動きます。利用者の条件に合いません。
-- **Claude Code のフックを `SHELL` で KairoCode の sandbox に通す:** Claude Code は、フックに `SHELL` も `CLAUDE_CODE_SHELL` も使わないことを確かめました。
+- **Let agents read nothing and have KairoCode pass everything (the current form):** reliable and consistent, but it does not fit the user's "loading can be done on the agent's side". It also cannot make use of how codex and copilot use skills. Only Claude Code keeps this form, because of hooks.
+- **Let Claude Code read things itself too, and leave hooks as they are:** hooks run outside KairoCode's sandbox without approval. This does not meet the user's condition.
+- **Route Claude Code's hooks into KairoCode's sandbox through `SHELL`:** we checked that Claude Code uses neither `SHELL` nor `CLAUDE_CODE_SHELL` for hooks.
 
-## 実装（2026-10-21）
+## Implementation (2026-10-21)
 
-### 1. 足りないものを補う（`internal/runtime/agent.go` の `nativeReadsOf`）
+### 1. Filling in what is missing (`nativeReadsOf` in `internal/runtime/agent.go`)
 
-- `agent.load` が、エンジンのエージェントが自分で読む指示とスキルの置き場所を除いて、システムの指示を作ります。記録はこれまでどおりです。
-- codex: `AGENTS.md`、`~/.agents/skills` と各階層の `.agents/skills` は、codex に任せます。`CODEX_CONFIG` からは `project_doc_max_bytes = 0` と `skills.include_instructions = false` を外し、`features.hooks = false` を入れました。
-- copilot: `AGENTS.md`・`CLAUDE.md` は、copilot に任せます（`--no-custom-instructions` を外した）。
-- **決定 2 から変えたこと（copilot のスキル）:** copilot のスキルのツールの名前は、モデルを呼ばずには確かめられませんでした。そのため、`--available-tools` に足していません。copilot には、スキルを KairoCode が全部渡します（KairoCode の skill ツール）。copilot 自身が自分のスキルをモデルに並べるかどうかは、確かめられていません。並べるなら一覧が二重になります。`scripts/agent-probe.sh` と、本物での確かめの残りです。
-- テスト: `TestEnginesGetWhatTheyDoNotRead`（エンジンごとの補うもの、codex の 1 ターンで渡るもの）、`TestCLIAgentsConfig`。
+- `agent.load` builds the system instructions leaving out the instruction and skill locations the engine's agent reads itself. Recording is as before.
+- codex: `AGENTS.md`, `~/.agents/skills` and `.agents/skills` at each level are left to codex. `project_doc_max_bytes = 0` and `skills.include_instructions = false` were removed from `CODEX_CONFIG`, and `features.hooks = false` was added.
+- copilot: `AGENTS.md` and `CLAUDE.md` are left to copilot (`--no-custom-instructions` removed).
+- **Changed from decision 2 (copilot's skills):** the name of copilot's skill tool could not be confirmed without calling a model. So it was not added to `--available-tools`. KairoCode passes all skills to copilot (KairoCode's skill tool). Whether copilot itself also lists its own skills to the model is not confirmed. If it does, the list appears twice. This remains for `scripts/agent-probe.sh` and checks with the real thing.
+- Tests: `TestEnginesGetWhatTheyDoNotRead` (what is filled in per engine, what is passed in one codex turn), `TestCLIAgentsConfig`.
 
-### 2. フックは、どのエンジンでも KairoCode が動かす（`internal/workflows/hooks.go`、`internal/runtime/commandhooks.go`）
+### 2. KairoCode runs hooks on every engine (`internal/workflows/hooks.go`, `internal/runtime/commandhooks.go`)
 
-- **読む:** `claudeHooks` が、`~/.claude/settings.json`、`.claude/settings.json`、`.claude/settings.local.json` の `type: "command"` のフックを読みます。`agent.load` のフックの一覧に足し、記録します。読めないファイルは外します。
-- **聞くとき:** 聞くのは、ターンの初め、どのフックも動く前です（`decideHooks`）。
-  - `hook.check` が、そのフォルダーで答えが出ているかを見ます。出ていないものは、フローの質問と同じ仕組みで聞きます（`Kind: question`。答えは「Run it in KairoCode's sandbox」「Run it outside the sandbox」「Do not run it」）。答えを `hook.decide` で残します。
-  - 答えは、フォルダー、Claude Code の事象、コマンドの組で、ストアに 1 度だけ書きます。コマンドが変われば、また聞きます。
-  - 初めに聞くので、Claude Code など CLI のエンジンの MCP の呼び出しの途中で、待つことはありません。
-  - このため、「初めて動く前に聞く」は、正確には「そのフックがあるターンの初めに聞く」です（決定 3）。
-- **動かす:** `hook.command`（作用は実）が `sh -c` で動かします。
-  - sandbox は bash と同じで、作業ディレクトリに書け、ネットワークは無しです。「outside」と答えたフックだけ、sandbox の外で動かします。
-  - stdin には、Claude Code と同じ JSON（`session_id`、`cwd`、`hook_event_name`、`tool_name`、`tool_input`、`tool_response`、`prompt`）を渡します。環境変数 `CLAUDE_PROJECT_DIR` も渡します。
-  - 待つのは `timeout`（既定 60 秒）までです。
-  - sandbox の外は、bash の昇格と同じ `sandbox.FullAccess` で動かします。不変条件の検査で `FullAccess` を使ってよいファイル（`fullAccessUsers`）に、`internal/runtime/commandhooks.go` を足しました（この ADR の決定 3 による）。
-  - 動いている途中で落ちたら、もう一度は動かしません。「効いたか」を利用者に聞き（要確認、不変条件 4）、答えたら、そのフックは止めなかったものとしてターンを進めます。
-- **事象と終了コード**（Claude Code と同じ）
+- **Reading:** `claudeHooks` reads `type: "command"` hooks from `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`. They are added to `agent.load`'s hook list and recorded. Files that cannot be read are left out.
+- **When to ask:** asking happens at the start of the turn, before any hook runs (`decideHooks`).
+  - `hook.check` looks at whether an answer exists for that folder. For those without one, the user is asked with the same mechanism as a flow's question (`Kind: question`. The answers are "Run it in KairoCode's sandbox", "Run it outside the sandbox", "Do not run it"). The answer is kept with `hook.decide`.
+  - The answer is written to the store once, keyed by the folder, the Claude Code event and the command. If the command changes, the user is asked again.
+  - Because asking happens at the start, there is no wait in the middle of an MCP call of a CLI engine such as Claude Code.
+  - So "ask before it first runs" is, precisely, "ask at the start of a turn that has that hook" (decision 3).
+- **Running:** `hook.command` (the effect is real) runs it with `sh -c`.
+  - The sandbox is the same as bash: can write the working directory, no network. Only hooks answered "outside" run outside the sandbox.
+  - stdin gets the same JSON as Claude Code (`session_id`, `cwd`, `hook_event_name`, `tool_name`, `tool_input`, `tool_response`, `prompt`). The environment variable `CLAUDE_PROJECT_DIR` is also passed.
+  - It waits up to `timeout` (default 60 seconds).
+  - Outside the sandbox it runs with `sandbox.FullAccess`, the same as bash's escalation. `internal/runtime/commandhooks.go` was added to the files allowed to use `FullAccess` in the invariant check (`fullAccessUsers`) (by decision 3 of this ADR).
+  - If the process crashes while the hook is running, it is not run again. The user is asked "did it take effect" (blocked (needs confirmation), invariant 4), and after the answer, the turn goes on as if the hook did not stop it.
+- **Events and exit codes** (the same as Claude Code)
 
-  | 事象 | 終了 0 | 終了 2 |
+  | Event | Exit 0 | Exit 2 |
   |---|---|---|
-  | SessionStart（session.start） | stdout を最初の依頼に足す | — |
-  | UserPromptSubmit（turn.start） | stdout を依頼に足す | ターンを、モデルに聞かずに「[A hook stopped this request: …]」で終える |
-  | PreToolUse（tool.before） | — | 呼び出しを止め、stderr をモデルに返す |
-  | PostToolUse（tool.after） | — | stderr を結果に添える（MCP の呼び出しは `hook.note` で） |
-  | Stop（turn.end） | — | stderr でモデルを送り返す（3 回まで） |
+  | SessionStart (session.start) | Adds stdout to the first request | — |
+  | UserPromptSubmit (turn.start) | Adds stdout to the request | Ends the turn with "[A hook stopped this request: …]" without asking the model |
+  | PreToolUse (tool.before) | — | Stops the call and returns stderr to the model |
+  | PostToolUse (tool.after) | — | Attaches stderr to the result (for MCP calls, through `hook.note`) |
+  | Stop (turn.end) | — | Sends the model back with stderr (up to 3 times) |
 
-  - ほかの事象（Notification など）は、まだ動かしません。
-  - matcher は、workflows で regexp が使えないので、Claude Code で使われる形に限ります。名前、`|` でつないだもの、`*`、`.*` で終わる前方一致です。
-- **エンジン**
-  - API: ターンの中で、すべての事象を動かします。
-  - CLI のエンジン: session.start と turn.start をターンの初めに、tool.before と tool.after を MCP の呼び出し（`RunMCPCall`、`ClaudeTurnInput.Hooks` → `MCPCallInput.Hooks`）で、turn.end を最後の回の後に動かします。
-  - フローのエージェントとサブエージェント（`Sub` のターン）では、これまでのフローのフックと同じく、動かしません。セッションのターンは、エージェントがフローで動くとき（`workflow`）も、session.start と turn.start を動かします。
-- **エージェント自身のフック:**
-  - Claude Code: `--setting-sources ""` で動きません（`scripts/agent-probe.sh` で確かめた）。
-  - codex: `CODEX_CONFIG` の `features.hooks = false` で止めます。
-  - copilot: **止められていない（既知の穴）。**
-    - copilot には、自分のフックがあります（`copilot help config`）。利用者の設定（`~/.copilot/settings.json` の `hooks`）と、copilot が信頼したフォルダーの `.github/hooks/*.json` です。
-    - 止める設定は `disableAllHooks` ですが、1 回の起動だけに効かせる旗も環境変数もありません。copilot の利用者の設定ファイルに書くしかありません。
-    - KairoCode は利用者の copilot の設定を勝手に書き換えないので、copilot のエンジンでは、copilot 自身のフックが KairoCode の sandbox の外で、承認なしに動き得ます。
-    - 利用者に、`disableAllHooks` を書くかを聞きました（2026-10-21）。答えと、その後の形は 4 節です。
-- **durability-reviewer の指摘で直したこと**
-  - **取り消しで止まったフックを、終わったことにしない:** プロセスを止めるときなどの取り消しで止まったフックは、終了コードではなく「結果が不明」（`kairo.Unknown`）として返し、要確認にします。前は、殺されたことを終了コード -1 として返していたので、PreToolUse のフックが止まっても呼び出しが進み得ました。
-  - **やり直してよいのは、始まらなかったときだけ:** 始まった後の失敗は「結果が不明」とします。
-  - **codex の設定:** 利用者の `CODEX_CONFIG` が JSON でないとき（codex-acp も読めない）、KairoCode の設定だけを渡し、codex 自身のフックを止めます。前は、そのまま渡していたので、フックが止まりませんでした。
-  - **MCP の呼び出しの要確認の文:** 落ちて途切れたものがフックのこともあるので、「この呼び出し（か、その周りのフック）」としました。
-  - **まだのテスト:**
-    - MCP の呼び出しの中で途切れたフックの crash のテスト
-    - sandbox の中に閉じ込められることのテスト
-    - 落ちたプロセスの子として残ったフック（sleep など）は、最後まで動き続けます（bash と同じ）。
-- **版を上げない理由:** 新しい呼び出しは、`agent.load` が記録したフックにコマンドのフックがあるときだけ起きます。この変更の前の記録には無いので、再開しても同じ呼び出しの列です。
-- **テスト**
-  - `TestClaudeHooksRunHere`（API で 4 つの事象、聞くのは 1 度、Notification は動かない）
-  - `TestClaudeHookNotRun`（動かさない、コマンドが変われば聞き直す）
-  - `TestClaudeHooksOnClaudeCode`（MCP の呼び出しの PreToolUse）
-  - `TestCrashHookRun`（落ちても動かし直さず聞く。作用を `Unprotected` に変えると落ちることを確かめた）
+  - Other events (Notification and so on) are not run yet.
+  - Since workflows cannot use regexp, matchers are limited to the forms Claude Code uses: a name, names joined with `|`, `*`, and a prefix match ending in `.*`.
+- **Engines**
+  - API: all events run inside the turn.
+  - CLI engines: session.start and turn.start at the start of the turn, tool.before and tool.after in MCP calls (`RunMCPCall`, `ClaudeTurnInput.Hooks` → `MCPCallInput.Hooks`), and turn.end after the last round.
+  - Flow agents and subagents (`Sub` turns) do not run them, like the existing flow hooks. A session's turn runs session.start and turn.start even when the agent runs as a flow (`workflow`).
+- **The agent's own hooks:**
+  - Claude Code: they do not run with `--setting-sources ""` (checked with `scripts/agent-probe.sh`).
+  - codex: stopped with `features.hooks = false` in `CODEX_CONFIG`.
+  - copilot: **not stopped (a known hole).**
+    - copilot has its own hooks (`copilot help config`): the user's settings (`hooks` in `~/.copilot/settings.json`) and `.github/hooks/*.json` in folders copilot trusts.
+    - The setting that stops them is `disableAllHooks`, but there is no flag or environment variable that applies to a single launch. It can only be written into copilot's user settings file.
+    - KairoCode does not rewrite the user's copilot settings on its own, so on the copilot engine, copilot's own hooks can run outside KairoCode's sandbox without approval.
+    - We asked the user whether to write `disableAllHooks` (2026-10-21). The answer and what followed are in section 4.
+- **What was fixed after durability-reviewer's findings**
+  - **A hook stopped by cancellation is not treated as finished:** a hook stopped by cancellation, such as when the process is being stopped, is returned as an "unknown outcome" (`kairo.Unknown`), not an exit code, and becomes blocked (needs confirmation). Before, being killed was returned as exit code -1, so a call could go ahead even though a PreToolUse hook had stopped.
+  - **Retrying is allowed only if it did not start:** a failure after it started is an "unknown outcome".
+  - **codex's settings:** when the user's `CODEX_CONFIG` is not JSON (codex-acp cannot read it either), only KairoCode's settings are passed, and codex's own hooks are stopped. Before, it was passed through as is, so hooks were not stopped.
+  - **The blocked (needs confirmation) message for MCP calls:** what was cut off by the crash can be a hook, so it says "this call (or a hook around it)".
+  - **Tests not yet written:**
+    - A crash test of a hook cut off inside an MCP call
+    - A test that it is confined in the sandbox
+    - A hook left behind as a child of the crashed process (sleep and so on) keeps running to the end (the same as bash).
+- **Why the version is not bumped:** the new calls happen only when the hooks recorded by `agent.load` include command hooks. Records from before this change have none, so on resume the sequence of calls is the same.
+- **Tests**
+  - `TestClaudeHooksRunHere` (four events on the API, asks once, Notification does not run)
+  - `TestClaudeHookNotRun` (not run; asks again when the command changes)
+  - `TestClaudeHooksOnClaudeCode` (PreToolUse in an MCP call)
+  - `TestCrashHookRun` (after a crash, it asks instead of running again. We checked that it fails if the effect is changed to `Unprotected`)
 
-### 3. 確かめるスクリプト（`scripts/agent-probe.sh`）
+### 3. The checking script (`scripts/agent-probe.sh`)
 
-- 手元の Claude Code、codex、copilot が自分で読むものと、動かすフックを、モデルを呼ばずに確かめます。KairoCode が当てにしていること（`nativeReadsOf`）と食い違えば、失敗で終わります。
-- 2026-10-21 の結果は、Claude Code 2.1.305、codex 0.163.0、copilot 1.0.101 で、22 項目すべて一致でした。
-- CLI が要るので、`check.sh` には入れません。CLI を上げたときに流します。
+- It checks, without calling a model, what the local Claude Code, codex and copilot read themselves and which hooks they run. If that disagrees with what KairoCode relies on (`nativeReadsOf`), it ends with a failure.
+- The result on 2026-10-21, with Claude Code 2.1.305, codex 0.163.0 and copilot 1.0.101, was that all 22 items matched.
+- It needs the CLIs, so it is not in `check.sh`. Run it when a CLI is upgraded.
 
-### 4. エージェント自身のフックを止める・許す（2026-10-21 追記）
+### 4. Stopping or allowing the agent's own hooks (Addendum (2026-10-21))
 
-- 利用者の答え: copilot は `disableAllHooks` で止めてよい。ただし、KairoCode の設定で解除できるようにする。
-- **既定（止める）**
-  - copilot を起動するたびに（`acpArgv`）、copilot の設定（`$COPILOT_HOME`、なければ `~/.copilot` の `settings.json`）に `"disableAllHooks": true` を書きます。ほかの項目は残し、ファイルの権限も保ちます。一時ファイルに書いて置き換えるので、途中の形は残りません。
-  - 書いたことを、同じディレクトリーの `kairocode-disabled-hooks` に印として残します。印を先に書くので、間で落ちても、解除のときに取りすぎることはありません。
-  - 利用者が自分で `disableAllHooks` を書いていたら、何もせず、印も残しません。
-  - 設定が JSON として読めないときは、止められないので copilot を起動せず、直すか下の設定を使うよう伝えます。
-  - テスト（`KAIROCODE_NO_CLIS`）では、`Config.CopilotHome` を渡さなければ何も書きません。
-- **解除（`agents.ownHooks`）**
-  - 利用者の `kairocode.json`（`~/.config/kairocode/`）に `{"agents": {"ownHooks": true}}` と書くと、エージェント自身のフックを許します。
-    - codex: `features.hooks = false` を足しません（利用者の `CODEX_CONFIG` のまま）。
-    - copilot: 印があれば、KairoCode が書いた `disableAllHooks` を消し、印も消します。印がなければ（利用者が書いたもの）触りません。
-    - Claude Code: 変わりません。Claude Code の書式のフックは、どのエンジンでも KairoCode が sandbox で動かしているからです。
-  - 許したフックは、KairoCode の sandbox の外で、承認なしに動きます。利用者が自分で選ぶ設定です。
-  - **プロジェクトの `kairocode.json` では効きません。** clone したリポジトリが、sandbox の外で動くフックを有効にできないようにするためです。
-- **durability-reviewer の指摘で直したこと**
-  - `settings.json` がシンボリックリンク（dotfiles の管理）なら、リンクを残して、その先に書きます。書いた後に fsync します。
-  - 解除のときに設定が読めなければ、copilot を止めず、印だけを消します。
-  - ホームディレクトリーがわからなければ、相対パスに書かず、書けないことをログに残します。
-  - ACP のレジストリーの copilot が自分の `COPILOT_HOME` を持つなら、そこに書きます。
-- **残る弱さ（受け入れたもの）**
-  - copilot の設定にはロックがないので、KairoCode が読んで書く間に、ほかのプロセス（copilot、利用者）が書いた変更は失われ得ます。
-  - 印は「KairoCode が書いた」としか言えません。印を書いた後、`disableAllHooks` を書く前に落ち、その後で利用者が自分で書いた場合などは、解除のときに利用者の値も消します。
-- **copilot のリポジトリのフック（確かめた。6 節）:** `disableAllHooks` では止まりませんでした。KairoCode は、そのリポジトリで copilot を動かしません。
-- **テスト:** `TestAgentsOwnHooks`（ほかの項目と権限が残る、プロジェクトの設定では効かない、解除で KairoCode の書いたものだけを消す、利用者の書いたものは残す、読めない設定では起動しない、解除のときは読めなくても起動する、シンボリックリンクを残す、codex の `features.hooks`）
+- The user's answer: for copilot, stopping with `disableAllHooks` is fine. But make it possible to undo through KairoCode's settings.
+- **Default (stop)**
+  - Each time copilot is launched (`acpArgv`), `"disableAllHooks": true` is written into copilot's settings (`settings.json` in `$COPILOT_HOME`, or `~/.copilot` if unset). Other entries are kept, and the file's permissions are kept. It is written to a temporary file and swapped in, so no half-written state is left.
+  - That it was written is marked with `kairocode-disabled-hooks` in the same directory. The mark is written first, so even with a crash in between, undoing never removes too much.
+  - If the user has written `disableAllHooks` themselves, nothing is done and no mark is left.
+  - If the settings cannot be read as JSON, they cannot be stopped, so copilot is not launched, and the user is told to fix it or use the setting below.
+  - In tests (`KAIROCODE_NO_CLIS`), nothing is written unless `Config.CopilotHome` is passed.
+- **Undoing (`agents.ownHooks`)**
+  - Writing `{"agents": {"ownHooks": true}}` in the user's `kairocode.json` (`~/.config/kairocode/`) allows the agents' own hooks.
+    - codex: `features.hooks = false` is not added (the user's `CODEX_CONFIG` as is).
+    - copilot: if the mark exists, the `disableAllHooks` that KairoCode wrote is removed, and the mark too. If there is no mark (the user wrote it), it is not touched.
+    - Claude Code: no change. Hooks in Claude Code's format are run by KairoCode in the sandbox on every engine.
+  - Allowed hooks run outside KairoCode's sandbox without approval. It is a setting the user chooses.
+  - **It does not take effect in a project's `kairocode.json`.** This keeps a cloned repository from turning on hooks that run outside the sandbox.
+- **What was fixed after durability-reviewer's findings**
+  - If `settings.json` is a symbolic link (dotfiles management), the link is kept and the target is written. fsync after writing.
+  - If the settings cannot be read when undoing, copilot is not stopped, and only the mark is removed.
+  - If the home directory is unknown, it does not write to a relative path, and logs that it could not write.
+  - If copilot from the ACP registry has its own `COPILOT_HOME`, that is where it writes.
+- **Remaining weaknesses (accepted)**
+  - copilot's settings have no lock, so changes written by another process (copilot, the user) between KairoCode's read and write can be lost.
+  - The mark can only say "KairoCode wrote it". In cases such as crashing after writing the mark and before writing `disableAllHooks`, and then the user writing it themselves, undoing also removes the user's value.
+- **copilot's repository hooks (checked. Section 6):** `disableAllHooks` did not stop them. KairoCode does not run copilot in that repository.
+- **Tests:** `TestAgentsOwnHooks` (other entries and permissions are kept, no effect in project settings, undoing removes only what KairoCode wrote, the user's own is kept, does not launch with unreadable settings, launches when undoing even if unreadable, keeps symbolic links, codex's `features.hooks`)
 
-### 5. 本物のモデルで確かめたこと（2026-10-21 追記）
+### 5. What we checked with the real model (Addendum (2026-10-21))
 
-- 利用者の許可を得て、本物のモデルで確かめました（codex-acp と codex 0.163、copilot 1.0.101。KairoCode の `run` を、別のデータの置き場で動かした）。
-- **codex は、codex-acp を通しても `.agents/skills` を自分で読みます。** プロジェクトの `.agents/skills` に置いたスキルが、codex 自身の一覧に出て、中身も使えました。
-- **codex で、同じ名前のスキルが二重に並んでいた（直した）。**
-  - 原因は、codex 自身のスキル（`~/.codex/skills`、同梱の `~/.codex/skills/.system`）と同じ名前のスキルが `~/.claude/skills` にもあり、KairoCode がそれも渡していたことです。
-  - 直し方は、codex が自分で持つスキルと同じ名前のスキルを、KairoCode から渡さないことです（`nativeReads.ownSkillDirs`）。codex のものが代わりになります。
-    - 対象は `$CODEX_HOME/skills`（既定は `~/.codex/skills`。下の `.system` も含めて、下へたどる）と `/etc/codex/skills` です。`CODEX_HOME` は、ACP のレジストリーが codex に渡す環境を先に見ます。
-    - 名前は、ディレクトリーではなく `SKILL.md` の `name` で比べます。読めない codex のスキルは codex のものと数えません（悪くても二重に並ぶだけで、消えはしない）。
-    - プロジェクトのスキルは、同じ名前でも渡します。プロジェクトのものが先です。
-  - 直した後に確かめ直し、重なりがなくなりました。
-- **copilot では、スキルの一覧は KairoCode の 1 つだけでした。** copilot 自身のスキルのツールは止まっていて（`Disabled tools: … skill`）、copilot 自身の一覧はモデルに並びません。二重にはなっていません。
-- **テスト:** `TestEnginesGetWhatTheyDoNotRead` に、codex 自身のスキル（`~/.codex/skills` と `.system`）と同じ名前のスキルと、同じ名前のプロジェクトのスキルを足しました。`/etc/codex/skills` はテストでは別の場所にします。
+- With the user's permission, we checked with the real model (codex-acp with codex 0.163, copilot 1.0.101. KairoCode's `run`, in a separate data directory).
+- **codex reads `.agents/skills` itself even through codex-acp.** A skill placed in the project's `.agents/skills` showed up in codex's own list, and its contents could be used.
+- **On codex, skills with the same name were listed twice (fixed).**
+  - The cause was that skills with the same names as codex's own skills (`~/.codex/skills`, the bundled `~/.codex/skills/.system`) were also in `~/.claude/skills`, and KairoCode passed those too.
+  - The fix is that KairoCode does not pass skills with the same name as one codex has itself (`nativeReads.ownSkillDirs`). codex's own takes their place.
+    - The targets are `$CODEX_HOME/skills` (default `~/.codex/skills`, walked down, including `.system` below it) and `/etc/codex/skills`. For `CODEX_HOME`, the environment the ACP registry passes to codex is checked first.
+    - Names are compared by the `name` in `SKILL.md`, not the directory. A codex skill that cannot be read is not counted as codex's (at worst it is listed twice; it does not disappear).
+    - Project skills are passed even with the same name. The project's come first.
+  - We checked again after the fix, and the overlap was gone.
+- **On copilot, the skill list was only KairoCode's one.** copilot's own skill tool is off (`Disabled tools: … skill`), and copilot's own list is not shown to the model. Nothing is duplicated.
+- **Tests:** `TestEnginesGetWhatTheyDoNotRead` gained skills with the same names as codex's own skills (`~/.codex/skills` and `.system`), and a project skill with the same name. `/etc/codex/skills` is put elsewhere in tests.
 
-### 6. copilot のリポジトリのフックと、残りのテスト（2026-10-21 追記）
+### 6. copilot's repository hooks, and the remaining tests (Addendum (2026-10-21))
 
-- **確かめたこと（copilot 1.0.101、ACP。モデルの小さな呼び出しを 1 回ずつ）**
-  - 使い捨ての `COPILOT_HOME` で、利用者の設定・リポジトリの `.github/hooks/*.json`・`.github/copilot/settings.json` に、それぞれ印のファイルを作る `SessionStart` のフックを置きました。フックは最初の prompt で動きます（`session/new` では動かない）。
-  - 利用者の設定に `"disableAllHooks": true` を書くと、利用者のフックは止まります。**`.github/hooks/*.json` のフックは止まりません。** リポジトリの設定の `false` の有無、`settings.local.json` も関係しませんでした。
-  - copilot が信頼していないフォルダーでも、ACP では `.github/hooks/*.json` のフックが動きました（`copilot help` は、信頼したフォルダーでだけ読むと書いている）。
-  - リポジトリの `settings.json` の `hooks` は、動きませんでした。
-  - 1 回の起動だけでリポジトリのフックを止める旗や環境変数は、見つかりませんでした。
-- **決定:** 作業ディレクトリーのリポジトリ（根から作業ディレクトリーまで）に copilot のフックの定義があれば、KairoCode は copilot を起動しません（`copilotRepoHooks`）。ターンには、理由と、別のプロバイダーを使うか `agents.ownHooks` で許すかを返します。
-  - 定義とみなすのは、`.github/hooks/*.json`、`.github/copilot/settings.json` と `settings.local.json` の `hooks` です。読めない設定も、copilot は読めるかもしれないので、定義があるとみなします。
-  - 利用者が `agents.ownHooks` を許しているときは、起動します。
-  - 本物の copilot で、フックのあるリポジトリが拒まれる（モデルを呼ばない）ことを確かめました。
-- **足したテスト**
-  - `TestCopilotRepoHooks`（フックの定義の 4 つの形、定義のないリポジトリ、`agents.ownHooks`、codex には効かない）
-  - `TestCrashHookOnMCPCall`（Claude Code の MCP の呼び出しの PreToolUse のフックの途中で落ちる。再開しても動かし直さず、人に聞く。フックは 1 回。フックの作用を `Unprotected` にすると落ちることを確かめた）
-  - `TestClaudeHookSandboxed`（sandbox で動かしたフックはプロジェクトの外に書けず、外で動かすと答えたものは書ける。sandbox を `FullAccess` にすると落ちることを確かめた）
-- **durability-reviewer の指摘で直したこと**
-  - **sandbox から copilot のフックを書かせない:** sandbox の中のコマンドが `.github/hooks` を書けると、`agents.ownHooks` を許した利用者では、次の copilot のターンがそれを sandbox の外で動かします。`sandbox.Protected` に `.github/hooks` と `.github/copilot` を足しました（ADR 0005 の守る名前。`.claude` と同じ理由）。
-    - `.github` のほかの場所（`workflows` など）は、これまでどおり書けます。
-    - write と edit も同じく拒みます（`internal/tools` の `protected` を、入れ子のパスにも合うようにした）。スナップショットにも入りません。
-    - Linux では、ほかの守る名前と同じく、まだ無いものは作れてしまいます（ADR 0005 の既知の弱さ）。その場合も、`agents.ownHooks` を許していなければ、次のターンで copilot を起動しません。
-  - **読めない `.github/hooks` は、定義があるとみなす:** 前は、一覧を取れないと「定義なし」になっていました。
-  - 認証のために copilot を起動するとき（prompt を送らない）も、作業ディレクトリーを一時ディレクトリーとして渡し、同じ検査を通します。
-  - テストが殺されて残る一時フォルダーを `.gitignore` に足しました。
-  - テスト: `TestSandboxProtectsGitAndConfig`、`TestWriteRefusesProtectedNames` に、`.github/hooks`・`.github/copilot` と、書けるままの `.github/workflows` を足しました。
-- **確かめていないこと:** copilot が、リポジトリの外や根より上の `.github` を読むか。KairoCode は、根（`.git` のあるところ）から作業ディレクトリーまでを見ます。
-- 2 節の「まだのテスト」のうち、上の 2 つは済みました。落ちたプロセスの子として残ったフックが最後まで動くことは、受け入れたままです。
+- **What we checked (copilot 1.0.101, ACP. One small model call each)**
+  - With a throwaway `COPILOT_HOME`, we placed a `SessionStart` hook that creates a marker file in each of: the user's settings, the repository's `.github/hooks/*.json`, and `.github/copilot/settings.json`. Hooks run on the first prompt (not on `session/new`).
+  - Writing `"disableAllHooks": true` in the user's settings stops the user's hooks. **Hooks in `.github/hooks/*.json` do not stop.** Whether the repository's settings had `false`, and `settings.local.json`, made no difference.
+  - Even in a folder copilot does not trust, hooks in `.github/hooks/*.json` ran over ACP (`copilot help` says it reads them only in trusted folders).
+  - `hooks` in the repository's `settings.json` did not run.
+  - We found no flag or environment variable that stops repository hooks for a single launch.
+- **Decision:** if the working directory's repository (from the root to the working directory) has copilot hook definitions, KairoCode does not launch copilot (`copilotRepoHooks`). The turn gets back the reason, and the choice of using another provider or allowing it with `agents.ownHooks`.
+  - Counted as definitions: `.github/hooks/*.json`, and `hooks` in `.github/copilot/settings.json` and `settings.local.json`. Settings that cannot be read are also counted as having definitions, since copilot might be able to read them.
+  - If the user has allowed `agents.ownHooks`, it launches.
+  - With the real copilot, we checked that a repository with hooks is refused (no model call).
+- **Tests added**
+  - `TestCopilotRepoHooks` (four forms of hook definitions, a repository without definitions, `agents.ownHooks`, no effect on codex)
+  - `TestCrashHookOnMCPCall` (crash in the middle of a PreToolUse hook on a Claude Code MCP call. On resume it does not run again but asks a person. The hook runs once. We checked that it fails if the hook's effect is `Unprotected`)
+  - `TestClaudeHookSandboxed` (a hook run in the sandbox cannot write outside the project, and one answered to run outside can. We checked that it fails if the sandbox is `FullAccess`)
+- **What was fixed after durability-reviewer's findings**
+  - **Do not let the sandbox write copilot's hooks:** if a command in the sandbox can write `.github/hooks`, then for a user who allowed `agents.ownHooks`, the next copilot turn runs it outside the sandbox. `.github/hooks` and `.github/copilot` were added to `sandbox.Protected` (ADR 0005's protected names. Same reason as `.claude`).
+    - Other places under `.github` (`workflows` and so on) can be written as before.
+    - write and edit refuse them too (`protected` in `internal/tools` now also matches nested paths). They are not in snapshots either.
+    - On Linux, as with the other protected names, ones that do not exist yet can still be created (ADR 0005's known weakness). Even then, unless `agents.ownHooks` is allowed, copilot is not launched on the next turn.
+  - **An unreadable `.github/hooks` counts as having definitions:** before, failing to list it meant "no definitions".
+  - When copilot is launched for authentication (no prompt sent), the working directory is passed as a temporary directory and goes through the same check.
+  - Temporary folders left behind when tests are killed were added to `.gitignore`.
+  - Tests: `TestSandboxProtectsGitAndConfig` and `TestWriteRefusesProtectedNames` gained `.github/hooks`, `.github/copilot`, and `.github/workflows`, which stays writable.
+- **Not checked:** whether copilot reads `.github` outside the repository or above the root. KairoCode looks from the root (where `.git` is) to the working directory.
+- Of the "tests not yet written" in section 2, the first two are done. That a hook left as a child of the crashed process runs to the end stays accepted.
 
-### 7. Stop のフックの 2 回目と、利用者の答えを待つ返事（2026-10-28 追記）
+### 7. The second Stop hook run, and replies that wait for the user's answer (Addendum (2026-10-28))
 
-利用者の指摘（2026-10-28）: 返事を利用者への質問で終えると、Stop のフック（このリポジトリの `scripts/check.sh --quick`）が止め、モデルが送り返されて検査を直しに行き、質問が押し流される。答えても、検査の報告に埋もれる。
+The user's point (2026-10-28): when a reply ends with a question to the user, the Stop hook (this repository's `scripts/check.sh --quick`) stops it, the model is sent back and goes off to fix the check, and the question is washed away. Even if the user answers, it is buried under the check's report.
 
-- **2 回目からは `stop_hook_active: true` を渡す（済み、2026-10-28）。** Claude Code は、Stop のフックに止められて続けるとき、これを渡します。KairoCode は渡していなかったので、2 回目に何もしないフックでも、3 回止め続けました。
-  - 回の番号は、フックの実行の ID の `.<n>`（同じ入力の何回目か、SDK が数える。不変条件 8）から読みます。turn.end のフックの入力は回ごとに同じなので、これが回の番号です。記録された ID なので、再開しても同じです。
-  - 入力に欄を足さないので、ターンの呼び出しの ID は変わらず、ターンの版も上げません。
-  - テスト: `TestStopHookActive`（1 回目は偽、2 回目は真、2 回目で終わる）、`TestHookRepeat`。
-- **利用者の答えを待つ返事では、送り返さない（承認（2026-10-30、利用者の「進めて」）。実装は下の「実装」）。**
-  - モデルに、利用者に聞くツール `ask_user`（問いと、あれば選択肢）を足します。Claude Code の `AskUserQuestion` と同じものです。
-    - ターンの中で、フローの `ask` と同じ質問（`Kind: question`）として待ちます（`kairo.WaitFor`、不変条件 7）。答えはツールの結果としてモデルに返り、ターンは続きます。
-    - 作用は外に何もしないので `tools.Read` です（承認は要らない）。
-    - turn.end のフックは、作業が本当に終わったときにだけ動きます。質問の前に検査が割り込みません。
-  - モデルが `ask_user` を使わず、文で聞いて終えたときは、今までどおり turn.end のフックが動きます。そのときの送り返しの文を「直してから終えよ」から次に変えます: 「終えるときの検査が通らなかった。返事が利用者への質問だったなら、ほかの作業をせず、質問を 1 行で言い直して終えよ。そうでなければ直してから終えよ」。
-    - この文はターンのワークフローの中の値なので、変えるとターンの版を上げます（前の版は `Draining`）。
-  - 端末とクライアントでは、送り返しの後の返事を、前の返事に続けて見せます（前の返事を消さない）。今もそうなっているかは、実装のときに確かめます。
-  - **検討した代替案**
-    - **返事の文が質問かを見分ける（「？」で終わる、など）:** 決定的に見分けられず、外れたとき検査を飛ばします。
-    - **turn.end のフックが止めても送り返さず、利用者に見せるだけにする:** Claude Code の Stop のフック（終了 2 で止める）と意味が変わり、同じ設定で違う動きになります（この ADR の目的に反する）。
-    - **質問のときは turn.end のフックを動かさない（モデルが印を付ける）:** 印を付け忘れると同じことが起き、付ければ検査を飛ばせてしまいます。`ask_user` なら、検査は飛ばさず、後に回るだけです。
-  - テスト（実装のとき）: `ask_user` で待ったターンに答えると、同じターンが続き、turn.end のフックはその後に 1 度だけ動く。落ちて再開しても、答えは記録から返る（`TestCrash...`）。文で聞いて終えたターンで、フックが止めたとき、送り返しの文が新しいものになる。
+- **Pass `stop_hook_active: true` from the second time on (done, 2026-10-28).** Claude Code passes this when it continues after being stopped by a Stop hook. KairoCode did not pass it, so even a hook that does nothing the second time kept stopping three times.
+  - The round number is read from the `.<n>` of the hook run's ID (which time with the same input, counted by the SDK. Invariant 8). A turn.end hook's input is the same each round, so this is the round number. It is a recorded ID, so it is the same on resume.
+  - No field is added to the input, so the IDs of the turn's calls do not change, and the turn's version is not bumped.
+  - Tests: `TestStopHookActive` (false the first time, true the second, ends on the second), `TestHookRepeat`.
+- **A reply that waits for the user's answer is not sent back (Accepted (2026-10-30, the user's "go ahead"). The implementation is under "Implementation" below).**
+  - Add a tool for the model to ask the user, `ask_user` (a question, and options if any). It is the same as Claude Code's `AskUserQuestion`.
+    - Inside the turn, it waits as the same question as a flow's `ask` (`Kind: question`) (`kairo.WaitFor`, invariant 7). The answer goes back to the model as the tool result, and the turn continues.
+    - It does nothing to the outside, so its effect is `tools.Read` (no approval needed).
+    - turn.end hooks run only when the work is really done. The check does not cut in before the question.
+  - When the model asks in prose and ends without using `ask_user`, turn.end hooks run as before. The send-back text in that case changes from "fix it before ending" to: "The check at the end did not pass. If your reply was a question to the user, do no other work; restate the question in one line and end. Otherwise fix it before ending."
+    - This text is a value inside the turn workflow, so changing it bumps the turn's version (the previous version is `Draining`).
+  - In the terminal and clients, the reply after a send-back is shown following the previous reply (the previous reply is not erased). Whether that is already so is checked during implementation.
+  - **Alternatives considered**
+    - **Detect whether the reply text is a question (ends with "?", and so on):** cannot be detected deterministically, and when it misses, the check is skipped.
+    - **When a turn.end hook stops it, do not send back, only show the user:** the meaning differs from Claude Code's Stop hook (exit 2 stops), and the same settings would behave differently (against the purpose of this ADR).
+    - **Do not run turn.end hooks for questions (the model marks them):** forgetting the mark leads to the same problem, and the mark could be used to skip the check. With `ask_user`, the check is not skipped, only postponed.
+  - Tests (at implementation): answering a turn that waited with `ask_user` continues the same turn, and the turn.end hook runs only once after that. After a crash and resume, the answer comes from the record (`TestCrash...`). In a turn that asked in prose and ended, when a hook stops it, the send-back text is the new one.
 
-- **実装（2026-10-30、利用者の判断で進めた）:** 上の案を、次のとおり実装した。案から変えたところも書く。
-  - **`ask_user`**（`internal/tools/askuser.go`、作用は `Read`、既定で許可）。引数は問いと、選ぶ答え 2〜6 個。答えには、KairoCode が「Something else: I will say it in my next message」を足す（ACP のクライアントは選択肢のボタンでしか答えられないため）。これが選ばれたら、モデルには「利用者は次のメッセージで自分の言葉で答える。今はターンを終えよ」と返す。
-  - **API のエンジン:** ターンのワークフローが、呼び出しを 1 つずつ確かめるところ（承認を待つのと同じところ、`Parallel` の外）で、フローの `ask` と同じ質問（`flow.ask` と `kairo.WaitFor`）として聞き、答えを呼び出しの結果にする（`askUser`）。
-  - **CLI のエンジン（Claude Code、codex、copilot）:** `claude` を待たせない（ADR 0007 の承認と同じ）。MCP の `ask_user` は「質問は利用者に回した。ターンを終えよ」とすぐ返し、質問をターンの `Asks` に載せる（`AskRequest.Options`）。そのラウンドが終わったら、ターンが聞いて待ち、答えを「You asked the user (ask_user): …」として `claude` に渡して続ける。
-  - **送り返しの文:** ターンの道具に `ask_user` があるとき（`agent.load` の記録）だけ、新しい文にする: 「返事が利用者への質問だったなら、ほかのことはせず、`ask_user` で聞き、答えを得たら続けよ。そうでなければ直してから終えよ」（`stopNote`）。
-  - **ターンの版は上げなかった。** 案では、送り返しの文を変えるので版を上げるとしていた。実装では、新しい文も `ask_user` の扱いも、記録された道具の一覧に `ask_user` があるターンにしか効かない。`ask_user` の前に始まったターンは、記録された一覧に無いので、今までと同じ呼び出しを同じ入力で行う（不変条件 2、kairo の ADR 0060 の版の考え方に合う）。
-  - **同じ名前のカスタムツール:** `ask_user` より前から、利用者が `ask_user` という名前のカスタムツールを作れた（名前が空いていたため）。そのツールを持つターンでは、`ask_user` は今までどおりカスタムツールとして動き、送り返しの文も前のまま（API の道でも `stopNote` でも、カスタムツールのときは新しい扱いをしない。MCP の道は、カスタムツールを先に振り分けるので、もとからそうなる）。これで「前に始まったターンの呼び出しは変わらない」が、この場合にも成り立つ。
-  - 「端末とクライアントでは、送り返しの後の返事を、前の返事に続けて見せる」は、確かめていない。
-  - テスト: `TestAskUser`、`TestAskUserArguments`、`TestAskUserBeforeStopHook`（答えを待つ間、Stop のフックは動かず、答えの後に 1 度だけ動く）、`TestCrashAskUser`（質問を待っているところで落として再開し、同じ質問に答えると同じターンが続く。前のモデルの呼び出しはやり直さない）、`TestClaudeEngineAskUser`、`TestStopNote`。
+- **Implementation (2026-10-30, carried out on the user's decision):** the proposal above was implemented as follows. Where it differs from the proposal is noted too.
+  - **`ask_user`** (`internal/tools/askuser.go`, effect `Read`, allowed by default). The arguments are the question and 2 to 6 answers to choose from. KairoCode adds "Something else: I will say it in my next message" to the answers (because ACP clients can only answer with option buttons). If that is chosen, the model gets "The user will answer in their own words in the next message. End the turn now."
+  - **The API engine:** where the turn workflow checks calls one by one (the same place it waits for approval, outside `Parallel`), it asks as the same question as a flow's `ask` (`flow.ask` and `kairo.WaitFor`), and the answer becomes the call's result (`askUser`).
+  - **CLI engines (Claude Code, codex, copilot):** `claude` is not kept waiting (the same as approval in ADR 0007). The MCP `ask_user` returns at once with "The question was passed to the user. End the turn.", and puts the question in the turn's `Asks` (`AskRequest.Options`). When that round ends, the turn asks and waits, and passes the answer to `claude` as "You asked the user (ask_user): …" to continue.
+  - **The send-back text:** the new text is used only when the turn's tools include `ask_user` (the `agent.load` record): "If your reply was a question to the user, do nothing else; ask with `ask_user`, and continue once you have the answer. Otherwise fix it before ending." (`stopNote`).
+  - **The turn's version was not bumped.** The proposal said the version would be bumped because the send-back text changes. In the implementation, both the new text and the `ask_user` handling take effect only in turns whose recorded tool list includes `ask_user`. Turns started before `ask_user` do not have it in their recorded list, so they make the same calls with the same inputs as before (invariant 2; this fits the version thinking of kairo's ADR 0060).
+  - **A custom tool with the same name:** from before `ask_user`, the user could create a custom tool named `ask_user` (the name was free). In turns that have such a tool, `ask_user` works as the custom tool as before, and the send-back text stays the old one (neither the API path nor `stopNote` applies the new handling when it is a custom tool. The MCP path routes custom tools first, so it already works this way). This keeps "calls of turns started earlier do not change" true in this case too.
+  - "In the terminal and clients, the reply after a send-back is shown following the previous reply" is not checked.
+  - Tests: `TestAskUser`, `TestAskUserArguments`, `TestAskUserBeforeStopHook` (while waiting for the answer the Stop hook does not run, and it runs once after the answer), `TestCrashAskUser` (crash while waiting on the question and resume; answering the same question continues the same turn. The earlier model call is not redone), `TestClaudeEngineAskUser`, `TestStopNote`.
 
-### 8. Claude Code のフックの sandbox: 手元の通信と、自分の記録の置き場所（2026-10-28 追記、承認（2026-10-28））
+### 8. The sandbox for Claude Code's hooks: local network access, and where they keep their own records (Addendum (2026-10-28), Accepted (2026-10-28))
 
-7 節の続きです。Stop のフックが止める一番の理由は、フックが動く sandbox にありました。
+This continues section 7. The main reason the Stop hook stops things was the sandbox the hook runs in.
 
-- このリポジトリの Stop のフック（`scripts/check.sh --quick`）は、テストで `127.0.0.1` と Unix ソケットで待ち受けます。KairoCode の sandbox ではネットワークが無いので、テストが始まらず、「この環境では動かない」（終了 3）で止めます。
-- 通ったことの記録（`.claude/.cache/last-green`）も、`.claude` が守る名前なので書けません。ソースを変えたターンは、コードが正しくても必ず止められます。
-- 記録を `.claude` の外（sandbox から書ける場所）に移す案は退けます。モデルの bash も同じ場所に書けるので、検査を動かさずに「通った」を書いて、終わるときの検査を飛ばせてしまいます。
+- This repository's Stop hook (`scripts/check.sh --quick`) has tests that listen on `127.0.0.1` and Unix sockets. KairoCode's sandbox has no network, so the tests do not start, and it stops with "this does not run in this environment" (exit 3).
+- The record of passing (`.claude/.cache/last-green`) cannot be written either, since `.claude` is a protected name. A turn that changes source is always stopped, even if the code is correct.
+- We reject moving the record outside `.claude` (to a place the sandbox can write). The model's bash could write the same place, so it could write "passed" without running the check and skip the check at the end.
 
-決定（案）:
+Decision (proposal):
 
-- **フックを、手元の通信だけを許す sandbox（`Loopback`、ADR 0031）で動かします。** bash の `sandbox: "loopback"` と同じで、localhost と、フック自身の TMPDIR の Unix ソケットだけです。外のネットワークは今までどおり無しです。デーモンのソケットは見えません（自分の呼び出しを承認できない）。
-- **フックにだけ、`.claude/.cache` に書くことを許します**（`Policy.Writable`）。Claude Code のフックが自分の状態を置く場所として使われる名前です。`.claude` のほかの場所（設定、フックの台本）は、今までどおり書けません。モデルの bash には許しません。
-  - これで、フックは検査を動かして通し、通ったことを記録できます。同じソースでは、次から検査を繰り返しません。
-  - モデルが記録を書いて検査を飛ばすことはできません。フックの台本は `.claude/hooks` にあり、変えれば聞き直されます（2 節）。
-- 「sandbox の外で動かす」と答えたフックは、今までどおりです。
-- テスト: フックが localhost で待ち受けられる。フックが `.claude/.cache` に書け、`.claude/settings.json` には書けない。同じ sandbox の bash は `.claude/.cache` に書けない。macOS と Linux の両方で。
-- 検討した代替案:
-  - **記録を `.claude` の外に置く:** 上のとおり、モデルが検査を飛ばせます。
-  - **フックを sandbox の外で動かすよう利用者に答えてもらう:** 今もできますが、フックの台本は何でもできるようになります。検査に要るのは手元の通信と記録の置き場所だけです。
-  - **フックが「この環境では動かない」で止めたときは止めない:** 検査が無いまま終われるようになります。
-- **実装（2026-10-28）:** `hookCommandAction` が、sandbox の中のフックを `Loopback` で動かし、Claude Code のフックには `.claude/.cache` を `Policy.Writable` に足します（無ければ作る。`.claude` か `.claude/.cache` がリンクなら足さない）。Linux では、書ける場所が別の書ける場所の守る名前の中にあるとき、守る名前を読み取り専用にした後で、もう一度書けるようにします（macOS は書ける場所ごとの規則なので、そのままで書ける）。テスト: `TestSandboxWritableInsideProtected`、`TestClaudeHookLoopbackAndCache`、`TestHookCache`（macOS で通した。Linux は CI で）。
+- **Run hooks in a sandbox that allows only local network access (`Loopback`, ADR 0031).** The same as bash's `sandbox: "loopback"`: only localhost and Unix sockets in the hook's own TMPDIR. No outside network, as before. The daemon's socket is not visible (it cannot approve its own calls).
+- **Allow only hooks to write `.claude/.cache`** (`Policy.Writable`). It is the name Claude Code's hooks use as the place to keep their own state. Other places in `.claude` (settings, hook scripts) stay unwritable, as before. The model's bash is not allowed.
+  - With this, a hook can run the check, pass it, and record that it passed. With the same source, the check is not repeated after that.
+  - The model cannot write the record to skip the check. The hook scripts are in `.claude/hooks`, and changing them leads to asking again (section 2).
+- Hooks answered "run outside the sandbox" are as before.
+- Tests: a hook can listen on localhost. A hook can write `.claude/.cache` and cannot write `.claude/settings.json`. bash in the same sandbox cannot write `.claude/.cache`. On both macOS and Linux.
+- Alternatives considered:
+  - **Put the record outside `.claude`:** as above, the model could skip the check.
+  - **Have the user answer to run the hook outside the sandbox:** possible today, but then the hook script can do anything. The check needs only local network access and a place for its record.
+  - **Do not stop when a hook stops with "this does not run in this environment":** then it could end with no check.
+- **Implementation (2026-10-28):** `hookCommandAction` runs hooks in the sandbox with `Loopback`, and for Claude Code's hooks adds `.claude/.cache` to `Policy.Writable` (created if missing; not added if `.claude` or `.claude/.cache` is a link). On Linux, when a writable place is inside a protected name of another writable place, it is made writable again after the protected names are made read-only (macOS has rules per writable place, so it is writable as is). Tests: `TestSandboxWritableInsideProtected`, `TestClaudeHookLoopbackAndCache`, `TestHookCache` (passed on macOS. Linux in CI).
 
-### 9. Claude Code のフックを読まない設定（2026-10-30 追記、利用者の判断）
+### 9. A setting to not read Claude Code's hooks (Addendum (2026-10-30), the user's decision)
 
-利用者の指摘（2026-10-30）: 中身の見えないフックが急に動くのは怖い。KairoCode は、聞かずにフックを動かすことはしないが、Claude Code の設定にフックがあれば、そのフォルダーで初めて動く前に毎回聞く。聞かれること自体を止める手段がなかった。
+The user's point (2026-10-30): it is scary when a hook whose contents you cannot see suddenly runs. KairoCode does not run hooks without asking, but if Claude Code's settings have hooks, it asks every time before they first run in that folder. There was no way to stop being asked at all.
 
-- **`kairocode.json` の `"agents": {"claudeHooks": "off"}` で、Claude Code のフック（2 節の `~/.claude/settings.json`、`.claude/settings.json`、`.claude/settings.local.json`）を読まない。** 既定の `"ask"` は今までどおり（初めて動く前に聞く）。
-  - 利用者の設定で決め、プロジェクトの設定は `"off"` にすること（厳しくすること）だけができる（ADR 0031 の `sandbox.loopback` と同じ）。知らない値は `"off"` とみなす。
-  - 読むのは `agent.load` の中なので、決めた値は記録され、進行中のターンは開始時の値で進む（不変条件 2）。KairoCode 自身のフック（`kairocode.json` の `hooks`）には効かない。
-- **質問の見せ方（同じ日）:** フックの質問には、コマンドが指すファイル（`~` かフォルダーから）の最初の 60 行を添え、この設定で止められることも書く（ACP のエージェントが見せるときに読む。記録には残さない）。選択肢は、フローの質問と同じく、どれも利用者が選ぶまで選ばれない種類（reject）にする。
-- テスト: `TestClaudeHooksOff`（値の組み合わせと、`"off"` でフックを聞かずにターンが進む）、`TestACPHookQuestion`。
-
+- **`"agents": {"claudeHooks": "off"}` in `kairocode.json` stops reading Claude Code's hooks (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json` from section 2).** The default `"ask"` stays as before (ask before the first run).
+  - It is decided by the user's settings; project settings can only set `"off"` (make it stricter) (the same as `sandbox.loopback` in ADR 0031). Unknown values count as `"off"`.
+  - It is read inside `agent.load`, so the value is recorded, and a turn in progress goes on with the value from its start (invariant 2). It does not affect KairoCode's own hooks (`hooks` in `kairocode.json`).
+- **How the question is shown (same day):** a hook's question includes the first 60 lines of the file the command points to (from `~` or the folder), and says that this setting can stop it (read when the ACP agent shows it; not kept in the record). As with flow questions, every option is of a kind that is not selected until the user picks it (reject).
+- Tests: `TestClaudeHooksOff` (combinations of values, and with `"off"` the turn proceeds without asking about hooks), `TestACPHookQuestion`.

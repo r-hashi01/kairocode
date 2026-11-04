@@ -1,209 +1,209 @@
-# 進め方（M0〜M9）
+# How we proceed (M0 to M9)
 
-設計 10 節の段階を、受け入れ条件のテストに落としたものです。段階の作業は `/milestone` スキルで進めます。受け入れ条件は、実装の前にテストとして書きます（最初は落ちる）。すべて通ったら、その段階の「状態」を「完了（日付）」にします。
+The milestones of design section 10, turned into acceptance-criteria tests. Work on a milestone with the `/milestone` skill. Write the acceptance criteria as tests before implementing (they fail at first). When they all pass, set that milestone's "Status" to "done (date)".
 
-今の段階: **M7（強みを見せる）は未着手**。M6 は完了（2026-11-04、v0.1.0 を公開）。M5 は完了（2026-10-22）。M3 も完了。M2 の残りは、dspchr（ADR 0004 の承認待ち）です（本物の `claude` と Zed での手での確認は M6 の関門で済んだ）。M4 の残り（PostgreSQL、サスペンドモード、GitHub から起動）は ADR 0012 と一緒に保留です。
+Current stage: **M7 (show the strengths) is not started**. M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
 
-## M0 骨組み
+## M0 Skeleton
 
-状態: 完了（2026-10-09）
+Status: done (2026-10-09)
 
-中身: `go.mod` に kairo の SDK（`github.com/r-hashi01/kairo` v0.3.0 以上）と `modernc.org/sqlite` を足す。`internal/runtime`（`kairo.Open`、ツールの作用の写し）。サーバー、CLI、セッションとターンのワークフロー、モデル（Anthropic と fake）、読むツール（read、glob、grep、list）、メッセージの保存（`kc_message`）。
+Contents: add kairo's SDK (`github.com/r-hashi01/kairo` v0.3.0 or later) and `modernc.org/sqlite` to `go.mod`. `internal/runtime` (`kairo.Open`, mapping tool effects). The server, the CLI, the session and turn workflows, the model (Anthropic and fake), the reading tools (read, glob, grep, list), message storage (`kc_message`).
 
-前提: ADR 0001 の承認。
+Prerequisite: approval of ADR 0001.
 
-決めること: セッションとターンの形（設計 2.1 節）。セッション（根）が `kairo.WaitFor("message")` と `kairo.Child("turn", …)` を繰り返すか、ターンを根の実行として `WithID` で始めるか。前者は木の単位の削除と取り消しの伝わり方を使えるが、再開でセッションの関数がターンの数だけ記録を読み直す。
+To decide: the shape of sessions and turns (design section 2.1). Either the session (the root) repeats `kairo.WaitFor("message")` and `kairo.Child("turn", …)`, or each turn starts as a root run with `WithID`. The former can use deletion by whole tree and the way cancellation propagates, but on resume the session function re-reads the record once per turn.
 
-受け入れ条件:
+Acceptance criteria:
 
 
-- [x] `TestCrashTurnResume`: ターンの途中（モデルの 2 回目の呼び出しの最中）でプロセスを強制終了し、再開すると同じ最終応答まで進む。終わったモデルの呼び出しは、もう一度は呼ばれない（fake の呼び出し回数で確かめる）。
-- [x] `TestHistoryStoredOnce`: 10 ターンの会話で、`kc_message` の行の数がメッセージの数と等しい。モデルの呼び出しの入力にメッセージの本文が入っていない（NFR-5）。
-- [x] `TestWorkflowIDs`: セッションの ID が `s/<ID>` で、失敗したターンの後に同じメッセージを送り直しても、ターンが別の実行になる（子の入力にターンの番号が入る）。
-- [x] `kairocode run "<依頼>"` が、fake のプロバイダーで最後まで動く。
-- [x] `internal/invariants` の検査が、実際のワークフローとツールに対して通る。
+- [x] `TestCrashTurnResume`: force-kill the process in the middle of a turn (during the model's second call); on resume it proceeds to the same final response. A finished model call is not called again (checked with the fake's call count).
+- [x] `TestHistoryStoredOnce`: in a 10-turn conversation, the number of `kc_message` rows equals the number of messages. The input of a model call contains no message text (NFR-5).
+- [x] `TestWorkflowIDs`: the session ID is `s/<ID>`, and if the same message is sent again after a failed turn, the turn is a different run (the child's input contains the turn number).
+- [x] `kairocode run "<request>"` runs to the end with the fake provider.
+- [x] The `internal/invariants` checks pass against the real workflows and tools.
 
-## M1 書くツールと承認
+## M1 Writing tools and approvals
 
-状態: 完了（2026-10-09）
+Status: done (2026-10-09)
 
-M0 のレビューからの持ち越し（`durability-reviewer`、2026-10-09）:
+Carried over from M0's review (`durability-reviewer`, 2026-10-09):
 
-- 実のツールの handler で、作用の後に起きたエラー（tool_result の保存の失敗など）は `kairo.Unknown` で包む。`tools.Def.Run` から「効いたかわからない」を返せるようにする（不変条件 4）。
-- 書くツールは、`resolve` の後の差し替え（TOCTOU）に備え、`os.OpenRoot` か `O_NOFOLLOW` でたどる。
-- `kairocode serve` が自動で作ったトークンを stderr に出している。ADR 0004 の `server.json`（0600）に置き換える。 → M2 の始めに、ADR 0008 のデーモンで解決（`kairocode serve` は無くなり、トークンは `server.json` に置く）。
+- In a real tool's handler, wrap errors that happen after the effect (a failure to save the tool_result, and so on) in `kairo.Unknown`. Let `tools.Def.Run` return "we do not know whether it took effect" (invariant 4).
+- Writing tools walk paths with `os.OpenRoot` or `O_NOFOLLOW`, to guard against a swap after `resolve` (TOCTOU).
+- `kairocode serve` prints the token it created automatically to stderr. Replace it with ADR 0004's `server.json` (0600). → Solved at the start of M2 with ADR 0008's daemon (`kairocode serve` is gone, and the token lives in `server.json`).
 
-中身: edit、write、bash、git（commit、push）、作用の型、権限の規則と判定（`permission.check`）、承認の待ち、要確認、コマンドの sandbox（ADR 0005）。
+Contents: edit, write, bash, git (commit, push), effect types, permission rules and decisions (`permission.check`), approval waits, blocked (needs confirmation), the command sandbox (ADR 0005).
 
-作業の順番（2026-10-09）:
+Order of work (2026-10-09):
 
-1. ツールの契約: 「効いたかわからない」を返せるようにする。作用の後のエラーは `kairo.Unknown` で包む。
-2. ファイルの操作を `os.Root` に移す（TOCTOU を塞ぐ）。
-3. edit と write: 「計画」（読むだけ。書く前と書いた後のハッシュを記録する）と「適用」（冪等。比べて置き換える）の 2 段にする（設計 3.1 節）。`TestCrashWriteOnce`。
-4. 権限の規則、`permission.check`、承認の待ち、plan のモード（ADR 0002 の第 1 部の承認が要る）。
-5. sandbox（ADR 0005）。macOS と Linux。
-6. bash と要確認。`TestCrashBashNeedsReview`。
-7. git の commit と push。`TestCrashGitCommitOnce`。
-8. Claude Code のエンジンで、実のツールを MCP に通す。自前の表に結果を記録する（kairo の不足 #17 の手当て）。前のプロセスで終わった実の呼び出しと同じものが来たら、人に確かめる。
-9. `TestResumeAfterLongApproval`。サーバーのトークンを `server.json` に移す。
+1. The tool contract: allow returning "we do not know whether it took effect". Wrap errors after the effect in `kairo.Unknown`.
+2. Move file operations to `os.Root` (closes TOCTOU).
+3. edit and write: two stages, "plan" (read only; records the hashes before and after the write) and "apply" (idempotent; compare and replace) (design section 3.1). `TestCrashWriteOnce`.
+4. Permission rules, `permission.check`, approval waits, plan mode (needs approval of ADR 0002's part 1).
+5. The sandbox (ADR 0005). macOS and Linux.
+6. bash and blocked (needs confirmation). `TestCrashBashNeedsReview`.
+7. git commit and push. `TestCrashGitCommitOnce`.
+8. With the Claude Code engine, route real tools through MCP. Record results in our own table (the remedy for kairo gap #17). If the same real call as one that finished in the previous process comes in, ask a person.
+9. `TestResumeAfterLongApproval`. Move the server's token to `server.json`.
 
-受け入れ条件:
+Acceptance criteria:
 
-- [x] `TestCrashWriteOnce`: write と edit の最中に強制終了して再開しても、ファイルの書き込みは 1 回分の結果になる。人が途中で書き換えた場合は、衝突としてモデルに返る。
-- [x] `TestCrashGitCommitOnce`: git commit の最中に強制終了して再開しても、commit は 1 つだけできる。
-- [x] `TestCrashBashNeedsReview`: bash（実）の最中に強制終了すると、再開で「要確認」になり、答え（実行された／されなかった）が `k.Resolve` / `k.ResolveFailed` で返り、続く。コマンドは確かめずに再実行されない。
-- [x] `TestApprovalFromAnotherProcess`: 承認を待っているセッションに、別のプロセスから承認を出すと、セッションが続く。
-- [x] `TestPermissionRecordedAtTurnStart`: 承認待ちの間に権限の設定を変えても、再開したターンは開始時の判定で進む。
-- [x] plan のモードでは、`tools.Read` のツールしか呼ばれない。
-- [x] sandbox（ADR 0005）: `TestSandboxDeniesWriteOutsideWorkspace`、`TestSandboxProtectsGitAndConfig`、`TestSandboxDeniesNetwork`、`TestSandboxStripsSecrets`、`TestSandboxIgnoresModelCwdOutsideRoot`、`TestSandboxFailsClosed` が、macOS と Linux（Docker）の両方で通る。
-- [x] `TestEscalationAlwaysAsks`（bash の昇格。手順 6 で）。
-- [x] Claude Code のエンジンで、実のツールを MCP に通す（ADR 0007）: `TestClaudeEngineAsksForApproval`、`TestClaudeEngineRepeatAfterInterruptionAsks`、`TestCrashClaudeEngine`。
-- [x] 24 時間を超えて承認を待ったターンが落ちて再開しても、終わった呼び出しをやり直さない（`TestResumeAfterLongApproval`。kairo 0.3.0 で解けたことを、KairoCode のターンで確かめ続ける）。
+- [x] `TestCrashWriteOnce`: force-kill during write and edit and resume, and the file ends up written once. If a person changed it in between, it goes back to the model as a conflict.
+- [x] `TestCrashGitCommitOnce`: force-kill during git commit and resume, and exactly one commit is made.
+- [x] `TestCrashBashNeedsReview`: force-kill during bash (real), and on resume it becomes blocked (needs confirmation); the answer (it ran / it did not) comes back with `k.Resolve` / `k.ResolveFailed`, and it continues. The command is not run again without checking.
+- [x] `TestApprovalFromAnotherProcess`: give an approval from another process to a session waiting for approval, and the session continues.
+- [x] `TestPermissionRecordedAtTurnStart`: even if the permission settings change while waiting for approval, the resumed turn proceeds with the decision from its start.
+- [x] In plan mode, only `tools.Read` tools are called.
+- [x] The sandbox (ADR 0005): `TestSandboxDeniesWriteOutsideWorkspace`, `TestSandboxProtectsGitAndConfig`, `TestSandboxDeniesNetwork`, `TestSandboxStripsSecrets`, `TestSandboxIgnoresModelCwdOutsideRoot`, `TestSandboxFailsClosed` pass on both macOS and Linux (Docker).
+- [x] `TestEscalationAlwaysAsks` (bash escalation. In step 6).
+- [x] With the Claude Code engine, route real tools through MCP (ADR 0007): `TestClaudeEngineAsksForApproval`, `TestClaudeEngineRepeatAfterInterruptionAsks`, `TestCrashClaudeEngine`.
+- [x] A turn that waited more than 24 hours for approval, then crashed and resumed, does not redo finished calls (`TestResumeAfterLongApproval`. Keeps checking, on KairoCode's turns, what kairo 0.3.0 solved).
 
-## M2 クライアント、ストリーミング、取り消し、dspchr
+## M2 Clients, streaming, cancellation, dspchr
 
-状態: 作業中
+Status: in progress
 
-中身: ACP のエージェント（ADR 0002。`kairocode acp`、v1）、端末の対話（`kairocode chat`、ACP のクライアントとして）、Claude Code のエンジン（ADR 0007）、トークンのストリーミング（`TaskContext.Emit` と `k.Subscribe`）、スナップショットと `/undo`・`/redo`、LSP の診断、エージェントとコマンドの Markdown の定義、dspchr との統合の段階 1（ADR 0004）。
+Contents: the ACP agent (ADR 0002. `kairocode acp`, v1), the terminal UI (`kairocode chat`, as an ACP client), the Claude Code engine (ADR 0007), token streaming (`TaskContext.Emit` and `k.Subscribe`), snapshots and `/undo` / `/redo`, LSP diagnostics, Markdown definitions of agents and commands, stage 1 of the dspchr integration (ADR 0004).
 
-前提: ADR 0002、0004、0007、0008 の承認。
+Prerequisite: approval of ADR 0002, 0004, 0007 and 0008.
 
-受け入れ条件:
+Acceptance criteria:
 
-- [x] データの置き場ごとのデーモン（ADR 0008）: 2 つ目は起動しない（`TestSecondDaemonDoesNotStart`）。クライアントが自動で起動し、`server.json` は 0600（`TestClientStartsTheDaemon`）。別のクライアントからの承認で、待っているターンがすぐ続く（`TestApprovalFromAnotherClient`。借用の期間は既定の 30 秒のまま、数ミリ秒で続く）。落ちたデーモンを起動し直すと、借用の期間を待たずにターンが続く（`TestCrashDaemonRestart`）。何もしないと止まり（`TestIdleDaemonStops`）、クライアントが待っている間は止まらない（`TestDaemonStaysWhileAClientWaits`）。終わる途中のデーモンの後に起動したデーモンは、ロックを待って引き継ぐ（`TestDaemonWaitsForTheOneOnItsWayOut`）。
-- [x] デーモンの版の確かめ（ADR 0008 の追記）: 版の違うクライアントは、ステップが走っておらずほかに使われていないデーモンを入れ替え（`TestOtherBuildReplacesTheDaemon`）、そうでなければ使い続けて利用者に伝える（`TestOtherBuildKeepsABusyDaemon`、`TestOtherBuildKeepsADaemonThatRuns`）。
-- [x] エンジンとモデルをセッションごとに選ぶ（ADR 0008 の追記）: `TestEngineAndModelPerSession`。
-- [x] `kairocode daemon stop`: デーモンがデータの置き場を手放してから応答する（`TestStopTheDaemon`）。走っているステップは、最大 30 秒、終わるまで待ってから止まる（kairo 0.4.1 の `Drain`、`TestStopLetsTheRunningStepFinish`）。
-- [x] 待っている承認を、複数のクライアントで扱う（ADR 0008 の追記）: 同じセッションを見ているクライアント全員に承認の求めが届き、最初の答えが通り、ほかのクライアントには「答えが出た」が届く。後からつないだクライアント（ACP の `session/load` を含む）には、待っている承認が送り直される。 → SSE の側は済み（`TestApprovalToManyClients`、`TestEventsReplayPendingOnJoin`、`TestCrashDaemonEventsAfterRestart`）。ACP の側は `TestACPApprovalSurvivesRestart`、`TestACPPermissionAnsweredElsewhere`。
+- [x] One daemon per data directory (ADR 0008): a second one does not start (`TestSecondDaemonDoesNotStart`). Clients start it automatically, and `server.json` is 0600 (`TestClientStartsTheDaemon`). An approval from another client lets the waiting turn continue right away (`TestApprovalFromAnotherClient`. The lease period stays at the default 30 seconds, and it continues within milliseconds). Restarting a crashed daemon lets the turn continue without waiting for the lease period (`TestCrashDaemonRestart`). It stops when idle (`TestIdleDaemonStops`), and does not stop while a client waits (`TestDaemonStaysWhileAClientWaits`). A daemon started after one that is on its way out waits for the lock and takes over (`TestDaemonWaitsForTheOneOnItsWayOut`).
+- [x] Checking the daemon's version (ADR 0008's addendum): a client of a different version replaces a daemon that runs no steps and that no one else uses (`TestOtherBuildReplacesTheDaemon`); otherwise it keeps using it and tells the user (`TestOtherBuildKeepsABusyDaemon`, `TestOtherBuildKeepsADaemonThatRuns`).
+- [x] Choose the engine and model per session (ADR 0008's addendum): `TestEngineAndModelPerSession`.
+- [x] `kairocode daemon stop`: replies after the daemon lets go of the data directory (`TestStopTheDaemon`). Running steps get up to 30 seconds to finish before it stops (kairo 0.4.1's `Drain`, `TestStopLetsTheRunningStepFinish`).
+- [x] Handle a waiting approval from many clients (ADR 0008's addendum): every client watching the same session gets the approval request, the first answer wins, and the other clients get "answered". Clients that connect later (including ACP's `session/load`) get the waiting approval sent again. → The SSE side is done (`TestApprovalToManyClients`, `TestEventsReplayPendingOnJoin`, `TestCrashDaemonEventsAfterRestart`). The ACP side is `TestACPApprovalSurvivesRestart`, `TestACPPermissionAnsweredElsewhere`.
 
-- [x] SSE で、トークン、ツールの開始と終了、承認の求め、要確認、ターンの終わりが届く（`TestSSEDeliversTurnEvents`、`TestEventsOfATurn`、`TestEventsStreamTokens`、`TestEventsOfAClaudeTurn`、`TestCrashEventsAfterRestart`）。
-- [x] `TestACPContract`: 実装した ACP のメソッドの要求と応答が、固定した版の ACP の JSON Schema（v1、`schema-v1.26.0`）に合う。
-- [x] 決まった順のメッセージを流す ACP のクライアントで、`session/new` → `prompt` → `tool_call` の更新 → `request_permission` → 答え → ターンの終わりが通る（`TestACPTurn`、`TestACPCommand`）。要確認も `request_permission` で答えられる（`TestCrashACPReview`）。
-- [x] 端末の対話（`kairocode chat`、引数なしの `kairo`）を、自分の ACP のクライアントとして作る（ADR 0002）: 返答を届いたそばから書き、ツールの呼び出しを示し、権限を端末で聞き、`-session` で会話を表示し直して続ける（`TestChat`、`TestChatAsks`、`TestNoCommandIsTheChat`、`TestClientKeepsTheOrderOfUpdates`、`TestClientPermission`）。
-- [x] `kairo` は端末では TUI（ADR 0010）: 見出し、入力の枠、状態の行、返答とツールの行、矢印で選ぶ承認（要確認は何も選んでいない状態から）、取り下げ、コマンドの補完、Ctrl-C 2 回で抜ける（`TestTurn`、`TestAsk`、`TestKeys`、`TestQueuedDuringATurn`、`TestHelp`、`TestReplyWraps`、`TestNoSize`）。初めてのフォルダは信頼を聞き、「いいえ」なら何も読まない（`TestTrustQuestion`、`TestChatInAFolderNotTrusted`、`TestTrust`）。Esc でターンを止める（ADR 0011）。
-- [x] `TestACPApprovalSurvivesRestart`: 承認を待っている間に ACP のプロセスを止めても、次のプロセスで `session/load` すると保留中の `request_permission` がもう一度届き、答えるとターンが続く。
-- [ ] Claude Code のエンジン（ADR 0007）: `TestClaudeEngineResumeDoesNotRepeatARealCall`（偽の `claude` で、落ちた後に新しい ID で呼び直された実のツールが二重に動かない）。本物の `claude` では手で確かめる。 → テストは通る（`TestClaudeEngineResumeDoesNotRepeatARealCall`、`TestCrashClaudeEngine`）。本物の `claude` での確認が残り。
-- [x] ターンの取り消し（ADR 0011、#11）: モデルの呼び出しの最中に止めるとターンが cancelled で終わり、次のターンの履歴に利用者のメッセージと書き添えが入る。承認の待ちの最中に止めると待ちが消え、ツールは動かない。取り消しの後に落ちて再開しても書き添えは二重にならない。版 4 のセッションは止めたターンを捨てる。ACP の `session/cancel` と TUI の Esc で止まる。（`TestCancelTurn`、`TestCancelWhileAwaitingApproval`、`TestCancelStopsARunningCommand`、`TestCancelInAVersion4Session`、`TestCrashCancel`、`TestCancelOverHTTP`、`TestACPCancel`、`TestEscStopsTheTurn`。セッションの版 5）
-- [x] edit のあと、LSP の診断のエラーがツールの出力に足される。（ADR 0009。`TestWriteGetsLSPErrors`、`TestCrashWriteOnceWithLSP`、`internal/lsp` のテスト）
-- [x] `.opencode/agents/*.md`、`.opencode/commands/*.md`、`.opencode/skills/` を、opencode と同じ意味で読む。（`TestAgents`、`TestCommands`、`TestExpand`、`TestSkills`、`TestOpencodeAgent`、`TestOpencodeAgentRefused`、`TestOpencodeSkills`、`TestOpencodeCommand`、`TestACPProjectCommand`）
-- [x] `/undo` で作業ファイルが前のターンの状態に戻り、`/redo` で戻る。記録は消えない。（`TestUndoRedo`、`TestUndoThenNewTurnClearsRedo`、`TestUndoAfterRestart`、`TestCrashUndo`、`TestACPUndoRedo`。セッションとターンの版 4）
-- [ ] `TestDspchrStateReports`: `DSPCHR_SESSION` があるとき、ターンの始まり・終わり・承認の求め・要確認・失敗・閉じるときに、`dspchr state` が ADR 0004 の表のとおりに起動される（`dspchr` は引数を記録する偽のコマンドに差し替える）。`DSPCHR_SESSION` が無ければ何も起動しない。
-- [x] `kairocode usage --session <ID> --json` が、記録された使用量（入力・出力・キャッシュ）を返す。（`TestUsageOfASession`、`TestRunWithFakeProvider`）
-- [ ] 普段の作業（バグの修正、機能の追加、リファクタリング）を、ACP のクライアント（Zed）から、opencode と同等の手間でこなせる（手で確かめる）。
+- [x] Over SSE, tokens, tool start and end, approval requests, blocked (needs confirmation), and the end of the turn arrive (`TestSSEDeliversTurnEvents`, `TestEventsOfATurn`, `TestEventsStreamTokens`, `TestEventsOfAClaudeTurn`, `TestCrashEventsAfterRestart`).
+- [x] `TestACPContract`: the requests and responses of the implemented ACP methods match a pinned version of ACP's JSON Schema (v1, `schema-v1.26.0`).
+- [x] With an ACP client that sends messages in a fixed order, `session/new` → `prompt` → `tool_call` updates → `request_permission` → answer → end of turn works (`TestACPTurn`, `TestACPCommand`). Blocked (needs confirmation) can also be answered with `request_permission` (`TestCrashACPReview`).
+- [x] Build the terminal UI (`kairocode chat`, `kairo` with no arguments) as its own ACP client (ADR 0002): it writes replies as they arrive, shows tool calls, asks for permission in the terminal, and with `-session` redisplays the conversation and continues (`TestChat`, `TestChatAsks`, `TestNoCommandIsTheChat`, `TestClientKeepsTheOrderOfUpdates`, `TestClientPermission`).
+- [x] `kairo` is a TUI in a terminal (ADR 0010): header, input box, status line, reply and tool lines, approvals chosen with arrows (blocked (needs confirmation) starts with nothing selected), withdrawal, command completion, Ctrl-C twice to quit (`TestTurn`, `TestAsk`, `TestKeys`, `TestQueuedDuringATurn`, `TestHelp`, `TestReplyWraps`, `TestNoSize`). In a folder seen for the first time it asks for trust, and on "no" it reads nothing (`TestTrustQuestion`, `TestChatInAFolderNotTrusted`, `TestTrust`). Esc stops the turn (ADR 0011).
+- [x] `TestACPApprovalSurvivesRestart`: even if the ACP process is stopped while waiting for approval, `session/load` in the next process delivers the pending `request_permission` again, and answering it lets the turn continue.
+- [ ] The Claude Code engine (ADR 0007): `TestClaudeEngineResumeDoesNotRepeatARealCall` (with a fake `claude`, a real tool called again under a new ID after a crash does not run twice). Check by hand with the real `claude`. → The tests pass (`TestClaudeEngineResumeDoesNotRepeatARealCall`, `TestCrashClaudeEngine`). Checking with the real `claude` remains.
+- [x] Turn cancellation (ADR 0011, #11): stopping during a model call ends the turn as cancelled, and the next turn's history contains the user's message and a note. Stopping during an approval wait removes the wait, and the tool does not run. Crashing and resuming after a cancellation does not duplicate the note. A version 4 session drops the stopped turn. ACP's `session/cancel` and the TUI's Esc stop it. (`TestCancelTurn`, `TestCancelWhileAwaitingApproval`, `TestCancelStopsARunningCommand`, `TestCancelInAVersion4Session`, `TestCrashCancel`, `TestCancelOverHTTP`, `TestACPCancel`, `TestEscStopsTheTurn`. Session version 5)
+- [x] After an edit, LSP diagnostic errors are added to the tool's output. (ADR 0009. `TestWriteGetsLSPErrors`, `TestCrashWriteOnceWithLSP`, the tests in `internal/lsp`)
+- [x] Read `.opencode/agents/*.md`, `.opencode/commands/*.md` and `.opencode/skills/` with the same meaning as opencode. (`TestAgents`, `TestCommands`, `TestExpand`, `TestSkills`, `TestOpencodeAgent`, `TestOpencodeAgentRefused`, `TestOpencodeSkills`, `TestOpencodeCommand`, `TestACPProjectCommand`)
+- [x] `/undo` returns the working files to the previous turn's state, and `/redo` brings them back. The record is not deleted. (`TestUndoRedo`, `TestUndoThenNewTurnClearsRedo`, `TestUndoAfterRestart`, `TestCrashUndo`, `TestACPUndoRedo`. Session and turn version 4)
+- [ ] `TestDspchrStateReports`: when `DSPCHR_SESSION` is set, `dspchr state` is started as in ADR 0004's table at the start and end of a turn, an approval request, blocked (needs confirmation), a failure, and on close (`dspchr` is replaced by a fake command that records its arguments). Without `DSPCHR_SESSION`, nothing is started.
+- [x] `kairocode usage --session <ID> --json` returns the recorded usage (input, output, cache). (`TestUsageOfASession`, `TestRunWithFakeProvider`)
+- [ ] Everyday work (fixing bugs, adding features, refactoring) can be done from an ACP client (Zed) with the same effort as opencode (checked by hand).
 
-## M3 サブエージェントと、人と出来事が始めるワークフロー
+## M3 Subagents, and workflows started by people and events
 
-状態: 完了（2026-10-19）
+Status: done (2026-10-19)
 
-中身: task（サブエージェント）。Starlark のフロー（ADR 0003: `.kairocode/workflows/<name>.star`、プリミティブ `agent`・`parallel`・`decide`・`tool`・`ask`・`phase`、ずれの検出、上限。外の出来事を待つ `wait` は M4）。入口は `/flow <name>`、hook（`turn.end`、`tool.after`、`session.start`）、エージェントの `workflow:`。言葉から作る（`/flow new <説明>`）。端末のフローの図（作るとき、動いている間、`kairocode flow graph`・`show`・`stats`）と、図の上での変更。
+Contents: task (subagents). Starlark flows (ADR 0003: `.kairocode/workflows/<name>.star`, the primitives `agent`, `parallel`, `decide`, `tool`, `ask`, `phase`, divergence detection, limits. `wait` for outside events is M4). Entry points are `/flow <name>`, hooks (`turn.end`, `tool.after`, `session.start`), and an agent's `workflow:`. Making one from words (`/flow new <description>`). The flow chart in the terminal (when making one, while it runs, `kairocode flow graph`, `show`, `stats`), and changes on the chart.
 
-前提: ADR 0003 の承認（2026-10-19）、ADR 0011（親を止めると子も止まる）。
+Prerequisite: approval of ADR 0003 (2026-10-19), ADR 0011 (stopping the parent stops the children).
 
-受け入れ条件:
+Acceptance criteria:
 
-- [x] `TestCrashWorkflowScriptResume`: 10 個の `agent` を `parallel` で並べたスクリプトを途中で強制終了して再開すると、終わった葉はやり直さない。
-- [x] `TestWorkflowScriptDivergence`: 記録と違う呼び出しをするスクリプトで再開すると、実行せずに止まる。
-- [x] `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。（`TestFlowMistakesAreReplies`、`TestFlowTokenLimit`）
-- [x] `TestTurnEndHookBlocks`: `turn.end` のフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
-- [x] `TestWorkflowGraph`: フローの図が、順番、`if`、`parallel`、`for`、`def` の展開、`phase` を正しく表し、幅が足りないときはまとめ、木の図に切り替える。（`TestBuild`、`TestChartLooks`、`TestChartStates`、`TestChartTooNarrow`、`TestFlowGraph`）
-- [x] `TestWorkflowLive`: 実行の木の状態が、図の箱の印と色、繰り返しの回に写る。`kairocode flow show <実行> --follow` が同じ図を出す。（`TestFlowEvents`、`TestFlowAgentWaiting`、`TestFlowLive`、`TestACPFlowPlan`、`TestFlowShowFollow`）
-- [x] `TestDraftFromWords`: `/flow new` で、モデルが書いたスクリプトが検査を通ってファイルになり、図で見え、`/flow <name>` で動く。入力欄から頼んだ変更で図が描き直される。（`TestNewFlow`、`TestFlowWrite`、`TestCheck`、`TestDiff`、`TestFlowsTheTurnMade`）
-- [x] `TestEditOnTheChart`: 図の上で箱の中身を書き換える、消す、入れ替えると、スクリプトのその引数と文の並びだけが変わる。（`TestSetText`、`TestDeleteAndMove`、`TestEditOnTheChart`）
-- [x] 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。（`TestFlowKeepsItsScript`）
-- [x] リポジトリの hook が初めて走る前に、利用者に確認する。（`TestTurnEndHookBlocks`。台本が変わったらまた聞く）
-- [x] エージェントの定義に `workflow:` を書くと、そのエージェントのターンがそのフローで進む。（`TestAgentWorkflow`）
-- [x] 親を止めると、子も止まる（ADR 0011）。（`TestCancelStopsTheFlow`）
+- [x] `TestCrashWorkflowScriptResume`: force-kill a script that runs 10 `agent`s in `parallel` partway and resume, and finished leaves are not redone.
+- [x] `TestWorkflowScriptDivergence`: resuming with a script that makes calls different from the record stops without running.
+- [x] `TestWorkflowScriptLimits`: stops at the limits on steps, number of agents and tokens. (`TestFlowMistakesAreReplies`, `TestFlowTokenLimit`)
+- [x] `TestTurnEndHookBlocks`: when a `turn.end` flow returns `ok` as false, the message goes back to the model and the loop continues, stopping at the limit on the number of times.
+- [x] `TestWorkflowGraph`: the flow chart correctly shows sequence, `if`, `parallel`, `for`, expansion of `def`, and `phase`, and when the width is too small it collapses and switches to a tree chart. (`TestBuild`, `TestChartLooks`, `TestChartStates`, `TestChartTooNarrow`, `TestFlowGraph`)
+- [x] `TestWorkflowLive`: the state of the run tree shows in the boxes' marks and colors and in loop iterations. `kairocode flow show <run> --follow` prints the same chart. (`TestFlowEvents`, `TestFlowAgentWaiting`, `TestFlowLive`, `TestACPFlowPlan`, `TestFlowShowFollow`)
+- [x] `TestDraftFromWords`: with `/flow new`, the script the model wrote passes the checks and becomes a file, is visible in the chart, and runs with `/flow <name>`. A change asked for in the input box redraws the chart. (`TestNewFlow`, `TestFlowWrite`, `TestCheck`, `TestDiff`, `TestFlowsTheTurnMade`)
+- [x] `TestEditOnTheChart`: rewriting, deleting or reordering a box's contents on the chart changes only that argument and the order of statements in the script. (`TestSetText`, `TestDeleteAndMove`, `TestEditOnTheChart`)
+- [x] Even if the script is rewritten while it runs, the running run finishes with the recorded script. (`TestFlowKeepsItsScript`)
+- [x] Before a repository's hook runs for the first time, ask the user. (`TestTurnEndHookBlocks`. Asks again when the script changes)
+- [x] When an agent definition has `workflow:`, that agent's turns proceed with that flow. (`TestAgentWorkflow`)
+- [x] Stopping the parent stops the children (ADR 0011). (`TestCancelStopsTheFlow`)
 
-## M4 非対話とサーバーレス
+## M4 Non-interactive and serverless
 
-状態: 作業中（ADR 0012 は利用者の判断で保留（2026-10-21）。HTTP(S) のツールは済み（ADR 0013））
+Status: in progress (ADR 0012 is on hold by the user's decision (2026-10-21). The HTTP(S) tools are done (ADR 0013))
 
-中身: フローの `wait(event, timeout=)`（ADR 0003）、PostgreSQL、サスペンドモード（`kairo.Suspend`、`k.Handler()` の `/tick`）、HTTP(S) のツール、GitHub からの起動。
+Contents: the flow's `wait(event, timeout=)` (ADR 0003), PostgreSQL, suspend mode (`kairo.Suspend`, `/tick` of `k.Handler()`), the HTTP(S) tools, starting from GitHub.
 
-受け入れ条件:
+Acceptance criteria:
 
-- [ ] Issue のコメントから起動し、承認と CI の結果を待つ間、プロセスが残らない。
-- [x] HTTP(S) のツール（ADR 0013）: `fetch`（GET、読むだけ）と `http`（POST、実）。POST の途中で落ちても送り直さず、人に聞く。利用者の設定の認証は記録に残らない。（`TestFetch`、`TestHTTPPost`、`TestHTTPUnknown`、`TestNetAuth`、`TestNetPrivateRefused`、`TestNetRedirects`、`TestNetSettingsAreTheUsers`、`TestCrashHTTPPost`）
-- [x] `kairocode run` が承認で中断し、`kairocode resume` で続く。（`kairocode run -detach` が人を待つところで止まり（終了コード 3）、`kairocode resume <session>` が最新のターンを最後まで追う。Ctrl-C で止めたときも続け方を示す。`TestRunDetachAndResume`）
+- [ ] Start from an issue comment, and no process stays around while waiting for approval and CI results.
+- [x] The HTTP(S) tools (ADR 0013): `fetch` (GET, read only) and `http` (POST, real). If it crashes during a POST, it does not resend and asks a person. Authentication in the user's settings stays out of the record. (`TestFetch`, `TestHTTPPost`, `TestHTTPUnknown`, `TestNetAuth`, `TestNetPrivateRefused`, `TestNetRedirects`, `TestNetSettingsAreTheUsers`, `TestCrashHTTPPost`)
+- [x] `kairocode run` pauses at an approval and continues with `kairocode resume`. (`kairocode run -detach` stops where it waits for a person (exit code 3), and `kairocode resume <session>` follows the latest turn to the end. When stopped with Ctrl-C it also shows how to continue. `TestRunDetachAndResume`)
 
-## M5 長く使い続ける: 圧縮と分岐、ツールの広がり、記録
+## M5 Long-term use: compaction and forks, wider tools, records
 
-状態: 完了（2026-10-22）。ADR 0024（上限と頻度の制限）は利用者の判断で保留
+Status: done (2026-10-22). ADR 0024 (limits and rate limiting) is on hold by the user's decision
 
-中身（利用者が選んだもの、2026-10-21。M4 の残りは ADR 0012 と一緒に保留）:
+Contents (chosen by the user, 2026-10-21. What remains of M4 is on hold together with ADR 0012):
 
-- 履歴の圧縮（FR-3）と分岐（FR-4）。ADR 0020、0021。
-- 利用者の MCP サーバーのツール（FR-8）、カスタムツール（FR-9）、todo（FR-5）。ADR 0022。
-- 記録の閲覧（FR-24）。ADR 0023。再生（FR-25）は、利用者の判断で作らない（2026-10-22、ADR 0023 の実装の 2）。
-- 上限（FR-26）と頻度の制限（FR-27）は、利用者の判断で保留（2026-10-22）。KairoCode 自身が課金する、使えるモデルを絞る、といった事情が出たときに、ADR 0024（提案のまま）で入れる。
+- History compaction (FR-3) and forks (FR-4). ADR 0020, 0021.
+- Tools from the user's MCP servers (FR-8), custom tools (FR-9), todo (FR-5). ADR 0022.
+- Browsing the record (FR-24). ADR 0023. Replay (FR-25) will not be built, by the user's decision (2026-10-22, ADR 0023's implementation item 2).
+- Limits (FR-26) and rate limiting (FR-27) are on hold by the user's decision (2026-10-22). If a need arises, such as KairoCode billing on its own or narrowing the usable models, they go in with ADR 0024 (still proposed).
 
-受け入れ条件:
+Acceptance criteria:
 
-- [x] 文脈の上限に近づいた会話が、要約して続く。要約の前の記録は消えず、閲覧できる。落ちて再開しても、要約は 1 度だけ（ADR 0020。`TestCompactNearTheContext`、`TestCompactAtTheTurnsStart`、`TestCompactWhenTooLong`、`TestCrashCompact`）。
-- [x] 過去のターンから分岐したセッションが、そのターンまでの会話で続く。元のセッションは変わらない（ADR 0021。`TestForkFromATurn`、`TestForkWithFiles`、`TestForkOnClaudeCode`）。
-- [x] 利用者の MCP サーバーのツールを、宣言した作用の型で使える。宣言のないツールは実として扱い、結果が不明なら人に聞く。プロジェクトが定める MCP サーバーとカスタムツールは、承認なしに sandbox の外で動かない（ADR 0022。どのエンジンでも。`TestMCPServerTool`、`TestCrashMCPServerTool`、`TestCrashMCPServerToolOnClaudeCode`、`TestProjectMCPServerAsks`、`TestProjectMCPServerChanged`、`TestCodexOwnMCPServersOff`）。
-- [x] todo の一覧が、ターンをまたいで続き、クライアントに見える（ADR 0022。`TestTodo`、`TestACPTodoPlan`）。
-- [x] セッションのすべてのターン、モデルの入出力、ツールの呼び出しと結果、待ち、使用量を見られる（`kairocode log`、`/log`。金額は ADR 0024 の後。`TestSessionLog`）。
+- [x] A conversation nearing the context limit is summarized and continues. The record from before the summary is not deleted and can be browsed. Even after crashing and resuming, it is summarized only once (ADR 0020. `TestCompactNearTheContext`, `TestCompactAtTheTurnsStart`, `TestCompactWhenTooLong`, `TestCrashCompact`).
+- [x] A session forked from a past turn continues with the conversation up to that turn. The original session does not change (ADR 0021. `TestForkFromATurn`, `TestForkWithFiles`, `TestForkOnClaudeCode`).
+- [x] Tools from the user's MCP servers can be used with their declared effect types. Tools without a declaration are treated as real, and if the outcome is unknown a person is asked. MCP servers and custom tools defined by the project do not run outside the sandbox without approval (ADR 0022. With every engine. `TestMCPServerTool`, `TestCrashMCPServerTool`, `TestCrashMCPServerToolOnClaudeCode`, `TestProjectMCPServerAsks`, `TestProjectMCPServerChanged`, `TestCodexOwnMCPServersOff`).
+- [x] The todo list continues across turns and is visible to clients (ADR 0022. `TestTodo`, `TestACPTodoPlan`).
+- [x] You can see all of a session's turns, model inputs and outputs, tool calls and results, waits, and usage (`kairocode log`, `/log`. Amounts of money after ADR 0024. `TestSessionLog`).
 
-## M6 公開の準備（個人向けの OSS として出す）
+## M6 Preparing to publish (release as open source for individuals)
 
-状態: 完了（2026-11-04）
+Status: done (2026-11-04)
 
-中身（利用者が選んだもの、2026-10-27: 個人向けの OSS として出す）: ライセンス、版の表示、CI、リリース、README、手での確認。ここまでで公開する（上限は 2026-10-30 に公開の後へ回した）。
+Contents (chosen by the user, 2026-10-27: release as open source for individuals): license, version display, CI, releases, README, checking by hand. Publish once these are done (limits were moved to after publishing on 2026-10-30).
 
-受け入れ条件:
+Acceptance criteria:
 
-- [x] LICENSE（MIT）を置く（2026-10-27）。`third_party/codex-sandbox` の Apache-2.0 と NOTICE はそのまま残す。README から辿れるようにするのは、README の項目で。
-- [x] kairo の SDK を、外の人が `replace` なしで取れる（proxy.golang.org に v0.4.1 がある。2026-10-27 に確かめた）。
-- [x] `kairocode version` が、ビルドのときに埋めた版とコミットを出す（埋めていなければ Go のビルド情報から。`TestVersionLine`、`TestVersionCommand`）。
-- [x] CI（GitHub Actions、macOS と Linux）で `scripts/check.sh` が通る（2026-10-28、PR #12 の `341af18`。sandbox を起動するテストも含めて、両方で通った）。
-- [x] タグからリリースのバイナリ（macOS と Linux、amd64 と arm64）ができ、`go install` と Homebrew の tap で入る（2026-11-04、v0.1.0）。
-  - 2026-11-04: 公開した。非公開のリポジトリは `r-hashi01/kairocode-dev` に名前を変えて残し、`r-hashi01/kairocode` を新しく公開して `main` とタグだけを push した（`main` は force push と削除を禁じた）。最初のタグのバイナリは `+dirty` と名乗った（`dist/` が `.gitignore` になく、2 つ目からのビルドが未追跡のファイルを見た）ので、`dist/` を無視して、公開の前のタグを打ち直した。`brew install r-hashi01/tap/kairocode`（`brew test` も）と `go install …@v0.1.0` で入ることを確かめた。tap は `r-hashi01/homebrew-tap`。
-  - 2026-10-30: 仕組みは用意した。`v*` のタグで、検査を通してから 4 つのバイナリ・チェックサム・Homebrew の formula を下書きのリリースに載せる（`.github/workflows/release.yml`、`scripts/release-build.sh`）。公開の手順は `docs/release.md`。実際のタグと tap は公開のときに。
-- [x] 利用者向けの README（入れ方、最初の設定、`kairo` の使い方、`/flow`、sandbox、対応 OS は macOS と Linux、第三者のライセンス）（2026-11-04、入れ方の節を足して公開）。
-- [x] 公開の前の関門: Zed と TUI で、普段の作業（バグの修正、機能の追加、リファクタリング）を手でこなす（M2 の残り）。出た不具合を直してから公開する（2026-11-04、利用者が確かめた）。
-  - 2026-10-28、TUI で使って出た不具合を直した: 画面のチラつき（返事を 1 行ずつ上に書く）、同じコマンドの 2 回目を「中断の後」と聞く（ADR 0007 の追記）、終わるときの検査が sandbox の中で通らず質問を押し流す（ADR 0018 の 7・8 節）。足したもの: クリップボードの画像（ADR 0026 の追記）、端末の通知（ADR 0032）、失敗したセッションから続ける（ADR 0021 の追記）。
-  - 2026-10-30、TUI: 窓の大きさを変えると入力欄の古い線が残る不具合を、tmux で再現して直した（ADR 0033 の追記）。見た目を KairoCode の縦の線でそろえ、見出しの下にフォルダーで続いているものを出した。貼り付けのラベルに頭を出し、Ctrl+O で開ける。
-  - 2026-10-30、Zed: 承認を待ったまま Zed を終了し、開き直すと、頼んだメッセージと同じ承認が出て、許すと続きから進み、答えが返った（dify-oss、Claude Code のエンジン）。途中で直した: 質問（hook）が答えられる形で出ない、セッションを作った直後のコマンドの一覧が捨てられる、新しい版への交代でターンの待ちが失敗に見える、開き直したときに進行中のターンのメッセージが出ない、表示名（Claude Code、既定のモデルとエフォート、既定の規則）。hook の質問には、動かすスクリプトの中身を添える。
-  - 2026-11-02: 開き直したとき、進行中のターンですでに動いた呼び出しも再生する（PR #17）。Zed で確かめた。
-  - 2026-11-02、公開の前のコードの整理（PR #17〜#21）: 大きなファイルを仕事ごとに分け、`internal/config`・`api`・`plugins`・`secrets`・`clipboard`・`flowfile` を足した。tui と acp は runtime を import しない（`TestClientsDoNotImportTheRuntime`）。途中で直したもの: `sandbox.loopback` をターンの始めの値で決める（ADR 0031 追記）、まだ送っていない `/provider`・`/mode` の選択をデーモンが止まっても残す（ADR 0014 追記）、ホームが無いときに利用者の設定を相対パスで読まない、フローの `decide` を API・Claude Code の順にそろえる（ADR 0014 追記）。
-  - 2026-11-04、手での確認で出たものを直した（PR #23〜#26）: TUI の `/flow` だけでフローを選ぶ画面（動かす・図で変える・実行を見る・新しく作る）、コマンドの名前の後にそのコマンドが取るもの（`/plugin install`、`/flow new`、フローの名前、モデルなど）を出す。Zed: 質問に答えるとどれを選んでも却下（×）に見える、`flow_write` の下書きが見えない（差分で出す）、フローのレビューが崩れる（節を Markdown に、スクリプトを差分に）。
-  - 残り: なし（公開の手順は上の 2 項目）。
+- [x] Add a LICENSE (MIT) (2026-10-27). Keep the Apache-2.0 and NOTICE of `third_party/codex-sandbox` as they are. Making them reachable from the README is done in the README item.
+- [x] Outside people can fetch kairo's SDK without `replace` (proxy.golang.org has v0.4.1. Checked on 2026-10-27).
+- [x] `kairocode version` prints the version and commit embedded at build time (if none were embedded, from Go's build info. `TestVersionLine`, `TestVersionCommand`).
+- [x] `scripts/check.sh` passes in CI (GitHub Actions, macOS and Linux) (2026-10-28, `341af18` in PR #12. Passed on both, including the tests that start the sandbox).
+- [x] A tag produces release binaries (macOS and Linux, amd64 and arm64), and it installs with `go install` and a Homebrew tap (2026-11-04, v0.1.0).
+  - 2026-11-04: published. The private repository was renamed to `r-hashi01/kairocode-dev` and kept, and `r-hashi01/kairocode` was newly made public with only `main` and the tags pushed (force pushes and deletion of `main` are forbidden). The first tag's binaries called themselves `+dirty` (`dist/` was not in `.gitignore`, so the builds from the second on saw untracked files), so we ignored `dist/` and re-tagged before publishing. Confirmed it installs with `brew install r-hashi01/tap/kairocode` (and `brew test`) and with `go install …@v0.1.0`. The tap is `r-hashi01/homebrew-tap`.
+  - 2026-10-30: the machinery is ready. On a `v*` tag, after passing the checks, it attaches the four binaries, checksums and the Homebrew formula to a draft release (`.github/workflows/release.yml`, `scripts/release-build.sh`). The publishing procedure is `docs/release.md`. The actual tag and tap come at publishing time.
+- [x] A README for users (how to install, first setup, how to use `kairo`, `/flow`, the sandbox, supported OSes macOS and Linux, third-party licenses) (2026-11-04, published with an install section added).
+- [x] The gate before publishing: do everyday work (fixing bugs, adding features, refactoring) by hand in Zed and the TUI (what remained of M2). Fix the bugs that come up before publishing (2026-11-04, checked by the user).
+  - 2026-10-28, fixed bugs found using the TUI: screen flicker (write replies above, one line at a time), asking about the second run of the same command as "after an interruption" (ADR 0007's addendum), the end-of-turn check not passing inside the sandbox and pushing the question away (ADR 0018's sections 7 and 8). Added: clipboard images (ADR 0026's addendum), terminal notifications (ADR 0032), continuing from a failed session (ADR 0021's addendum).
+  - 2026-10-30, TUI: reproduced in tmux and fixed the bug where old lines of the input box remain after resizing the window (ADR 0033's addendum). Aligned the look on KairoCode's vertical line, and showed what continues in the folder under the header. Pasted labels show the start of the text and can be opened with Ctrl+O.
+  - 2026-10-30, Zed: quitting Zed while waiting for approval and opening it again showed the same approval as the requested message; allowing it went on from where it was, and the answer came back (dify-oss, the Claude Code engine). Fixed along the way: a question (hook) not shown in an answerable form, the list of commands right after creating a session being dropped, a turn's wait looking like a failure on handover to a new version, the messages of a turn in progress not showing on reopening, display names (Claude Code, the default model and effort, the default rules). Questions from hooks come with the contents of the script they run.
+  - 2026-11-02: on reopening, also replay calls that already ran in the turn in progress (PR #17). Checked in Zed.
+  - 2026-11-02, cleaning up the code before publishing (PR #17 to #21): split large files by job, and added `internal/config`, `api`, `plugins`, `secrets`, `clipboard`, `flowfile`. tui and acp do not import runtime (`TestClientsDoNotImportTheRuntime`). Fixed along the way: decide `sandbox.loopback` by the value at the start of the turn (ADR 0031's addendum), keep `/provider` and `/mode` choices not yet sent even if the daemon stops (ADR 0014's addendum), do not read the user's settings by a relative path when there is no home, align the flow's `decide` to the order API, then Claude Code (ADR 0014's addendum).
+  - 2026-11-04, fixed what came up in the hand check (PR #23 to #26): with just `/flow` in the TUI, a screen to choose a flow (run it, change it on the chart, view runs, make a new one); after a command's name, show what that command takes (`/plugin install`, `/flow new`, flow names, models, and so on). Zed: answering a question looked like a rejection (×) whatever was chosen, `flow_write`'s draft was not visible (now shown as a diff), the flow review was garbled (sections as Markdown, the script as a diff).
+  - Remaining: none (the publishing procedure is the two items above).
 
-## M7 強みを見せる
+## M7 Show the strengths
 
-状態: 未着手
+Status: not started
 
-- [ ] 耐久性のデモ: `kill -9` しても続き、何も二重に起きない様子の録画と、再現の手順（`docs/durability.md`）。README の冒頭に置く。
-- [ ] 承認の求めを手元の外（Slack など）に知らせる。hook に「承認の求め」の出来事を足し、フローで送る（ADR が要る）。外から答えるのは後で別に決める。
-- [ ] 他社のエージェント（Claude Code、codex）をエンジンにしても同じ保証が保たれることの説明とデモ。本物の `claude` での確認（M2 の残り）もここで済ませる。
+- [ ] A durability demo: a recording showing that it continues after `kill -9` and nothing happens twice, and steps to reproduce it (`docs/durability.md`). Put it at the top of the README.
+- [ ] Notify approval requests outside the local machine (Slack and so on). Add an "approval request" event to hooks and send it with a flow (needs an ADR). Answering from outside is decided separately later.
+- [ ] An explanation and demo that the same guarantees hold when another company's agent (Claude Code, codex) is the engine. Also finish checking with the real `claude` (what remains of M2) here.
 
-## M8 入口の格差を埋める
+## M8 Close the gap at the entry points
 
-状態: 未着手
+Status: not started
 
-- [ ] OpenAI 互換の API のアダプター（手元のモデルを含む）。標準ライブラリの HTTP で書く（ADR 0014 の追記か新しい ADR）。
-- [x] 画像の入力（ADR 0026）。ファイル（`@<パス>`、端末に落としたファイル）、ACP、API から（2026-10-27）。
-- [x] クリップボードの画像を TUI に貼る（ADR 0026 の追記、2026-10-28）。Linux は手での確認が残り。
-- [ ] `/init`: リポジトリを読んで AGENTS.md の下書きを作る。
+- [ ] An adapter for OpenAI-compatible APIs (including local models). Written with the standard library's HTTP (ADR 0014's addendum or a new ADR).
+- [x] Image input (ADR 0026). From files (`@<path>`, files dropped on the terminal), ACP and the API (2026-10-27).
+- [x] Pasting clipboard images into the TUI (ADR 0026's addendum, 2026-10-28). On Linux, checking by hand remains.
+- [ ] `/init`: read the repository and make a draft AGENTS.md.
 
-## M9 差別化を深める
+## M9 Deepen what sets it apart
 
-状態: 未着手
+Status: not started
 
-- [ ] うまくいったセッションからフローを作る（下の「今後の作業」の案。ADR が要る）。
-- [ ] worktree で並べるセッションと、その一覧の画面（ADR が要る）。
+- [ ] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR).
+- [ ] Sessions run side by side in worktrees, and a screen listing them (needs an ADR).
 
-M6〜M9 の後に回すもの: 上限（トークンと金額。ADR 0024、保留のまま。2026-10-30 に利用者の判断で公開の後へ）、VS Code の拡張、Windows、GitHub とサーバーレス（ADR 0012）、セッションの共有、外から承認に答える、検査の報告が回答の後に割り込んで回答を押し流す問題（Stop hook。急ぐなら M6 に入れる）。
+Left for after M6 to M9: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside, the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 
-## 段階に割り当てていない今後の作業
+## Future work not assigned to a milestone
 
-- **セッションの内容からフローを作る**（利用者の発案、2026-10-22）: うまくいったセッションの記録（頼んだこと、呼んだツール、承認したところ）から、同じ手順を繰り返せるフロー（`.kairocode/workflows`）を書き起こす。
-  - 材料は閲覧の記録（`Runtime.Log`、`kairocode log -json`）です。モデルに読ませて、`/flow new` と同じ仕組み（レビューの画面、試運転）で書かせる形を考えている。
-  - 作るときに ADR で決める。
+- **Make a flow from a session's contents** (the user's idea, 2026-10-22): from the record of a session that went well (what was asked, the tools called, where approvals were given), write a flow (`.kairocode/workflows`) that can repeat the same procedure.
+  - The material is the browsing record (`Runtime.Log`, `kairocode log -json`). We are thinking of having the model read it and write the flow with the same mechanism as `/flow new` (the review screen, try).
+  - Decide with an ADR when building it.
 
-- **（済み: ADR 0016）承認の auto モード**（利用者の要望、2026-10-09）: 規則に `auto` を足し、判定用のアクション（`permission.judge`）が許可・拒否・人に訊く、のどれかを理由つきで返す。
-  - 判定は型付きの値で受ける（kairo の ADR 0055 の型付きの判断か、構造化された出力）。判定は記録されるので、再開しても同じ判定で進む（不変条件 2）。
-  - 人に訊く、と判定されたら、今の承認の待ちに落とす。
-  - sandbox の外で動かす昇格と `git_push` は、auto でも人に訊く、を既定にする（設定で変えられる）。
-  - 判定にモデルを使うか、どのモデルを使うかなどを、作るときに ADR で決める。
+- **(Done: ADR 0016) auto mode for approvals** (the user's request, 2026-10-09): add `auto` to the rules; a judging action (`permission.judge`) returns allow, deny, or ask a person, with a reason.
+  - The judgment is received as a typed value (kairo's ADR 0055 typed decisions, or structured output). The judgment is recorded, so on resume it proceeds with the same judgment (invariant 2).
+  - If the judgment is to ask a person, it falls back to the current approval wait.
+  - Escalations that run outside the sandbox and `git_push` ask a person by default even in auto (can be changed in settings).
+  - Whether to use a model for the judgment, and which model, and so on, are decided with an ADR when building it.

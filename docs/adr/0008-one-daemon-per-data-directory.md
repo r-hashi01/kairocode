@@ -1,98 +1,98 @@
-# 0008 データの置き場ごとに、kairo を動かすデーモンを 1 つだけ置く。ほかはすべてクライアントにする
+# 0008 Put exactly one daemon that runs kairo per data directory. Everything else is a client
 
-- 状態: 承認（2026-10-09）。追記の決定 1（版の入れ替え）は 0019 により置き換え
-- 日付: 2026-10-09
-- 関連: 要件 FR-11、FR-20、NFR-3、NFR-4、設計 8 節、ADR 0002（ACP）、0004（dspchr、`server.json`）、0007（Claude Code のエンジン）、AGENTS.md の不変条件 7、kairo の不足 #15、#19
+- Status: Accepted (2026-10-09). Decision 1 of the addendum (replacing the version) is superseded by 0019
+- Date: 2026-10-09
+- Related: requirements FR-11, FR-20, NFR-3, NFR-4; design section 8; ADR 0002 (ACP), 0004 (dspchr, `server.json`), 0007 (the Claude Code engine); invariant 7 in AGENTS.md; kairo's gaps #15, #19
 
-## 背景
+## Context
 
-M1 で、承認を別のプロセスから出せるようにしました（`TestApprovalFromAnotherProcess`）。ところが、SQLite では、別のプロセスが起こしたこと（シグナル、実行の終わり）を知らせる手段がありません。kairo は、借用の期間（既定 30 秒）ごとの掃除で、待っている実行を読み直して気づきます（kairo の不足 #15）。生きているプロセスどうしのやり取りが、実質的にポーリングになっています。利用者は「できるだけポーリングは避けたい。イベント駆動にしたい」と判断しました（2026-10-09）。
+In M1, we made it possible to give an approval from another process (`TestApprovalFromAnotherProcess`). But with SQLite, there is no way to be told about what another process did (a signal, the end of a run). kairo notices by rereading waiting runs in its sweep every lease period (30 seconds by default) (kairo's gap #15). Communication between live processes is in effect polling. The user decided: "I want to avoid polling as much as possible. I want it event-driven" (2026-10-09).
 
-掃除には 2 つの役割があります。
+The sweep has two roles.
 
-- **死んだプロセスが残したものを拾う:** 死んだプロセスは何も知らせられないので、時間で拾うしかありません。障害からの回復の仕組みとして残します。
-- **生きているプロセスどうしのやり取り:** 本来はイベントで伝えるべきものです。今は、同じ DB を複数のプロセスが動かすので、掃除に頼っています。
+- **Picking up what a dead process left behind:** a dead process cannot tell anyone anything, so the only way is to pick it up by time. This stays as the mechanism for recovering from failures.
+- **Communication between live processes:** this should really be conveyed by events. Now it relies on the sweep, because several processes run the same DB.
 
-さらに、ACP（ADR 0002）では、エディタが開くたびに `kairocode acp` を起動します。今のままだと、同じ DB を動かすプロセスが増え、上の問題がいつも起きます。
+On top of that, with ACP (ADR 0002), an editor starts `kairocode acp` every time it opens. As things are, the number of processes running the same DB would grow, and the problem above would happen all the time.
 
-## 決定
+## Decision
 
-- **データの置き場（`~/.local/share/kairocode`）ごとに、kairo を動かすプロセス（デーモン）を 1 つだけ置きます。**
-  - kairo のランタイム、MCP のサーバー（ADR 0007）、HTTP の API を、このデーモンが持ちます。
-  - 最初に要ったときに、クライアントが自動で起動します。
-  - デーモンは、置き場に `server.json`（権限 0600。アドレスとトークン）と、ロックファイルを書きます。ロックで、2 つ目のデーモンが起動しないようにします。
-- **ほかはすべてクライアントにします。**
-  - `kairocode acp`（エディタが起動する）、`kairocode run`、`approvals`、`approve` は、デーモンにつなぎます。DB を自分で開きません。
-  - クライアントとデーモンの間は、手元の Unix ソケットの上の HTTP（設計 8.1 節の API）です。出来事の流れは SSE です。
-- **これで、生きているプロセスどうしのやり取りが、すべてデーモンの中の出来事になります。**
-  - 承認は、デーモンの中の `Signal` です。待っている `WaitFor` は、その場で起きます。
-  - ターンの終わりは、デーモンの中の観測（`Options.Observe`）で、待っているクライアントに届きます。
-  - ポーリングはありません。
-- **デーモンが動いていないとき:**
-  - クライアントは、まずデーモンを起動します。起動できない場合（読むだけの操作など）に限り、DB を直接開きます。
-  - DB に直接書いたシグナルを待っているプロセスはありません。次にデーモンが起動したとき、そこから続きます。
-- **掃除は、死んだプロセスが残したものを拾う役割だけにします。**
-  - デーモンが落ちて再起動したときに、残ったものを拾います。同じ名前（Owner）で開くので、借用の期間を待たずに引き継げます。
-- **デーモンの寿命:** 動いているセッションも、つながっているクライアントも無くなってから、決まった時間（既定 10 分）で終わります。承認を待つだけのセッションは、プロセスを持ちません（NFR-4）。
+- **Put exactly one process (a daemon) that runs kairo per data directory (`~/.local/share/kairocode`).**
+  - This daemon holds the kairo runtime, the MCP server (ADR 0007) and the HTTP API.
+  - A client starts it automatically the first time it is needed.
+  - The daemon writes `server.json` (permissions 0600; the address and token) and a lock file in the data directory. The lock keeps a second daemon from starting.
+- **Everything else is a client.**
+  - `kairocode acp` (started by an editor), `kairocode run`, `approvals` and `approve` connect to the daemon. They do not open the DB themselves.
+  - Between a client and the daemon is HTTP over a local Unix socket (the API of design section 8.1). The stream of events is SSE.
+- **With this, all communication between live processes becomes events inside the daemon.**
+  - An approval is a `Signal` inside the daemon. A waiting `WaitFor` wakes up on the spot.
+  - The end of a turn reaches the waiting client through an observation inside the daemon (`Options.Observe`).
+  - There is no polling.
+- **When the daemon is not running:**
+  - A client first starts the daemon. Only when it cannot be started (read-only operations and so on) does it open the DB directly.
+  - No process is waiting for a signal written directly to the DB. The next time the daemon starts, it continues from there.
+- **The sweep's only role is picking up what dead processes left behind.**
+  - When the daemon crashes and restarts, it picks up what was left. It opens with the same name (Owner), so it can take over without waiting for the lease period.
+- **The daemon's lifetime:** it ends a fixed time (10 minutes by default) after there are no running sessions and no connected clients. A session that is only waiting for an approval holds no process (NFR-4).
 
-## 結果
+## Consequences
 
-- 承認、ターンの終わり、ストリーミングが、どれもイベントで届きます。
-- `kairocode acp` は、エディタごとに起動されても、薄い中継になります。同じセッションを、別のエディタから続けて扱えます。
-- ADR 0004 の段階 2（dspchr が KairoCode のサーバーにつなぐ）は、このデーモンにつなぐ形になります。
-- テスト:
-  - 2 つ目のデーモンは起動しないこと。
-  - クライアントが、デーモンを自動で起動すること。
-  - 別のクライアントから出した承認で、待っているターンが続くこと。kairo の掃除の時計（借用の期間）より十分に短い時間で続くことを確かめます。借用の期間は既定（30 秒）のままにしておき、掃除で続いたのではないことを確かめます。
-  - デーモンを SIGKILL して起動し直すと、ターンが続くこと。
-- 実装は M2 の始めに行います（ACP の入口と同時）。M1 の `TestApprovalFromAnotherProcess` は、そのときにクライアントとデーモンの形に書き直します。
+- Approvals, the end of turns and streaming all arrive as events.
+- `kairocode acp` becomes a thin relay, even when started per editor. The same session can be continued from another editor.
+- Stage 2 of ADR 0004 (dspchr connects to KairoCode's server) becomes a connection to this daemon.
+- Tests:
+  - A second daemon does not start.
+  - A client starts the daemon automatically.
+  - An approval given from another client lets the waiting turn continue. We confirm it continues in a time well shorter than kairo's sweep clock (the lease period). The lease period is left at the default (30 seconds) to confirm that it did not continue because of the sweep.
+  - When the daemon is SIGKILLed and restarted, the turn continues.
+- It is implemented at the start of M2 (together with ACP's entry point). M1's `TestApprovalFromAnotherProcess` is rewritten then into the client-and-daemon shape.
 
-### 実装（2026-10-09、M2 の始め）
+### Implementation (2026-10-09, the start of M2)
 
-- `internal/daemon` に置きました。テストは「結果」に書いた 4 つと、何もしないと止まることです（`TestSecondDaemonDoesNotStart`、`TestClientStartsTheDaemon`、`TestApprovalFromAnotherClient`、`TestCrashDaemonRestart`、`TestIdleDaemonStops`）。M1 の `TestApprovalFromAnotherProcess` は、`TestApprovalFromAnotherClient` に置き換えました。
-- 承認からターンが続くまでは、数ミリ秒です（同じ DB を 2 つのプロセスで動かしていたときは、掃除を待っていました）。デーモンの Owner を毎回変えると、`TestCrashDaemonRestart` は借用の期間（30 秒）を待って落ちることを確かめました。
-- 「何もしていない」は、kairo の観測（ステップの始まりと終わり）と、HTTP の接続の数から決めます。ポーリングはしません。クライアントが待っている間は止まりません（`TestDaemonStaysWhileAClientWaits`）。
-  - 限界: kairo のタイマーを待っている間（`Retryable` のやり直しの間隔、後の `ctx.Sleep`）は数えません。クライアントがいないと、その途中でデーモンが止まり得ます。そのターンは失われず、次にデーモンが起動したときに続きます。
-- ソケットのパスが長すぎると（macOS で約 104 バイト）、利用者だけが入れるディレクトリに、データの置き場のハッシュの名前で置きます。`$XDG_RUNTIME_DIR` があればそこ、無ければ一時ディレクトリの `kairocode-<uid>`（持ち主と 0700 を確かめる。Linux では共有の `/tmp` のため）です。どの要求にもトークンが要ります。
-- クライアントは、`start.lock` を取ってからデーモンを起動します。同時に来たほかのクライアントはロックで待ち、起動したデーモンにつなぎます。デーモンの起動の準備ができたことは、標準出力の 1 行で受け取ります。クライアントの ctx が切れると（Ctrl-C）、ロックの待ちも起動の待ちもやめます。
-- 起動されたデーモンは、前のデーモンが終わる途中で（何もしないで止まる途中、SIGKILL の直後）ロックを持っていると、最大 10 秒、ロックが離れるのを待ちます（カーネルの flock で待つ。`TestDaemonWaitsForTheOneOnItsWayOut`）。
-- デーモンは KairoCode 自身のプロセスなので、ADR 0005 の sandbox の外で起動します。起動してよいファイルとして、`internal/daemon/spawn.go` を検査（`internal/invariants`）に足しました。
-- デーモンの Owner は固定の名前です。kairo は、同じ名前の借用を `Open` のときにすべて切らすので、同じ DB をこの名前で開くプロセスが 2 つあると、動いているステップが二重に動きます。今はロックで 1 つに限っています。「DB を直接開く」を入れるとき、PostgreSQL で複数のホストに置くときは、名前を分けます。
-- 決定の中の「起動できない場合に限り、DB を直接開く」は、まだ入れていません。今はどのコマンドもデーモンにつなぎます。
-- デーモンの設定（エンジン、モデル）は、起動したときの環境変数から取ります。設定を変えたら、デーモンが止まるのを待つか、止めてから使います。 → 下の追記で、エンジンとモデルはセッションごとになりました。
+- It is in `internal/daemon`. The tests are the four written in "Consequences" plus stopping when idle (`TestSecondDaemonDoesNotStart`, `TestClientStartsTheDaemon`, `TestApprovalFromAnotherClient`, `TestCrashDaemonRestart`, `TestIdleDaemonStops`). M1's `TestApprovalFromAnotherProcess` was replaced with `TestApprovalFromAnotherClient`.
+- From an approval to the turn continuing takes a few milliseconds (when two processes ran the same DB, it waited for the sweep). We confirmed that if the daemon's Owner changes every time, `TestCrashDaemonRestart` waits for the lease period (30 seconds) and fails.
+- "Idle" is decided from kairo's observations (the start and end of steps) and the number of HTTP connections. There is no polling. It does not stop while a client is waiting (`TestDaemonStaysWhileAClientWaits`).
+  - A limit: time spent waiting on kairo's timers (the interval between `Retryable` retries, a later `ctx.Sleep`) is not counted. With no clients, the daemon may stop partway through that. That turn is not lost; it continues the next time the daemon starts.
+- If the socket path is too long (about 104 bytes on macOS), it is put in a directory only the user can enter, under a name made from the hash of the data directory. That is `$XDG_RUNTIME_DIR` if it exists, otherwise `kairocode-<uid>` in the temporary directory (the owner and 0700 are checked, because on Linux `/tmp` is shared). Every request needs the token.
+- A client takes `start.lock` before starting the daemon. Other clients that come at the same time wait on the lock and connect to the daemon that was started. That the daemon is ready is received as one line on stdout. When the client's ctx is cancelled (Ctrl-C), it stops waiting for both the lock and the start.
+- A started daemon, if the previous daemon holds the lock while on its way out (on the way to stopping when idle, right after a SIGKILL), waits up to 10 seconds for the lock to be released (it waits with the kernel's flock; `TestDaemonWaitsForTheOneOnItsWayOut`).
+- The daemon is KairoCode's own process, so it is started outside ADR 0005's sandbox. `internal/daemon/spawn.go` was added to the check (`internal/invariants`) as a file allowed to start it.
+- The daemon's Owner is a fixed name. kairo expires all leases with the same name at `Open`, so if two processes open the same DB with this name, running steps run twice. For now the lock limits it to one. When "open the DB directly" is added, or when PostgreSQL is used across several hosts, the names will be separated.
+- "Only when it cannot be started does it open the DB directly" in the Decision is not in yet. For now every command connects to the daemon.
+- The daemon's configuration (engine, model) is taken from the environment variables at the time it started. After changing the configuration, wait for the daemon to stop, or stop it and then use it. → In the addendum below, the engine and the model became per session.
 
-### 追記（2026-10-09 に決め、2026-10-15 にレビューを受けて改めた）: opencode と Codex との比べから足したもの
+### Addendum (decided on 2026-10-09, revised on 2026-10-15 after review): what was added from comparing with opencode and Codex
 
-Codex のデーモン（`codex app-server` の daemon）と比べた結果を利用者に示し、利用者が「入れましょう」と判断して（2026-10-09）、次の 4 つを M2 に入れました。
+We showed the user the results of comparing with Codex's daemon (the daemon of `codex app-server`), the user decided "let's put them in" (2026-10-09), and the following four went into M2.
 
-1. **クライアントとデーモンの版を比べる。** `server.json` にデーモンの版（実行ファイルのハッシュ）を書きます。版の違うクライアントは、デーモンに「何もしていなければ止まる」ように頼みます（`POST /daemon/stop?idle`）。デーモンは、その場でステップが走っておらず、ほかのクライアントもつないでいなければ止まり、クライアントが自分の版で起動し直します。そうでなければ 409 を返して使われ続け、クライアントは利用者に `kairocode daemon stop` を伝えます。確かめるのはその時点だけです。その後に始まったステップは、止まるときに終わりまで待ちます（下の追記）（`TestOtherBuildReplacesTheDaemon`、`TestOtherBuildKeepsABusyDaemon`、`TestOtherBuildKeepsADaemonThatRuns`）。
-2. **エンジンとモデルは、セッションごとにクライアントが渡す。** `SessionInput` の `engine` と `model` は `agent.load` に渡り、そこで記録されます（不変条件 2）。空ならデーモンの既定です。デーモンは両方のエンジンを持ちます（`TestEngineAndModelPerSession`）。`KAIROCODE_CLAUDE` と fake のプロバイダーは、今もデーモンの環境から取ります。
-   - セッションとターンのワークフローの版を 3 に上げ、版 2 は `kairo.Draining()` で残しました。版 2 の実行は同じ関数で終わり、空の欄は JSON に出ないので、呼び出しの ID も版 2 のときと同じです（`TestVersion2RunsFinishHere`、`TestEmptyEngineKeepsVersion2Inputs`）。版 2 しか知らない古いデーモンが、版 3 のセッションを `engine` と `model` の無い形で読むと、ターンを別の ID で始め直すからです（実のツールが二重に動き得る）。版の入れ替え（1）で、新旧のデーモンが同じ DB を順に動かすことが普通になります。
-3. **待っている承認を、複数のクライアントで扱う。** 最初の答えが通ること、ほかのクライアントに「答えが出た」と知らせること、後から加わったクライアントに待っている承認を送り直すことです。SSE と ACP の作業と一緒に入れます（M2 の受け入れ条件）。KairoCode の承認は kairo の待ちとして DB にあるので、Codex と違って、デーモンが落ちても消えません。
-4. **`kairocode daemon stop`。** デーモンが `server.json`、リスナー、ランタイム、ソケット、ロックをこの順に手放してから応答し、応答を書き終えてからプロセスを終えます。後片付けはこの 1 か所だけで行い、ロックを離した後に、次のデーモンのファイルを消すことはありません。応答が届いたときには、新しいデーモンを起動できます（`TestStopTheDaemon`）。
-   - **止めることは、落ちることと同じです。** そのとき走っていたステップは切られ、実のステップは次のデーモンで要確認になります（不変条件 4 は守られる）。何もしないときの停止は、ステップが走っていないときにしか起きません。版の入れ替えも、デーモンがその時点で確かめて、ステップが走っていないときだけにしました。
-   - 最初は、アクションの handler の入口を閉じて、走っている handler の終わりを待つ形で実装しました。レビューで次の 2 つがわかり、取り除きました。
-     - 入口で断ったステップは、「やり直せる」を返しても、同じプロセスの中で試行の回数を使い切ります。実のアクションは試行が 1 回なので、すぐに失敗として確定します。
-     - kairo は、handler が返った後に「閉じたか」を確かめ、閉じていれば結果を記録しません。そのため、待った handler の結果も失われ得ます（40 回に 2 回、再現しました）。
-   - ステップの間で止めるには、kairo の側に「新しいステップを始めず、走っているものの結果を記録してから閉じる」API が要ります（kairo の不足 #20）。 → 下の追記で、kairo 0.4.1 の `Drain` を使うようにしました。
+1. **Compare the versions of the client and the daemon.** The daemon's version (the hash of the executable) is written in `server.json`. A client with a different version asks the daemon to "stop if idle" (`POST /daemon/stop?idle`). The daemon stops if no step is running at that moment and no other client is connected, and the client starts it again with its own version. Otherwise it returns 409 and keeps being used, and the client tells the user about `kairocode daemon stop`. This is checked only at that moment. Steps that start after that are waited for until they finish when it stops (the addendum below) (`TestOtherBuildReplacesTheDaemon`, `TestOtherBuildKeepsABusyDaemon`, `TestOtherBuildKeepsADaemonThatRuns`).
+2. **The engine and the model are passed by the client per session.** `engine` and `model` of `SessionInput` are passed to `agent.load` and recorded there (invariant 2). If empty, the daemon's default is used. The daemon holds both engines (`TestEngineAndModelPerSession`). `KAIROCODE_CLAUDE` and the fake provider are still taken from the daemon's environment.
+   - The versions of the session and turn workflows were raised to 3, and version 2 is kept with `kairo.Draining()`. Version 2 runs finish with the same function, and empty fields do not appear in the JSON, so the call IDs are the same as under version 2 (`TestVersion2RunsFinishHere`, `TestEmptyEngineKeepsVersion2Inputs`). This is because an old daemon that knows only version 2, reading a version 3 session in the shape without `engine` and `model`, would start the turn over with a different ID (a real tool could run twice). With version replacement (1), it becomes normal for the old and new daemons to run the same DB one after the other.
+3. **Handle pending approvals across several clients.** The first answer goes through, other clients are told "an answer was given", and a client that joins later is sent the pending approvals again. This goes in together with the SSE and ACP work (M2's acceptance criteria). KairoCode's approvals are in the DB as kairo waits, so unlike Codex, they do not disappear even if the daemon crashes.
+4. **`kairocode daemon stop`.** The daemon releases `server.json`, the listener, the runtime, the socket and the lock in this order before responding, and ends the process after it has finished writing the response. Cleanup is done only in this one place; after releasing the lock, it never deletes the next daemon's files. By the time the response arrives, a new daemon can be started (`TestStopTheDaemon`).
+   - **Stopping is the same as crashing.** Steps that were running at that time are cut off, and real steps become blocked (needs confirmation) in the next daemon (invariant 4 is kept). Stopping when idle happens only when no step is running. Version replacement also happens only when the daemon checks at that moment and no step is running.
+   - At first, this was implemented by closing the entrance to action handlers and waiting for running handlers to finish. Review found the following two problems, and it was removed.
+     - A step refused at the entrance uses up its attempts within the same process even if it returns "can be retried". A real action has a single attempt, so it is settled as a failure at once.
+     - kairo checks "was it closed" after a handler returns, and if closed, does not record the result. So even the result of a handler it waited for can be lost (reproduced 2 times in 40).
+   - Stopping between steps needs an API on kairo's side that "starts no new steps, records the results of the running ones, and then closes" (kairo's gap #20). → In the addendum below, this now uses kairo 0.4.1's `Drain`.
 
-### 追記（2026-10-15）: kairo 0.4.1 の `Drain` で、ステップの間で止める
+### Addendum (2026-10-15): stop between steps with kairo 0.4.1's `Drain`
 
-kairo の不足 #20 を issue として出し（r-hashi01/kairo#1）、kairo 0.4.0 に `k.Drain(ctx)` が入りました。0.4.1 に上げ、デーモンが止まるとき（`daemon stop`、版の入れ替え、何もしないときの停止、シグナル）は次の順にしました。
+We filed kairo's gap #20 as an issue (r-hashi01/kairo#1), and `k.Drain(ctx)` went into kairo 0.4.0. We moved to 0.4.1, and when the daemon stops (`daemon stop`, version replacement, stopping when idle, signals), it now follows this order.
 
-1. 排水を始めます。新しいステップはこのデーモンでは始まらず、ワークフローは次の呼び出しで止まります（次のデーモンがそこから続ける）。
-2. `server.json` を消し、リスナーを閉じます。`server.json` が無くなったときには、排水が始まっています。
-3. 走っているステップを、最大 `DefaultDrain`（30 秒）待ちます。終わったステップの結果は記録され、次のデーモンはそれを使います（`TestStopLetsTheRunningStepFinish`。モデルの呼び出しが 1 回だけ）。
-4. ランタイム、ソケット、ロックの順に手放します。`daemon stop` の応答は、この後に返します（排水が時間切れになっても、応答を書き終えるまでプロセスは終わらない。`TestStopCutsAStepThatOutlastsTheDrain`）。
+1. Start draining. No new step starts in this daemon, and workflows stop at their next call (the next daemon continues from there).
+2. Delete `server.json` and close the listener. By the time `server.json` is gone, draining has started.
+3. Wait for running steps for up to `DefaultDrain` (30 seconds). The results of finished steps are recorded, and the next daemon uses them (`TestStopLetsTheRunningStepFinish`; the model is called only once).
+4. Release the runtime, the socket and the lock, in that order. The response to `daemon stop` is returned after this (even if draining times out, the process does not end until it has finished writing the response; `TestStopCutsAStepThatOutlastsTheDrain`).
 
-- 30 秒を超えたステップは、今までどおり切られます。実のステップは次のデーモンで要確認になります（不変条件 4）。Claude Code のエンジンのターンは、`claude` の実行が 1 つのステップです。排水の間に `claude` がツールを呼ぶと、その呼び出しは動かず、`claude` の実行は 30 秒待ってから切られます（レビューでコードから確かめた。テストは無い）。切られた後は、次のデーモンが同じ呼び出しを選び直すので、二重には動きません。
-- 手前で動かしている `kairocode daemon` に、Ctrl-C（SIGINT）か SIGTERM を 2 回送ると、2 回目で待ちをやめてすぐ止まります。走っていたステップは切られ、落ちたときと同じ扱いになります（`TestSecondSignalStopsTheDaemonNow`）。
-- 起動されたデーモンがロックを待つ時間（`WaitLock`）は、`DefaultDrain` に 10 秒を足した長さにしました。排水中のデーモンの後に、すぐ起動できます。
-- 版の入れ替えは、今までどおり、ステップが走っておらず、ほかのクライアントがいないときだけです。走っているステップがあると、版の違うクライアントが排水を待つことになるからです。
-- 同じ版で、`kairo.Parallel` の 2 回目以降の枝の ID が変わりました（kairo の不足 #13 の修正）。0.3.0 で始まって 2 歩目以降に進んだターンは、0.4.x で再開すると、ツールの呼び出しを新しい ID でもう一度動かします。上げたときに進行中のターンが無かったので、利用者の判断で、ワークフローの版は上げていません（`docs/kairo-gaps.md` の #13）。
+- Steps that take longer than 30 seconds are still cut off, as before. Real steps become blocked (needs confirmation) in the next daemon (invariant 4). A turn on the Claude Code engine is one step: the run of `claude`. If `claude` calls a tool during draining, that call does not run, and the `claude` run is cut off after waiting 30 seconds (confirmed from the code in review; there is no test). After it is cut off, the next daemon chooses the same call again, so it does not run twice.
+- Sending Ctrl-C (SIGINT) or SIGTERM twice to a `kairocode daemon` running in the foreground makes it stop waiting and stop at once on the second one. Steps that were running are cut off and treated the same as a crash (`TestSecondSignalStopsTheDaemonNow`).
+- The time a started daemon waits for the lock (`WaitLock`) was set to `DefaultDrain` plus 10 seconds. It can start right after a daemon that is draining.
+- Version replacement still happens only when no step is running and no other client is present, as before. Otherwise, a client with a different version would end up waiting for the drain if a step were running.
+- In the same version, the IDs of `kairo.Parallel`'s second and later branches changed (the fix for kairo's gap #13). A turn that started on 0.3.0 and moved past its first step will, when resumed on 0.4.x, run its tool calls again with new IDs. There was no turn in progress at the time of the upgrade, so by the user's decision the workflow version was not raised (#13 in `docs/kairo-gaps.md`).
 
-## 検討した代替案
+## Alternatives considered
 
-- **SQLite でもプロセスの間で通知する（kairo の不足 #19）:** 同じ DB を動かすプロセスが複数あっても、イベントで伝わります。ただし、kairo の SDK の側の変更が要ります（`Notifier` に知らせる側の hook を足す）。KairoCode ではデーモンの形で足りますが、SDK を使うほかの利用者のために、kairo の ADR として提案します。
-- **PostgreSQL を手元でも使う（LISTEN/NOTIFY）:** イベントで伝わります。ただし、要件 NFR-6（手元の必須の基盤は SQLite だけ）から外れます。
-- **掃除の間隔を短くする:** ポーリングの間隔を縮めるだけです。
+- **Notify between processes even with SQLite (kairo's gap #19):** even with several processes running the same DB, things would be conveyed by events. But it needs a change on kairo SDK's side (adding a notifying hook to `Notifier`). For KairoCode the daemon shape is enough, but for other users of the SDK, it is proposed as a kairo ADR.
+- **Use PostgreSQL locally too (LISTEN/NOTIFY):** things would be conveyed by events. But it departs from requirement NFR-6 (the only required local infrastructure is SQLite).
+- **Shorten the sweep interval:** that only shortens the polling interval.

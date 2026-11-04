@@ -50,7 +50,7 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS kc_claude_proc (
 			session TEXT PRIMARY KEY,
 			pid INTEGER NOT NULL)`,
-		// Per provider (ADR 0014, 追記): the model and effort last chosen,
+		// Per provider (ADR 0014, addendum): the model and effort last chosen,
 		// and the models and efforts its agent said it has (JSON lists).
 		`CREATE TABLE IF NOT EXISTS kc_provider_pref (
 			provider TEXT PRIMARY KEY,
@@ -97,7 +97,7 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			try INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE INDEX IF NOT EXISTS kc_flow_run_dir ON kc_flow_run (dir, started)`,
 		// A session's switch of provider, model or mode not yet sent with
-		// its next event (ADR 0014, 追記 2026-11-02): body is the switch's
+		// its next event (ADR 0014, addendum 2026-11-02): body is the switch's
 		// JSON, seq counts its changes so only the one sent is removed.
 		`CREATE TABLE IF NOT EXISTS kc_switch (
 			session TEXT PRIMARY KEY,
@@ -108,7 +108,7 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			return nil, fmt.Errorf("store: %w", err)
 		}
 	}
-	// try (a try of a flow, ADR 0029 追記): a table made before it lacks it.
+	// try (a try of a flow, ADR 0029 addendum): a table made before it lacks it.
 	if _, err := db.ExecContext(ctx, `ALTER TABLE kc_flow_run ADD COLUMN try INTEGER NOT NULL DEFAULT 0`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return nil, fmt.Errorf("store: %w", err)

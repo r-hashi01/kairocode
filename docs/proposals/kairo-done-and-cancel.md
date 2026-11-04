@@ -1,54 +1,54 @@
-# kairo の ADR の案: コードで書くワークフローの完了と取り消しを排他にする
+# Draft ADR for kairo: make completion and cancellation of code-written workflows exclusive
 
-KairoCode の kairo-gap #22 から。kairo のリポジトリで ADR として起票するための案です。このリポジトリから `../kairo` は編集しません。
+From KairoCode's kairo-gap #22. This is a draft to file as an ADR in the kairo repository. This repository does not edit `../kairo`.
 
 ---
 
-# 0061. コードで書くワークフローの完了と取り消しは、先に記録された方だけが効く
+# 0061. For code-written workflows, only whichever of completion and cancellation is recorded first takes effect
 
-- 状態: 提案
-- 日付: 2026-10-19（2026-10-28 に kairo の `00376a0`（v0.4.1 の後）で、まだ直っていないことを確かめた。番号は、そのときの次の番号）
-- 関連: ADR 0026（走っているタスクへの取り消し）、0058（Go の SDK）、0059（ワークフローの駆動）、0060
+- Status: Proposed
+- Date: 2026-10-19 (on 2026-10-28, confirmed it is still not fixed in kairo's `00376a0` (after v0.4.1). The number is the next number at that time)
+- Related: ADR 0026 (cancellation of a running task), 0058 (the Go SDK), 0059 (driving workflows), 0060
 
-## 背景
+## Context
 
-Go の SDK で、コードで書くワークフローを駆動する `runAs`（`sdk/go/kairo.go`）は、次の順に動きます。
+In the Go SDK, `runAs` (`sdk/go/kairo.go`), which drives a code-written workflow, works in this order.
 
-1. ワークフローの関数を呼ぶ。
-2. 関数がエラーで返った場合: 実行が取り消されていれば（`cancelled()`）、`ErrCancelled` を返す。
-3. 関数が成功で返った場合: `cancelled()` を見ずに、`done` のシグナルを `runs.signal` で記録し、値を返す。
+1. Call the workflow function.
+2. If the function returned an error: if the run has been cancelled (`cancelled()`), return `ErrCancelled`.
+3. If the function returned success: without looking at `cancelled()`, record the `done` signal with `runs.signal`, and return the value.
 
-関数が返ってから `done` が記録されるまでの間に `k.Cancel(id)` が記録されると、次のことが起きます。
+If `k.Cancel(id)` is recorded between the function returning and `done` being recorded, the following happens.
 
-- 実行は `cancelled` で決着します。
-- その後の `done` は、決着した実行への出来事として、コアに無視されます（`res.Ignored`）。エラーにはなりません。
-- 親の `Child` には、live では関数の値が返ります。読み直すと（親の再開）、`done()` が `Status == "cancelled"` を見て `ErrCancelled` を返します。
+- The run settles as `cancelled`.
+- The later `done` is ignored by the core as an event for a settled run (`res.Ignored`). It is not an error.
+- In live execution, the parent's `Child` gets the function's value. When it is read again (the parent resumes), `done()` sees `Status == "cancelled"` and returns `ErrCancelled`.
 
-2026-10-28 の時点の該当箇所:
+The relevant code as of 2026-10-28:
 
-- `sdk/go/kairo.go` の `runAs`: 成功の道（`k.runs.signal(..., "done", {"ok": true, ...})`）は `cancelled()` を見ない。失敗の道は `signal` の誤りを `_ =` で捨てる。
-- `sdk/go/runtime.go` の `runtime.signal`: コアが出来事を無視したとき（`res.Ignored`）、何も記録せずに `nil` を返す。
-- `k.Cancel` は `k.runs.cancel` をそのまま返し、すでに決着していたかを伝えない。
+- `runAs` in `sdk/go/kairo.go`: the success path (`k.runs.signal(..., "done", {"ok": true, ...})`) does not look at `cancelled()`. The failure path discards the `signal` error with `_ =`.
+- `runtime.signal` in `sdk/go/runtime.go`: when the core ignores the event (`res.Ignored`), it records nothing and returns `nil`.
+- `k.Cancel` returns `k.runs.cancel` as is, and does not say whether the run had already settled.
 
-関数が失敗で返ったときも、`cancelled()` を見張る goroutine が取り消しにまだ気づいていなければ、同じく live では失敗、再開では `ErrCancelled` になります。
+When the function returns failure too, if the goroutine watching `cancelled()` has not yet noticed the cancellation, it is likewise a failure in live execution and `ErrCancelled` on resume.
 
-親のワークフローが、live では値を使い、再開ではエラーで別の道に入るので、その後の呼び出しの入力と ID がずれます。結果として、終わった呼び出しをもう一度動かし得ます。
+The parent workflow uses the value in live execution and takes a different path with an error on resume, so the input and IDs of the calls after that drift. As a result, it can run a finished call again.
 
-KairoCode では、利用者がターンを止める操作（Esc、ACP の `session/cancel`）を、ターンの実行への `k.Cancel` で作りました。ターンが終わる瞬間に止めると、この隙間に入ります。
+In KairoCode, the user's action to stop a turn (Esc, ACP's `session/cancel`) is built as a `k.Cancel` on the turn's run. Stopping it at the moment the turn finishes falls into this gap.
 
-## 決定（案）
+## Decision (draft)
 
-- `runAs` で関数が成功で返ったら、`done` を記録した結果を確かめます。`done` が無視された（実行がすでに決着している）なら、記録された結果に従います。取り消されていれば `ErrCancelled` を返し、値は返しません。
-  - そのために `runs.signal`（`process`）が、出来事が無視されたことを呼び出し元に返すようにします（例: `ErrRunSettled`）。
-- 逆に、`done` が先に記録されていれば、`k.Cancel` は何もしません（今のまま。決着した実行への取り消しは無視される）。呼び出し元が知れるように、`Cancel` が「すでに決着していた」ことを返せるとよいです（`ErrRunSettled`）。
-- `kairotest` に、関数が返った直後に取り消しを差し込めるフックを用意し、live と再開で `Child` の結果が同じになることを確かめるテストを足します。
+- In `runAs`, when the function returns success, check the result of recording `done`. If `done` was ignored (the run had already settled), follow the recorded outcome. If it was cancelled, return `ErrCancelled` and do not return the value.
+  - For that, `runs.signal` (`process`) returns to the caller that the event was ignored (for example, `ErrRunSettled`).
+- Conversely, if `done` was recorded first, `k.Cancel` does nothing (as now; a cancellation of a settled run is ignored). It would be good for `Cancel` to be able to return that "it had already settled" (`ErrRunSettled`), so the caller can know.
+- Provide a hook in `kairotest` that can insert a cancellation right after the function returns, and add a test that checks that `Child`'s result is the same in live execution and on resume.
 
-## 結果
+## Consequences
 
-- 完了と取り消しは、先に記録された方だけが効き、live と再開で親の見る結果が一致します。
-- `Cancel` の呼び出し元は、取り消しが効いたかどうかを知れます。KairoCode は、効かなかったときに「ターンはもう終わっていた」と利用者に伝えられます。
+- Only whichever of completion and cancellation is recorded first takes effect, and the result the parent sees matches in live execution and on resume.
+- The caller of `Cancel` can know whether the cancellation took effect. KairoCode can tell the user "the turn had already finished" when it did not.
 
-## 検討した代替案
+## Alternatives considered
 
-- **呼び出し元（KairoCode）が、取り消す前に終わっていないかを確かめる:** 確かめた後、取り消すまでの間に終わり得るので、隙間は狭まるだけで消えません。
-- **取り消しをワークフローの中のシグナルにする（ステップの合間に見る）:** 走っているモデルの呼び出しやコマンドを、その場で止められません（KairoCode の ADR 0011 の代替案）。
+- **The caller (KairoCode) checks that the run has not finished before cancelling:** It can finish between the check and the cancellation, so the gap only narrows; it does not go away.
+- **Make cancellation a signal inside the workflow (checked between steps):** It cannot stop a running model call or command on the spot (an alternative in KairoCode's ADR 0011).

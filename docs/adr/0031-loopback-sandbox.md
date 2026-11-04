@@ -1,119 +1,119 @@
-# 0031 手元の通信だけを許す sandbox: 検査を sandbox の外に出さずに動かす
+# 0031 A sandbox that allows only local traffic: running checks without leaving the sandbox
 
-- 状態: 承認（2026-10-27）
-- 日付: 2026-10-27
-- 関連: ADR 0005（sandbox）、ADR 0028（裏で動くコマンド）、AGENTS.md「作業の進め方」
+- Status: Accepted (2026-10-27)
+- Date: 2026-10-27
+- Related: ADR 0005 (sandbox), ADR 0028 (background commands), AGENTS.md "How to work"
 
-## 背景
+## Context
 
-`scripts/check.sh` は、エージェントの sandbox の外で動かすことになっています。KairoCode では `bash` を `sandbox: "escalate"`（利用者の承認で sandbox の外）で呼びます。
+`scripts/check.sh` is meant to run outside the agent's sandbox. In KairoCode, `bash` is called with `sandbox: "escalate"` (outside the sandbox, with the user's approval).
 
-外で動かすと、`go test` を通して、エージェントがいま書いたテストのコードが制限なしで動きます。「check.sh だけは聞かずに外へ出す」という許可も、中身は「何でも外で動かせる」と同じです。そのため、外に出すことを自動にはできず、長いループで 1 つのエージェントに任せるとき、検査のたびに人の承認を待つことになります。
+Running it outside means that, through `go test`, the test code the agent just wrote runs without limits. A permission saying "let only check.sh go outside without asking" amounts to "anything can run outside". So going outside cannot be made automatic, and when one agent is trusted with a long loop, every check waits for a human approval.
 
-KairoCode の sandbox（macOS、`WorkspaceWrite`）の中で検査を動かして、止められるものを確かめました（2026-10-27）。
+We ran the checks inside KairoCode's sandbox (macOS, `WorkspaceWrite`) and confirmed what is blocked (2026-10-27).
 
-1. **`127.0.0.1` での待ち受け**（偽のサーバー）: `bind: operation not permitted`。
-2. **Unix ソケット**（デーモン）: 一時フォルダーの中でも `bind: operation not permitted`。
-3. **sandbox の入れ子**（KairoCode の sandbox でコマンドを起動するテスト）: `sandbox_apply: Operation not permitted`。macOS では、sandbox の中で別の sandbox を始められません。
-4. **Go のビルドのキャッシュ**（`~/Library/Caches/go-build`）: 書けないので、`go test` はビルドの段階で止まります。
+1. **Listening on `127.0.0.1`** (fake servers): `bind: operation not permitted`.
+2. **Unix sockets** (the daemon): `bind: operation not permitted`, even inside a temporary folder.
+3. **Nested sandboxes** (tests that start commands in KairoCode's sandbox): `sandbox_apply: Operation not permitted`. On macOS, another sandbox cannot be started inside a sandbox.
+4. **Go's build cache** (`~/Library/Caches/go-build`): it cannot be written, so `go test` stops at the build stage.
 
-試作で、1 と 2 だけを許す規則を足しました。また、ビルドのキャッシュをリポジトリの中に置きました。すると、`internal/flowchart`、`internal/server` は中で通りました。`internal/daemon` も、3 に当たる 1 件（`TestCrashDaemonEventsAfterRestart`。bash を sandbox で動かす）を除いて通りました。外へのネットワーク（`curl https://example.com`）と、許した場所の外の Unix ソケットは、止められたままでした。
+In a prototype, we added rules that allow only 1 and 2, and put the build cache inside the repository. Then `internal/flowchart` and `internal/server` passed inside. `internal/daemon` also passed, except 1 test that hits 3 (`TestCrashDaemonEventsAfterRestart`, which runs bash in the sandbox). Outbound network (`curl https://example.com`) and Unix sockets outside the allowed place stayed blocked.
 
-## 決定
+## Decision
 
-1. **sandbox の規則に「手元の通信」を足す。** `sandbox.Policy` に `Loopback bool` を足します。`Loopback` のときに許すのは、次の 2 つだけです。
-   - **localhost の TCP と UDP:** 待ち受け、受ける、つなぐ（macOS の規則では `(local ip "localhost:*")` と `(remote ip "localhost:*")`）。
-   - **Unix ソケット:** そのコマンドのためだけの一時フォルダー（`/private/tmp/kc-XXXX`、モード 0700）の中でだけ、作る・つなぐことを許します。
-     - コマンドの `TMPDIR` を、そのフォルダーにします。テストの `t.TempDir()` も、デーモンのソケットの置き場（ADR 0008）もこの中に入ります。
-     - 一時フォルダー全体（`$TMPDIR`、`/tmp`）のソケットは許しません。そこには、本物のデーモンのソケット（`$TMPDIR/kairocode-<uid>/`）、tmux や herdr のソケットがあります。つなげると、自分で承認したり、端末に打ち込んだりして、sandbox の外に出られます。
-     - `loopback` のときに書ける一時フォルダーは、この専用のフォルダーだけです（`/tmp` と `$TMPDIR` は読むだけ）。書けると、他人のソケットやそのフォルダーを専用のフォルダーへ `mv` して、つなげてしまうからです。専用のフォルダーの外のソケットは、動かすことも消すこともできません。
-     - フォルダーは、コマンドが終わったら消します。裏で動くコマンド（ADR 0028）は、その仕事が終わったときに消します。
-   - ほかは `WorkspaceWrite` と同じです。外へのネットワーク、書ける場所の外への書き込み、守る名前（`.git`、設定の置き場）は許しません。
-   - Linux（bubblewrap）は、ネットワークを切ると、`--unshare-net` でそのコマンドだけの localhost を持ちます。そのため TCP の扱いは今のままです。Unix ソケットの一時フォルダーは、macOS と同じにします。
-   - 実装: `internal/sandbox`（`Policy.Loopback`、`seatbelt.go`、`platform_linux.go`、一時フォルダーの作成と後始末）。
-2. **`bash` の `sandbox` に `"loopback"` を足す。**
-   - 承認は、既定では、ふつうの `bash` と同じ規則に従います。`bash` が聞かずに通る設定なら、`loopback` も聞かずに通ります。ここが `escalate`（毎回聞く）との違いです。
-   - **設定で変えられます。** `kairocode.json` の `sandbox.loopback` に、次のどれかを書きます。
-     - `"allow"`（既定）: `bash` と同じ規則に従う。
-     - `"ask"`: `loopback` の呼び出しは毎回聞く。
-     - `"deny"`: `loopback` は使えない（`escalate` だけが残る）。
-   - 利用者の設定はどれにでもできます。プロジェクトの設定（リポジトリの中）は、利用者の設定より厳しくする方向（`ask`、`deny`）にだけ効きます。手に入れたリポジトリが、勝手にゆるめられないようにするためです。
-   - 設定は `permission.check` の中で読み、その判定として記録します（不変条件 2）。
-   - sandbox が止めたらしい失敗のとき、モデルへの案内を「手元の通信が要るなら `loopback`、それ以外で要るなら `escalate`」にします。
-   - 実装: `internal/tools/bash.go`、`internal/tools/jobs.go`、`internal/runtime/permission.go`。
-3. **入れ子の sandbox は、使えないものとして扱う。**
-   - macOS の `sandbox.Available()` は、`sandbox-exec` があるかだけでなく、一度実際に起動して確かめます（結果は覚えておく。Linux はすでにそうしている）。
-   - 入れ子のときは `ErrUnavailable` を返します。本番の `bash` は、これまでどおり sandbox なしでは動かずに失敗します（ゆるめる方向には倒しません）。
-   - sandbox を起動するテストは、すでに「no sandbox」で自分を飛ばす形になっています。まだ飛ばさないもの（`TestCrashDaemonEventsAfterRestart` など）にも、同じ飛ばし方を足します。
-4. **`scripts/check.sh` を sandbox の中でも通す。**
-   - `KAIROCODE_SANDBOX` があるときは、`GOCACHE` を `.cache/go-build`（git の対象外）にします。
-     - 共有のキャッシュに sandbox から書けるようにはしません。書けると、sandbox の中のコマンドが、後で sandbox の外のビルドが使う中身を置けてしまうからです。
-   - envcheck は、入れ子の sandbox が使えないことを、止める理由から外します。代わりに「sandbox を起動するテストは飛ばした」と言います。localhost と Unix ソケットが使えないときは、これまでどおり止めます（終了コード 3）。
-   - 入れ子のために飛ばしたテストがあれば、終わりに「N 件を飛ばした。外（CI か手元の端末）で全部を動かすこと」と出します。
-   - 既定では、そのときの終了コードは 0 にします。ただし `last-green` には「一部」と印を付けます。Stop hook は「一部」でも通し、コミットもできます。全部の合格は、外での実行（CI、push の前の手元）で確かめます。
-   - **設定で変えられます。** 環境変数 `KAIROCODE_CHECK_FULL=1` のときは、飛ばしたテストがあれば、終了コード 3（外で動かせ）で終わります。「一部」の合格を認めない人や機械（CI など）は、これを設定します。`.claude/settings.json` の `env` や、KairoCode のエージェントの設定に書けます。
-5. **AGENTS.md:** KairoCode では、`scripts/check.sh` を `sandbox: "loopback"` で動かすと書き換えます。`escalate` は、全部を動かすときだけに使います。
+1. **Add "local traffic" to the sandbox rules.** Add `Loopback bool` to `sandbox.Policy`. With `Loopback`, only these 2 are allowed.
+   - **localhost TCP and UDP:** listening, accepting, connecting (in the macOS rules, `(local ip "localhost:*")` and `(remote ip "localhost:*")`).
+   - **Unix sockets:** creating and connecting are allowed only inside a temporary folder just for that command (`/private/tmp/kc-XXXX`, mode 0700).
+     - The command's `TMPDIR` is set to that folder. Tests' `t.TempDir()` and the daemon's socket location (ADR 0008) also go inside it.
+     - Sockets in the whole temporary folder (`$TMPDIR`, `/tmp`) are not allowed. Those hold the real daemon's socket (`$TMPDIR/kairocode-<uid>/`) and the sockets of tmux and herdr. If they could be connected to, a command could approve itself or type into a terminal, and get outside the sandbox.
+     - With `loopback`, the only writable temporary folder is this dedicated one (`/tmp` and `$TMPDIR` are read only). If they were writable, someone else's socket or its folder could be `mv`ed into the dedicated folder and connected to. Sockets outside the dedicated folder can be neither moved nor deleted.
+     - The folder is deleted when the command ends. For background commands (ADR 0028), it is deleted when that job ends.
+   - Everything else is the same as `WorkspaceWrite`. Outbound network, writes outside the writable places, and protected names (`.git`, the config directory) are not allowed.
+   - On Linux (bubblewrap), cutting the network with `--unshare-net` gives the command its own localhost. So TCP is handled as it is now. The temporary folder for Unix sockets is made the same as on macOS.
+   - Implementation: `internal/sandbox` (`Policy.Loopback`, `seatbelt.go`, `platform_linux.go`, creating and cleaning up the temporary folder).
+2. **Add `"loopback"` to `bash`'s `sandbox`.**
+   - By default, approval follows the same rules as ordinary `bash`. If the settings let `bash` pass without asking, `loopback` also passes without asking. This is the difference from `escalate` (ask every time).
+   - **It can be changed in settings.** Write one of these in `sandbox.loopback` in `kairocode.json`.
+     - `"allow"` (default): follow the same rules as `bash`.
+     - `"ask"`: ask every time for `loopback` calls.
+     - `"deny"`: `loopback` cannot be used (only `escalate` remains).
+   - The user's settings can be any of these. Project settings (inside the repository) only take effect in the stricter direction (`ask`, `deny`) than the user's. This is so that a repository you obtained cannot loosen it on its own.
+   - The setting is read inside `permission.check` and recorded as part of that decision (invariant 2).
+   - When a failure looks like the sandbox blocked it, the guidance to the model becomes "if you need local traffic, use `loopback`; if you need it for anything else, `escalate`".
+   - Implementation: `internal/tools/bash.go`, `internal/tools/jobs.go`, `internal/runtime/permission.go`.
+3. **Treat nested sandboxes as unavailable.**
+   - On macOS, `sandbox.Available()` checks not only whether `sandbox-exec` exists, but actually starts it once (the result is remembered; Linux already does this).
+   - When nested, it returns `ErrUnavailable`. Production `bash` still fails rather than running without a sandbox, as before (it does not fall toward loosening).
+   - Tests that start a sandbox already skip themselves with "no sandbox". The same skip is added to those that do not skip yet (`TestCrashDaemonEventsAfterRestart` and so on).
+4. **Make `scripts/check.sh` pass inside the sandbox too.**
+   - When `KAIROCODE_SANDBOX` is set, `GOCACHE` is set to `.cache/go-build` (not tracked by git).
+     - The shared cache is not made writable from the sandbox. If it were, a command inside the sandbox could put in content that a build outside the sandbox later uses.
+   - envcheck drops "nested sandboxes are unavailable" from its reasons to stop. Instead it says "tests that start a sandbox were skipped". When localhost or Unix sockets cannot be used, it stops as before (exit code 3).
+   - If any tests were skipped because of nesting, at the end it prints "skipped N tests; run them all outside (CI or a local terminal)".
+   - By default, the exit code in that case is 0. But `last-green` is marked "partial". The Stop hook lets "partial" pass, and committing is possible. Passing everything is confirmed by running outside (CI, locally before push).
+   - **It can be changed in settings.** With the environment variable `KAIROCODE_CHECK_FULL=1`, if any tests were skipped, it ends with exit code 3 (run it outside). People and machines (CI and so on) that do not accept a "partial" pass set this. It can be written in `env` in `.claude/settings.json` or in KairoCode's agent settings.
+5. **AGENTS.md:** rewritten to say that in KairoCode, `scripts/check.sh` is run with `sandbox: "loopback"`. `escalate` is used only when running everything.
 
-実装で決めたこと（決定の趣旨は変えない）:
-- **macOS の「localhost」は、この機械の自分のアドレス全部です。** sandbox の規則の `localhost` には、LAN の IP など、この機械のほかのアドレスへの接続も含まれます（試して確かめた）。外の機械のアドレス（`8.8.8.8` など）へは止められます。届くのはこの機械の中のサービスだけで、決定の範囲と同じです。
-- **sandbox の中のビルドのキャッシュは、`.cache/go-build`（リポジトリ直下。git の対象外）です。** `.claude` は sandbox が守る名前なので、中からは書けません。同じ理由で、sandbox の中の `check.sh` は `last-green` と「一部」の印も書けません（書けなくても合格は合格）。印は外で動かしたときにだけ残ります。
-- **Linux の Unix ソケット（2026-10-27、CI で見つけて直した）。** bubblewrap の sandbox では、読み取り専用のファイルにしても、ネットワークの名前空間を分けても、パスの上の Unix ソケットにはつなげました。loopback に限らず、ネットワークのない普段の sandbox でもそうでした。デーモンのソケット（普段はデータの置き場、`~/.local/share/kairocode/kairocode.sock`）にもつなげたので、sandbox の中のコマンドが自分の呼び出しを承認できたことになります。CI の Linux で `TestSandboxLoopback` が落ちて見つかりました。直し方は次のとおりです。
-  - ネットワークのない普段の sandbox: seccomp で `socket(AF_UNIX)` を拒否します（macOS と同じく Unix ソケットを作れない）。どこにもつながらない `socketpair` は残します。seccomp のライブラリは引数を 64 ビットで比べ、ほかのアーキテクチャ（amd64 の上の i386 の呼び出し）を素通しするので、その前に自前の命令を置きます（ほかのアーキテクチャの呼び出しはすべて拒否し、ソケットの種類は下位 32 ビットで見る。`TestSeccompFilter`）。
-  - `loopback`: `/tmp`、`/var/tmp`、`TMPDIR`、`$XDG_RUNTIME_DIR` と、デーモンのデータの置き場（`sandbox.HideFromLoopback`。デーモンと、裏で動くコマンドの runner がそれぞれ言う）を空の tmpfs で覆い、`/run` の直下のソケット（docker の）を空のファイルで覆います。書ける場所はその後で結び直し、書ける場所の下にある覆う場所（ホームで始めたセッションの、データの置き場）は、結び直した後でもう一度覆います。覆う場所そのものが作業フォルダーなら（`/tmp` で始めたセッション）、`loopback` は使えません。`/tmp` の下のプログラムは、`loopback` の中からは見えません。
-  - ホームの下のほかのソケット（gpg-agent など）には、Linux の `loopback` の中からつなげます。利用者の判断で、これは塞がないことにしました（下の追記）。
-- **残ること:** 作業フォルダーの中にあるソケット（そのプロジェクトのプロセスのもの）は、ソケットを含むフォルダーごと専用のフォルダーへ動かせば、つなげます。作業フォルダーは書ける場所だからです。プロジェクトの外のソケット（デーモン、tmux、herdr）には届きません。
-- **消し残し:** 専用のフォルダーは、コマンドの後に消します。デーモンや裏の仕事の runner が強制終了されたときは、`/private/tmp/kc-*` が残ります（OS の一時フォルダーの掃除に任せる）。
-- 飛ばしたテストの数え方: sandbox を起動するテストは、`sandboxtest.Require(t)`（`internal/sandbox/sandboxtest`）で自分を飛ばします。そのとき、環境変数 `KAIROCODE_SKIPPED` のファイルにテストの名前を書きます。`check.sh` は、それを数えます。
-- 入れ子のときに自分を飛ばすようにしたテスト: 裏で動くコマンド、Claude Code のフック、ファイルのスナップショット（undo、fork）、`escalate` の承認、`kairocode jobs run` ほか（`--quick` で 45 件）。
+Decided during implementation (the intent of the decision is unchanged):
+- **On macOS, "localhost" is all of this machine's own addresses.** `localhost` in the sandbox rules also includes connections to this machine's other addresses, such as its LAN IP (confirmed by trying). Addresses of other machines (`8.8.8.8` and so on) are blocked. Only services inside this machine are reachable, which is the same as the scope of the decision.
+- **The build cache inside the sandbox is `.cache/go-build` (at the repository root; not tracked by git).** `.claude` is a name the sandbox protects, so it cannot be written from inside. For the same reason, `check.sh` inside the sandbox cannot write `last-green` or the "partial" mark either (a pass is a pass even if it cannot be written). The mark is left only when it is run outside.
+- **Unix sockets on Linux (2026-10-27, found in CI and fixed).** In the bubblewrap sandbox, Unix sockets on a path could be connected to even when made read-only files and even with a separate network namespace. This was so not only for loopback but also for the ordinary sandbox without network. The daemon's socket (normally in the data directory, `~/.local/share/kairocode/kairocode.sock`) could also be connected to, which means a command inside the sandbox could approve its own calls. It was found when `TestSandboxLoopback` failed on Linux in CI. The fix is as follows.
+  - The ordinary sandbox without network: `socket(AF_UNIX)` is denied with seccomp (as on macOS, Unix sockets cannot be created). `socketpair`, which connects to nothing, is kept. The seccomp library compares arguments as 64 bits and lets other architectures (i386 calls on amd64) through, so our own instructions are put before it (all calls from other architectures are denied, and the socket type is checked on the low 32 bits; `TestSeccompFilter`).
+  - `loopback`: `/tmp`, `/var/tmp`, `TMPDIR`, `$XDG_RUNTIME_DIR` and the daemon's data directory (`sandbox.HideFromLoopback`; the daemon and the runner of background commands each declare it) are covered with an empty tmpfs, and sockets directly under `/run` (docker's) are covered with empty files. The writable places are bound again after that, and covered places that are under writable places (the data directory, for a session started in the home folder) are covered again after re-binding. If a covered place is itself the working folder (a session started in `/tmp`), `loopback` cannot be used. Programs under `/tmp` cannot be seen from inside `loopback`.
+  - Other sockets under the home folder (gpg-agent and so on) can be connected to from inside Linux's `loopback`. By the user's decision, this is not closed off (the addendum below).
+- **What remains:** sockets inside the working folder (those of that project's processes) can be connected to by moving the folder containing the socket into the dedicated folder, because the working folder is writable. Sockets outside the project (the daemon, tmux, herdr) cannot be reached.
+- **Leftovers:** the dedicated folder is deleted after the command. When the daemon or the runner of a background job is killed, `/private/tmp/kc-*` remains (left to the OS's cleanup of temporary folders).
+- How skipped tests are counted: tests that start a sandbox skip themselves with `sandboxtest.Require(t)` (`internal/sandbox/sandboxtest`). When doing so, they write the test name into the file named by the environment variable `KAIROCODE_SKIPPED`. `check.sh` counts these.
+- Tests made to skip themselves when nested: background commands, Claude Code hooks, file snapshots (undo, fork), `escalate` approvals, `kairocode jobs run` and others (45 with `--quick`).
 
-## 追記（2026-10-27、利用者の判断）: `loopback` が約束すること
+## Addendum (2026-10-27, the user's decision): what `loopback` promises
 
-Linux の `loopback` でホームの下のソケットに届くことが分かり、ホームも空に見せて要るものだけ見せ直す案を検討しました。その結果、塞がないことにしました。
+When it turned out that Linux's `loopback` reaches sockets under the home folder, we considered also making the home folder look empty and showing only what is needed again. As a result, it was decided not to close this off.
 
-- `loopback` は、初めから「この機械の中の口は信用する」という約束です。macOS では、この機械のアドレスで待っている TCP のサービス（開発用の DB、手元の LLM のサーバー、管理画面）にすでに届きます。Linux で Unix ソケットだけを完全に塞いでも、守りの強さは揃いません。
-- ホームを空に見せると、見せ直していない設定やキャッシュ（`.gitconfig` など）が見えなくなり、検査を sandbox の中で動かすという目的を壊す危険があります。
+- `loopback` was from the start a promise that "ports inside this machine are trusted". On macOS, it already reaches TCP services listening on this machine's addresses (development DBs, local LLM servers, admin pages). Even if only Unix sockets were fully closed off on Linux, the strength of protection would not be even.
+- Making the home folder look empty would hide settings and caches that were not shown again (`.gitconfig` and so on), and risks breaking the purpose of running checks inside the sandbox.
 
-`loopback` が約束するのは、次のことだけです。初めの 2 つは、どの OS でもテスト（`TestSandboxLoopback`、`TestLoopbackInTheBackground`）で確かめます。3 つ目は、テストがネットワークを使わないので、規則（macOS の sandbox の規則、Linux のネットワークの名前空間）で守ります。
+`loopback` promises only the following. The first 2 are confirmed by tests on every OS (`TestSandboxLoopback`, `TestLoopbackInTheBackground`). The 3rd is guarded by the rules (macOS's sandbox rules, Linux's network namespace), since tests do not use the network.
 
-- KairoCode 自身の承認の口（デーモンのソケットと、データの置き場）には届かない。
-- ほかのコマンドやセッションの一時フォルダー（`/tmp`、`TMPDIR`、`$XDG_RUNTIME_DIR`）のソケットには届かず、動かすことも消すこともできない。
-- 外の機械には届かない。
+- It does not reach KairoCode's own approval channel (the daemon's socket and the data directory).
+- It does not reach sockets in the temporary folders of other commands or sessions (`/tmp`, `TMPDIR`, `$XDG_RUNTIME_DIR`), and cannot move or delete them.
+- It does not reach other machines.
 
-それ以外の、この機械の中の口（macOS では localhost の TCP の全部、Linux ではホームの下のソケット）には届きます。それが困る人は、設定の `sandbox.loopback` を `"ask"` か `"deny"` にします。既定は `"allow"` のままです。
+Other ports inside this machine (on macOS, all localhost TCP; on Linux, sockets under the home folder) are reachable. People who are troubled by that set `sandbox.loopback` in settings to `"ask"` or `"deny"`. The default stays `"allow"`.
 
-ネットワークのない普段の sandbox は、どの OS でも Unix ソケットを作れません（Linux は seccomp。`TestSeccompFilter`）。こちらは何にも届きません。
+The ordinary sandbox without network cannot create Unix sockets on any OS (Linux uses seccomp; `TestSeccompFilter`). It reaches nothing.
 
-Linux に、パスの上の Unix ソケットへの接続をパスで制限する仕組み（Landlock）が入り、広く使えるようになったら、それを重ねることを見直します（2026 年 4 月の時点ではレビュー中だった）。
+When Linux gets a mechanism to restrict connections to Unix sockets on a path by path (Landlock) and it becomes widely available, adding it on top will be reconsidered (as of April 2026 it was under review).
 
-## 追記（2026-11-02）: `sandbox.loopback` は、ターンの始めの値で決める
+## Addendum (2026-11-02): `sandbox.loopback` is decided by the value at the start of the turn
 
-`sandbox.loopback` の設定は、権限の規則と同じく、ターンの始めに記録します（不変条件 2）。これまでは、`permission.check` が呼ばれるたびに設定のファイルを読んでいたので、ターンの途中で設定を変えると、同じターンの後の呼び出しが新しい値で決まっていました。
+The `sandbox.loopback` setting is recorded at the start of the turn, like the permission rules (invariant 2). Until now, `permission.check` read the settings file each time it was called, so if the setting was changed in the middle of a turn, later calls in the same turn were decided by the new value.
 
-- `agent.load` が、設定の値を `Agent.Loopback` として返します。ワークフローは、それを `Policy.Loopback` として `permission.check` に渡します（`internal/workflows/types.go`）。
-- `permission.check` は、`Policy.Loopback` があればそれで決めます。空なのは、記録する前に始まったターンです。そのときだけ、今までどおり設定を読みます（記録された入力は変えない）。
-- テスト: `internal/runtime`（`TestLoopbackKeptAsTheTurnStarted`）。ターンの途中で `deny` に変えても、そのターンの `loopback` の呼び出しは、始めの値で通る。
+- `agent.load` returns the setting's value as `Agent.Loopback`. The workflow passes it to `permission.check` as `Policy.Loopback` (`internal/workflows/types.go`).
+- `permission.check` decides by `Policy.Loopback` if it is set. It is empty for turns that started before it was recorded. Only then does it read the settings as before (the recorded input is not changed).
+- Test: `internal/runtime` (`TestLoopbackKeptAsTheTurnStarted`). Even if it is changed to `deny` in the middle of a turn, that turn's `loopback` calls pass by the value at the start.
 
-## 結果
+## Consequences
 
-- KairoCode のエージェントは、検査を聞かれずに sandbox の中で動かせます。外に出すのは、入れ子の sandbox が要るテストを含めた全部を動かすときだけです。
-- 許される範囲が広がるのは、`loopback` のコマンドから手元の TCP のサービス（手元のデータベース、開発用のサーバー、エディターの待ち受けなど）につなげることです。これは `sandbox.loopback` で「聞く」か「使わない」にできます。
-- Claude Code や Codex の sandbox（エージェントの側）は変わりません。この ADR が効くのは、KairoCode の上で動くエージェントだけです。
-- テスト
-  - `internal/sandbox`（`TestSandboxLoopback`、`TestSandboxLoopbackNeedsItsDirectory`）:
-    - `loopback` で、`127.0.0.1` の待ち受けと接続、専用の一時フォルダーの中の Unix ソケットができる。
-    - 専用の一時フォルダーの外（本物の `$TMPDIR`）の Unix ソケットと、外へのネットワークは止められる。
-    - `loopback` でないときは、今までどおり止められる。
-    - 専用の一時フォルダーは、コマンドが終わると消える。
-  - `internal/sandbox`（`TestSandboxNestedIsUnavailable`）: sandbox の中から `Available()` を呼ぶと、使えないと答える（子のプロセスを sandbox の中で起動して確かめる）。
-  - `internal/runtime`（`TestLoopbackInTheBackground`）: 裏で動く仕事の一時フォルダーが、仕事が終わると消える。
-  - `internal/runtime`（`TestLoopbackSetting`、`TestLoopbackCommand`）: `loopback` が、既定では `bash` の規則で聞かずに通る。`sandbox.loopback` の `ask` で聞き、`deny` で断る。プロジェクトの設定の `allow` は、利用者の `ask` をゆるめない。
-  - `scripts/check.sh` の、飛ばした件数、「一部」の印、`KAIROCODE_CHECK_FULL=1` での終了コード 3 は、手で確かめます（自動のテストはなし）。
+- KairoCode's agent can run checks inside the sandbox without being asked. It goes outside only when running everything, including tests that need nested sandboxes.
+- What becomes newly allowed is connecting from `loopback` commands to local TCP services (local databases, development servers, editors' listeners and so on). This can be set to "ask" or "do not use" with `sandbox.loopback`.
+- The sandboxes of Claude Code and Codex (on the agent's side) do not change. This ADR applies only to agents running on top of KairoCode.
+- Tests
+  - `internal/sandbox` (`TestSandboxLoopback`, `TestSandboxLoopbackNeedsItsDirectory`):
+    - With `loopback`, listening on and connecting to `127.0.0.1`, and Unix sockets inside the dedicated temporary folder, work.
+    - Unix sockets outside the dedicated temporary folder (the real `$TMPDIR`) and outbound network are blocked.
+    - Without `loopback`, they are blocked as before.
+    - The dedicated temporary folder disappears when the command ends.
+  - `internal/sandbox` (`TestSandboxNestedIsUnavailable`): calling `Available()` from inside a sandbox answers that it is unavailable (checked by starting a child process inside the sandbox).
+  - `internal/runtime` (`TestLoopbackInTheBackground`): a background job's temporary folder disappears when the job ends.
+  - `internal/runtime` (`TestLoopbackSetting`, `TestLoopbackCommand`): by default, `loopback` passes without asking under `bash`'s rules. With `ask` in `sandbox.loopback` it asks, and with `deny` it refuses. `allow` in project settings does not loosen the user's `ask`.
+  - In `scripts/check.sh`, the skipped count, the "partial" mark, and exit code 3 with `KAIROCODE_CHECK_FULL=1` are checked by hand (no automatic test).
 
-## 検討した代替案
+## Alternatives considered
 
-- **check.sh だけは聞かずに外へ出す（自動の escalate）:** 外で動くのはエージェントが書いたコードなので、何でも外で動かせるのと同じです。
-- **判定役のモデルに、外へ出してよいかを決めさせる:** 読んだ issue や Web のページに仕込まれた指示を見落とせば、外への道が開きます。
-- **書ける場所と localhost だけを許す、もう一段の sandbox を新しく作る:** 中身はこの `Loopback` と同じになります。新しい種類にするより、今の規則に印を 1 つ足す方が小さく済みます。
-- **一時フォルダー全体の Unix ソケットを許す:** 規則は簡単ですが、本物のデーモンや tmux のソケットにつながり、sandbox の外に出られます。
-- **入れ子のとき、内側のコマンドを外側の sandbox に任せて、そのまま動かす:** 外側の方がゆるい場合（例えば内側が読むだけのとき）に、意図より広く動いてしまいます。テストのためだけに本番の道をゆるめることになります。
-- **Go の共有のビルドのキャッシュを、書ける場所に足す:** sandbox の外のビルドが使う中身を、sandbox の中から書き換えられてしまいます。
+- **Let only check.sh go outside without asking (automatic escalate):** what runs outside is code the agent wrote, so it is the same as being able to run anything outside.
+- **Let a judge model decide whether going outside is OK:** if it misses instructions planted in an issue or web page it read, a way outside opens.
+- **Build a new, additional sandbox level that allows only the writable places and localhost:** its content would be the same as this `Loopback`. Adding one flag to the current rules is smaller than a new kind.
+- **Allow Unix sockets in the whole temporary folder:** the rules are simple, but it connects to the real daemon's and tmux's sockets, and gets outside the sandbox.
+- **When nested, leave the inner command to the outer sandbox and run it as is:** if the outer one is looser (for example, when the inner one is read only), it runs wider than intended. It would loosen the production path just for tests.
+- **Add Go's shared build cache to the writable places:** content that builds outside the sandbox use could be rewritten from inside the sandbox.

@@ -1,128 +1,128 @@
 # AGENTS.md
 
-このリポジトリで作業するコーディングエージェント（と人）向けの作業指示です。
+Working instructions for coding agents (and people) working in this repository.
 
-- 要件: `../kairo/docs/kairocode/requirements.md`
-- 設計: `../kairo/docs/kairocode/design.md`（言語と kairo の使い方は ADR 0001 で置き換え）
-- kairo の Go の SDK: `../kairo/sdk/go/README.md`、`go doc github.com/r-hashi01/kairo/sdk/go`
-- 進め方と各段階の受け入れ条件: `docs/milestones.md`
-- kairo の側に足りないもの: `docs/kairo-gaps.md`
-- KairoCode の側の設計判断: `docs/adr/`
+- Requirements: `../kairo/docs/kairocode/requirements.md`
+- Design: `../kairo/docs/kairocode/design.md` (the language and how kairo is used are replaced by ADR 0001)
+- kairo's Go SDK: `../kairo/sdk/go/README.md`, `go doc github.com/r-hashi01/kairo/sdk/go`
+- How we proceed and each milestone's acceptance criteria: `docs/milestones.md`
+- What kairo is missing: `docs/kairo-gaps.md`
+- Design decisions on KairoCode's side: `docs/adr/`
 
-要件と設計は kairo のリポジトリにあります。隣に `kairo` が clone されている前提です（`../kairo`）。
+The requirements and the design live in the kairo repository. We assume `kairo` is cloned next to this one (`../kairo`).
 
-## これは何か
+## What this is
 
-KairoCode は、kairo（耐久ワークフローのランタイム）の上に作るコーディングエージェントです。opencode や Claude Code と同じ種類の道具ですが、セッションを kairo のワークフローとして動かします。目標は「落ちても、待っても、並べても壊れない」ことです。
+KairoCode is a coding agent built on kairo (a durable workflow runtime). It is the same kind of tool as opencode or Claude Code, but it runs sessions as kairo workflows. The goal is that it "does not break when it crashes, waits, or runs side by side."
 
-- Go 1.27.2。kairo は、Go の SDK `github.com/r-hashi01/kairo/sdk/go`（v0.4.1 以上、パッケージ名 `kairo`）の埋め込みのランタイム（`kairo.Open`）で使います（ADR 0001）。
-- 保存先は、手元では SQLite（`modernc.org/sqlite`）、サーバーレスとチームでは PostgreSQL です。手元のサーバーは待ちモード、サーバーレスはサスペンドモードです。
-- サーバー（HTTP + SSE）と、それにつなぐクライアント（TUI と CLI）に分けます。配り方は単一のバイナリ（`cmd/kairocode`）です。
+- Go 1.27.2. kairo is used through the embedded runtime (`kairo.Open`) of the Go SDK `github.com/r-hashi01/kairo/sdk/go` (v0.4.1 or later, package name `kairo`) (ADR 0001).
+- Storage is SQLite (`modernc.org/sqlite`) locally, and PostgreSQL for serverless and teams. The local server uses wait mode; serverless uses suspend mode.
+- It is split into a server (HTTP + SSE) and clients that connect to it (TUI and CLI). It ships as a single binary (`cmd/kairocode`).
 
-## パッケージと責務の境界
+## Packages and the boundaries of their responsibilities
 
-| パッケージ | 責務 | I/O・goroutine |
+| Package | Responsibility | I/O and goroutines |
 |---|---|---|
-| `internal/workflows` | kairo のワークフロー（`session`、`turn`、`flow`（Starlark のフローをワークフローの中で動かす。ADR 0003））。エージェントのループの制御 | **一切禁止。** SDK の `*kairo.Context`（`kairo.Call`、`Parallel`、`WaitFor`、`Child`、`ctx.Now`、`ctx.Random`、`ctx.Sleep`）を通してだけ外を見る |
-| `internal/runtime` | `kairo.Open`、ワークフローとアクションの宣言。アクションの実装（`agent.load`、`model`、`history.extend`、`tool.<name>`。後で `permission.check`、`snapshot`、`restore`）。ツールの作用の型から kairo の `Effect` への写し。サーバーと CLI に向けた小さな API（`CreateSession`、`Send`、`WaitTurn`） | ここで I/O する |
-| `internal/tools` | 組み込みのツール。1 ファイル 1 ツールで、`tools.Def` に作用の型を書く | ここで I/O する |
-| `internal/provider` | モデルのプロバイダーのアダプター（Anthropic と、テスト用の fake） | ここで I/O する |
-| `internal/plugins` | プラグインとマーケットプレイス（ADR 0025、0027）: 入れる・更新する・消す、一覧、プラグインの定義（`kairocode-plugin.json`、Claude Code のプラグイン）を読む。サーバーにつなぐのと、鍵を使うのは runtime | ここで I/O する（入れるときに git を動かす） |
-| `internal/secrets` | プラグインの鍵の保存（ADR 0025）: macOS のキーチェーン、Linux の Secret Service、なければ利用者だけが読めるファイル。値を記録に残さない（不変条件 6） | ここで I/O する |
-| `internal/store` | メッセージの保存（`kc_message`、内容のハッシュで引く。1 度だけ書く） | ここで I/O する |
-| `internal/daemon` | データの置き場ごとに 1 つのデーモン（ADR 0008）。ロック、`server.json`、Unix ソケットの上の HTTP、何もしないときの終了。ほかのプロセスが使うクライアントと、デーモンの自動の起動 | ここで I/O する |
-| `internal/api` | デーモンとクライアントのあいだの型（セッション、出来事、承認、プロバイダー、プラグイン、フローの実行）と、名前の付いたエラー。runtime はこれを別名で使い、tui と acp は runtime ではなくこれを使う（`TestClientsDoNotImportTheRuntime`） | なし（型と小さな関数だけ） |
-| `internal/server` | HTTP + SSE の API（設計 8.1 節）。ライブの出力は `k.Subscribe(<セッションの ID>)` から流す（ID の前方一致で、子孫の出力も届く） | ここで I/O する |
-| `internal/opencode` | opencode のエージェント・コマンド・スキルの定義（`.opencode/agents`、`commands`、`SKILL.md`）を、opencode と同じ意味で読み、コマンドを展開する。frontmatter の YAML は小さな自前のパーサーで読む | ファイルを読むだけ（コマンドの `` !`…` `` は呼び出し側が sandbox で動かす） |
-| `internal/acp` | ACP のエージェント（ADR 0002）と、端末の対話が使う ACP のクライアント。stdio の JSON-RPC、デーモンのセッション・出来事・承認を ACP に写す。待ちの状態を持たない（承認の待ちは kairo にある）。runtime は import しない（型は `internal/api`） | ここで I/O する |
-| `internal/jsonrpc` | 改行で区切った JSON の上の JSON-RPC 2.0（ACP の stdio）。`internal/acp`（KairoCode が ACP のエージェント）と、`internal/runtime` の ACP のエンジン（KairoCode が codex・copilot の ACP のクライアント。ADR 0014）が使う | 渡された読み書きの口だけ |
-| `internal/cli` | `kairocode chat`（引数なしの `kairo` も。自分の ACP のクライアントとして話す端末の対話）、`run / approvals / approve / daemon / acp / usage`、後で `replay`。DB を自分で開かず、デーモンにつなぐ | ここで I/O する |
-| `internal/flowfile` | プロジェクトのフローのスクリプト（`.kairocode/workflows/<名前>.star` と下書き）の場所、一覧、読み書き。作業ディレクトリの中（`os.Root`）でだけ読み書きする | フローのファイルだけ |
-| `internal/flowchart` | フローの形（ADR 0003）。Starlark のスクリプトの構文の木から、プリミティブの呼び出しを、順番・分岐・繰り返し・並列の形で読む。木の形の文字の図も | なし（読むだけ） |
-| `internal/tui` | `kairo` の端末の画面（ADR 0010、Bubble Tea v2）。ACP のクライアントの表示と入力を持つ。フローの図と編集のため、フローのスクリプトを `internal/flowfile` で読み書きする。runtime は import しない（型は `internal/api`） | 端末の入出力と、`internal/flowfile` を通したフローのファイルだけ |
-| `internal/clipboard` | クリップボードの画像を読む OS のコマンド（ADR 0026）と、貼った画像の保存。利用者がキーを押したときだけ動く | ここで I/O する |
-| `internal/tui/screen` | 端末の画面の下の領域を描き、会話をその上に書く（ADR 0033。Codex と同じ仕組み）。生モードと端末の設定 | 端末の入出力だけ |
-| `internal/lsp` | 書いたファイルの、言語サーバーの診断のエラー（ADR 0009）。サーバーは sandbox の中で起動し、デーモンの中で持ち続け、使われなければ止める | ここで I/O する |
-| `internal/config` | 設定の置き場所（利用者の `$XDG_CONFIG_HOME/kairocode` と、プロジェクトの `kairocode.json`）と、その読み出し（利用者の分、プロジェクトの分の順の層）。各節の意味は、読む側が決める | 設定のファイルを読むだけ |
-| `internal/locale` | 読む人の言語（`KAIROCODE_LANG`、利用者の `kairocode.json`、ロケール）と、フローのレビューの言い回しの置き換え（項目名とスクリプトは置き換えない） | 環境変数と利用者の設定を読むだけ |
-| `internal/trust` | 信頼したフォルダの一覧（ADR 0010。データの置き場の `trust.json`）。クライアントだけが読み書きする | ここで I/O する |
-| `internal/invariants` | 下の不変条件のうち、ソースから読めるものの検査（go/ast、go/types） | なし |
-| `cmd/kairocode` | エントリーポイント | — |
+| `internal/workflows` | kairo workflows (`session`, `turn`, `flow` (runs a Starlark flow inside a workflow. ADR 0003)). Controls the agent loop | **Entirely forbidden.** Sees the outside only through the SDK's `*kairo.Context` (`kairo.Call`, `Parallel`, `WaitFor`, `Child`, `ctx.Now`, `ctx.Random`, `ctx.Sleep`) |
+| `internal/runtime` | `kairo.Open`, declaring workflows and actions. The action implementations (`agent.load`, `model`, `history.extend`, `tool.<name>`; later `permission.check`, `snapshot`, `restore`). Mapping tool effect types to kairo's `Effect`. A small API for the server and CLI (`CreateSession`, `Send`, `WaitTurn`) | Does I/O here |
+| `internal/tools` | Built-in tools. One tool per file, with its effect type written in `tools.Def` | Does I/O here |
+| `internal/provider` | Model provider adapters (Anthropic, and a fake for tests) | Does I/O here |
+| `internal/plugins` | Plugins and marketplaces (ADR 0025, 0027): install, update, remove, list, read plugin definitions (`kairocode-plugin.json`, Claude Code plugins). Connecting to the servers and using the credentials is runtime's job | Does I/O here (runs git when installing) |
+| `internal/secrets` | Storing plugin credentials (ADR 0025): the macOS Keychain, Linux's Secret Service, or else a file only the user can read. Keeps values out of the record (invariant 6) | Does I/O here |
+| `internal/store` | Message storage (`kc_message`, looked up by content hash. Written only once) | Does I/O here |
+| `internal/daemon` | One daemon per data directory (ADR 0008). The lock, `server.json`, HTTP over a Unix socket, exiting when idle. The client other processes use, and starting the daemon automatically | Does I/O here |
+| `internal/api` | The types between the daemon and clients (sessions, events, approvals, providers, plugins, flow runs) and named errors. runtime uses them through aliases; tui and acp use these instead of runtime (`TestClientsDoNotImportTheRuntime`) | None (types and small functions only) |
+| `internal/server` | The HTTP + SSE API (design section 8.1). Live output flows from `k.Subscribe(<session ID>)` (by ID prefix match, descendants' output arrives too) | Does I/O here |
+| `internal/opencode` | Reads opencode's agent, command and skill definitions (`.opencode/agents`, `commands`, `SKILL.md`) with the same meaning as opencode, and expands commands. Reads the frontmatter YAML with a small parser of its own | Only reads files (a command's `` !`…` `` is run in the sandbox by the caller) |
+| `internal/acp` | The ACP agent (ADR 0002) and the ACP client the terminal UI uses. stdio JSON-RPC; maps the daemon's sessions, events and approvals to ACP. Holds no wait state (approval waits live in kairo). Does not import runtime (types come from `internal/api`) | Does I/O here |
+| `internal/jsonrpc` | JSON-RPC 2.0 over newline-delimited JSON (ACP's stdio). Used by `internal/acp` (KairoCode as an ACP agent) and by `internal/runtime`'s ACP engine (KairoCode as an ACP client of codex and copilot. ADR 0014) | Only the reader and writer it is given |
+| `internal/cli` | `kairocode chat` (also `kairo` with no arguments; the terminal UI that talks as its own ACP client), `run / approvals / approve / daemon / acp / usage`, later `replay`. Does not open the DB itself; connects to the daemon | Does I/O here |
+| `internal/flowfile` | Where the project's flow scripts live (`.kairocode/workflows/<name>.star` and drafts), listing them, reading and writing them. Reads and writes only inside the working directory (`os.Root`) | Flow files only |
+| `internal/flowchart` | The shape of a flow (ADR 0003). From a Starlark script's syntax tree, reads the primitive calls as sequence, branch, loop and parallel. Also a tree-shaped text chart | None (only reads) |
+| `internal/tui` | `kairo`'s terminal UI (ADR 0010, Bubble Tea v2). Holds the ACP client's display and input. For the flow chart and editing, reads and writes flow scripts through `internal/flowfile`. Does not import runtime (types come from `internal/api`) | Terminal input and output, and flow files through `internal/flowfile` only |
+| `internal/clipboard` | The OS commands that read clipboard images (ADR 0026), and saving pasted images. Runs only when the user presses a key | Does I/O here |
+| `internal/tui/screen` | Draws the bottom area of the terminal and writes the conversation above it (ADR 0033. The same mechanism as Codex). Raw mode and terminal settings | Terminal input and output only |
+| `internal/lsp` | Language server diagnostic errors for written files (ADR 0009). Servers start inside the sandbox, are kept inside the daemon, and are stopped when unused | Does I/O here |
+| `internal/config` | Where settings live (the user's `$XDG_CONFIG_HOME/kairocode` and the project's `kairocode.json`) and reading them (layered: the user's, then the project's). What each section means is up to the reader | Only reads settings files |
+| `internal/locale` | The reader's language (`KAIROCODE_LANG`, the user's `kairocode.json`, the locale) and replacing the wording of flow reviews (field names and scripts are not replaced) | Only reads environment variables and the user's settings |
+| `internal/trust` | The list of trusted folders (ADR 0010. `trust.json` in the data directory). Only clients read and write it | Does I/O here |
+| `internal/invariants` | Checks for those invariants below that can be read from the source (go/ast, go/types) | None |
+| `cmd/kairocode` | Entry point | — |
 
-ワークフローが import してよいパッケージは、`internal/invariants/invariants.go` の許可リストにあるものだけです（kairo の SDK、Starlark（`go.starlark.net`。ADR 0003）、`internal/msg`（メッセージの型。純粋なパッケージ）、決定的な標準ライブラリ）。ほかの内部のパッケージの型が要るときは、純粋なパッケージに分けてから、リストに足します。
+Workflows may import only the packages on the allow list in `internal/invariants/invariants.go` (kairo's SDK, Starlark (`go.starlark.net`. ADR 0003), `internal/msg` (message types; a pure package), and the deterministic parts of the standard library). When a workflow needs a type from another internal package, split it into a pure package first, then add it to the list.
 
-## 破ってはいけない不変条件
+## Invariants you must not break
 
-破ると壊れるのは、要件の中心（落ちても壊れない、二重に起きない）です。どれも自動テストか hook で守ります。
+Breaking them breaks the core of the requirements (does not break when it crashes, nothing happens twice). Each is guarded by an automated test or a hook.
 
-1. **ワークフローのコードは決定的である。** `internal/workflows` の非テストのコードでは、時計（`time.Now` など）、乱数、環境変数、ファイル・ネットワーク・プロセス、goroutine、`select`、map の走査（`maps.Keys` などの反復子を含む）を使いません。時刻と乱数は `ctx.Now()` と `ctx.Random()`、並列は `kairo.Parallel`、それ以外はすべてアクションを通します。map は `slices.Sorted(maps.Keys(m))` で走査します。→ `TestWorkflowCodeIsDeterministic`（import の許可リスト、型による map の検出）、hook（`scripts/workflow-forbidden.txt`）
-2. **ワークフローの分岐に使う値は、記録された値だけである。** 設定（権限の規則、エージェントの定義、モデルの選択）は、ワークフローの中で直接読まず、アクション（`agent.load`、`permission.check`）の結果として記録してから使います。パッケージの変数やキャッシュも読みません。設定を変えた後に再開しても、進行中のターンは開始時の値で進みます（設計 4・5 節）。
-3. **すべてのツールは作用の型を宣言する。宣言がなければ「実」として扱う。** 型は `tools.Read`、`tools.Idempotent`、`tools.Real` で、ゼロ値が `Real` です（kairo の `ir.Effect` と同じ規則）。`tools.Def` のリテラルには、`Real` でも `Effect` を明示します。kairo への写し方は `Read` → `kairo.Unprotected`、`Idempotent` → `kairo.Real` + `kairo.IdempotentRetry()`、`Real` → `kairo.Real` です（`internal/runtime`）。MCP とカスタムのツールも同じです。→ `TestToolsDeclareEffect`
-4. **結果が不明な実のツールを、成功扱いしない。** `Idempotent` のツールは、自動で確かめてからやり直します（edit と write は「書く前・書いた後のハッシュ」で比べて置き換える。設計 3.1 節）。`Real` のツールは kairo の「要確認」（blocked）で止め、人に「実行されたか」を聞き、答えを `k.Resolve` か `k.ResolveFailed` で返します。handler が「効いたかわからない」失敗を返すときは `kairo.Unknown(err)`、効いていないと言えるときだけ `kairo.Retryable(err)` で包みます。確かめずにもう一度実行してはいけません。→ crash のテスト
-5. **モデルの呼び出しの入力は、ハッシュの列にする。** 履歴の本文を `model` の呼び出しの入力に入れません。メッセージは `kc_message` に内容のハッシュを鍵として 1 度だけ書き、書き換えません（設計 2.2 節、NFR-5）。
-6. **秘密を記録に残さない。** API キーは、アクションの中で環境変数か設定から読みます。ワークフローの入力、アクションの入出力、`kc_message`、ログ、エラーの文面、テストの記録（testdata）に入れません。→ `TestNoSecretsInSources`、hook
-7. **待つときはプロセスを手放す。** 承認や外部の出来事は `kairo.WaitFor`（kairo のシグナル）で待ちます。ポーリング、`time.Ticker`、プロセスの中に待ちの状態を持つ実装をしません（NFR-4）。
-8. **実行の ID は、決まった規則で作る。** 根（セッション）だけを `kairo.WithID("s/<ID>")` で決めます。ターン、サブエージェント、計画の葉は `kairo.Child` で始め、ID は SDK の規則（`<親の ID>/<sha256(種類 + 入力) の先頭 24 文字>.<n>`）に任せます。同じ入力の子を区別するため、子の入力にターンの番号や計画の中の位置を入れます。子の入力に、記録されていない値（乱数、時刻、設定）を入れません。 Claude Code のエンジン（ADR 0007）の MCP の呼び出しの実行は、`<ターンの ID>/mcp/<ツールの名前と正規化した引数のハッシュ>.<何回目か>` です（tool_use の ID は使わない。落ちた後に呼び直されると変わるため）。
-9. **テストは本物のモデルを呼ばない。** プロバイダーは fake か、記録した応答を返すものを使います。ネットワークにつながずに、すべてのテストが通るようにします。
+1. **Workflow code is deterministic.** Non-test code in `internal/workflows` does not use the clock (`time.Now` and the like), random numbers, environment variables, files, network or processes, goroutines, `select`, or map iteration (including iterators such as `maps.Keys`). Time and random numbers come from `ctx.Now()` and `ctx.Random()`, parallelism from `kairo.Parallel`, and everything else goes through actions. Iterate maps with `slices.Sorted(maps.Keys(m))`. → `TestWorkflowCodeIsDeterministic` (the import allow list, map detection by type), hook (`scripts/workflow-forbidden.txt`)
+2. **Workflows branch only on recorded values.** Settings (permission rules, agent definitions, model choice) are not read directly inside a workflow; they are recorded as the result of an action (`agent.load`, `permission.check`) and used from there. Package variables and caches are not read either. Even if settings change and the session resumes, a turn in progress continues with the values from its start (design sections 4 and 5).
+3. **Every tool declares its effect type. Without a declaration, it is treated as "real".** The types are `tools.Read`, `tools.Idempotent` and `tools.Real`, and the zero value is `Real` (the same rule as kairo's `ir.Effect`). Every `tools.Def` literal states `Effect` explicitly, even when it is `Real`. The mapping to kairo is `Read` → `kairo.Unprotected`, `Idempotent` → `kairo.Real` + `kairo.IdempotentRetry()`, `Real` → `kairo.Real` (`internal/runtime`). MCP and custom tools follow the same rule. → `TestToolsDeclareEffect`
+4. **A real tool with an unknown outcome is never treated as a success.** An `Idempotent` tool checks automatically, then retries (edit and write compare "the hashes before and after the write" and replace. Design section 3.1). A `Real` tool stops in kairo's blocked (needs confirmation) state, asks a person "did it run?", and returns the answer with `k.Resolve` or `k.ResolveFailed`. When a handler returns a failure where "we do not know whether it took effect", wrap it in `kairo.Unknown(err)`; wrap it in `kairo.Retryable(err)` only when you can say it did not take effect. Never run it again without checking. → crash tests
+5. **The input to a model call is a list of hashes.** Do not put the history's text in the input of a `model` call. Each message is written once to `kc_message` keyed by its content hash, and never rewritten (design section 2.2, NFR-5).
+6. **Secrets stay out of the record.** API keys are read inside actions from environment variables or settings. Do not put them in workflow inputs, action inputs or outputs, `kc_message`, logs, error text, or test records (testdata). → `TestNoSecretsInSources`, hook
+7. **Release the process while waiting.** Wait for approvals and external events with `kairo.WaitFor` (kairo signals). Do not implement waiting with polling, `time.Ticker`, or wait state held inside the process (NFR-4).
+8. **Run IDs follow fixed rules.** Only the root (the session) is named, with `kairo.WithID("s/<ID>")`. Turns, subagents and plan leaves start with `kairo.Child`, and their IDs are left to the SDK's rule (`<parent ID>/<first 24 characters of sha256(kind + input)>.<n>`). To tell apart children with the same input, put the turn number or the position in the plan in the child's input. Do not put unrecorded values (random numbers, time, settings) in a child's input. The runs for MCP calls of the Claude Code engine (ADR 0007) are `<turn ID>/mcp/<hash of the tool name and normalized arguments>.<attempt number>` (the tool_use ID is not used, because it changes when the call is made again after a crash).
+9. **Tests do not call real models.** Providers are the fake or ones that return recorded responses. All tests must pass without a network connection.
 
-## 設計判断の記録（ADR）
+## Recording design decisions (ADR)
 
-- KairoCode の側の判断は `docs/adr/` に書きます（`/adr` スキル）。kairo の ADR 0017 と同じく、**ADR が要る変更は、利用者の承認を得てから実装に入ります。** 自分で起票した ADR を自分で承認してはいけません。
-- ADR が要る変更: 上の不変条件を足す・変える・緩める、ツールの作用の型を増やす、実行の ID の規則を変える、`kc_message` などの保存の形式を変える、依存を足す（下の「許可済みの依存」以外）、要件・設計から外れる、設計 11 節の未決事項を決める。
-- **kairo の側に足りないものは、kairo の ADR として提案します（`/kairo-gap` スキル）。** このリポジトリから `../kairo` を編集してはいけません（hook が拒否します）。回避策を KairoCode の側に置く場合は、`docs/kairo-gaps.md` に書き、コードに `// kairo-gap #N:` のコメントを付けます。
+- Decisions on KairoCode's side are written in `docs/adr/` (the `/adr` skill). As in kairo's ADR 0017, **a change that needs an ADR is implemented only after the user approves it.** Never approve an ADR you filed yourself.
+- Changes that need an ADR: adding, changing or relaxing the invariants above; adding a tool effect type; changing the run ID rules; changing a storage format such as `kc_message`; adding a dependency (other than the "allowed dependencies" below); departing from the requirements or the design; deciding an open question in design section 11.
+- **Propose what kairo is missing as a kairo ADR (the `/kairo-gap` skill).** Do not edit `../kairo` from this repository (a hook refuses it). If you put a workaround on KairoCode's side, write it in `docs/kairo-gaps.md` and add a `// kairo-gap #N:` comment in the code.
 
-## 作業の進め方
+## How to work
 
 ```sh
-scripts/check.sh           # 完了の条件: gofmt、vet、build、全テスト（-race、crash を含む）、不変条件、ADR の検査
-scripts/check.sh --quick   # hook が使う軽量版（go test -short。crash のテストは -short で自分を飛ばす）
+scripts/check.sh           # the condition for done: gofmt, vet, build, all tests (-race, including crash tests), invariants, ADR checks
+scripts/check.sh --quick   # the light version the hooks use (go test -short; crash tests skip themselves under -short)
 make check | quick | build
 ```
 
-- **完了の条件は `scripts/check.sh` が通ることです。** 通らない状態で終わるなら、何が失敗していて、なぜ直せないのかを明記してください。
-- **`scripts/check.sh` は、エージェントの sandbox の外で動かします。** テストは `127.0.0.1` と Unix ソケットで待ち受け（偽のサーバー、デーモン）、KairoCode の sandbox でコマンドを起動します。エージェントの sandbox の中ではそれができないので、検査はテストの前に `== env` で止まり、何ができないかを言います（合格にはしません）。
-  - KairoCode: `bash` を `sandbox: "loopback"`（sandbox の中で、手元の通信だけを許す。ADR 0031）で呼んで動かします。承認は要りません（`bash` の規則に従う）。sandbox を起動するテストは、入れ子にできないので自分を飛ばし、検査は「一部」の合格（`partial: N skipped`）になります。全部を動かすときだけ、`sandbox: "escalate"`（利用者の承認で sandbox の外）を使います。`KAIROCODE_CHECK_FULL=1` なら、「一部」は合格にせず終了コード 3 で止まります。
-  - Codex: `scripts/check.sh` は、sandbox の外での実行の許可（escalated）を求めて動かします。`network_access` を許すだけでは足りません（macOS は、sandbox の中で別の sandbox を始められない）。
-  - `== env` で止まったときの終了コードは 3 です。Stop hook は、そのとき「直せ」ではなく「外で動かせ」と返します。外で通れば、`check.sh` が通ったこと（`.claude/.cache/last-green`）を書くので、ソースが変わるまで Stop hook は検査を繰り返しません。
-  - 外で動かす許可が得られないなら、`== env` の出力を添えて、利用者に外で動かしてもらってください。
-- 段階（M0〜M4）の作業は `/milestone` スキルで進めます。受け入れ条件をテストとして先に書き、それが通ったら段階を終えます。
-- 実のツール、ワークフロー、再開に関わる変更では、**プロセスを強制終了して再開するテスト**（crash のテスト）を書きます。名前は `TestCrash...` にし、先頭で `if testing.Short() { t.Skip(...) }` とします。テストのバイナリを子のプロセスとして起動し直し（`os.Args[0]` と `-test.run`、環境変数で役を渡す）、途中で `SIGKILL` して、同じ DB で再開します。「二重に起きない」は、ツールの handler が呼ばれた回数か、外から見える作用（ファイル、git の記録）の回数で確かめます。
-- テストの閾値や期待値を緩めて通してはいけません。待ち合わせは固定の `time.Sleep` でなく、条件を見て待ちます。
-- 時間の予算（NFR-2、NFR-3）は、テストで合否を決めません。計測して前後で比べます（kairo の ADR 0056 と同じ）。
+- **The condition for done is that `scripts/check.sh` passes.** If you finish while it does not pass, state clearly what fails and why you cannot fix it.
+- **Run `scripts/check.sh` outside the agent's sandbox.** The tests listen on `127.0.0.1` and Unix sockets (fake servers, the daemon) and start commands in KairoCode's sandbox. That is not possible inside the agent's sandbox, so the check stops at `== env` before the tests and says what it cannot do (it does not count as a pass).
+  - KairoCode: call `bash` with `sandbox: "loopback"` (inside the sandbox, allowing only local traffic. ADR 0031). No approval is needed (it follows the `bash` rules). Tests that start the sandbox skip themselves because it cannot be nested, and the check is a "partial" pass (`partial: N skipped`). Use `sandbox: "escalate"` (outside the sandbox with the user's approval) only when you run everything. With `KAIROCODE_CHECK_FULL=1`, a "partial" result does not count as a pass and it stops with exit code 3.
+  - Codex: run `scripts/check.sh` by asking for permission to run outside the sandbox (escalated). Allowing `network_access` alone is not enough (macOS cannot start another sandbox inside a sandbox).
+  - The exit code when it stops at `== env` is 3. In that case the Stop hook says "run it outside" rather than "fix it". If it passes outside, `check.sh` writes that it passed (`.claude/.cache/last-green`), so the Stop hook does not repeat the check until the source changes.
+  - If you cannot get permission to run it outside, attach the `== env` output and ask the user to run it outside.
+- Work on a milestone (M0 to M4) with the `/milestone` skill. Write the acceptance criteria as tests first, and finish the milestone when they pass.
+- For changes involving real tools, workflows or resuming, write **a test that force-kills the process and resumes** (a crash test). Name it `TestCrash...` and start it with `if testing.Short() { t.Skip(...) }`. Start the test binary again as a child process (`os.Args[0]` and `-test.run`, passing the role in an environment variable), `SIGKILL` it partway, and resume on the same DB. Check "nothing happens twice" by the number of times the tool's handler was called, or by the number of externally visible effects (files, git records).
+- Do not loosen test thresholds or expected values to make tests pass. Wait for a condition, not a fixed `time.Sleep`.
+- Time budgets (NFR-2, NFR-3) do not decide pass or fail in tests. Measure them and compare before and after (the same as kairo's ADR 0056).
 
-## 変更の種類ごとの手順
+## Procedures by kind of change
 
-- **ツールを足す・変える。** `/tool-change` スキル（作用の型、結果が不明なときの確かめ方、権限の規則の形、crash のテスト）。
-- **ワークフロー（`internal/workflows`）を変える。** `/workflow-change` スキル（決定性、記録された値、ID の規則、版の扱い）。
-- **kairo の API が足りない。** `/kairo-gap` スキル。
-- **依存を足す。** 許可済みの依存は、`github.com/r-hashi01/kairo`（と `sdk/go/pgnotify`）、`modernc.org/sqlite`、`github.com/jackc/pgx/v5`、`github.com/anthropics/anthropic-sdk-go`、`github.com/modelcontextprotocol/go-sdk`、`go.starlark.net`（ADR 0003、承認済み）、`github.com/elastic/go-seccomp-bpf` と `golang.org/x/net`（ADR 0005。`x/net/bpf` を Linux の sandbox だけが使う）、`charm.land/bubbletea/v2`・`charm.land/bubbles/v2`・`charm.land/lipgloss/v2`（ADR 0010。`internal/tui` だけが使う）、`golang.org/x/oauth2`（ADR 0025。MCP の SDK の `auth` の型。プラグインの OAuth だけが使う）です。それ以外は、利用者の了承と ADR が要ります（hook が確認を求めます）。
+- **Adding or changing a tool.** The `/tool-change` skill (effect type, how to check an unknown outcome, the shape of the permission rule, the crash test).
+- **Changing workflows (`internal/workflows`).** The `/workflow-change` skill (determinism, recorded values, ID rules, handling versions).
+- **kairo's API is missing something.** The `/kairo-gap` skill.
+- **Adding a dependency.** The allowed dependencies are `github.com/r-hashi01/kairo` (and `sdk/go/pgnotify`), `modernc.org/sqlite`, `github.com/jackc/pgx/v5`, `github.com/anthropics/anthropic-sdk-go`, `github.com/modelcontextprotocol/go-sdk`, `go.starlark.net` (ADR 0003, approved), `github.com/elastic/go-seccomp-bpf` and `golang.org/x/net` (ADR 0005. Only the Linux sandbox uses `x/net/bpf`), `charm.land/bubbletea/v2`, `charm.land/bubbles/v2` and `charm.land/lipgloss/v2` (ADR 0010. Only `internal/tui` uses them), and `golang.org/x/oauth2` (ADR 0025. The `auth` types of the MCP SDK. Only plugin OAuth uses it). Anything else needs the user's consent and an ADR (a hook asks for confirmation).
 
-## コーディング規約
+## Coding conventions
 
-- コメントと識別子は英語、ドキュメントは日本語です。周りのコードの密度と書き方に合わせます。
-- gofmt に従います（編集後に hook が整形します）。
-- エラーは握りつぶさず、戻り値で返すか記録します。ツールの「確定した失敗」（衝突、作業ディレクトリの外など）は、エラーではなく結果としてモデルに返します。
-- ファイルの操作は、作業ディレクトリ（セッションのリポジトリ）の外に出ないようにします（パスを正規化し、シンボリックリンクも解決して確かめる）。
-- goroutine を起こしたら、止める経路（`context` の取り消し）を必ず持たせます。
+- Everything in the repository is in English: code, comments, identifiers, docs, commit messages, PR titles and bodies, and release notes. The one exception is product text localized for users (`internal/locale`, and the Japanese terminal notifications). Match the density and style of the surrounding code.
+- Follow gofmt (a hook formats after each edit).
+- Do not swallow errors; return them or record them. A tool's "settled failure" (a conflict, outside the working directory, and so on) goes back to the model as a result, not as an error.
+- File operations must not leave the working directory (the session's repository) (normalize paths and resolve symbolic links to check).
+- When you start a goroutine, always give it a way to stop (`context` cancellation).
 
-## 落とし穴
+## Pitfalls
 
-- `kairo.Call` は、kairo の 1 つの実行です。再開するとワークフローの関数を頭から実行し、同じ ID の呼び出しは記録から結果を返します。呼び出しの順番や入力を変えると、別の呼び出しとして新しく実行されます。ターンのワークフローの中身を変えるときは、`kairo.WorkflowVersion` で版を上げ、前の版を `kairo.Draining()` で残します（kairo の ADR 0060）。前の版は、`k.List` でその版の実行が残っていないことを確かめてから消します。
-- 終わった木の記録は、根が終わってから `KeepFinished`（既定 24 時間）が過ぎると消えます。待っている木は消えません（kairo の ADR 0054）。
-- 実の呼び出しは、意図が DB に確定してから動きます。プロセスが落ちると、借用（`Options.Lease`、既定 30 秒）が切れてから、別のプロセスか次の `Tick` が拾います。実の呼び出しは `blocked` に、ワークフローの関数は最初から動かし直しになります（kairo の ADR 0059）。
-- 時計に関わるテスト（長い承認の待ち、期限、眠り）は `kairotest.New(t)` と `env.Advance(d)` で書きます。実時間では待ちません。
-- kairo の実のステップは、意図が耐久化してから動きます。テストで「1 回だけ動いた」を確かめるときは、handler の中で数えて、ファイルか DB に残します（プロセスを殺すので、メモリの数は残らない）。
-- kairo の側の不変条件（純粋なコア、実の命令は耐久化した意図から、など）は `../kairo/AGENTS.md` にあります。SDK の約束は `../kairo/sdk/go/README.md` と kairo の ADR 0058〜0060 で確かめます。
+- `kairo.Call` is one kairo run. On resume, the workflow function runs again from the top, and calls with the same ID return their results from the record. If you change the order or the input of calls, they run anew as different calls. When you change what the turn workflow does, raise the version with `kairo.WorkflowVersion` and keep the old version with `kairo.Draining()` (kairo's ADR 0060). Delete the old version only after checking with `k.List` that no runs of that version remain.
+- The record of a finished tree is deleted once `KeepFinished` (default 24 hours) passes after its root finishes. A waiting tree is not deleted (kairo's ADR 0054).
+- A real call runs only after its intent is committed to the DB. If the process crashes, another process or the next `Tick` picks it up once the lease (`Options.Lease`, default 30 seconds) expires. The real call becomes `blocked`, and the workflow function runs again from the start (kairo's ADR 0059).
+- Write clock-related tests (long approval waits, deadlines, sleeps) with `kairotest.New(t)` and `env.Advance(d)`. Do not wait in real time.
+- kairo's real steps run only after their intent is durable. To check in a test that something "ran only once", count inside the handler and keep the count in a file or the DB (the process is killed, so a count in memory does not survive).
+- kairo's own invariants (a pure core, real commands only from durable intents, and so on) are in `../kairo/AGENTS.md`. Check the SDK's promises in `../kairo/sdk/go/README.md` and kairo's ADRs 0058 to 0060.
 
-## このリポジトリのエージェント用ハーネス
+## The agent harness in this repository
 
-- `.claude/settings.json` の hooks
-  - `SessionStart`: ブランチ、未コミットの数、直近の検証結果、今の段階（`docs/milestones.md`）を表示します。
-  - `PreToolUse`（Edit/Write）: `internal/workflows` への禁止パターン、API キーらしき文字列、ランタイムのデータ（`*.db`）の編集、`../kairo` の編集を拒否します。許可済み以外のモジュールを `go.mod` に足すときは確認を求めます。
-  - `PostToolUse`（Edit/Write）: gofmt、パッケージの go vet と `go test -short` を実行します。`internal/workflows`、`internal/tools` を変えたら不変条件の検査も走らせます。
-  - `Stop`: `scripts/check.sh --quick` が通らないと終了させません。ソースが前回の成功時から変わっていなければ省きます。
-- スキル: `/verify`、`/milestone`、`/tool-change`、`/workflow-change`、`/kairo-gap`、`/adr`
-- サブエージェント: `durability-reviewer`（差分を、不変条件と設計の観点でレビューする。読み取り専用）。`internal/workflows`、`internal/runtime`、`internal/tools` を変えたら、終える前に使います。
-- `scripts/check.sh` は `scripts/adr-lint.sh` も実行します。
+- hooks in `.claude/settings.json`
+  - `SessionStart`: shows the branch, the number of uncommitted changes, the latest check result, and the current milestone (`docs/milestones.md`).
+  - `PreToolUse` (Edit/Write): refuses forbidden patterns in `internal/workflows`, strings that look like API keys, edits to runtime data (`*.db`), and edits to `../kairo`. Asks for confirmation when adding a module to `go.mod` that is not allowed.
+  - `PostToolUse` (Edit/Write): runs gofmt, and go vet and `go test -short` for the package. If you change `internal/workflows` or `internal/tools`, it runs the invariant checks too.
+  - `Stop`: does not let you finish unless `scripts/check.sh --quick` passes. Skipped if the source has not changed since the last pass.
+- Skills: `/verify`, `/milestone`, `/tool-change`, `/workflow-change`, `/kairo-gap`, `/adr`
+- Subagent: `durability-reviewer` (reviews a diff against the invariants and the design. Read-only). Use it before finishing when you change `internal/workflows`, `internal/runtime` or `internal/tools`.
+- `scripts/check.sh` also runs `scripts/adr-lint.sh`.
 
-hook やテストを無効化して回避しないでください。誤検出だと思ったら、hook や検査の側を直す変更として提案してください。
+Do not get around hooks or tests by disabling them. If you think one is a false positive, propose a change that fixes the hook or check itself.

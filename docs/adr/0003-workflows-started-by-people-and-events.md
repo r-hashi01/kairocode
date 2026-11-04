@@ -1,140 +1,140 @@
-# 0003 ワークフローは、人と出来事が始める。中身は Starlark で、言葉から作り、端末にフローの図として見せる
+# 0003 Workflows are started by people and events. Their body is Starlark, written from words, and shown in the terminal as a flow chart
 
-- 状態: 承認（2026-10-19）
-- 日付: 2026-10-09（同日の「スキルとして扱う」案と「JavaScript で書く」案を、利用者の指摘で書き直した）。2026-10-15 に、開発のワークフローの例（5）を足した。2026-10-19 に、作り方（言葉から作る、1 の後半）と見せ方（フローの図、4）を、利用者の指摘で書き直した
-- 関連: 要件 FR-13、FR-14、FR-15、FR-24、FR-26、設計 6 節、ADR 0001、0002（コマンドとエージェントの形）、0005（sandbox）、kairo の ADR 0049、0060
+- Status: Accepted (2026-10-19)
+- Date: 2026-10-09 (the same day's proposals "treat them as skills" and "write them in JavaScript" were rewritten after the user pointed out problems). On 2026-10-15, the example of a development workflow (5) was added. On 2026-10-19, how flows are made (made from words, the second half of 1) and how they are shown (the flow chart, 4) were rewritten after the user pointed out problems
+- Related: requirements FR-13, FR-14, FR-15, FR-24, FR-26; design section 6; ADR 0001, 0002 (the shape of commands and agents), 0005 (sandbox); kairo's ADR 0049, 0060
 
-## 背景
+## Context
 
-KairoCode では、複数のサブエージェントの組み合わせ（並列、順番、反復、結果での分岐）を、kairo の耐久のワークフローとして動かせます。落ちても終わったサブエージェントはやり直さず、人の承認や外の出来事を何日でも待てます（設計 6 節）。
+In KairoCode, combinations of several subagents (in parallel, in order, repeated, branching on results) can run as kairo's durable workflows. Even after a crash, finished subagents are not redone, and a workflow can wait for days for a person's approval or an outside event (design section 6).
 
-この ADR は、同じ日に 3 回書き直しました。いずれも利用者の指摘によるものです。
+This ADR was rewritten three times on the same day. Each time it was because of the user's comments.
 
-- **スキルの形（最初の案）をやめた理由:** スキルは「用意したけど使われない」ものです。使うかどうかをモデルの判断に任せると、飛ばされます。このリポジトリのハーネスでも、「終える前に検証する」は Stop hook で必ず流しています。
-- **JSON の計画（設計 6.2 節）をやめた理由:** 独自の形は、中身をモデルと人に理解させる工夫が要ります。
-- **JavaScript を経て Starlark にした理由:** 利用者は Python の書き方を望みました。本物の Python は、OS を触れるので sandbox が要り、決定性も環境でしか守れず、Python の実行環境も要ります。Starlark（Python の方言）にすると、次の性質が言語の側で手に入ります。
+- **Why we dropped the skill shape (the first proposal):** a skill is something that "is provided but not used". If whether to use it is left to the model's judgment, it gets skipped. In this repository's harness too, "verify before finishing" is always run by the Stop hook.
+- **Why we dropped the JSON plan (design section 6.2):** a home-grown format needs extra work to make the model and people understand its content.
+- **Why we went through JavaScript to Starlark:** the user wanted the Python way of writing. Real Python can touch the OS, so it needs a sandbox, determinism can only be kept by the environment, and it needs a Python runtime. With Starlark (a dialect of Python), the following properties come from the language itself.
 
-2026-10-09 に、`go.starlark.net` で次のことを確かめました。
+On 2026-10-09 we confirmed the following with `go.starlark.net`.
 
-- **そのまま動いたもの:** `for`、`while`（オプション）、辞書、内包表記、`def` と `return`、`sorted`、`%` と `.format()`。
-- **構文の段階で、行と列つきのエラーになるもの:** f-string、`try/except`、`class`、`import`、`time`。
-- **決定性:** 時計、乱数、I/O は言語にありません。辞書を走査する順番は、入れた順で毎回同じです。
-- **止める仕組み:** 無限ループは、ステップ数の上限（`SetMaxExecutionSteps`）で止まります。
-- **依存:** 純粋な Go で、増える依存は `golang.org/x/sys` だけです。
+- **What ran as is:** `for`, `while` (optional), dicts, comprehensions, `def` and `return`, `sorted`, `%` and `.format()`.
+- **What becomes an error with line and column at the syntax stage:** f-strings, `try/except`, `class`, `import`, `time`.
+- **Determinism:** the language has no clock, random numbers or I/O. The order of iterating a dict is the insertion order, the same every time.
+- **How it is stopped:** an infinite loop is stopped by a limit on the number of steps (`SetMaxExecutionSteps`).
+- **Dependencies:** it is pure Go, and the only added dependency is `golang.org/x/sys`.
 
-比較のため、Go のインタプリタ（`github.com/traefik/yaegi` v0.16.1）も試しました。スクリプトに渡すものを絞ることはできましたが、正しいジェネリクスのコードが型のエラーで落ちました。
+For comparison, we also tried a Go interpreter (`github.com/traefik/yaegi` v0.16.1). We could narrow what is given to the script, but correct generic code failed with type errors.
 
-## 決定
+## Decision
 
-### 1. 使うかどうかをモデルに選ばせない。入口は 3 つ
+### 1. Do not let the model choose whether to use them. There are three entry points
 
-ワークフローは `.kairocode/workflows/<name>.star` に置き、次の 3 つの入口から始めます。
+Workflows live in `.kairocode/workflows/<name>.star` and are started from the following three entry points.
 
-1. **人が呼ぶ（`/flow <name>`）。** フローは、どれも 1 つのコマンド `/flow` の下にまとめます（2026-10-19、利用者の判断）。
-   - `/flow <name> [引数]` で動かします。
-   - `/flow` だけを打つと、一覧（名前と説明）を出します。
-   - `/flow new <説明>` で、言葉から作ります（下）。そのため `new` という名前のフローは作れません。
-   - プロジェクトのコマンド（`.opencode/commands`）と名前がぶつかりません。ACP のスラッシュのコマンドの一覧（`available_commands_update`）には、`flow` が 1 つだけ並びます（ADR 0002）。TUI では、`/flow ` の後でフローの名前を補完します。
-2. **出来事が始める（hook）。** `kairocode.json` の `hooks` で、出来事にワークフローを結びつけます。結びつけたものは、その時点で必ず走ります。
+1. **A person calls it (`/flow <name>`).** All flows are grouped under one command, `/flow` (2026-10-19, the user's decision).
+   - `/flow <name> [arguments]` runs one.
+   - Typing just `/flow` shows the list (names and descriptions).
+   - `/flow new <description>` makes one from words (below). So a flow named `new` cannot be made.
+   - Names do not collide with project commands (`.opencode/commands`). In ACP's list of slash commands (`available_commands_update`), only one `flow` appears (ADR 0002). In the TUI, flow names are completed after `/flow `.
+2. **An event starts it (hook).** `hooks` in `kairocode.json` binds workflows to events. A bound workflow always runs at that point.
 
-   | 出来事 | 時点 | 段階 |
+   | Event | When | Milestone |
    |---|---|---|
-   | `turn.end` | ターンが応答を返す前 | M3 |
-   | `tool.after` | ツールの後。ツールの名前と引数の形で絞る | M3 |
-   | `session.start` | セッションの始め | M3 |
-   | `github.*`、`ci.result`、`schedule` | 外の出来事（Issue のコメント、CI の結果、定時） | M4 |
+   | `turn.end` | before a turn returns its response | M3 |
+   | `tool.after` | after a tool. Narrowed by the tool's name and the shape of its arguments | M3 |
+   | `session.start` | at the start of a session | M3 |
+   | `github.*`, `ci.result`, `schedule` | outside events (an Issue comment, a CI result, a schedule) | M4 |
 
-   - `turn.end` と `tool.after` のワークフローは、`{"ok": bool, "message": str}` を返します。
-   - `ok` が偽なら、`message` をモデルに返してループを続けます。続ける回数には上限があります。
-3. **エージェントの進め方そのものにする。** エージェントの定義（ADR 0002）に `workflow: <name>` を書くと、そのエージェントのターンは、既定のループの代わりにそのワークフローで進みます。
+   - Workflows for `turn.end` and `tool.after` return `{"ok": bool, "message": str}`.
+   - If `ok` is false, `message` is returned to the model and the loop continues. There is a limit on how many times it continues.
+3. **Make it the agent's way of working itself.** If an agent definition (ADR 0002) says `workflow: <name>`, that agent's turns proceed with that workflow instead of the default loop.
 
-モデルがその場でスクリプトを書いて動かす道（`workflow` のツール）も残します。その場合は、動かす前に構造の図（下の 4）を見せて、利用者に確認します。保存されたワークフローを、モデルが名前で選んで呼ぶ道は作りません。
+The path where the model writes a script on the spot and runs it (the `workflow` tool) also stays. In that case, the structure chart (4 below) is shown before running and the user confirms. There is no path where the model picks a saved workflow by name and calls it.
 
-**作るのは、言葉からです（2026-10-19）。** Python を書ける利用者は一部なので、人にスクリプトを書かせません。
+**They are made from words (2026-10-19).** Only some users can write Python, so people are not made to write scripts.
 
-1. 利用者が言葉で頼みます（`/flow new <説明>`、またはふだんの会話で）。
-2. モデルが Starlark のスクリプトを書きます。KairoCode は構文と決定性を検査し、通ったら `.kairocode/workflows/<name>.star` に書いて、フローの図（下の 4）を見せます。通らなければ、行と列つきでモデルに返して直させます。
-3. 確認のメニューはありません。図を見て変えたいときは、次の 2 つのどちらかです。
-   - **図を直接変える:** ↑↓ で箱を選び、Enter でその箱の中身（プロンプト、コマンド、問い）を書き換えます。`d` で消し、Shift+↑↓ で同じ段の中で順番を入れ替えます。変更は、スクリプトの構文の木の上で、その呼び出しの文字列の引数と文の並びだけを書き換えて、ファイルに書き戻します。
-   - **言葉で頼む:** いつもの入力欄に打って Enter で送ります（例「レビューの後にテストを足して」）。モデルがスクリプトを直し、図が描き直されます。箱を足す、分岐を変えるなど、図の上でできない変更はこちらで行います。
-4. 動かすのは `/flow <name>` です。保存の操作はありません。ファイルがそのまま最新の形で、変更は git で見えます。
+1. The user asks in words (`/flow new <description>`, or in the normal conversation).
+2. The model writes a Starlark script. KairoCode checks the syntax and determinism, and if it passes, writes it to `.kairocode/workflows/<name>.star` and shows the flow chart (4 below). If it does not pass, the errors go back to the model with line and column, to fix.
+3. There is no confirmation menu. To change something after looking at the chart, there are two ways.
+   - **Change the chart directly:** select a box with ↑↓ and press Enter to rewrite its content (prompt, command, question). `d` deletes it, and Shift+↑↓ swaps the order within the same level. A change rewrites only that call's string arguments and the order of statements on the script's syntax tree, and writes the result back to the file.
+   - **Ask in words:** type in the usual input box and send with Enter (for example, "add tests after the review"). The model fixes the script and the chart is redrawn. Changes the chart cannot make, such as adding a box or changing a branch, are made this way.
+4. It runs with `/flow <name>`. There is no save step. The file as it is is the latest form, and changes are visible in git.
 
-人はスクリプトを読まなくても使えます。読みたい人、手で直したい人のために、スクリプトはそのまま `.star` に置きます。
+People can use flows without reading the script. For those who want to read it or fix it by hand, the script stays as it is in the `.star` file.
 
-### 2. 中身は Starlark で書く
+### 2. The body is written in Starlark
 
 ```python
-DESCRIPTION = "変えたファイルを並列にレビューして直し、テストが通るまで繰り返す"
+DESCRIPTION = "Review the changed files in parallel and fix them, repeating until the tests pass"
 INPUT = {"files": list}
 LIMITS = {"agents": 12, "tokens": 2000000}
 
 def main(input):
     parallel([
-        {"agent": "reviewer", "prompt": "%s の型の誤りを探して直す" % f}
+        {"agent": "reviewer", "prompt": "Find and fix type errors in %s" % f}
         for f in input["files"]
     ])
     for round in range(3):
         test = tool("bash", command = "go test ./...")
         if test.exit_code == 0:
             return {"ok": True}
-        agent(agent = "build", prompt = "テストが落ちた。直して:\n" + test.output)
-    return {"ok": False, "message": "3 回直してもテストが通らない"}
+        agent(agent = "build", prompt = "The tests failed. Fix them:\n" + test.output)
+    return {"ok": False, "message": "the tests do not pass after 3 fixes"}
 ```
 
-- **プリミティブ（最初の版）:**
+- **Primitives (the first version):**
 
-  | 書き方 | 働き | kairo での形 |
+  | How it is written | What it does | Its form in kairo |
   |---|---|---|
-  | `agent(agent=, prompt=, schema=None)` | サブエージェント 1 つ。`schema` を付けると型付きの値で返る | `kairo.Child("agent", …)` |
-  | `parallel([spec, …])` | `agent` の指定（辞書）を並列に動かし、結果を順に返す | `kairo.Parallel` |
-  | `decide(prompt=, type=)` | 型付きの判断（`bool`、`enum`、`number`。設計 6.3 節） | モデルの構造化された出力 |
-  | `tool(name, **args)` | ツールを直接呼ぶ。権限の判定、作用の型、sandbox（ADR 0005）はツールのまま | ツールのアクション |
-  | `ask(question=, options=None)` | 人に訊いて待つ（ACP では `session/request_permission`） | `kairo.WaitFor` |
-  | `wait(event, timeout=)` | 外の出来事を待つ（M4） | `kairo.WaitFor` |
-  | `now()`、`random()` | 記録される時刻と乱数 | `ctx.Now`、`ctx.Random` |
+  | `agent(agent=, prompt=, schema=None)` | One subagent. With `schema`, it returns a typed value | `kairo.Child("agent", …)` |
+  | `parallel([spec, …])` | Runs `agent` specs (dicts) in parallel and returns the results in order | `kairo.Parallel` |
+  | `decide(prompt=, type=)` | A typed decision (`bool`, `enum`, `number`; design section 6.3) | The model's structured output |
+  | `tool(name, **args)` | Calls a tool directly. The permission decision, the effect type and the sandbox (ADR 0005) stay as for the tool | The tool's action |
+  | `ask(question=, options=None)` | Asks a person and waits (`session/request_permission` in ACP) | `kairo.WaitFor` |
+  | `wait(event, timeout=)` | Waits for an outside event (M4) | `kairo.WaitFor` |
+  | `now()`, `random()` | Recorded time and random numbers | `ctx.Now`, `ctx.Random` |
 
-- **失敗は値で返します。** Starlark には `try/except` がありません。そのため、プリミティブは予期した失敗（ツールの失敗、エージェントの失敗、拒否）を例外にせず、`ok`、`output`、`error` を持つ値で返します。スクリプトの中で `if` で分岐します。予期しない失敗（上限を超えた、スクリプトの誤り）は、ワークフローを止めます。
-- **並列は Go の側で動かします。** `parallel` に渡すのは関数ではなく、指定（辞書）の配列です。スクリプトの流れは 1 本のままです。
-- **実行の仕組み:**
-  - `go.starlark.net` で、KairoCode のプロセスの中で動かします。OS の sandbox は要りません（ADR 0005）。
-  - 再開するとスクリプトを頭から動かし直し、プリミティブの呼び出しは記録から結果を返します（kairo のコードで書く API と同じ。呼び出しの ID は、呼び出しの順と入力から決まる）。
-  - 構文の検査は、動かす前に行います。エラーは行と列つきでモデルに返し、直させます。f-string など、Python との違いでよく当たるものには、直し方を添えます。
-- **決定性の守り方:**
-  - 言語の外に出る道は、上のプリミティブだけです。
-  - スクリプトの中身は、始めたときに内容のハッシュとともに記録します（AGENTS.md の不変条件 2）。走っている途中でファイルを書き換えても、走っている実行は始めたときのスクリプトで終わります。
-  - ステップ数の上限を設けます。
-  - **ずれの検出:** 再開のときに、スクリプトが記録と違う呼び出しをしようとしたら、実行せずに止めます。たとえば、まだ読み直していない記録が残っているのに、新しい呼び出しが来た場合です。Starlark は決定的なので、本来は起きません。KairoCode の版を上げたときなどに備える安全網です。
-- **上限:** `LIMITS`（`agents`、`depth`、`steps`、`tokens`）は、プリミティブを呼ぶたびに記録された値で数え、超えたら止めます。
+- **Failures are returned as values.** Starlark has no `try/except`. So primitives do not turn expected failures (a tool failure, an agent failure, a refusal) into exceptions; they return a value with `ok`, `output` and `error`. The script branches on it with `if`. Unexpected failures (a limit exceeded, a mistake in the script) stop the workflow.
+- **Parallelism runs on the Go side.** What is passed to `parallel` is not functions but an array of specs (dicts). The script's flow stays a single thread.
+- **How it runs:**
+  - It runs inside the KairoCode process with `go.starlark.net`. No OS sandbox is needed (ADR 0005).
+  - On resume, the script runs again from the top, and primitive calls return their results from the record (the same as kairo's code-first API; a call's ID is decided by the order of calls and the input).
+  - The syntax is checked before running. Errors go back to the model with line and column, to fix. For differences from Python that are commonly hit, such as f-strings, a way to fix them is added.
+- **How determinism is kept:**
+  - The only ways out of the language are the primitives above.
+  - The script's content is recorded with its content hash when it starts (invariant 2 in AGENTS.md). Even if the file is rewritten while it runs, the running run finishes with the script it started with.
+  - There is a limit on the number of steps.
+  - **Detecting divergence:** on resume, if the script tries to make a call that differs from the record, it stops without running it. For example, a new call comes while there are still records not yet replayed. Starlark is deterministic, so this should not happen. It is a safety net for cases such as upgrading KairoCode's version.
+- **Limits:** `LIMITS` (`agents`, `depth`, `steps`, `tokens`) are counted with recorded values each time a primitive is called, and the run stops when one is exceeded.
 
-### 3. 権限
+### 3. Permissions
 
-- ワークフローの中の `agent` と `tool` は、セッションの権限の規則、作用の型、sandbox をそのまま通ります。ワークフローが自分で権限を広げることはできません。
-- リポジトリに置かれた hook は、そのリポジトリで初めて走る前に、一度だけ利用者に確認します（何の出来事で何が走るか）。答えは記録します。
+- `agent` and `tool` inside a workflow go through the session's permission rules, effect types and sandbox as they are. A workflow cannot widen permissions by itself.
+- For a hook placed in a repository, the user is asked once, before it first runs in that repository (which event runs what). The answer is recorded.
 
-### 4. 端末で、フローの図として見える
+### 4. Visible in the terminal as a flow chart
 
-中身は Starlark ですが、人に見せるのはコードではなく、Dify のワークフローのような、ノードがつながった図です。ブラウザの画面は作らず、端末の中に描きます（利用者の選択、2026-10-19）。
+The body is Starlark, but what people see is not code; it is a chart of connected nodes like a Dify workflow. No browser screen is built; it is drawn inside the terminal (the user's choice, 2026-10-19).
 
-- **ノード:** スクリプトの中のプリミティブの呼び出し（`agent`、`tool`、`ask`、`decide`、`wait`）が、それぞれ 1 つの箱になります。
-  - 箱には、種類と要点（エージェントの名前とプロンプトの頭、ツールのコマンド、問い）を書きます。
-  - `phase("レビュー")` で、続く呼び出しに段の名前を付けられます。図では段ごとに見出しを付けます。
-- **形:** スクリプトの構文の木（`go.starlark.net/syntax`）から作ります。
-  - 順番: 上から下へ線でつなぐ
-  - `if`: 左右に分かれて合流する。分かれ目に条件の文を書く
-  - `parallel`、内包表記: 横に並べる。数が分からないものは、1 つの箱に `× files` と書く
-  - `for`、`while`: 囲みと `⟳` で表し、範囲（`range(3)`）を書く
-  - `return`: 終了の箱
-  - スクリプトの中の `def` の呼び出しは、その中身を展開して描きます（再帰は 1 段で止める）。プリミティブを呼ばない計算は描きません。
+- **Nodes:** each primitive call in the script (`agent`, `tool`, `ask`, `decide`, `wait`) becomes one box.
+  - A box shows the kind and the gist (the agent's name and the start of the prompt, the tool's command, the question).
+  - `phase("review")` gives a phase name to the calls that follow. The chart has a heading for each phase.
+- **Shape:** built from the script's syntax tree (`go.starlark.net/syntax`).
+  - Order: connected with lines from top to bottom
+  - `if`: splits left and right, then joins. The condition is written at the split
+  - `parallel`, comprehensions: placed side by side. When the number is not known, one box says `× files`
+  - `for`, `while`: shown with an enclosure and `⟳`, with the range (`range(3)`)
+  - `return`: an end box
+  - A call to a `def` inside the script is drawn with its body expanded (recursion stops at one level). Computation that calls no primitives is not drawn.
 
 ```
           ╭─────────────────────╮
-          │ ▶ 開始 title, detail │
+          │ ▶ start title,detail│
           ╰──────────┬──────────╯
           ╭──────────┴──────────╮
-          │ ✓ 計画  agent plan   │ 18s
+          │ ✓ plan  agent plan  │ 18s
           ╰──────────┬──────────╯
           ╭──────────┴──────────╮
-          │ ✓ 確認  進めますか？  │──やめる──▶ ■ 終了
+          │ ✓ confirm  proceed? │──stop──▶ ■ end
           ╰──────────┬──────────╯
        ╭─────────────┼─────────────╮
   ╭────┴─────╮  ╭────┴─────╮  ╭────┴─────╮
@@ -144,426 +144,426 @@ def main(input):
        ╰─────────────┼─────────────╯
      ╭ ⟳ for round in range(5)   2/5 ─────╮
      │    ╭──────────┴──────────╮         │
-     │    │ ✓ 実装  agent build  │         │
+     │    │ ✓ build  agent build│         │
      │    ╰──────────┬──────────╯         │
      │    ╭──────────┴──────────╮         │
-     │    │ ⏺ 検査  bash check.sh│         │
+     │    │⏺ check bash check.sh│         │
      │    ╰─────────────────────╯         │
      ╰────────────────────────────────────╯
 ```
 
-- **色と印**（ADR 0010 の配色）
+- **Colors and marks** (ADR 0010's color scheme)
 
-  | 印 | 色 | 意味 |
+  | Mark | Color | Meaning |
   |---|---|---|
-  | `○` | 灰 | まだ |
-  | `⏺` | 黄 | 動いている |
-  | `✓` | 緑 | 終わった |
-  | `✗` | 赤 | 失敗した |
-  | `⏸` | 橙 | 人を待っている |
+  | `○` | gray | not yet |
+  | `⏺` | yellow | running |
+  | `✓` | green | finished |
+  | `✗` | red | failed |
+  | `⏸` | orange | waiting for a person |
 
-  - 動いている間の状態は、kairo の記録（呼び出しの木）から取ります。
-  - 各呼び出しにスクリプトの行を記録し、図の箱と結びます。
-  - 繰り返しの中の箱は、今の回の状態を示し、`2/5` と添えます。
-  - 並列で数が決まった後は、箱を実際の数に広げます。
-- **幅と高さが足りないとき**
-  - 並列を 1 つの箱にまとめます（`reviewer × 10  ✓6 ⏺3 ✗1`）。
-  - それでも幅が足りなければ、木の形の文字の図に切り替えます。
-  - 高さが画面を超えるときは、動いている所の周りを見せます。
-- **見せる場所**
-  - 作るとき: 書けたら、全部 `○` の図を入力欄の上に出します。図の箱を選んで変えるか、入力欄に言葉で打って変えます（上の 1）。変わった箱には、次に描き直すまで `~`（足した箱は `+`）を付けます。
-  - 動いている間: TUI の入力の枠の上に出し、状態が変わるたびに描き直します。終わったら消して、端末の流れには要約 1 行と、失敗した箱だけを書きます。
-  - CLI: `kairocode flow graph <name>`（動かす前）、`kairocode flow show <実行> [--follow]`（動いている間と後）で、同じ図を出します。
-  - ACP: 各ノードが `plan` の項目として、状態つきで並びます。
-  - 使われ方は `kairocode flow stats` で出します（何が、どの入口から何回走り、何回失敗したか）。
-- 図を作る処理（構文の木からノードの形を作る）は `internal/workflows` の外の純粋なパッケージに置きます。描くのは `internal/tui` です。
+  - The state while running is taken from kairo's record (the tree of calls).
+  - Each call records its line in the script, which ties it to a box in the chart.
+  - A box inside a loop shows the state of the current round, with `2/5` added.
+  - Once the number of parallel items is decided, the box expands to the actual number.
+- **When width or height is not enough**
+  - Parallel items are folded into one box (`reviewer × 10  ✓6 ⏺3 ✗1`).
+  - If the width is still not enough, it switches to a tree-shaped text chart.
+  - When the height exceeds the screen, the area around what is running is shown.
+- **Where it is shown**
+  - When making: once written, the chart with everything `○` is shown above the input box. It is changed by selecting a box in the chart, or by typing words in the input box (1 above). A changed box is marked `~` (an added box `+`) until the next redraw.
+  - While running: shown above the TUI's input frame, and redrawn every time the state changes. When it finishes, it is cleared, and only a one-line summary and the failed boxes are written into the terminal's flow.
+  - CLI: `kairocode flow graph <name>` (before running) and `kairocode flow show <run> [--follow]` (while running and after) show the same chart.
+  - ACP: each node is listed as a `plan` entry, with its state.
+  - Usage is shown by `kairocode flow stats` (what ran how many times from which entry point, and how many times it failed).
+- The code that builds the chart (making node shapes from the syntax tree) goes in a pure package outside `internal/workflows`. Drawing is done by `internal/tui`.
 
-### 5. 例: 開発そのもののワークフロー
+### 5. Example: a workflow for development itself
 
-利用者の発案（2026-10-15）です。「起票 → テストを先に → 実装 → レビュー → 検査 → PR」という開発の進め方そのものを、ワークフローとして書けます。KairoCode のハーネスの `/milestone` スキルが手で回している手順と同じです。
+This is the user's idea (2026-10-15). The way development proceeds, "file an issue → tests first → implement → review → check → PR", can itself be written as a workflow. It is the same procedure that the `/milestone` skill in KairoCode's harness runs by hand.
 
-これを例にする理由は 3 つあります。
+There are three reasons to use this as the example.
 
-- **落ちても続く。** 終わった段（書いたテスト、通ったレビュー）はやり直しません。
-- **人の判断が段になる。** 計画の承認や PR のレビューは `ask` と `wait` です。待っている間はプロセスを持ちません（不変条件 7）。CI の結果やレビューのコメントが、出来事として続きを始めます（M4）。
-- **見える。** 上の 4 の図と `flow show --follow` で、どの段にいて、どこで人を待っているかが分かります。
+- **It carries on after a crash.** Finished phases (tests written, a review passed) are not redone.
+- **A person's judgment becomes a phase.** Approving the plan and reviewing the PR are `ask` and `wait`. While waiting, no process is held (invariant 7). CI results and review comments start the continuation as events (M4).
+- **It is visible.** With the chart in 4 above and `flow show --follow`, you can see which phase it is in and where it waits for a person.
 
 ```python
-DESCRIPTION = "起票した課題を、テストを先に書いて実装し、レビューと検査を通して PR にする"
+DESCRIPTION = "Take a filed issue, write the tests first, implement it, pass review and checks, and make a PR"
 INPUT = {"title": str, "detail": str}
 LIMITS = {"agents": 20, "tokens": 5000000}
 
 def main(input):
-    plan = agent(agent = "plan", prompt = "次の課題の計画と、受け入れ条件のテストを考える:\n" + input["detail"],
+    plan = agent(agent = "plan", prompt = "Work out a plan for the following issue and tests for its acceptance criteria:\n" + input["detail"],
                  schema = {"plan": str, "tests": list})
-    answer = ask(question = "この計画で進めますか？\n" + plan.value["plan"], options = ["進める", "やめる"])
-    if answer.value != "進める":
-        return {"ok": False, "message": "計画が承認されなかった"}
+    answer = ask(question = "Proceed with this plan?\n" + plan.value["plan"], options = ["proceed", "stop"])
+    if answer.value != "proceed":
+        return {"ok": False, "message": "the plan was not approved"}
 
-    agent(agent = "build", prompt = "受け入れ条件をテストとして先に書く（まだ実装しない）:\n" + str(plan.value["tests"]))
+    agent(agent = "build", prompt = "Write the acceptance criteria as tests first (do not implement yet):\n" + str(plan.value["tests"]))
     first = tool("bash", command = "go test ./...")
     if first.exit_code == 0:
-        return {"ok": False, "message": "書いたテストが最初から通る。条件を確かめていない"}
+        return {"ok": False, "message": "the tests written pass from the start. They do not check the criteria"}
 
     passed = False
     for round in range(5):
-        agent(agent = "build", prompt = "テストが通るように実装する:\n" + plan.value["plan"])
+        agent(agent = "build", prompt = "Implement it so the tests pass:\n" + plan.value["plan"])
         if tool("bash", command = "scripts/check.sh").exit_code == 0:
             passed = True
             break
     if not passed:
-        return {"ok": False, "message": "5 回直しても検査が通らない"}
+        return {"ok": False, "message": "the checks do not pass after 5 fixes"}
 
     for round in range(3):
-        review = agent(agent = "durability-reviewer", prompt = "差分をレビューする",
+        review = agent(agent = "durability-reviewer", prompt = "Review the diff",
                        schema = {"findings": list})
         if len(review.value["findings"]) == 0:
             break
-        agent(agent = "build", prompt = "レビューの指摘を直し、検査を通す:\n" + str(review.value["findings"]))
+        agent(agent = "build", prompt = "Fix the review findings and pass the checks:\n" + str(review.value["findings"]))
 
     tool("git_commit", message = input["title"])
     pr = tool("bash", command = "gh pr create --fill", sandbox = "escalate",
-              justification = "PR を作る（ネットワーク）")
-    ci = wait("ci.result", timeout = "2h")              # M4: 外の出来事
-    approved = wait("github.pr_review", timeout = "7d")  # M4: 人のレビュー
+              justification = "make a PR (network)")
+    ci = wait("ci.result", timeout = "2h")              # M4: an outside event
+    approved = wait("github.pr_review", timeout = "7d")  # M4: a person's review
     return {"ok": ci.ok and approved.ok, "message": pr.output}
 ```
 
-- 入口は、人のコマンド（`/flow develop`）か、外の出来事（Issue に付いたラベル、M4）です。モデルが名前で選んで呼ぶことはありません（上の 1）。
-- 権限は、ふだんのツールと同じです（上の 3）。PR を作る bash は sandbox の外に出るので、そのたびに利用者に確認します（ADR 0005）。
-- M3 の確かめとして、KairoCode の M3 以降の作業の一部を、このワークフローで回すことを目指します。
+- The entry point is a person's command (`/flow develop`) or an outside event (a label put on an Issue, M4). The model never picks it by name and calls it (1 above).
+- Permissions are the same as for ordinary tools (3 above). The bash that makes the PR goes outside the sandbox, so the user is asked every time (ADR 0005).
+- As a check of M3, we aim to run part of KairoCode's own work from M3 on with this workflow.
 
-### この ADR で決めないこと
+### What this ADR does not decide
 
-- ブラウザで見る画面。
-- 外の出来事（`github.*` など）の受け方。M4 で決めます。
+- A screen viewed in a browser.
+- How outside events (`github.*` and so on) are received. Decided in M4.
 
-## 結果
+## Consequences
 
-- 依存に `go.starlark.net` を足します（AGENTS.md の許可済みの依存に加える）。
-- AGENTS.md の不変条件 1（決定的）は、Starlark の実行環境の側にも及びます。プリミティブを足すときは、それが記録された値だけを返すことを守ります。
-- テスト（M3 の受け入れ条件）:
-  - `TestCrashWorkflowScriptResume`: 10 個の `agent` を `parallel` で並べたスクリプトを途中で強制終了して再開すると、終わった葉はやり直さない。
-  - `TestWorkflowScriptDivergence`: 記録と違う呼び出しをするスクリプトで再開すると、実行せずに止まる。
-  - `TestWorkflowScriptLimits`: ステップ数、エージェントの数、トークンの上限で止まる。
-  - `TestTurnEndHookBlocks`: `turn.end` のワークフローが `ok` を偽で返すと、メッセージがモデルに返ってループが続き、上限の回数で止まる。
-  - `TestWorkflowGraph`: フローの図が、順番、`if`、`parallel`、`for`、`def` の展開、`phase` を正しく表す。幅が足りないときのまとめと、木の図への切り替えも含める（決まった入力に対する出力を固定して比べる）。
-  - `TestWorkflowLive`: 実行の木の状態が、図の箱の印と色、繰り返しの回に写る。
-  - `TestDraftFromWords`: 偽のモデルがスクリプトを書き、検査に落ちると理由が返り、通ったものがファイルに書かれて図で見え、`/flow <name>` で動く。入力欄から頼んだ変更で図が描き直され、変わった箱に印が付く。
-  - `TestEditOnTheChart`: 図の上で箱の中身を書き換える、消す、入れ替えると、スクリプトのその引数と文の並びだけが変わり、ほかの行（コメントを含む）は変わらない。
-  - 走っている途中でスクリプトを書き換えても、走っている実行は記録したスクリプトで終わる。
-  - 上の 5 の開発のワークフローを、偽のモデルと偽の `gh` で最後まで流す。途中（テストを書いた後、レビューの後）で強制終了して再開しても、終わった段をやり直さない。`ask` と `wait` の間はプロセスを持たない。
+- `go.starlark.net` is added as a dependency (added to the allowed dependencies in AGENTS.md).
+- Invariant 1 in AGENTS.md (deterministic) also extends to the Starlark runtime. When a primitive is added, it must return only recorded values.
+- Tests (M3's acceptance criteria):
+  - `TestCrashWorkflowScriptResume`: when a script with 10 `agent`s in a `parallel` is forcibly stopped partway and resumed, finished leaves are not redone.
+  - `TestWorkflowScriptDivergence`: resuming with a script that makes a call different from the record stops without running it.
+  - `TestWorkflowScriptLimits`: it stops at the limits on steps, number of agents and tokens.
+  - `TestTurnEndHookBlocks`: when a `turn.end` workflow returns `ok` as false, the message goes back to the model and the loop continues, stopping at the limit on the count.
+  - `TestWorkflowGraph`: the flow chart correctly shows order, `if`, `parallel`, `for`, `def` expansion and `phase`. It also covers folding when the width is not enough and switching to the tree chart (comparing against fixed output for fixed input).
+  - `TestWorkflowLive`: the state of the run's tree maps to the marks and colors of the chart's boxes and the loop round.
+  - `TestDraftFromWords`: a fake model writes a script; when it fails the check the reason comes back; one that passes is written to the file, visible in the chart, and runs with `/flow <name>`. A change asked for from the input box redraws the chart, and the changed boxes are marked.
+  - `TestEditOnTheChart`: rewriting, deleting or swapping a box's content on the chart changes only that argument and the order of statements in the script, and no other lines (including comments) change.
+  - Even if the script is rewritten while running, the running run finishes with the recorded script.
+  - Run the development workflow in 5 above to the end with a fake model and a fake `gh`. Even when it is forcibly stopped partway (after writing the tests, after the review) and resumed, finished phases are not redone. No process is held during `ask` and `wait`.
 
-## 検討した代替案
+## Alternatives considered
 
-- **スキルの形で置き、モデルが説明を見て呼ぶ:** 使うかどうかがモデルの判断に残ります。
-- **中身ごと、Dify のようなノードの定義（JSON）にする（2026-10-19 に検討）:** 図とは 1 対 1 で対応します。ただし、利用者が求めたのは見せ方で、中身の表現力を下げる理由はありません。図は Starlark の構文の木から作れます。
-- **JSON か YAML の計画:** 構成要素とテンプレートの書き方を覚えてもらう必要があり、分岐や繰り返しを表そうとすると、言語のようなものを自分で作ることになります。
-- **JavaScript（goja）:** `Date` や `Math.random` を自分で外す必要があります。利用者は Python の書き方を望みました。
-- **本物の Python（sandbox の中のプロセス）:** 書ける範囲は一番広いです。ただし、Python の実行環境が要り（ADR 0001 の単一のバイナリから外れる）、決定性は環境の固定（`PYTHONHASHSEED`、時刻の差し替え）でしか守れません。構文の木を Go の中で読めないので、静的な図も Python のプロセスに頼むことになります。
-- **Go（yaegi）:** KairoCode と同じ言語にできますが、正しいジェネリクスのコードが動きませんでした。インタプリタが Go の新しい機能に追いついていません。また、`GOPATH` からソースを読み込む作りなので、import の検査が別に要ります。
+- **Put them in the skill shape and have the model call them after reading the description:** whether to use them stays with the model's judgment.
+- **Make the whole body a Dify-like node definition (JSON) (considered on 2026-10-19):** it maps one to one to the chart. But what the user asked for was the presentation, and there is no reason to lower the body's expressiveness. The chart can be built from Starlark's syntax tree.
+- **A JSON or YAML plan:** people would have to learn the building blocks and the template syntax, and trying to express branches and loops would mean inventing something like a language ourselves.
+- **JavaScript (goja):** we would have to remove `Date` and `Math.random` ourselves. The user wanted the Python way of writing.
+- **Real Python (a process inside the sandbox):** it allows the widest range of what can be written. But it needs a Python runtime (which breaks ADR 0001's single binary), and determinism can only be kept by fixing the environment (`PYTHONHASHSEED`, replacing the time). The syntax tree cannot be read inside Go, so even the static chart would have to be requested from a Python process.
+- **Go (yaegi):** it would be the same language as KairoCode, but correct generic code did not run. The interpreter has not caught up with Go's new features. Also, since it reads sources from `GOPATH`, import checking would be needed separately.
 
-## 実装（2026-10-19、M3 の 1 歩目）
+## Implementation (2026-10-19, M3's first step)
 
-最初に入れたのは、`/flow <name>` で Starlark のフローを、落ちても続く形で動かす核です。
+What went in first is the core that runs a Starlark flow with `/flow <name>` in a form that carries on after a crash.
 
-- **形:** `/flow <name> [引数]` は、セッションのターンになります。ターンは始まりと終わりのスナップショットの間で、子の実行 `flow`（版 1）を動かし、`main` の結果をターンの返答として会話に残します。
-- **スクリプトの記録:** フローの始まりに、アクション `flow.load` でスクリプトを読みます。結果が記録されるので、走っている途中でファイルを書き換えても、元のスクリプトで終わります（`TestFlowKeepsItsScript`）。
-- **Starlark はワークフローの中で動かします。** `go.starlark.net`（`v0.0.0-20261005163335-bcb1a1a55bf9`）の `starlark`、`starlarkstruct`、`syntax` を、ワークフローが import してよいもの（`internal/invariants`）に足しました。`while` は使え、再帰は使えません。ステップの上限で、終わらないものを止めます。
-- **プリミティブ（最初の版）**
+- **Shape:** `/flow <name> [arguments]` becomes a session turn. Between the snapshots at its start and end, the turn runs a child run `flow` (version 1), and leaves `main`'s result in the conversation as the turn's reply.
+- **Recording the script:** at the start of the flow, the action `flow.load` reads the script. Its result is recorded, so even if the file is rewritten while it runs, it finishes with the original script (`TestFlowKeepsItsScript`).
+- **Starlark runs inside the workflow.** `starlark`, `starlarkstruct` and `syntax` of `go.starlark.net` (`v0.0.0-20261005163335-bcb1a1a55bf9`) were added to what workflows may import (`internal/invariants`). `while` is allowed, recursion is not. The step limit stops anything that does not end.
+- **Primitives (the first version)**
 
-  | 書き方 | 返す値 | 中身 |
+  | How it is written | What it returns | What it is |
   |---|---|---|
-  | `agent(agent=, prompt=, model=None)` | `ok`、`output`、`error` を持つ値 | 履歴を持たない子のターン（`TurnInput.Sub`）。スナップショットは取らず、サブエージェント（`mode: subagent`）も使える |
-  | `parallel([{"agent":…, "prompt":…}, …])` | 同じ形の値の一覧（順番どおり） | `kairo.Parallel` |
-  | `tool(name, **args)` | `ok`、`output`、`error` | セッションのエージェントの権限の規則を通す。確認が要るものは、ふだんのツールと同じく承認を待つ |
-  | `phase(name)` | なし | 段の名前（図で使う） |
+  | `agent(agent=, prompt=, model=None)` | A value with `ok`, `output`, `error` | A child turn with no history (`TurnInput.Sub`). No snapshot is taken, and subagents (`mode: subagent`) can be used too |
+  | `parallel([{"agent":…, "prompt":…}, …])` | A list of values of the same shape (in order) | `kairo.Parallel` |
+  | `tool(name, **args)` | `ok`, `output`, `error` | Goes through the permission rules of the session's agent. Anything that needs confirmation waits for approval, the same as ordinary tools |
+  | `phase(name)` | nothing | A phase name (used in the chart) |
 
-  `main(input)` の `input` は `{"args": "<名前の後に打った言葉>"}` です。`main` は、`{"ok": …, "message": …}`、文字列、`None` のどれかを返します。ADR の例の `test.exit_code` は、今は `ok` と `output` です。
-- **失敗の扱い:** スクリプトの誤り、上限（`LIMITS` の `agents`、`steps`、`tokens`）、無いフローは、ターンの失敗ではなく、返答として「フローが成功しなかった理由」を返します（`TestFlowMistakesAreReplies`）。kairo の止め（待ち、取り消し）は、そのまま止めます。
-- **トークン:** フローの中のエージェントの言葉は、セッションの返答のトークンとしては流しません（`s/<id>/<ターン>/<呼び出し>` の深さのものだけを流す）。ツールの開始と終わりは、今までどおり届きます。
-- **入口:** ACP（TUI、Zed）では `/flow` だけで一覧、`/flow <name> [引数]` で実行です。HTTP は `GET`・`POST /sessions/{id}/flows` です。
-- **互換:** すべて入力の新しい欄（`TurnInput.Flow`、`Sub`、`AgentLoadInput.Sub`、`SessionEvent.Flow`）で分けたので、それを持たない進行中のセッションとターンは、今までと同じ呼び出しをします。版は上げていません。
-- **承認と要確認（durability-reviewer の指摘で直した）:**
-  - フローの中の承認の待ちと、途中で切れた実の呼び出しは、セッションのターンの下の深い所（フローの実行、そのエージェントのターン）にあります。`Pending` は、ターンから下へ、終わっていないフローとターンをたどって集めます。
-  - 承認のキーは「待っている実行の ID + `#` + 呼び出しの ID」で、答えはその実行に送ります（`TestFlowAsksForApproval`、`TestFlowCutOffCallIsReviewed`）。
-  - ACP では、フローが自分で呼んだツール（`flow_` で始まる呼び出しの ID）は、聞く前に `tool_call` として知らせます。
-- **Claude Code のエンジン:** フローのエージェントのターンは、セッションの Claude Code のセッションを使いません。自分のターンの実行の ID から作った、別のセッションで動きます。履歴を持たずに始まり、並んだエージェントが互いの claude を止めることもありません（`TestFlowAgentsOnClaudeCode`）。
-- **記録したスクリプト:** `TestFlowKeepsItsScript` は、書き換えの後にプロセスを開き直し、フローを頭から動かし直しても、記録したスクリプトで終わることを確かめます。
-- **`ask(question, options=["Yes", "No"])`（2 歩目）:**
-  - 問いを `flow.ask` で記録してから、シグナル `answer/<id>` を待ちます。待っている間、プロセスは要りません（`TestFlowAsks` は、待っている間にプロセスを開き直す）。
-  - 問いは、承認と同じ一覧（`Pending`、`Kind: "question"`、選択肢つき）と出来事（`question.requested`、`question.resolved`）に出ます。
-  - 答えは選択肢のどれかで、最初の答えだけが通ります（`Runtime.Answer`、`POST /questions`、`kairocode answer <key> <answer>`）。
-  - ACP では `session/request_permission` で聞きます。題が問いで、種類は `think` です。選択肢はどれも `reject_once` の種類にします。要確認と同じく、自動で許すクライアントが利用者の代わりに答えないためです。
-  - 選択肢は 2 つ以上です。自由な文での答えは、まだありません。
-- **`decide(prompt, type="bool"|"number"|"choice", choices=None)`（2 歩目）:**
-  - モデルに型付きで決めさせます（設計 6.3）。文章から判断を取り出すことはしません。
-  - API のエンジンでは、`decide` のツールを呼ばせることを強制します（`tool_choice`）。
-  - Claude Code のエンジンでは、`claude -p --output-format json --json-schema` の `structured_output` を読みます（ツールなし、セッションを残さない）。
-  - 型に合わない答え、答えなし、断りは `ok` が偽の値で返ります（`TestFlowDecide`、`TestFlowDecideOnClaudeCode`、`TestFlowDecideOnClaudeCodeFails`）。Claude Code が判断せずに 0 以外で終わっても、結果の行が読めればそれを使います。API の一時的なエラーは、モデルの呼び出しと同じく、やり直します。
-  - 判断を求める文は `flow.put` で保存し、ハッシュで渡します（不変条件 5。`agent()` と同じ）。
-  - 数の判断は、2^53 より小さい整数だけを Starlark の整数にします。それより大きいものは小数のままです（整数への変換が、機械によって変わらないように）。
-  - 判断のための `claude` は、落ちた後に残ったものを止める仕組み（`SetClaudeProc`）に乗っていません。ツールを持たず、何も残さないので、二重に効く作用はなく、増えるのは費用だけです。
-- `kairocode run "/flow <name> …"` でも、フローを非対話で動かせます（`TestRunAFlowThatAsks`）。
-- **フローの図（3 歩目、動かす前の図）:**
-  - `internal/flowchart` がスクリプトの構文の木から形を作ります（`main` から、プリミティブの呼び出しを順番どおりに。`if`、`for`・`while`、`parallel`（一覧と内包表記）、`phase`、`return`、`break`。スクリプトの中の関数は、その場に展開して描き、その `return` はフローの終わりにしない）。
-  - `internal/tui` が、Dify のように上から下へ箱と線で描きます。分岐と並べたエージェントは横に並べて合流させ、繰り返しと「各要素に同時に」は枠で囲みます。幅に収まらなければ、木の形の文字の図にします。
-  - 箱の印と色は状態から決めます（`○` まだ、`⏺` 動いている、`✓` 終わり、`✗` 失敗、`⏸` 人を待っている）。動いている間の状態を重ねるのは次の歩です。
-  - 見る入口は `kairocode flow graph <name>` と、TUI の `/flow graph <name>` です。どちらもデーモンを通さず、手元のスクリプトから描きます。`graph` という名前のフローは作れません。
-  - テスト: `TestBuild`（形）、`TestChartLooks`、`TestChartStates`、`TestChartTooNarrow`、`TestFlowGraph`、`TestFlowGraphCommand`。
-- **動いている間の図（4 歩目）:**
-  - フローの版を 2 に上げました（版 1 は `Draining` で残す）。版 2 では、プリミティブの呼び出しが、スクリプトのどこで呼ばれたか（`At`、`"行:列"`。Starlark が呼び出しに記録する開き括弧の位置）を入力に持ちます。エージェントのターン、ツールの入力、`flow.ask`、`flow.decide` です。
-  - 呼び出しの直前に印の呼び出しを記録する案はやめました。kairo の子の一覧は、作られた時刻（ミリ秒）と ID の順で、同じミリ秒の中の順番が保たれないためです。
-  - `Runtime.FlowView` が、記録したスクリプトから図を作り、フローの子の実行の状態（入力の `At` で箱に結ぶ）から、各箱の状態（動いている、終わり、失敗、人を待っている）と回数を出します。エージェントのターンの中で承認を待っているときも「人を待っている」です。
-  - 出来事のハブは、フローが進むたびに `flow` の出来事（図と状態）を出します。後からつないだクライアントにも、今の状態を送ります。
-  - ACP では `plan` の更新になります。項目は呼び出しごとで、図と状態は `_meta` の `kairocode/flow` にあります。Zed は項目の一覧として、kairo の TUI は図として見せます。
-  - TUI は、動いている間の図を入力の枠の上に出します。画面に収まらなければ木の図に、それでも長ければ動いている所の周りだけを出します。終わったら、印つきの木の図を端末の流れに残します。
-  - **Bubble Tea の描画の注意:** 端末の流れに行を書き足すのと同時に画面が縮むと、前の画面の行が残ります（Bubble Tea は、描いた高さで書き足す位置を決めるため）。TUI は、書き足している間は画面の高さを縮めません（`TestScreenKeepsItsHeightWhilePrinting`）。信頼の質問の消し残しも、同じ原因でした。
-  - 図は実行ごとに 1 度だけ作ってとっておき、状態は、そのフローの下の実行の観測のときだけ計算し直します（durability-reviewer の指摘。出来事のハブは 1 本の goroutine なので、重い計算はすべてのセッションの出来事を遅らせる）。
-  - 版 1 で始まったフローは、新しいコードでも版 1 の関数で続き、終わったエージェントをやり直しません（`TestFlowVersion1GoesOn`。版 2 の関数で動かすと落ちることを確かめた）。
-  - テスト: `TestFlowEvents`、`TestFlowAgentWaiting`、`TestFlowVersion1GoesOn`、`TestACPFlowPlan`、`TestClientReadsAFlowPlan`、`TestFlowLive`。
-- **`/flow new`（5 歩目、言葉から作る）:**
-  - `/flow new <説明>` は、フローの書き方（プリミティブ、返る値、Starlark と Python の違い、置き場所）を添えた頼みとして、ふつうのターンになります（`Runtime.NewFlow`、`POST /sessions/{id}/flows/new`、`kairocode run "/flow new …"`）。頼みは会話に残るので、続くターンで言葉で直せます。
-  - **書くのは新しいツール `flow_write` です（利用者の承認、2026-10-19）。** `.kairocode` は、ADR 0005 でモデルのツールが書けない場所です（設定と権限の規則があるため）。そこは変えず、`.git` を git のツールだけが書くのと同じく、`.kairocode/workflows/<name>.star` だけを書く専用のツールを足しました。
-    - 書く前に `flowchart.Check` で検査します（構文、知らない名前、`main(input)` の有無。f-string、`try`、`import` には直し方を添える）。問題のある台本は書かず、問題をモデルに返します。
-    - 既定の規則がないので、書くたびに利用者に聞きます（`"*": "ask"`）。プロジェクトの規則で `flow_write` を許すこともできます。
-    - 作用の型は `Idempotent` で、`write` と同じく、計画してから「比べて置き換える」形で書きます（設計 3.1）。もう一度動いても二重に書かず、その間に誰かが変えた台本は上書きせずに衝突として返します。適用の段は、計画が `.kairocode/workflows/<name>.star` を指しているときだけ書きます。
-  - `flow_check` は、書かずに検査だけするツールです（読むだけ。既定で許可）。
-  - TUI は、ターンの始めと終わりで `.kairocode/workflows` を比べ、作られたフローや変わったフローの図を描きます。変わった箱には `~`、足した箱には `+` を付けます（`flowchart.Diff`）。言葉で直したときも同じです。
-  - テスト: `TestNewFlow`（書けない台本を直して、承認されて書かれ、`/flow hello` で動く）、`TestFlowWrite`、`TestCheck`、`TestDiff`、`TestFlowsTheTurnMade`。
-- **図の上での変更（6 歩目）:** TUI の `/flow edit <name>` で、フローの図を開いて変えます。
-  - ↑↓ で箱を選び、Enter で言葉（プロンプト、コマンド、問い）を入力欄で書き換え、`d` で消し、Shift+↑↓ で同じ段の中で入れ替えます。Esc で終えると、変わった図が端末の流れに残ります。
-  - 書き換えるのは台本のその部分だけです（`flowchart.SetText`、`Delete`、`Move`）。言葉はその文字列の値だけを、消すと入れ替えはその文の行だけを変え、ほかの行（コメントを含む）はそのままです。
-  - 変えた台本が検査（`flowchart.Check`）を通らなければ書きません（たとえば、後で使う値を作る文を消すと「定義されていない」になる）。言葉がコードで書かれた箱や、大きな文の一部の呼び出しは、図の上では変えられず、言葉で頼むように知らせます。
-  - これは利用者自身の操作なので、TUI が台本を直接書きます（モデルの `flow_write` ではない）。
-  - テスト: `TestSetText`、`TestDeleteAndMove`、`TestEditOnTheChart`（検査を通さずに書く形に壊すと落ちることを確かめた）。
-- **hook とエージェントの `workflow:`（7 歩目）:**
-  - `kairocode.json` の `{"hooks": {"turn.end": ["<flow>", …]}}` で、フローを出来事に結びます。利用者の設定（`~/.config/kairocode/kairocode.json`）とプロジェクトの設定の両方を読み、agent.load で記録します（不変条件 2）。出来事は `turn.end`、`tool.after`、`session.start` です（9 歩目）。
-  - `turn.end`: モデルが答え終えたら、順に動かします。`ok: false` を返したら、その `message` を利用者の発言としてモデルに返し、ループを続けます。送り返すのは 3 回までです（`TestTurnEndHookBlocks`）。フローのエージェント（`Sub`）のターンには hook はありません。
-  - **プロジェクトの hook は、初めて動く前に聞きます。** 権限の判定を種類 `hook`（対象はフローの名前）で通します。規則で `"hook": "allow"` などとも書けます。聞いて許されたら、フォルダ、出来事、フロー、台本のハッシュを記録し（store の `hook-trust`。内容のハッシュで引く既存の表で、表は足していない）、同じ台本の間は聞きません。台本が変わったら、また聞きます。断られた hook は動かしません。読むだけのモード（plan）でも動かしません。
-  - 利用者自身の設定の hook も聞きます（durability-reviewer の指摘）。名前で結ぶので、動くのはプロジェクトの台本だからです。
-  - 動くのは、許された台本だけです。許したときの台本のハッシュをフローに渡し（`FlowInput.Expect`）、読み込んだ台本と違えば動かしません。許可を待つ間に台本が変わっても、許していない台本は動きません（`TestHookRunsTheScriptAllowed`。この照合を外すと落ちることを確かめた）。
-  - 台本が無い、誤りがある、上限を超えたなど、台本そのものが動かない hook（`FlowOutput.Broken`）は、モデルに送り返しません。モデルには直せないからです。
-  - hook のフローの入力には、出来事、何回目、何番目（`FlowInput.Hook`）を入れます（不変条件 8）。
-  - エージェントの定義（`.opencode/agents/*.md`）に `workflow: <flow>` と書くと、そのエージェントのターンは、モデルのループの代わりにそのフローで進みます。利用者の発言が `input["args"]` です（`TestAgentWorkflow`）。
-  - どれも記録されたエージェントの定義の新しい欄で分けたので、それを持たない進行中のターンは、今までと同じ呼び出しをします。
-- **ずれの検出と M3 の残り（8 歩目）:**
-  - フローの版を 3 に上げました（版 2、版 1 は `Draining` で残す）。各プリミティブを呼ぶ前に、何番目の呼び出しで、何をするか（種類と中身のハッシュ）を `flow.step` で記録します。
-  - 同じ中身で再開した呼び出しは、記録から結果が返るので `flow.step` の処理は動きません。動くのは、中身が変わったとき（同じ版のままコードが変わったときなど）だけです。そのときは、同じ番目で別の中身の記録があれば「ずれた」と答え、フローは呼び出しをせずに止まります（`TestWorkflowScriptDivergence`。照合を外すと、新しいエージェントが動いて落ちることを確かめた）。
-  - `kairocode flow show [-follow] <session>` は、セッションの最新のフローを、呼び出しの状態つきで描きます。`-follow` を付けると、進むたびに描き直し、終わったら抜けます（`GET /sessions/{id}/flow`、`TestFlowShowFollow`）。
-  - トークンの上限（`TestFlowTokenLimit`）と、ターンを止めるとフローとそのエージェントも止まること（`TestCancelStopsTheFlow`）を確かめました。
-- **残りの出来事、stats、schema、task（9 歩目）:**
-  - `tool.after`: 実行したツールの呼び出しごとに、結果の後で動きます。`kairocode.json` の要素は、フローの名前か `{"tool": "<ツール>", "flow": "<フロー>"}` で、`tool` を書くとそのツールの後だけで動きます。フローの `input["args"]` は、ツールの名前と、何に対して動いたか（権限の判定と同じ対象。パスやコマンド）です。`ok: false` の `message` は、ツールの結果の後に利用者の発言として足し、モデルに返します。走らなかった呼び出し（断られた、無い、切れた）の後では動きません（durability-reviewer の指摘で、作用の名前の前置きでなく、判定の結果で見分けるように直した）。
-  - `session.start`: セッションの最初のターン（N = 0）の始めに動きます。`ok: false` の `message` を、最初の発言に `[What the session's start says: …]` として足します。2 回目からのターンでは動きません。
-  - どちらも `turn.end` と同じく、初めて動く前に聞き、許された台本だけが動き、`Broken` はモデルに返しません。入力の `Hook` には出来事、何歩目と何番目の呼び出し（`tool.after`）、何番目の hook を入れます（不変条件 8）。hook が無いエージェントは、今までと同じ呼び出しをします。
-  - テスト: `TestToolAfterAndSessionStartHooks`（別のツールの hook を先に置き、ツールの照合を外すと落ちる。`session.start` を外すと落ちることを確かめた）。
-  - `kairocode flow stats [-dir DIR]`: そのフォルダのセッションの記録から、フローごとに、走った回数、入口（`command`: `/flow`、`hook`、`agent`: エージェントの `workflow:`）、成功・失敗（`ok: false`、台本が動かない、失敗、取り消し）・走っている数、最後に走った時刻を出します。プロジェクトにあって一度も走っていないフローも出し、もう無いフローには `(gone)` を付けます（`GET /flows/stats?dir=`、`Runtime.FlowStats`）。数えるのは残っている記録だけです（`KeepFinished` を過ぎた木は消える）。テスト: `TestToolAfterAndSessionStartHooks` の後半（入口の判定を逆にすると落ちることを確かめた）、`TestFlowShowFollow` の後半。
-  - `agent(…, schema = {"名前": "string", …})`: エージェントが答えた後、その答えを `decide` と同じ仕組み（強制したツールの呼び出し）で、決まった欄を持つ dict に直します。欄の型は `"string"`、`"number"`、`"bool"`、`"list"`、`"dict"` です。返るのは `decide` と同じ形（`.ok`、`.value`、`.error`）で、欄が無い・型が合わない値は `ok` が偽になり、理由が `.error` に入ります（`TestAgentSchema`。型の照合を外すと落ちることを確かめた）。
-  - `task` のツール（FR-13）: モデルが自分でサブエージェントを呼びます。ツールとしては実行せず、ターンのワークフローが、子のターン（`Sub`、入力の `At` に `task:<呼び出しの ID>`）として動かし、その答えを呼び出しの結果にします。同じ返答の中の複数の `task` は並べて動き、再起動しても終わったサブエージェントはやり直さず、親を止めると止まります。作用の型は `Read` で、実際の作用は、サブエージェントのツールがそれぞれの権限の判定を通して起こします。サブエージェント、読むだけのモード、Claude Code のエンジンには `task` を渡しません。引数が読めない、`prompt` が空の呼び出しは、ターンを失敗させず、誤りの結果としてモデルに返します（`TestTaskTool`。結果を子の答えにしないよう壊すと落ちることを確かめた）。2 つの `task` の 1 つ目が終わり、2 つ目が動いている間にプロセスを強制終了して再開すると、2 つ目だけがもう一度動きます（`TestCrashTaskResume`。1 つ目も終わる前に殺すと、1 つ目のやり直しを検出して落ちることを確かめた）。フローの `tool("task", …)` は動かさず、`agent()` を使うように返します。
-- **M4 で:** `wait`（外の出来事。出来事の入口と一緒に作る）。M3 はこれで完了です（2026-10-19）。
-- **承認の画面にフローの形（2026-10-20、利用者の報告「どんなフローができたのか全くわからん」）:**
-  - `flow_write` を聞くとき、`permission.check` の出力に、書こうとしているフローの形（`flowchart.Tree`）を `Preview` として入れます。
-  - `Preview` は ACP の承認の求めの `toolCall.content` に載り、TUI は承認の画面に出します（画面に収まるだけ）。
-  - テスト: `TestFlowWriteAskShowsTheFlow`、`TestAskShowsWhatItWouldDo`。
+  The `input` of `main(input)` is `{"args": "<the words typed after the name>"}`. `main` returns one of `{"ok": …, "message": …}`, a string, or `None`. `test.exit_code` in the ADR's example is now `ok` and `output`.
+- **Handling failures:** a mistake in the script, a limit (`agents`, `steps`, `tokens` of `LIMITS`) or a missing flow does not fail the turn; the reply gives "the reason the flow did not succeed" (`TestFlowMistakesAreReplies`). kairo's stops (waits, cancellation) stop it as they are.
+- **Tokens:** the words of agents inside a flow are not streamed as the session's reply tokens (only those at the depth `s/<id>/<turn>/<call>` are streamed). The start and end of tools still arrive as before.
+- **Entry points:** in ACP (the TUI, Zed), `/flow` alone gives the list and `/flow <name> [arguments]` runs one. Over HTTP it is `GET` and `POST /sessions/{id}/flows`.
+- **Compatibility:** everything is separated by new input fields (`TurnInput.Flow`, `Sub`, `AgentLoadInput.Sub`, `SessionEvent.Flow`), so sessions and turns in progress that do not have them make the same calls as before. The version was not raised.
+- **Approvals and blocked (needs confirmation) calls (fixed after durability-reviewer's findings):**
+  - Approval waits inside a flow, and real calls cut off partway, are deep below the session's turn (the flow's run, and the turns of its agents). `Pending` collects them by walking down from the turn through the flows and turns that have not finished.
+  - The approval key is "the ID of the waiting run + `#` + the call's ID", and the answer is sent to that run (`TestFlowAsksForApproval`, `TestFlowCutOffCallIsReviewed`).
+  - In ACP, tools the flow called itself (calls whose ID starts with `flow_`) are announced as `tool_call` before asking.
+- **The Claude Code engine:** a flow's agent turns do not use the session's Claude Code session. They run in a separate session made from their own turn's run ID. They start with no history, and agents side by side do not stop each other's claude (`TestFlowAgentsOnClaudeCode`).
+- **The recorded script:** `TestFlowKeepsItsScript` reopens the process after the rewrite and confirms that even when the flow runs again from the top, it finishes with the recorded script.
+- **`ask(question, options=["Yes", "No"])` (the second step):**
+  - It records the question with `flow.ask` and then waits for the signal `answer/<id>`. While it waits, no process is needed (`TestFlowAsks` reopens the process while waiting).
+  - The question appears in the same list as approvals (`Pending`, `Kind: "question"`, with options) and in events (`question.requested`, `question.resolved`).
+  - The answer is one of the options, and only the first answer goes through (`Runtime.Answer`, `POST /questions`, `kairocode answer <key> <answer>`).
+  - In ACP it is asked with `session/request_permission`. The title is the question and the kind is `think`. Every option is of the `reject_once` kind. As with blocked (needs confirmation) calls, this keeps a client that allows automatically from answering in the user's place.
+  - There are two or more options. Free-text answers do not exist yet.
+- **`decide(prompt, type="bool"|"number"|"choice", choices=None)` (the second step):**
+  - It makes the model decide with a type (design section 6.3). It does not extract a decision from prose.
+  - On the API engine, calling the `decide` tool is forced (`tool_choice`).
+  - On the Claude Code engine, it reads `structured_output` of `claude -p --output-format json --json-schema` (no tools, no session kept).
+  - An answer that does not fit the type, no answer, or a refusal returns a value with `ok` false (`TestFlowDecide`, `TestFlowDecideOnClaudeCode`, `TestFlowDecideOnClaudeCodeFails`). Even when Claude Code exits non-zero without deciding, the result line is used if it can be read. Temporary API errors are retried, the same as model calls.
+  - The text asking for the decision is saved with `flow.put` and passed as a hash (invariant 5; the same as `agent()`).
+  - For a number decision, only integers smaller than 2^53 become Starlark integers. Larger ones stay floats (so that conversion to an integer does not vary by machine).
+  - The `claude` used for decisions is not covered by the mechanism that stops leftovers after a crash (`SetClaudeProc`). It has no tools and leaves nothing behind, so there is no effect that could happen twice; only the cost grows.
+- `kairocode run "/flow <name> …"` also runs a flow non-interactively (`TestRunAFlowThatAsks`).
+- **The flow chart (the third step, the chart before running):**
+  - `internal/flowchart` builds the shape from the script's syntax tree (from `main`, primitive calls in order; `if`, `for` and `while`, `parallel` (lists and comprehensions), `phase`, `return`, `break`. Functions in the script are drawn expanded in place, and their `return` does not end the flow).
+  - `internal/tui` draws it from top to bottom with boxes and lines, like Dify. Branches and agents side by side are placed horizontally and joined, and loops and "for each element at once" are enclosed in a frame. If it does not fit the width, it becomes a tree-shaped text chart.
+  - A box's mark and color are decided by its state (`○` not yet, `⏺` running, `✓` finished, `✗` failed, `⏸` waiting for a person). Overlaying the state while running is the next step.
+  - The entry points for viewing it are `kairocode flow graph <name>` and the TUI's `/flow graph <name>`. Both draw from the local script without going through the daemon. A flow named `graph` cannot be made.
+  - Tests: `TestBuild` (shape), `TestChartLooks`, `TestChartStates`, `TestChartTooNarrow`, `TestFlowGraph`, `TestFlowGraphCommand`.
+- **The chart while running (the fourth step):**
+  - The flow's version was raised to 2 (version 1 is kept with `Draining`). In version 2, primitive calls carry in their input where in the script they were called (`At`, `"line:column"`; the position of the opening parenthesis that Starlark records for a call). This covers agent turns, tool inputs, `flow.ask` and `flow.decide`.
+  - The idea of recording a marker call right before each call was dropped. kairo's list of children is ordered by creation time (milliseconds) and ID, so the order within the same millisecond is not kept.
+  - `Runtime.FlowView` builds the chart from the recorded script, and from the states of the flow's child runs (tied to boxes by the `At` in their input) it gives each box's state (running, finished, failed, waiting for a person) and count. Waiting for an approval inside an agent's turn is also "waiting for a person".
+  - The event hub emits a `flow` event (the chart and the states) every time the flow progresses. A client that connects later is also sent the current state.
+  - In ACP it becomes a `plan` update. The entries are per call, and the chart and the states are in `kairocode/flow` of `_meta`. Zed shows it as a list of entries, and kairo's TUI as a chart.
+  - The TUI shows the chart while running above the input frame. If it does not fit the screen, it becomes the tree chart, and if that is still too long, only the area around what is running is shown. When it finishes, the tree chart with marks is left in the terminal's flow.
+  - **A note on Bubble Tea's drawing:** if the screen shrinks at the same time as lines are added to the terminal's flow, lines from the previous screen are left behind (because Bubble Tea decides where to add lines by the height it drew). The TUI does not shrink the screen's height while it is adding lines (`TestScreenKeepsItsHeightWhilePrinting`). The leftovers of the trust question had the same cause.
+  - The chart is built once per run and kept, and the states are recomputed only when a run under that flow is observed (durability-reviewer's finding; the event hub is a single goroutine, so heavy computation delays every session's events).
+  - A flow that started on version 1 continues with version 1's function even on new code, and does not redo finished agents (`TestFlowVersion1GoesOn`; we confirmed it fails when run with version 2's function).
+  - Tests: `TestFlowEvents`, `TestFlowAgentWaiting`, `TestFlowVersion1GoesOn`, `TestACPFlowPlan`, `TestClientReadsAFlowPlan`, `TestFlowLive`.
+- **`/flow new` (the fifth step, making one from words):**
+  - `/flow new <description>` becomes a normal turn, as a request that comes with how to write flows (the primitives, the values they return, the differences between Starlark and Python, where files go) (`Runtime.NewFlow`, `POST /sessions/{id}/flows/new`, `kairocode run "/flow new …"`). The request stays in the conversation, so later turns can fix it with words.
+  - **Writing is done by a new tool, `flow_write` (the user's approval, 2026-10-19).** `.kairocode` is a place the model's tools cannot write under ADR 0005 (because the configuration and permission rules are there). We left that as is, and, the same way that only the git tools write `.git`, added a dedicated tool that writes only `.kairocode/workflows/<name>.star`.
+    - Before writing, it checks with `flowchart.Check` (syntax, unknown names, whether `main(input)` exists; f-strings, `try` and `import` come with a way to fix them). A script with problems is not written, and the problems go back to the model.
+    - There is no default rule, so the user is asked every time it writes (`"*": "ask"`). A project rule can also allow `flow_write`.
+    - The effect type is `Idempotent`, and like `write` it plans first and then writes in a "compare and replace" form (design section 3.1). Running it again does not write twice, and a script someone changed in between is not overwritten; it is returned as a conflict. The apply stage writes only when the plan points at `.kairocode/workflows/<name>.star`.
+  - `flow_check` is a tool that only checks, without writing (read-only; allowed by default).
+  - The TUI compares `.kairocode/workflows` at the start and end of a turn, and draws the charts of flows that were made or changed. Changed boxes are marked `~` and added boxes `+` (`flowchart.Diff`). The same applies when fixing with words.
+  - Tests: `TestNewFlow` (a script that cannot be written is fixed, approved, written, and runs with `/flow hello`), `TestFlowWrite`, `TestCheck`, `TestDiff`, `TestFlowsTheTurnMade`.
+- **Changing it on the chart (the sixth step):** the TUI's `/flow edit <name>` opens the flow's chart to change it.
+  - ↑↓ selects a box, Enter rewrites its words (prompt, command, question) in the input box, `d` deletes it, and Shift+↑↓ swaps within the same level. Finishing with Esc leaves the changed chart in the terminal's flow.
+  - Only that part of the script is rewritten (`flowchart.SetText`, `Delete`, `Move`). Words change only the value of that string, delete and swap change only the lines of that statement, and other lines (including comments) stay as they are.
+  - If the changed script does not pass the check (`flowchart.Check`), it is not written (for example, deleting a statement that makes a value used later gives "not defined"). Boxes whose words are written as code, and calls that are part of a larger statement, cannot be changed on the chart, and the user is told to ask in words.
+  - This is the user's own action, so the TUI writes the script directly (not the model's `flow_write`).
+  - Tests: `TestSetText`, `TestDeleteAndMove`, `TestEditOnTheChart` (we confirmed it fails when broken into a form that writes without the check).
+- **Hooks and the agent's `workflow:` (the seventh step):**
+  - `{"hooks": {"turn.end": ["<flow>", …]}}` in `kairocode.json` binds flows to events. Both the user's configuration (`~/.config/kairocode/kairocode.json`) and the project's configuration are read and recorded with agent.load (invariant 2). The events are `turn.end`, `tool.after` and `session.start` (the ninth step).
+  - `turn.end`: once the model has finished answering, they run in order. If one returns `ok: false`, its `message` is returned to the model as the user's message, and the loop continues. It is sent back at most 3 times (`TestTurnEndHookBlocks`). Turns of a flow's agents (`Sub`) have no hooks.
+  - **A project's hook asks before it first runs.** It goes through the permission decision with the kind `hook` (the target is the flow's name). A rule can also say `"hook": "allow"` and so on. Once asked and allowed, the folder, the event, the flow and the script's hash are recorded (`hook-trust` in the store; the existing table looked up by content hash, no table added), and it is not asked again while the script is the same. If the script changes, it asks again. A refused hook does not run. It does not run in read-only mode (plan) either.
+  - Hooks in the user's own configuration ask too (durability-reviewer's finding). They bind by name, so what runs is the project's script.
+  - Only the allowed script runs. The hash of the script at the time it was allowed is passed to the flow (`FlowInput.Expect`), and if it differs from the script read, it does not run. Even if the script changes while waiting for permission, a script that was not allowed does not run (`TestHookRunsTheScriptAllowed`; we confirmed it fails when this check is removed).
+  - A hook whose script itself does not run (no script, a mistake, a limit exceeded and so on; `FlowOutput.Broken`) is not sent back to the model, because the model cannot fix it.
+  - The input of a hook's flow carries the event, which round, and which position (`FlowInput.Hook`) (invariant 8).
+  - If an agent definition (`.opencode/agents/*.md`) says `workflow: <flow>`, that agent's turns proceed with that flow instead of the model loop. The user's message is `input["args"]` (`TestAgentWorkflow`).
+  - All of these are separated by new fields in the recorded agent definition, so turns in progress that do not have them make the same calls as before.
+- **Detecting divergence and the rest of M3 (the eighth step):**
+  - The flow's version was raised to 3 (versions 2 and 1 are kept with `Draining`). Before calling each primitive, `flow.step` records which call number it is and what it does (the kind and the hash of its content).
+  - A call resumed with the same content returns its result from the record, so `flow.step`'s handler does not run. It runs only when the content changed (for example, the code changed while the version stayed the same). In that case, if there is a record with different content at the same number, it answers "diverged", and the flow stops without making the call (`TestWorkflowScriptDivergence`; we confirmed that when the check is removed, a new agent runs and the test fails).
+  - `kairocode flow show [-follow] <session>` draws the session's latest flow with the states of its calls. With `-follow` it redraws every time the flow progresses and exits when it finishes (`GET /sessions/{id}/flow`, `TestFlowShowFollow`).
+  - We confirmed the token limit (`TestFlowTokenLimit`) and that stopping a turn also stops the flow and its agents (`TestCancelStopsTheFlow`).
+- **The remaining events, stats, schema, task (the ninth step):**
+  - `tool.after`: runs after the result, for each tool call that ran. An element in `kairocode.json` is a flow's name or `{"tool": "<tool>", "flow": "<flow>"}`; with `tool`, it runs only after that tool. The flow's `input["args"]` is the tool's name and what it ran on (the same target as the permission decision: a path or a command). The `message` of `ok: false` is added after the tool's result as the user's message and returned to the model. It does not run after calls that did not run (refused, missing, cut off) (after durability-reviewer's finding, this was fixed to tell them apart by the result of the decision rather than by the prefix of the effect's name).
+  - `session.start`: runs at the start of the session's first turn (N = 0). The `message` of `ok: false` is added to the first message as `[What the session's start says: …]`. It does not run on the second and later turns.
+  - As with `turn.end`, both ask before they first run, only allowed scripts run, and `Broken` is not returned to the model. The input's `Hook` carries the event, which step and which call number (`tool.after`), and which hook (invariant 8). An agent without hooks makes the same calls as before.
+  - Tests: `TestToolAfterAndSessionStartHooks` (with another tool's hook placed first, it fails when the tool check is removed; we confirmed it fails when `session.start` is removed).
+  - `kairocode flow stats [-dir DIR]`: from the records of the sessions in that folder, for each flow it shows the number of runs, the entry point (`command`: `/flow`, `hook`, `agent`: the agent's `workflow:`), successes, failures (`ok: false`, a script that does not run, a failure, a cancellation), the number running, and the last time it ran. Flows in the project that have never run are shown too, and flows that no longer exist are marked `(gone)` (`GET /flows/stats?dir=`, `Runtime.FlowStats`). Only the records that remain are counted (trees past `KeepFinished` disappear). Tests: the second half of `TestToolAfterAndSessionStartHooks` (we confirmed it fails when the entry point check is reversed), the second half of `TestFlowShowFollow`.
+  - `agent(…, schema = {"name": "string", …})`: after the agent answers, its answer is turned into a dict with fixed fields by the same mechanism as `decide` (a forced tool call). The field types are `"string"`, `"number"`, `"bool"`, `"list"` and `"dict"`. What it returns has the same shape as `decide` (`.ok`, `.value`, `.error`); a value with a missing field or a mismatched type has `ok` false, with the reason in `.error` (`TestAgentSchema`; we confirmed it fails when the type check is removed).
+  - The `task` tool (FR-13): the model calls a subagent itself. It is not run as a tool; the turn workflow runs it as a child turn (`Sub`, with `task:<call ID>` in the input's `At`) and makes its answer the call's result. Several `task`s in the same reply run side by side; after a restart, finished subagents are not redone; stopping the parent stops them. The effect type is `Read`; the actual effects are caused by the subagent's tools, each through its own permission decision. `task` is not given to subagents, to read-only mode, or to the Claude Code engine. A call whose arguments cannot be read or whose `prompt` is empty does not fail the turn; it goes back to the model as an error result (`TestTaskTool`; we confirmed it fails when broken so the result is not the child's answer). With two `task`s, when the process is forcibly stopped and resumed after the first finished while the second is running, only the second runs again (`TestCrashTaskResume`; we confirmed that killing it before the first also finishes makes the test detect the first being redone and fail). A flow's `tool("task", …)` is not run; it returns a message to use `agent()` instead.
+- **In M4:** `wait` (outside events; built together with the entry point for events). With this, M3 is done (2026-10-19).
+- **The flow's shape on the approval screen (2026-10-20, the user's report "I have no idea what kind of flow was made"):**
+  - When asking about `flow_write`, the shape of the flow about to be written (`flowchart.Tree`) is put into `permission.check`'s output as `Preview`.
+  - `Preview` is carried in `toolCall.content` of ACP's permission request, and the TUI shows it on the approval screen (as much as fits on the screen).
+  - Tests: `TestFlowWriteAskShowsTheFlow`, `TestAskShowsWhatItWouldDo`.
 
-## 追記: フローを書くときのレビュー（2026-10-20、利用者の要望）
+## Addendum: a review when a flow is written (2026-10-20, the user's request)
 
-利用者の要望（「ワークフローを作ることに関しては、レビュー層を持ってもいいかもね、TUI 上で」）を受けて足しました。選んだのは、TUI の専用のレビュー画面です。
+Added after the user's request ("for making workflows, maybe we could have a review layer, on the TUI"). What was chosen is a dedicated review screen in the TUI.
 
-- **承認の中身は節に分けます**（`runtime.PreviewSection`）。
-  - **Summary:** 段ごとの動きと、呼び得るツールです。ツールには、何に届くかを付けます。
-    - MCP と知らないツール: `⚠ an outside service`
-    - 実（`Real`）: `⚠ cannot be undone`
-    - 冪等（`Idempotent`）: `changes files`
-  - **Tree:** 木の形です。
-  - **Changes:** 同じ名前のフローがすでにあれば、必ず出します。差分が無くても出すので、上書きであることが分かります。
-    - 足したもの、変えたもの: 印付きの木（`+`・`~`）で示します。
-    - 消えた段: `- ` の行で並べます（`flowchart.Removed`）。
-    - 前の版が読めないとき（フローとして読めない、普通のファイルでない、1 MiB を超える）も、置き換えることだけは示します。
-  - **Script:** スクリプトの全文です。
-- **記録と送り方**
-  - 記録（`permission.check` の出力）に入るのは、要約・木・差分と、スクリプトのハッシュだけです。スクリプトの全文は、承認の一覧を作るときに読みます（ADR 0016 の追記）。
-  - ACP では、節ごとに内容のブロックを分けて送り、各ブロックの `_meta`（`kairocode/section`）に節の名前と本文を入れます。ほかのクライアント（Zed など）は、見出し付きの一続きの文として読めます。
-- **TUI のレビュー画面**（`internal/tui/review.go`）
-  - 節は tab（と ←→）で切り替えます。行は ↑↓・PgUp・PgDn で選びます。
-  - `c` で、選んだ行にコメントを付けます。スクリプトの行は、行番号付きで記録します。`x` で、最後のコメントを取り消します。
-  - 答え方は次のとおりです。
-    - `a`: 許します。
-    - `d`: 断ります。
-    - `r`: コメントをまとめて断った理由としてモデルに返し、書き直させます（ADR 0016 の「Others」と同じ仕組み）。コメントが無ければ、直してほしいことを文で打ちます。
-- **段の中身を開く（利用者の要望「細かいところまで矢印と Enter で見られると良い」）**
-  - Summary・Tree・Changes の各行は、その段のスクリプトの行（`flowchart.Lines`）を持ちます。
-    - 木の行は、その箱の文です。if やループは、頭の行です。
-    - 要約の行は、その段の最初の手順です。
-  - 記録の形式: 節の本文の後に、行ごとの「first-last」を付けて記録します（`refsSep`）。ACP では、`_meta` の `kairocode/refs` に入れます。
-  - TUI での操作
-    - ↑↓ で行を選び、Enter で、その段のスクリプトの行を切らずに全文で開きます。前後 2 行も薄く出します。
-    - 開いた中で ↑↓ で行を選び、`c` でコメントを付けます。コメントは、スクリプトの行番号に付きます。
-    - esc か Enter で戻ります。
-  - 答えのキーは変わりました。Enter は「開く」になったので、答えは `a`（許す）・`d`（断る）・`r`（コメントを付けて返す）だけです。
-  - テスト: `TestFlowReview`（木の段を開く、プロンプトの全文、開いた中でのコメント、見出しの行では何も開かない）、`TestLinesOfSteps`。
-  - **画面の高さ（利用者の報告「左右に移ると窓が下に行く」）:** 節ごとに行数が違い、画面の高さが変わるたびに、端末の上で位置がずれていました。レビュー画面は、節、開いた段、コメント、打っている途中のどの状態でも同じ高さにします。本文の行数は、画面の高さから残りの分を引いて決め、足りない行は空けておきます（`TestFlowReviewKeepsItsHeight`。前の形では落ちることを確かめた）。
-- **durability-reviewer の指摘で直したこと**
-  - **上書き:** 差分の印が無いと Changes が出ず、上書きが新しいフローに見えていました。今は前の版があれば必ず出し、消えた段も並べます。
-  - **前の版の読み方:** `Lstat` で普通のファイルかを確かめ、大きさに上限を置きます（FIFO で止まらない）。
-  - **取り下げ:** 承認がほかで答えられて消えたら、打ちかけのコメントを入力欄から消します（チャットとして送られない）。
-  - **ACP:** 節の名前は、テキストのブロックの `_meta` に入れます。本文は 2 度送りません。
-  - **行と段の対応（段を開く）:** フローの説明（DESCRIPTION）は、木では 1 行にします。改行や制御文字があっても、行と段の対応がずれず、記録の区切りも入りません（`TestTreeLinesWithALongDescription`）。スクリプトの行でない対応（負の値など）は、開きません。
-- **テスト:** `TestFlowReview`（TUI）、`TestPermissionSections`（ACP）、`TestRemoved`、`TestFlowWriteAskShowsTheFlow`（節、上書き、消えた段）。
+- **The content of the approval is split into sections** (`runtime.PreviewSection`).
+  - **Summary:** what each phase does, and the tools it may call. Each tool is marked with what it reaches.
+    - MCP and unknown tools: `⚠ an outside service`
+    - Real (`Real`): `⚠ cannot be undone`
+    - Idempotent (`Idempotent`): `changes files`
+  - **Tree:** the tree shape.
+  - **Changes:** always shown if a flow with the same name already exists. It is shown even with no diff, so it is clear that this is an overwrite.
+    - Added and changed things: shown as a marked tree (`+` and `~`).
+    - Removed phases: listed as `- ` lines (`flowchart.Removed`).
+    - When the previous version cannot be read (cannot be read as a flow, is not a regular file, is over 1 MiB), it still shows that it will be replaced.
+  - **Script:** the full text of the script.
+- **Recording and sending**
+  - What goes into the record (`permission.check`'s output) is only the summary, the tree, the diff and the script's hash. The full text of the script is read when the list of approvals is built (ADR 0016's addendum).
+  - In ACP, each section is sent as a separate content block, and each block's `_meta` (`kairocode/section`) holds the section's name and text. Other clients (Zed and so on) can read it as one continuous text with headings.
+- **The TUI's review screen** (`internal/tui/review.go`)
+  - Sections are switched with tab (and ←→). Lines are selected with ↑↓, PgUp and PgDn.
+  - `c` attaches a comment to the selected line. A script line is recorded with its line number. `x` removes the last comment.
+  - The ways to answer are:
+    - `a`: allow.
+    - `d`: refuse.
+    - `r`: return the comments together to the model as the reason for refusing, and have it rewrite (the same mechanism as "Others" in ADR 0016). If there are no comments, type what you want fixed.
+- **Opening a phase's content (the user's request "it would be nice to see the details with the arrows and Enter")**
+  - Each line of Summary, Tree and Changes holds the script lines of that phase (`flowchart.Lines`).
+    - A tree line holds that box's statement. For an if or a loop, its head line.
+    - A summary line holds the first step of that phase.
+  - Record format: after the section's text, a "first-last" for each line is recorded (`refsSep`). In ACP it goes into `kairocode/refs` of `_meta`.
+  - Operation in the TUI
+    - Select a line with ↑↓ and press Enter to open that phase's script lines in full, without truncation. Two lines before and after are also shown faintly.
+    - Inside the opened view, select a line with ↑↓ and attach a comment with `c`. The comment is attached to the script's line number.
+    - esc or Enter goes back.
+  - The answer keys changed. Enter now means "open", so the answers are only `a` (allow), `d` (refuse) and `r` (return with comments).
+  - Tests: `TestFlowReview` (opening a tree phase, the full prompt, comments inside the opened view, nothing opens on a heading line), `TestLinesOfSteps`.
+  - **The screen's height (the user's report "moving left and right makes the window go down"):** each section had a different number of lines, and every time the screen's height changed, its position on the terminal shifted. The review screen now has the same height in every state: section, opened phase, comment, or typing. The number of body lines is decided by subtracting the rest from the screen's height, and missing lines are left blank (`TestFlowReviewKeepsItsHeight`; we confirmed it fails with the previous form).
+- **What was fixed after durability-reviewer's findings**
+  - **Overwrites:** without diff marks, Changes was not shown, and an overwrite looked like a new flow. Now it is always shown if there is a previous version, and removed phases are listed too.
+  - **How the previous version is read:** `Lstat` confirms it is a regular file, and its size is capped (so a FIFO does not hang it).
+  - **Withdrawal:** when the approval is answered elsewhere and disappears, a half-typed comment is cleared from the input box (so it is not sent as chat).
+  - **ACP:** the section's name goes into `_meta` of the text block. The text is not sent twice.
+  - **Mapping lines to phases (opening a phase):** the flow's description (DESCRIPTION) is one line in the tree. Even with newlines or control characters, the mapping between lines and phases does not shift, and no record separator gets in (`TestTreeLinesWithALongDescription`). A mapping that is not to a script line (a negative value and so on) does not open.
+- **Tests:** `TestFlowReview` (TUI), `TestPermissionSections` (ACP), `TestRemoved`, `TestFlowWriteAskShowsTheFlow` (sections, overwrites, removed phases).
 
-## 追記: レビューの最初の画面を「判断に要ること」にする（2026-10-20、利用者の要望）
+## Addendum: make the first review screen "what you need to decide" (2026-10-20, the user's request)
 
-利用者の指摘は「draft, confirm, notify でコードが出てきてもよくわからない」と「レビューでみんな何が欲しいんだろ」でした。検討の結果、レビューの最初の画面（Overview）には、次の 3 つを 1 枚にまとめます。試運転（もう 1 つの要望）は ADR 0017 で提案します。
+The user's comments were "when draft, confirm, notify show up with code, I can't really tell" and "what does everyone want in a review?". After considering it, the first review screen (Overview) puts the following three things on one page. A try run (the other request) is proposed in ADR 0017.
 
-- **頼んだとおりか**
-  - `flow_write` に `asked` を足しました。モデルが依頼をどう受け取ったかを、`[{need, phase}]` の一覧で書きます。
-  - 一覧は、フローの段と機械的に照らします。
-    - `✓`: 対応する段がある。
-    - `✗`: その名前の段がフローに無い。
-    - `+ not asked for`: どの依頼にも当たらない段。
-  - `/flow new` の指示では、各部分に段（`phase`）を付けることと、`asked` を書くことを求めます。
-  - 書かれていなければ、そう出します（「the model did not say how it took it」）。
-- **何に届くか**
-  - 外に送るもの、取り消せないもの（MCP、知らないツール、`Real`）
-    - 何を使って送るかを言葉で出します。変数を、それを作った段まで辿ります（例: 「with the reply of agent plan (in draft)」）。
-    - その前に利用者に聞く段があるか（`you are asked before it (confirm)`）、無ければ `⚠ nothing asks you before it` と出します。
-  - 書き換えるファイル。
-  - モデルを呼ぶ回数（エージェント・判断、繰り返しの中なら「回るほど増える」）と、ファイルを変えられるエージェント。
-- **気をつけるところ**
-  - 確認なしで外に送る。
-  - `while` の繰り返し。
-  - 前の版から消えた確認やツール。
-  - 頼んだのに段が無いもの。
-- **作り方と、ほかの節**
-  - 依頼の一覧（モデルの言葉）以外は、すべてスクリプトから決定的に作ります（`flowchart.Overview`）。
-  - 段の一覧は「Steps」（木）、続けて Changes、Script です。前の「Summary」は Overview に置き換えました。
-  - Overview の各行も、Enter でその段のスクリプトを開けます。⚠ の行は黄、✓ は緑、✗ は赤で出します。
-- **durability-reviewer の指摘で直したこと**
-  - **確認の有無を、分岐ごとに見る:** 前は、どこかに ask があれば、その後のすべてを「確認あり」としていました。そのため、if の片方で聞いて、もう片方で `rm -rf` する形でも「確認あり」と出ていました。
-    - 今は道ごとに見ます。if の後は、両方の道で聞いたときだけ「確認あり」です。繰り返しと並列の中の ask は、その外を「確認あり」にしません。
-  - **送るもの:** 最初の引数だけでなく、すべての引数の出どころを出します（`channel = "c", body = x.output` なら、エージェントの返事）。
-  - **依頼の一覧の大きさ:** 20 件まで、1 件 200 文字までにして記録します。
-- **テスト:** `TestOverview`（依頼の照らし合わせ、送るものの出どころ、分岐ごとの確認の有無、ファイル、モデルの回数、気をつけるところ）、`TestFlowWriteAskShowsTheFlow`（`asked` が画面まで届く）。
+- **Is it what was asked for**
+  - `asked` was added to `flow_write`. The model writes how it took the request, as a list `[{need, phase}]`.
+  - The list is checked mechanically against the flow's phases.
+    - `✓`: there is a matching phase.
+    - `✗`: there is no phase with that name in the flow.
+    - `+ not asked for`: a phase that matches no request.
+  - The instructions for `/flow new` ask for a phase (`phase`) on each part and for `asked` to be written.
+  - If it is not written, that is shown ("the model did not say how it took it").
+- **What it reaches**
+  - Things that send outside or cannot be undone (MCP, unknown tools, `Real`)
+    - What it sends with is shown in words. A variable is traced back to the phase that made it (for example, "with the reply of agent plan (in draft)").
+    - Whether there is a phase that asks the user before it (`you are asked before it (confirm)`); if not, `⚠ nothing asks you before it` is shown.
+  - The files it rewrites.
+  - How many times it calls the model (agents and decisions; inside a loop, "grows with each round"), and the agents that can change files.
+- **Things to watch**
+  - Sending outside without confirmation.
+  - `while` loops.
+  - Confirmations or tools removed since the previous version.
+  - Things asked for that have no phase.
+- **How it is built, and the other sections**
+  - Everything except the list of requests (the model's words) is built deterministically from the script (`flowchart.Overview`).
+  - The list of phases is "Steps" (the tree), followed by Changes and Script. The former "Summary" was replaced by Overview.
+  - Each Overview line can also open that phase's script with Enter. ⚠ lines are shown in yellow, ✓ in green and ✗ in red.
+- **What was fixed after durability-reviewer's findings**
+  - **Whether confirmation exists is checked per branch:** before, if there was an ask anywhere, everything after it was "confirmed". So even a shape that asks in one side of an if and runs `rm -rf` in the other showed "confirmed".
+    - Now it is checked per path. After an if, it is "confirmed" only when both paths asked. An ask inside a loop or a parallel does not make what is outside it "confirmed".
+  - **What is sent:** the sources of all arguments are shown, not just the first (for `channel = "c", body = x.output`, the agent's reply).
+  - **The size of the list of requests:** recorded up to 20 items, up to 200 characters each.
+- **Tests:** `TestOverview` (matching requests, the sources of what is sent, confirmation per branch, files, model call counts, things to watch), `TestFlowWriteAskShowsTheFlow` (`asked` reaches the screen).
 
-## 追記: レビューを、文章でなく、項目・図・差分で見せる（2026-10-20、利用者の要望）
+## Addendum: show the review as items, a chart and diffs, not prose (2026-10-20, the user's request)
 
-利用者の指摘は「レビューの項目名とレビュー対象の差分がわかりづらい」でした。あわせて、次の 3 つの指示がありました。
+The user's comment was "the review's item names and the diff being reviewed are hard to understand". Along with it came three instructions.
 
-- 画面は英語のままにし、文章はやめる。
-- 流れは mermaid のような図にする。
-- 変わった箇所だけを出し、矢印で選んで中身を見られるようにする。
+- Keep the screen in English, and stop using prose.
+- Make the flow a chart like mermaid.
+- Show only the parts that changed, and let you select them with the arrows to see their content.
 
-- **Overview は、文章をやめて「ラベル  値」の行にします**（`flowchart.Overview`）。
-  - 部分の見出しは `▌ ASKED FOR`・`▌ REACHES`・`▌ WATCH` です。TUI では色の付いた見出しにします。
-  - 外に出るツールの下には、`sends`（何を送るか）と `asks you first`（✓ どの段で聞くか／⚠ no）を出します。
-  - 値の出どころは短い言葉にしました（`reply of agent plan (draft)`、`your words`）。
-- **Flow は図にします。** フローの実行の画面と同じ箱の図（上から下、分岐は横に並べる）を、承認の中で描きます。
-  - 外に出るツールの箱には `⚠` と `sends …` を、質問の箱には選択肢（`[post | stop]`）を出します。
-  - ACP では、節の `_meta` の `kairocode/chart` に図の形（`flowchart.Chart`）を入れます。ほかのクライアントには木の文字を送ります。
-- **Changes は、変わった段だけを差分の形で並べます**（`flowchart.Changes`）。
-  - `+` は足した段（緑）、`-` は消えた段（赤）、`~` は変えた段（黄）です。同じ段は「… N the same」とまとめます。
-  - 行を選んで Enter を押すと、その段の文の before（`-`）と after（`+`）を開きます。ACP では `_meta` の `kairocode/details` で送ります。
-  - 開いた中でもコメントを付けられます。
-- **記録の形**
-  - 記録（`permission.check` の出力）に入るのは、Overview と、新しいスクリプトと置き換える前のスクリプトのハッシュ（`oldRef`）だけです。
-  - 図と差分は、承認の一覧を作るときに、ストアの 2 つのスクリプトから描きます。記録は小さく保たれ、描き方を変えても記録は変わりません。
-  - この形の前に記録された承認は、記録された節のまま出します。
-- **durability-reviewer の指摘で直したこと**
-  - 質問の選択肢も、ほかの文と同じく 1 行に縮めます（図の箱が崩れない）。
-  - 前の版の差分が描けないとき（ストアに無い、読めない）も、「replaces …」だけは出します。上書きであることは必ず見えます。
-  - 図に付けたコメントで、図のすべての行に印が付いていました。図のコメントには印を付けません。
-  - **図のスクロール（利用者の報告「flow がスクロールできない」）:** 図の各行にもカーソル（❯）を置いていたので、↓ を押しても、カーソルが画面の真ん中を過ぎるまで図が動きませんでした。図では行を選ばず、矢印と PgUp・PgDn で図そのものを送ります（`TestFlowReviewChartScrolls`。前の形では落ちることを確かめた）。
-  - 残した点: 図の ⚠ は一覧を作るときのツールの一覧から決めます。そのため、その間にツールや MCP のサーバーが変わると、記録された Overview の REACHES と食い違うことがあります。表示だけで、分岐には使いません。
-- **テスト**
-  - `TestChanges`（足した・消えた・変えた段と、その before と after）。
-  - `TestReviewSections`（図の印と、印が差分に混ざらないこと）。
-  - `TestOverview`、`TestFlowWriteAskShowsTheFlow`、`TestFlowReviewChartAndChanges`（図を描く、変更を開く、見出し）。
+- **Overview drops prose and becomes "label  value" lines** (`flowchart.Overview`).
+  - The part headings are `▌ ASKED FOR`, `▌ REACHES` and `▌ WATCH`. In the TUI they are colored headings.
+  - Under a tool that goes outside, `sends` (what it sends) and `asks you first` (✓ which phase asks / ⚠ no) are shown.
+  - The sources of values were made into short words (`reply of agent plan (draft)`, `your words`).
+- **Flow becomes a chart.** The same box chart as the flow run screen (top to bottom, branches side by side) is drawn inside the approval.
+  - A box for a tool that goes outside shows `⚠` and `sends …`, and a question box shows its options (`[post | stop]`).
+  - In ACP, the chart's shape (`flowchart.Chart`) goes into `kairocode/chart` of the section's `_meta`. Other clients are sent the text of the tree.
+- **Changes lists only the phases that changed, in diff form** (`flowchart.Changes`).
+  - `+` is an added phase (green), `-` a removed phase (red), and `~` a changed phase (yellow). Unchanged phases are folded as "… N the same".
+  - Selecting a line and pressing Enter opens the before (`-`) and after (`+`) of that phase's statements. In ACP they are sent in `kairocode/details` of `_meta`.
+  - Comments can be attached inside the opened view too.
+- **The record's form**
+  - What goes into the record (`permission.check`'s output) is only Overview, plus the hashes of the new script and of the script being replaced (`oldRef`).
+  - The chart and the diff are drawn from the two scripts in the store when the list of approvals is built. The record stays small, and changing how things are drawn does not change the record.
+  - Approvals recorded before this form are shown with their recorded sections as they are.
+- **What was fixed after durability-reviewer's findings**
+  - A question's options are also shrunk to one line, like other text (so the chart's boxes do not break).
+  - Even when the previous version's diff cannot be drawn (not in the store, cannot be read), "replaces …" is still shown. That it is an overwrite is always visible.
+  - A comment attached to the chart put a mark on every line of the chart. Chart comments now get no mark.
+  - **Scrolling the chart (the user's report "the flow can't be scrolled"):** a cursor (❯) was placed on each line of the chart too, so pressing ↓ did not move the chart until the cursor passed the middle of the screen. The chart no longer selects lines; the arrows and PgUp/PgDn scroll the chart itself (`TestFlowReviewChartScrolls`; we confirmed it fails with the previous form).
+  - What remains: the chart's ⚠ is decided from the list of tools at the time the list of approvals is built. So if tools or MCP servers change in between, it can disagree with REACHES in the recorded Overview. It is display only and is not used for branching.
+- **Tests**
+  - `TestChanges` (added, removed and changed phases, and their before and after).
+  - `TestReviewSections` (the chart's marks, and that marks do not get mixed into the diff).
+  - `TestOverview`, `TestFlowWriteAskShowsTheFlow`, `TestFlowReviewChartAndChanges` (drawing the chart, opening a change, headings).
 
-## 追記: REACHES の言い方と、読む人の言語（2026-10-20、利用者の要望）
+## Addendum: how REACHES is worded, and the reader's language (2026-10-20, the user's request)
 
-- **REACHES**（利用者の指摘「これは何を表してる？」）
-  - 動詞をツールの種類で変えます。
+- **REACHES** (the user's comment "what does this show?")
+  - The verb changes with the kind of tool.
     - bash: `runs a command · cannot be undone`
-    - MCP: `sends to <サーバー> · outside service`
-    - そのほかの実（`Real`）: `cannot be undone`
-  - 中身は、引数ごとに 1 行で出します（`command`、`text`、`channel` など、引数の名前を項目名にする）。
-    - 変数は、それを作った段か、代入した式まで辿ります（例: `"curl -X POST " + url`）。
-  - 確認の有無は `asked before it  ✓ yes, in confirm` か `⚠ no` です。
-- **読む人の言語**
-  - 利用者の判断（2026-10-20）: 項目名（REACHES、models、files、引数の名前など）は Pull Request のような固有名詞に近いので、英語のままにします。言語に合わせるのは、レビューの中身の言い回しとフローの中身だけです。
-  - 言語は次の順で決めます（`internal/locale`）。
+    - MCP: `sends to <server> · outside service`
+    - other real (`Real`): `cannot be undone`
+  - The content is shown one line per argument (the argument's name, such as `command`, `text` or `channel`, is the item name).
+    - A variable is traced back to the phase that made it, or to the expression assigned (for example, `"curl -X POST " + url`).
+  - Whether there is confirmation is `asked before it  ✓ yes, in confirm` or `⚠ no`.
+- **The reader's language**
+  - The user's decision (2026-10-20): item names (REACHES, models, files, argument names and so on) are close to proper nouns like "Pull Request", so they stay in English. Only the wording of the review's content and the flow's content follow the language.
+  - The language is decided in this order (`internal/locale`).
     1. `KAIROCODE_LANG`
-    2. 利用者の `~/.config/kairocode/kairocode.json` の `language`
-    3. 端末のロケール（`LC_ALL`、`LC_MESSAGES`、`LANG`）
-    - 今は英語と日本語です。
-  - 置き換えるのは、KairoCode のエージェント（ACP）が承認を送るところです。対象は、節の本文、各行の details、図の箱の文です（`locale.Review`）。
-    - 記録は英語のままなので、読む人ごとに違う言語で出せます。
-    - TUI は、KairoCode のエージェントを自分の環境で起動するので、端末の言語になります。
-  - `/flow new` の指示では、依頼の一覧（`asked`）、`DESCRIPTION`、質問、プロンプトを、利用者が依頼を書いた言語で書かせます。段の名前とフローの名前は、短い英小文字のままです。
-- **Try の節**も、文章をやめて行にしました（`words`、`ended`、`▌ WHAT HAPPENED`、`1 agent plan  replied`、`2 ⚠ write  not called`）。
-- **試運転中の承認の知らせ**
-  - 試運転を頼んだ直後、待ちが一瞬なくなってから「試運転中」として現れたときに、クライアントが Try の無いまま聞き直すことがありました。
-  - 「試運転中」の承認は「頼まれた」と知らせず、終わって中身が変わったときに知らせます。中身の変化で知らせるので、試運転中の状態を一度も見ないまま終わった場合も知らせます。
-- **durability-reviewer の指摘で直したこと**
-  - **置き換えるのは KairoCode の言葉だけにします。** 承認するものは、書かれ・送られるとおりに見えなければなりません。そのため、次のものは置き換えません。
-    - Script の節
-    - 変更の before と after
-    - 引用符を含む行（スクリプトの文字列）
-    - 字下げした塊（エージェントの返事、呼ぶはずだった引数）
-    - 図の箱のうち、スクリプトの文（KairoCode が付けた「sends …」だけを置き換える）
-  - **変数は出どころまで辿ります。**
-    - 別名（`text = draft.output`）: その出どころ（`reply of agent plan`）を出します。
-    - 組み立てた値: 式に出どころを添えます（`"curl " + url (with … your words)`）。
-  - 残した点: 承認の知らせの変更（試運転中は知らせない、中身が変われば知らせる）は、出来事の単体のテストがまだありません。ふだんの流れは `TestTryFlow`・`TestACPTryFlow` で確かめています。
-- **テスト:** `TestLang`、`TestReview`、`TestLocalizedReview`、`TestOverview`（引数ごとの行、式と出どころ、別名）。
+    2. `language` in the user's `~/.config/kairocode/kairocode.json`
+    3. the terminal's locale (`LC_ALL`, `LC_MESSAGES`, `LANG`)
+    - For now, English and Japanese.
+  - The replacement happens where KairoCode's agent (ACP) sends an approval. It covers the sections' text, each line's details, and the text of the chart's boxes (`locale.Review`).
+    - The record stays in English, so it can be shown in a different language for each reader.
+    - The TUI starts KairoCode's agent in its own environment, so it uses the terminal's language.
+  - The instructions for `/flow new` have the list of requests (`asked`), `DESCRIPTION`, questions and prompts written in the language the user wrote the request in. Phase names and flow names stay short lowercase English.
+- **The Try section** also dropped prose and became lines (`words`, `ended`, `▌ WHAT HAPPENED`, `1 agent plan  replied`, `2 ⚠ write  not called`).
+- **Notifying approvals during a try run**
+  - Right after a try run was requested, when the wait briefly disappeared and then reappeared as "trying", a client sometimes asked again without Try.
+  - An approval that is "trying" is not announced as "requested"; it is announced when the try finishes and its content changes. Because it is announced on the change of content, it is announced even when the try finished without the "trying" state ever being seen.
+- **What was fixed after durability-reviewer's findings**
+  - **Only KairoCode's own words are replaced.** What is approved must be seen exactly as it will be written and sent. So the following are not replaced.
+    - the Script section
+    - the before and after of changes
+    - lines that contain quotes (the script's strings)
+    - indented blocks (an agent's reply, the arguments it would have called with)
+    - in the chart's boxes, the script's statements (only "sends …", which KairoCode added, is replaced)
+  - **Variables are traced to their sources.**
+    - An alias (`text = draft.output`): its source (`reply of agent plan`) is shown.
+    - A built-up value: the expression is shown with its sources (`"curl " + url (with … your words)`).
+  - What remains: the change to approval notifications (not announced during a try run, announced when the content changes) has no unit test of the events yet. The usual flow is checked by `TestTryFlow` and `TestACPTryFlow`.
+- **Tests:** `TestLang`, `TestReview`, `TestLocalizedReview`, `TestOverview` (a line per argument, expressions and sources, aliases).
 
-## 追記: 図を読みやすく、実行中も図で（2026-10-20、利用者の要望）
+## Addendum: a more readable chart, and a chart while running too (2026-10-20, the user's request)
 
-利用者の指摘は「（実行中の木は）プレビューの図にできるよね」と「実行したけど、トータルで見にくい」でした。
+The user's comments were "(the tree while running) could be the preview's chart, right?" and "I ran it, but overall it's hard to read".
 
-- **実行中も図にします。** 前は、図が画面の高さに収まらないと木に切り替えていました。今は図のまま、動いている箱か待っている箱（なければ最後に終わった箱）の周りを、画面の高さぶん出します（`around`）。木にするのは、図が端末の幅に収まらないときだけです。
-- **図そのものを読みやすくしました**（実行中と、レビューの Flow の両方。`internal/tui/flowchart.go`）
-  - **ガード節:** 終わるだけの if（`if not r.ok: return …`）と、ループを抜けるだけの if（`if …: break`）は、yes と no に分けず、1 つの箱にします。例: `◇ if not r.ok → stop` の下に、終わるときの文を出します。
-  - **終わり:** return は `■ end` か `■ stop`（`"ok": False` のとき）にし、コードの代わりに message の文を出します。
-  - **箱の幅:** 文は 60 桁までで折り返し、2 行目で切ります。長いプロンプトで箱が画面いっぱいに広がりません。
-  - **ツールの箱:** 引数が変数のときは、その出どころを出します（例: `"slack-notify " + draft (with …)`）。そのため `Node.Args` を JSON に載せました（記録には入らない、実行の画面の出来事だけ）。
-- **実行中の図を見回す**（利用者の判断「マウスは使わず、shift + 矢印で見られるくらいがよい」）
-  - 画面に収まらない図は、shift+↑↓ で 1 行ずつ動かせます。図の下に、その案内を出します。
-  - 動かした後は、フローが進んでもその位置に留まります。新しいフローは、また動いている箱の周りから始まります。
-  - マウスと全画面の案（ADR 0018 の下書き）は、利用者が取りやめたので、起票しませんでした。
-- **テスト:** `TestChartLooks`（ガード節、終わり、二つの道の分岐、長い文、変数の出どころ）、`TestFlowLive`（短い画面でも図のまま、動いている箱の周り、shift+↑↓ で見回して留まる）。
-- **動いている様子を見せる**（利用者の要望「動いてる様子が見れるといい」）
-  - 実行中の箱は、印が回り（スピナー）、動き始めてからの秒数を出します（`agent build ×2 · 37s`）。
-  - 動いている箱が 1 つのときは、その箱の中に、エージェントが今していることを薄く出します。
-    - `▸ go test ./...`: 今呼んでいるツール。
-    - `… Fixing the parser`: 書いている文の最後の行。
-  - 箱が 2 つ以上同時に動いているとき（並列のエージェント）は、どの箱のものか分からないので、図の下に出します。
-  - 中身が変わっても図が揺れないよう、今していることを出している箱は、幅を 60 桁に固定します。
-  - フローの間、エージェントの文は、図の上の返事の欄には出しません（箱の中に出る）。これまでどおり、段落ごとに端末の履歴には残します。
-  - 画面には ACP の出来事（文の断片、ツールの呼び出し）だけを使い、記録は変えていません。
-  - テスト: `TestFlowLive`（秒数、今のツール、最後の行、終わったツールは消える、返事の欄に出ない）。
-- **フロー自身の進み方を見せる**（利用者の要望「フロー自身の動きが見たい」）
-  - 実行中の図で、通ってきた道を緑にします。
-    - 箱と箱をつなぐ線は、その先の箱まで来ていれば緑、まだなら薄い色です。
-    - if の分かれ道は、通った側のラベル（yes／no）と分かれ・合流の線を緑にします。
-    - 動かない箱（段の見出し、if、ガード、終わり）は、その先まで来ていれば「通った」とします。
-  - 段の見出し
-    - 終わった段: `── review ✓ ──`（緑）
-    - 今の段: `── fix ◂ now ──`
-    - まだの段: 薄い色
-  - 図の題の横に、今どこにいるかを出します（`fix · phase 2/2 · 3 done · 1m12s`）。
-    - 今の段と、段の数の中での位置
-    - 終わった呼び出しの数
-    - 始まってからの時間
-  - レビューの図（実行していない図）には、どれも出しません。
-  - テスト: `TestFlowLivePath`（緑の線と薄い線、段の ✓ と now、if の通った側、題の進み具合、レビューの図に出ないこと）。
+- **The chart is used while running too.** Before, when the chart did not fit the screen's height, it switched to the tree. Now it stays a chart and shows a screen's height around the running or waiting box (or, if there is none, the last finished box) (`around`). It becomes a tree only when the chart does not fit the terminal's width.
+- **The chart itself was made easier to read** (both while running and in the review's Flow; `internal/tui/flowchart.go`)
+  - **Guard clauses:** an if that only ends (`if not r.ok: return …`) and an if that only leaves the loop (`if …: break`) are not split into yes and no; they become one box. For example, under `◇ if not r.ok → stop` the text of the ending is shown.
+  - **Ends:** return becomes `■ end` or `■ stop` (when `"ok": False`), and the message text is shown instead of code.
+  - **Box width:** text wraps at 60 columns and is cut at the second line. A long prompt does not stretch a box across the screen.
+  - **Tool boxes:** when an argument is a variable, its source is shown (for example, `"slack-notify " + draft (with …)`). For that, `Node.Args` was put into the JSON (it does not go into the record; only into the run screen's events).
+- **Looking around the chart while running** (the user's decision: "no mouse; being able to look with shift + arrows is about right")
+  - A chart that does not fit the screen can be moved one line at a time with shift+↑↓. A hint for this is shown below the chart.
+  - After moving it, it stays at that position even as the flow progresses. A new flow starts again around the running box.
+  - The idea of a mouse and full screen (a draft of ADR 0018) was dropped by the user, so it was not filed.
+- **Tests:** `TestChartLooks` (guard clauses, ends, two-way branches, long text, the sources of variables), `TestFlowLive` (stays a chart on a short screen, around the running box, looking around with shift+↑↓ and staying there).
+- **Showing that it is moving** (the user's request "it would be nice to see it moving")
+  - A running box has a spinning mark (a spinner) and shows the seconds since it started (`agent build ×2 · 37s`).
+  - When one box is running, what the agent is doing now is shown faintly inside that box.
+    - `▸ go test ./...`: the tool it is calling now.
+    - `… Fixing the parser`: the last line of the text it is writing.
+  - When two or more boxes are running at the same time (agents in parallel), it cannot be told which box it belongs to, so it is shown below the chart.
+  - So that the chart does not shake when the content changes, a box showing what is happening now has its width fixed at 60 columns.
+  - During a flow, the agents' text is not shown in the reply area above the chart (it appears in the boxes). As before, it is left in the terminal's history paragraph by paragraph.
+  - The screen uses only ACP events (text fragments, tool calls); the record was not changed.
+  - Tests: `TestFlowLive` (seconds, the current tool, the last line, finished tools disappear, nothing in the reply area).
+- **Showing how the flow itself proceeds** (the user's request "I want to see the flow itself moving")
+  - In the chart while running, the path taken so far is green.
+    - A line between boxes is green if the run has reached the box after it, and faint if not yet.
+    - At an if's fork, the label of the side taken (yes / no) and the lines of the split and join are green.
+    - Boxes that do not run (phase headings, ifs, guards, ends) count as "passed" if the run has reached beyond them.
+  - Phase headings
+    - A finished phase: `── review ✓ ──` (green)
+    - The current phase: `── fix ◂ now ──`
+    - A phase not yet reached: faint
+  - Next to the chart's title, where it is now is shown (`fix · phase 2/2 · 3 done · 1m12s`).
+    - the current phase and its position among the phases
+    - the number of finished calls
+    - the time since it started
+  - None of these are shown on the review's chart (a chart that is not running).
+  - Tests: `TestFlowLivePath` (green and faint lines, a phase's ✓ and now, the side of an if taken, the progress in the title, and that they do not appear on the review's chart).
 
-追記（2026-10-27、利用者の要望）: **フローに何を渡すかを、書いて見せる。**
-- フローは、`DESCRIPTION` と同じく、最上位に `ARGS = "<owner/repo> [ラベル]"` のような使い方の一行を書けます。`input["args"]` に入る言葉が何であるべきかを、人が読む形で書くものです。実行には使いません（検査もしない）。
-- `/flow <名前> --help`（`kairocode run "/flow <名前> --help"` も）は、ターンもセッションも始めずに、次を見せます。
-  - 説明と使い方（`/flow <名前> <ARGS>`）
-  - `ARGS` がなければ、スクリプトの中で `input["args"]` を読んでいる行（行の番号つき）。読んでいなければ、そう言います。
-  - フェーズの並び
-  - 公開版がなく下書き（ADR 0030）だけなら下書きを見せ、`--draft` で試すよう案内します。両方あれば公開版を見せ、下書きもあると添えます。
-- `/flow`（一覧）は、名前に続けて `ARGS` を見せます。`/flow new` のモデルには、引数を読むフローなら `ARGS` を書くよう伝えます。
-- 実装: `flowchart.Help`、`Chart.Args`、`runtime.FlowHelp`、ACP のエージェントの `/flow` と CLI の `run`。テスト: `TestHelp`、`TestRunFlowHelp`。
+Addendum (2026-10-27, the user's request): **write down and show what to pass to a flow.**
+- Like `DESCRIPTION`, a flow can have at the top level a one-line usage such as `ARGS = "<owner/repo> [label]"`. It is written for people to read and says what the words in `input["args"]` should be. It is not used when running (and not checked).
+- `/flow <name> --help` (and `kairocode run "/flow <name> --help"`) shows the following without starting a turn or a session.
+  - the description and the usage (`/flow <name> <ARGS>`)
+  - if there is no `ARGS`, the lines in the script that read `input["args"]` (with line numbers). If it does not read them, it says so.
+  - the order of phases
+  - if there is no published version and only a draft (ADR 0030), it shows the draft and suggests trying it with `--draft`. If both exist, it shows the published version and notes that there is also a draft.
+- `/flow` (the list) shows `ARGS` after each name. The model for `/flow new` is told to write `ARGS` for a flow that reads arguments.
+- Implementation: `flowchart.Help`, `Chart.Args`, `runtime.FlowHelp`, the ACP agent's `/flow` and the CLI's `run`. Tests: `TestHelp`, `TestRunFlowHelp`.

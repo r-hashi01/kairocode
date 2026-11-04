@@ -45,7 +45,7 @@ func claudeSettings(dir string) []string {
 }
 
 // claudeHooksOff says whether Claude Code's hooks are not to be read at
-// all (ADR 0018, 9 節): kairocode.json's "agents": {"claudeHooks": "off"};
+// all (ADR 0018, section 9): kairocode.json's "agents": {"claudeHooks": "off"};
 // "ask", the default, asks before each one first runs. The user's sets it;
 // a project's can only turn them off. A value not known is taken as off.
 func claudeHooksOff(dir string) bool {

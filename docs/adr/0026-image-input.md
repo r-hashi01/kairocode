@@ -1,84 +1,84 @@
-# 0026 画像の入力: メッセージの画像の部品と、エンジンごとの渡し方
+# 0026 Image input: an image part in messages, and how each engine receives it
 
-- 状態: 承認（2026-10-27）
-- 日付: 2026-10-26
-- 関連: 設計 2.2 節（`kc_message`）、ADR 0002（ACP）、0007（Claude Code のエンジン）、0014（ACP のエンジン）、不変条件 5・6
+- Status: Accepted (2026-10-27)
+- Date: 2026-10-26
+- Related: design section 2.2 (`kc_message`), ADR 0002 (ACP), 0007 (Claude Code engine), 0014 (ACP engine), invariants 5 and 6
 
-## 背景
+## Context
 
-利用者は、画面の写し（エラーの画面、デザイン）を見せて頼みたいことがあります。Claude Code、opencode、codex は、どれも画像を入力にできます。
+The user sometimes wants to show a screenshot (an error screen, a design) along with a request. Claude Code, opencode and codex all accept images as input.
 
-今のメッセージの部品（`msg.Part`）は、文、ツールの呼び出し、ツールの結果の 3 つだけです。また、ユーザーの入力は文だけを受け付けます。
-- ACP のエージェントとしては、`promptCapabilities.image: false` と答えています。
-- `Runtime.Send` も、文しか受けません。
+Today a message part (`msg.Part`) is one of only 3 things: text, a tool call, or a tool result. And user input accepts only text.
+- As an ACP agent, it answers `promptCapabilities.image: false`.
+- `Runtime.Send` also accepts only text.
 
-`kc_message` は内容のハッシュを鍵として 1 度だけ書き、モデルの呼び出しの入力はハッシュの列です（不変条件 5）。画像はメッセージよりずっと大きいので、メッセージの本文に埋め込むと、履歴を読むたびに重くなります。
+`kc_message` is written once, keyed by the hash of its content, and the input of a model call is a list of hashes (invariant 5). Images are much larger than messages, so embedding them in the message body would make every read of the history heavy.
 
-## 決定
+## Decision
 
-1. **部品の型 `image` を足す。** `msg.Part` に `Type: "image"`、`MediaType`（`image/png`・`image/jpeg`・`image/gif`・`image/webp`）、`Ref`（画像のバイト列のハッシュ）を足します。
-   - バイト列は、`kc_message` に種類 `image` で 1 度だけ書きます（`Store.Put`）。メッセージの本文には、ハッシュだけを入れます。
-   - 同じ画像は、何度添えても 1 つです。
-   - 古いメッセージに `image` の部品はないので、読み方は変わりません。新しい欄は `omitempty` です。
-2. **大きさの上限:** 1 枚 5 MB、1 つのメッセージに 8 枚までです（Anthropic の API の上限に合わせる）。超えたものは、送る前に、理由をつけて断ります。縮小はしません（依存を足さないため）。
-3. **入力の口**
-   - **ACP（エージェントとして）:** `promptCapabilities.image: true` と答えます。`session/prompt` の `image` の部品（base64 と `mimeType`）を受けます。
-   - **API:** `POST /sessions/{id}/messages` に `images: [{media_type, data(base64)}]` を足します。`Runtime.Send` は、文と画像の部品を 1 つのメッセージとして書きます。
-   - **TUI:** `@<パス>` で画像のファイルを指すと（`@` によるファイル指定と同じ口）、そのファイルを画像として添えます。端末からの貼り付けで画像のファイルのパスが入ったときも、同じく扱います。クリップボードの画像そのもの（ファイルでないもの）は、この ADR では扱いません。
-4. **エンジンごとの渡し方**
-   - **Anthropic の API:** `image` のブロック（base64）で渡します。
-   - **ACP のエンジン（codex、copilot。ADR 0014）:** 相手が `promptCapabilities.image` を持てば、`image` の部品で渡します。持たなければ下の「ファイルで渡す」にします。
-   - **Claude Code のエンジン（ADR 0007）:** 今の `-p` の文の渡し方は変えず、「ファイルで渡す」にします。
-     - Claude Code は `Read` で画像を読めます。
-     - `--input-format stream-json` に変えるのは、エンジンの起動の形を変えることになるので、別に決めます。
-   - **ファイルで渡す:** 画像を、データの置き場の `images/<ハッシュ>.<拡張子>` に書きます（内容のハッシュの名前なので、書き直しても同じ）。プロンプトの終わりに「添付の画像: <パス>」と書き足します。
-     - エンジンの sandbox が、そのパスを読めるようにします（読むだけ）。
-5. **記録と再開:** 画像はハッシュで記録されるので、再開しても、同じ画像が同じ入力として渡ります（不変条件 5）。`kairocode log` と ACP の `session/load` の再生では、画像を「[image: <種類>, <大きさ>]」と見せ、バイト列は出しません（ACP の再生では `image` の部品として返す）。
-6. **秘密:** 画像の中身は、利用者が添えたものとして扱います。ログとエラーの文面には、バイト列も base64 も入れません。
+1. **Add an `image` part type.** Add `Type: "image"`, `MediaType` (`image/png`, `image/jpeg`, `image/gif`, `image/webp`) and `Ref` (the hash of the image bytes) to `msg.Part`.
+   - The bytes are written once to `kc_message` with kind `image` (`Store.Put`). The message body holds only the hash.
+   - The same image is stored once, however many times it is attached.
+   - Old messages have no `image` parts, so reading them does not change. The new fields are `omitempty`.
+2. **Size limits:** 5 MB per image, up to 8 images per message (matching the Anthropic API's limits). Anything over is refused with a reason before sending. Images are not shrunk (to avoid adding a dependency).
+3. **Input paths**
+   - **ACP (as an agent):** answer `promptCapabilities.image: true`. Accept `image` parts (base64 and `mimeType`) in `session/prompt`.
+   - **API:** add `images: [{media_type, data(base64)}]` to `POST /sessions/{id}/messages`. `Runtime.Send` writes the text and image parts as one message.
+   - **TUI:** pointing at an image file with `@<path>` (the same path as pointing at a file with `@`) attaches that file as an image. When a paste from the terminal puts in the path of an image file, it is handled the same way. Clipboard images themselves (not files) are not handled in this ADR.
+4. **How each engine receives it**
+   - **Anthropic API:** passed as an `image` block (base64).
+   - **ACP engines (codex, copilot; ADR 0014):** if the other side has `promptCapabilities.image`, passed as an `image` part. If not, use "pass as a file" below.
+   - **Claude Code engine (ADR 0007):** the current way of passing text with `-p` stays, and images use "pass as a file".
+     - Claude Code can read images with `Read`.
+     - Switching to `--input-format stream-json` would change how the engine is started, so it is decided separately.
+   - **Pass as a file:** the image is written to `images/<hash>.<extension>` in the data directory (named by the content hash, so rewriting it gives the same thing). "Attached image: <path>" is appended to the end of the prompt.
+     - The engine's sandbox is allowed to read that path (read only).
+5. **Record and resume:** images are recorded by hash, so on resume the same image is passed as the same input (invariant 5). In `kairocode log` and in ACP's `session/load` replay, an image is shown as "[image: <kind>, <size>]" and the bytes are not output (ACP replay returns it as an `image` part).
+6. **Secrets:** the content of an image is treated as something the user attached. Neither the bytes nor base64 go into logs or error messages.
 
-実装に現れるところ: `internal/msg`（`Part` の欄）、`internal/store`（`image` の種類）、`internal/runtime`（`Send`、エンジンごとの渡し方、ファイルで渡すときの置き場と sandbox）、`internal/provider`（Anthropic の `image` のブロック）、`internal/acp`（`promptCapabilities.image`、`image` の部品の受け取りと再生）、`internal/server` と `internal/daemon`（`images`）、`internal/tui`（`@` で指した画像）。
+Where this shows up in the implementation: `internal/msg` (the `Part` fields), `internal/store` (the `image` kind), `internal/runtime` (`Send`, how each engine receives images, the location and sandbox when passing as a file), `internal/provider` (Anthropic's `image` block), `internal/acp` (`promptCapabilities.image`, receiving and replaying `image` parts), `internal/server` and `internal/daemon` (`images`), `internal/tui` (images pointed at with `@`).
 
-## 結果
+## Consequences
 
-- 利用者は、画像を見せて頼めます。どのエンジンでも、画像の中身か、画像のファイルが届きます。
-- 画像は 1 度だけ保存され、モデルの呼び出しの入力はハッシュの列のままです。
-- テスト（実装のとき足す）
-  - 偽のプロバイダーで、画像の部品がハッシュで記録され、プロバイダーに `image` のブロックとして渡る。再開しても同じ。
-  - ACP の `session/prompt` の `image` の部品が、スキーマのとおりに受け取られ、`session/load` で再生される。
-  - 5 MB を超える画像、対応していない種類が、送る前に断られる。
-  - Claude Code の偽のエンジンに、画像のファイルのパスがプロンプトとして渡り、そのファイルが置き場にある。
-  - ログとエラーの文面に、base64 が出ない。
+- The user can show an image with a request. Every engine gets either the image content or the image file.
+- An image is stored once, and the input of a model call stays a list of hashes.
+- Tests (added at implementation)
+  - With a fake provider, an image part is recorded by hash and reaches the provider as an `image` block. The same after resume.
+  - An `image` part in ACP's `session/prompt` is accepted as the schema says and is replayed by `session/load`.
+  - An image over 5 MB, or of an unsupported kind, is refused before sending.
+  - A fake Claude Code engine gets the image file's path in the prompt, and the file is in its location.
+  - base64 does not appear in logs or error messages.
 
-## 追記（2026-10-27、実装で決めたこと）
+## Addendum (2026-10-27, decided during implementation)
 
-- **Claude Code のエンジンは、ファイルでなく、`stream-json` の入力で画像を渡す（利用者の判断）。** 決定 4 の「Claude Code は `Read` で画像を読める」は誤りでした。ADR 0007 で組み込みのツールを切っている（`--tools ""`）ので、`Read` はありません。`Read` だけ戻す案も考えましたが、作用を KairoCode の外で起こさないという ADR 0007 の理由に合わないので退けました。代わりに、画像のあるターンだけ、プロンプトと画像を `--input-format stream-json` で標準入力から渡します（ADR 0007 の追記）。代替案で「エンジンの起動の形が変わる」として退けたものですが、実際に変わるのは入力の渡し方だけで、出力の読み方は同じでした。本物の `claude`（2.1.311）で、画像を読めること、`--resume` で続けられることを確かめました。テスト: `TestClaudeEngineImages`（偽の `claude` が標準入力の画像を受け取る）。
-- **「ファイルで渡す」は、画像を読まない ACP のエージェントにだけ使います**（`promptCapabilities.image` が無いもの）。ACP のエージェントの側のツールで読みます。テスト: `TestImagesAsFiles`。
-- **画像のバイト列は、`kc_message` の種類 `image` に保存し、`msg.Part` には `MediaType` と `Ref` だけを書きます。** `Part.Data` は、モデルに渡す直前に `Ref` から埋める欄で、保存しません（`json:"-"`）。履歴の圧縮（ADR 0020）の要約にも画像を渡します。
-- **上限（決定 2 を API の測り方に合わせた）:** API の 1 枚 5 MB は base64 の長さで測るので、元のバイト数では 1 枚 3.75 MB までにします。1 つのメッセージの画像の合計も、元のバイト数で 15 MB（base64 で 20 MB。API のリクエストは 32 MB まで）までにします。送る前の検査（`runtime.CheckImages`）は、これに種類、8 枚、中身が言われた種類か（`http.DetectContentType`）を加えて見ます。エラーの文面には中身を入れません。
-- **履歴にたまった画像:** モデルの 1 回の呼び出しに渡すのは、新しいものから 50 枚、合計 15 MB までです。それより古い画像は「前に添えた画像（種類）。もう一度は送らない」という文にして渡します。そうしないと、画像の多いセッションは、以降のすべての呼び出しが「大き過ぎる」で失敗し、二度と進めなくなるためです（記録は変わらず、渡し方だけ）。テスト: `TestImagesKeptToWhatACallTakes`。
-- **強制終了と再開:** Claude Code のエンジンで画像のあるターンを途中で落とし、再開すると、Claude Code はプロンプトを持っているので「続けて」だけを伝え、画像は二度送りません。テスト: `TestCrashClaudeEngineImage`。`claude` が失敗したときのエラーの文面（stderr の末尾）からは、base64 らしい長い文字列を伏せます。
-- **再生:** ACP の `session/load` は、画像を `image` の部品として返します。バイト列は、デーモンの `GET /images/{hash}`（`image` の種類だけ）から取ります。TUI と `kairocode log` では `[image: <種類>, <大きさ>]` と見せます。
-- **TUI:** `@<パス>` は、画像のファイルなら作業フォルダーの外（絶対パス、`~/`）も指せます。デスクトップの画面の写しを想定しています。画像以外のファイルは、今までどおり作業フォルダーの中だけです。端末にファイルを落として貼り付けられた画像のパス（引用符つき、空白を `\ ` で逃がしたもの）は、`@<パス>` に置き換えます。テスト: `TestMentionedImages`。
-- テスト: `TestCheckImages`、`TestImagesReachTheModel`（偽のプロバイダーに画像が届き、次のターンにも届く。保存したメッセージにバイト列がない。記録に base64 が出ない）、`TestAnthropicImages`、`TestACPImages`。
+- **The Claude Code engine passes images through `stream-json` input, not as files (the user's decision).** "Claude Code can read images with `Read`" in decision 4 was wrong. ADR 0007 turns off the built-in tools (`--tools ""`), so there is no `Read`. Bringing back only `Read` was considered, but rejected because it does not fit ADR 0007's reason (not causing effects outside KairoCode). Instead, only for turns with images, the prompt and images are passed on standard input with `--input-format stream-json` (ADR 0007's addendum). The alternatives rejected this as "changing how the engine is started", but in fact only the way input is passed changes, and output is read the same way. Checked with the real `claude` (2.1.311) that it can read images and can continue with `--resume`. Test: `TestClaudeEngineImages` (a fake `claude` receives the images on standard input).
+- **"Pass as a file" is used only for ACP agents that do not read images** (those without `promptCapabilities.image`). The ACP agent reads them with its own tools. Test: `TestImagesAsFiles`.
+- **Image bytes are stored in `kc_message` with kind `image`, and `msg.Part` holds only `MediaType` and `Ref`.** `Part.Data` is a field filled from `Ref` just before passing to the model, and is not stored (`json:"-"`). Images are also passed to the summary of history compaction (ADR 0020).
+- **Limits (decision 2 adjusted to how the API measures):** the API's 5 MB per image is measured on the base64 length, so it is up to 3.75 MB per image in original bytes. The total of images in one message is also up to 15 MB in original bytes (20 MB in base64; an API request can be up to 32 MB). The check before sending (`runtime.CheckImages`) also looks at the kind, the 8-image limit, and whether the content is the stated kind (`http.DetectContentType`). Error messages do not include the content.
+- **Images piling up in history:** one model call gets the newest images, up to 50 and up to 15 MB in total. Older images are passed as the text "an image attached earlier (kind); not sent again". Otherwise, in a session with many images, every following call would fail with "too large" and could never proceed (the record does not change, only how it is passed). Test: `TestImagesKeptToWhatACallTakes`.
+- **Kill and resume:** if a turn with images on the Claude Code engine is killed midway and resumed, Claude Code already has the prompt, so only "continue" is sent and the images are not sent twice. Test: `TestCrashClaudeEngineImage`. In the error message when `claude` fails (the tail of stderr), long strings that look like base64 are masked.
+- **Replay:** ACP's `session/load` returns images as `image` parts. The bytes are fetched from the daemon's `GET /images/{hash}` (only for the `image` kind). The TUI and `kairocode log` show `[image: <kind>, <size>]`.
+- **TUI:** `@<path>` can point outside the working folder (absolute paths, `~/`) if it is an image file. This is meant for screenshots on the desktop. Non-image files are, as before, only inside the working folder. Image paths pasted by dropping a file on the terminal (quoted, or with spaces escaped as `\ `) are replaced with `@<path>`. Test: `TestMentionedImages`.
+- Tests: `TestCheckImages`, `TestImagesReachTheModel` (the image reaches a fake provider, and also reaches it in the next turn; the stored message has no bytes; no base64 appears in the record), `TestAnthropicImages`, `TestACPImages`.
 
-## 追記（2026-10-28、承認（2026-10-28）: クリップボードの画像を貼る）
+## Addendum (2026-10-28, Accepted (2026-10-28): pasting clipboard images)
 
-利用者は、画面の写しをファイルにせず、クリップボードから貼りたい（利用者の要望、2026-10-28）。決定 3 の TUI で「扱わない」としたものです。端末は貼り付けで文字しか送らないので、TUI が自分でクリップボードを読みます。
+The user wants to paste screenshots from the clipboard without saving them as files (the user's request, 2026-10-28). This is what decision 3's TUI part said was "not handled". A terminal sends only text on paste, so the TUI reads the clipboard itself.
 
-- **きっかけ:** TUI の入力欄での Ctrl+V と、中身の無い貼り付けです。Cmd+V では、クリップボードが画像だけのとき、端末は何も送らないか、空の貼り付けを送ります。どちらのときも、クリップボードに画像があれば、それを添えます。画像が無ければ何もしません（文字の貼り付けは今までどおり）。
-- **読み方（依存を足さない）:**
-  - macOS: `osascript` で、クリップボードの `«class PNGf»` をファイルに書かせます。
-  - Linux: Wayland なら `wl-paste --type image/png`、X11 なら `xclip -selection clipboard -t image/png -o`。どちらも無ければ、「クリップボードの画像を読むには wl-paste か xclip が要る」と状態の行に出します。
-  - 時間は 5 秒で打ち切ります。
-- **置き場所:** 読んだ PNG を、データの置き場の `pasted/<内容のハッシュ>.png` に書き、入力欄に `@<パス>` を入れます。あとは、今の `@<パス>` の画像と同じ道です（大きさと種類の検査、`kc_message` への保存）。同じ画像を何度貼っても、ファイルは 1 つです。送った後のファイルは要りませんが、送る前に消えないように、7 日より古いものを、次に貼るときに TUI が消します（実装で、デーモンでなく貼る側にした）。
-- **コマンドを sandbox の外で起動すること（ADR 0005）:** クリップボードは利用者のデスクトップのものなので、KairoCode の sandbox の中からは読めません。起動するのは、上の決まったコマンドと引数だけで、モデルの出力は渡りません。利用者のキー入力でだけ動きます。`internal/tui/clipboard.go` を、コマンドを起動してよいファイル（`internal/invariants` の `commandStarters`）に足します。
-- **テスト:** クリップボードを読む関数を差し替えて、Ctrl+V と空の貼り付けで `@<パス>` が入ること、画像が無いときと読めないときは何も入らずに理由が出ること、同じ画像が 1 つのファイルになること。本物のクリップボードでは手で確かめます（macOS と Linux）。
-- **入力欄での見え方（2026-10-28、利用者の指摘で変えた）:** 入力欄には、パスでなく `[Image #1]` のような名札を入れます（Claude Code と同じ）。送るとき、文に名札があればその画像を添えます。名札を消せば添えません。端末に落とした画像のファイルも、同じく名札にします。メッセージの文は名札のまま送ります。
-- **実装（2026-10-28）:** `internal/tui/clipboard.go`。Ctrl+V は、画像が無ければ入力欄に渡し、今までどおり文字を貼ります。データの置き場の分からない TUI では、Ctrl+V は入力欄のものです。macOS の `osascript` は、本物のクリップボードの画面の写しで確かめました（PNG が読めた）。Linux の `wl-paste`・`xclip` は、手では確かめていません。テスト: `TestPasteImage`、`TestPasteNoImage`、`TestPasteWithNoDataDir`、`TestSavePasted`。
-- **検討した代替案:** 端末の画像のプロトコル（kitty、iTerm2）は、端末が画像を表示するためのもので、貼り付けを送ってはきません。Go のクリップボードのライブラリは cgo か、同じコマンドを呼ぶものなので、依存を足す理由がありません。
+- **Trigger:** Ctrl+V in the TUI's input box, and a paste with no content. With Cmd+V, when the clipboard holds only an image, the terminal sends nothing or sends an empty paste. In either case, if the clipboard has an image, it is attached. If there is no image, nothing happens (text paste works as before).
+- **How it is read (no added dependency):**
+  - macOS: `osascript` is made to write the clipboard's `«class PNGf»` to a file.
+  - Linux: `wl-paste --type image/png` on Wayland, `xclip -selection clipboard -t image/png -o` on X11. If neither exists, the status line shows "reading clipboard images needs wl-paste or xclip".
+  - It gives up after 5 seconds.
+- **Location:** the PNG read is written to `pasted/<content hash>.png` in the data directory, and `@<path>` is put in the input box. From there it follows the same path as today's `@<path>` images (size and kind checks, storing in `kc_message`). Pasting the same image many times gives one file. The file is not needed after sending, but so that it does not disappear before sending, files older than 7 days are deleted by the TUI on the next paste (in the implementation this was put on the pasting side, not the daemon).
+- **Starting commands outside the sandbox (ADR 0005):** the clipboard belongs to the user's desktop, so it cannot be read from inside KairoCode's sandbox. Only the fixed commands and arguments above are started, and no model output is passed to them. They run only on the user's key input. `internal/tui/clipboard.go` is added to the files allowed to start commands (`commandStarters` in `internal/invariants`).
+- **Tests:** with the clipboard-reading function replaced, Ctrl+V and an empty paste put `@<path>` in; when there is no image or it cannot be read, nothing is put in and a reason is shown; the same image becomes one file. With a real clipboard, it is checked by hand (macOS and Linux).
+- **How it looks in the input box (2026-10-28, changed after the user pointed it out):** the input box gets a label like `[Image #1]` instead of the path (the same as Claude Code). When sending, if the text has the label, that image is attached. Deleting the label means it is not attached. An image file dropped on the terminal also becomes a label. The message text is sent with the label as is.
+- **Implementation (2026-10-28):** `internal/tui/clipboard.go`. If there is no image, Ctrl+V is passed to the input box and pastes text as before. In a TUI that does not know the data directory, Ctrl+V belongs to the input box. macOS's `osascript` was checked with a screenshot on the real clipboard (the PNG was read). Linux's `wl-paste` and `xclip` have not been checked by hand. Tests: `TestPasteImage`, `TestPasteNoImage`, `TestPasteWithNoDataDir`, `TestSavePasted`.
+- **Alternatives considered:** terminal image protocols (kitty, iTerm2) are for the terminal to display images, and do not send pastes. Go clipboard libraries either use cgo or call the same commands, so there is no reason to add a dependency.
 
-## 検討した代替案
+## Alternatives considered
 
-- **画像をメッセージの本文に base64 で入れる:** 保存は簡単です。ただ、履歴を読むたびに画像を読み、同じ画像が何度も保存されます。また、メッセージのハッシュが重くなります。
-- **画像をいつもファイルにして、パスだけを渡す:** 実装は一番小さいです。ただ、Anthropic の API のエンジンは、ファイルを読むツールで画像を見られません（`read` は文として返す）。API に直接渡せるものは、直接渡します。
-- **Claude Code のエンジンを `--input-format stream-json` にする:** 画像のブロックをそのまま渡せます。ただ、エンジンの起動と出力の読み方が変わり、ADR 0007 の見直しになります。ファイルで渡せば、今の形のままで届きます。
+- **Put images in the message body as base64:** storage is simple. But every read of the history reads the images, and the same image is stored many times. Hashing messages also becomes heavy.
+- **Always turn images into files and pass only the path:** the smallest implementation. But the Anthropic API engine cannot see an image through a file-reading tool (`read` returns text). What can be passed to the API directly is passed directly.
+- **Switch the Claude Code engine to `--input-format stream-json`:** image blocks can be passed as is. But how the engine is started and how its output is read would change, which means revisiting ADR 0007. Passing as a file gets there with the current form.

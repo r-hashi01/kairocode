@@ -1,77 +1,77 @@
-# 0023 記録の閲覧と再生
+# 0023 Viewing and replaying records
 
-- 状態: 承認（2026-10-22）
-- 日付: 2026-10-21
-- 関連: 要件 FR-24（記録の閲覧）・FR-25（再生）、設計 8.2 節（`kairocode replay`）・9 節（kairo の不足 #3・#6）、不変条件 1・2・9、ADR 0020（圧縮の前の記録）
+- Status: Accepted (2026-10-22)
+- Date: 2026-10-21
+- Related: requirements FR-24 (viewing records) and FR-25 (replay), design section 8.2 (`kairocode replay`) and section 9 (kairo gaps #3 and #6), invariants 1, 2 and 9, ADR 0020 (the record from before compaction)
 
-## 背景
+## Context
 
-要件 FR-24 は「セッションのすべてのターン、モデルの入出力、ツールの呼び出しと結果、待ち、費用を見られる」、FR-25 は「記録したモデルの応答を使って、モデルを呼ばずにセッションを再生できる（ツールは再実行しない）」です。
+Requirement FR-24 is "be able to see every turn of a session, model inputs and outputs, tool calls and results, waits, and cost", and FR-25 is "be able to replay a session using the recorded model responses, without calling the model (tools are not re-run)".
 
-記録は 2 か所にあります。kairo の実行の記録（セッション、ターン、呼び出し、その入力と出力、状態、時刻）と、KairoCode の `kc_message`（メッセージ、履歴の鎖、システムの指示、ツールの一覧）です。kairo には、子の実行の一覧（`Children`）があります。
+Records are in two places: kairo's run records (sessions, turns, calls, their inputs and outputs, states, times), and KairoCode's `kc_message` (messages, history chains, system instructions, tool lists). kairo has a list of child runs (`Children`).
 
-再生には、kairo の不足 #6（「記録だけを返す」モード）が関わります。
+Replay involves kairo gap #6 (a mode that "only returns records").
 
-## 決定
+## Decision
 
-1. **閲覧（FR-24）:** `kairocode log <セッション>`（CLI）と、端末の対話の `/log` です。
-   - 記録をたどって、ターンごとに次を時刻つきで並べます。
-     - 利用者のメッセージ。
-     - モデルの呼び出し（モデル、使用量、費用、応答の本文）。
-     - ツールの呼び出し（引数、結果、作用、権限の判定と規則）。
-     - 待ち（承認・問い・要確認）と、誰がいつどう答えたか。
-     - 圧縮（ADR 0020）と、その前の会話へのリンク。
-   - 費用は、使用量と、ADR 0024 の値段の表から出します（記録された使用量から計算する。値段は記録しない）。
-   - `--json` で機械が読める形にします。
-   - 読むだけで、何も書きません。
-2. **再生（FR-25）:** `kairocode replay <セッション>` です。記録したセッションを、今の KairoCode のコードで、もう一度ワークフローとして動かします。
-   - 一時の DB（メモリーの kairo と、元の `kc_message` を読むだけで開いたもの）で動かします。元の記録には書きません。
-   - アクションは差し替えます。
-     - `model`: 元の記録の、同じターンの同じ番目の応答を返します。モデルは呼びません。
-     - ツール: 元の記録の、同じ呼び出しの結果を返します。動かしません。
-     - そのほか（`agent.load`、`permission.check` など）: 元の記録の出力を返します。設定を読み直しません。
-   - 元にない呼び出しを今のコードがしたら、そこで止め、「食い違い」として、どのターンの何番目で、元と今の呼び出しがどう違うかを示します。これは、ワークフローを変えたときに、記録が再開で同じ道を通るかを確かめる道具になります（不変条件 1・2 の確認。版を上げ忘れた変更を見つける）。
-   - 承認の待ちは、元の答えをそのまま返します。
-   - kairo の不足 #6 は、KairoCode の側で、アクションを差し替えて代えます（`// kairo-gap #6`）。
-3. **CI での使い方:** テストの記録（testdata）に、いくつかのセッションの記録を置き、再生して食い違いがないことを確かめるテストを足します。記録には秘密を入れません（不変条件 6。偽のプロバイダーで作る）。
+1. **Viewing (FR-24):** `kairocode log <session>` (CLI) and `/log` in the terminal UI.
+   - It walks the record and lists, per turn and with times:
+     - The user's messages.
+     - Model calls (model, usage, cost, response text).
+     - Tool calls (arguments, result, effect, permission decision and rule).
+     - Waits (approvals, questions, blocked (needs confirmation)), and who answered how and when.
+     - Compaction (ADR 0020), and a link to the conversation before it.
+   - Cost is computed from usage and ADR 0024's price table (computed from recorded usage. Prices are not recorded).
+   - `--json` gives a machine-readable form.
+   - It only reads and writes nothing.
+2. **Replay (FR-25):** `kairocode replay <session>`. It runs a recorded session again as a workflow, with the current KairoCode code.
+   - It runs on a temporary DB (an in-memory kairo, plus the original `kc_message` opened read-only). It does not write to the original record.
+   - Actions are swapped out.
+     - `model`: returns the response at the same position in the same turn of the original record. It does not call the model.
+     - Tools: return the result of the same call from the original record. They do not run.
+     - Others (`agent.load`, `permission.check` and so on): return the original record's output. Settings are not reread.
+   - If the current code makes a call that is not in the original, it stops there and shows a "mismatch": in which turn, at which position, and how the original and current calls differ. This becomes a tool to check, when a workflow is changed, whether records take the same path on resume (a check of invariants 1 and 2; it finds changes where a version bump was forgotten).
+   - Approval waits return the original answers as they are.
+   - kairo gap #6 is covered on KairoCode's side by swapping actions (`// kairo-gap #6`).
+3. **Use in CI:** put records of a few sessions in the test records (testdata), and add a test that replays them and checks there are no mismatches. Records contain no secrets (invariant 6. Made with the fake provider).
 
-実装に現れるところ: `internal/runtime`（記録をたどる `Log`、再生用に差し替えたアクションで開く `Replay`）、`internal/server` と `internal/daemon`（閲覧の API）、`internal/cli`（`log`、`replay`）、`internal/tui`（`/log`）、`docs/kairo-gaps.md`（#6 の回避）。
+Where this shows in the implementation: `internal/runtime` (`Log`, which walks the record, and `Replay`, which opens with swapped actions for replay), `internal/server` and `internal/daemon` (the viewing API), `internal/cli` (`log`, `replay`), `internal/tui` (`/log`), `docs/kairo-gaps.md` (the workaround for #6).
 
-## 結果
+## Consequences
 
-- セッションで何が起きたかを、すべて見られます。
-- 今のコードで記録を再生し、食い違いを示せます。ワークフローの変更の検査にも使えます。
-- テスト（実装のとき足す）
-  - 承認・圧縮・サブエージェントを含むセッションの `log` に、すべてのターン・呼び出し・待ち・費用が出る。
-  - 記録したセッションの再生が、モデルを呼ばず、ツールを動かさずに最後まで進む。
-  - ターンのワークフローの呼び出しの順番を変えると、再生が食い違いを示す。
+- Everything that happened in a session can be seen.
+- Records can be replayed with the current code, and mismatches shown. This can also be used to check workflow changes.
+- Tests (added during implementation)
+  - The `log` of a session with approvals, compaction and subagents shows every turn, call, wait and cost.
+  - Replaying a recorded session runs to the end without calling the model or running tools.
+  - Changing the order of calls in the turn workflow makes the replay show a mismatch.
 
-## 検討した代替案
+## Alternatives considered
 
-- **再生 = 記録を時刻の順に見せるだけ:** 閲覧と同じになり、「今のコードで動かす」意味がなくなります。
-- **元の DB で、記録だけを返すモードで動かす（kairo の不足 #6 を待つ）:** kairo の側の変更が要ります。差し替えで代えられるので、KairoCode の側で先に作ります。
+- **Replay = just show the record in time order:** that would be the same as viewing, and "run it with the current code" would lose its meaning.
+- **Run on the original DB in a mode that only returns records (wait for kairo gap #6):** needs a change on kairo's side. Swapping can stand in for it, so it is built first on KairoCode's side.
 
-## 実装
+## Implementation
 
-### 1. 閲覧（2026-10-22）
+### 1. Viewing (2026-10-22)
 
-- `Runtime.Log`（`internal/runtime/log.go`）が、セッションのターンの実行を番号の順に、その中の実行を始まった順にたどります。CLI のエンジンの MCP の呼び出し（ターンの子ではない根の実行）は、`kc_mcp_call` から引いてターンの中に並べます。実行の計画（`kairo.call/<アクション>`、`kairo.wait/<シグナル>`、子のワークフロー）ごとに、次のように見せます。
-  - ターン: 頼んだこと（`/undo`、`/compact`、`/flow` などはその名前）、状態、止まった理由、使用量。
-  - モデルの呼び出し: モデル、使用量、返事（400 文字まで）、呼んだツールの名前。長すぎて圧縮したことも書きます。
-  - ツールの呼び出し: 引数（200 文字まで）と結果（400 文字まで）、失敗したか。
-  - 権限の判定: 許可・確認・拒否、対象、規則。
-  - 待ち: 承認の答え（許可・拒否と理由）、問いの答え、時間切れ。
-  - 圧縮、サブエージェント（子のターン）、フロー。
-- 入り口は、サーバーの `GET /sessions/{id}/log`、`kairocode log [-json] <セッション>`、ACP の `/log` です。読むだけで、何も書きません。
-- **決定から変えたこと:** 費用は、使用量（トークン）だけを見せます。金額は、ADR 0024 の値段の表ができてから足します。
-- テスト: `TestSessionLog`（読む・承認を待って書く・圧縮の各行が出る）。
+- `Runtime.Log` (`internal/runtime/log.go`) walks a session's turn runs in number order, and the runs within each in start order. MCP calls of CLI engines (root runs that are not children of the turn) are looked up from `kc_mcp_call` and placed inside the turn. Each run plan (`kairo.call/<action>`, `kairo.wait/<signal>`, child workflows) is shown as follows.
+  - Turn: what was asked (for `/undo`, `/compact`, `/flow` and so on, that name), state, reason for stopping, usage.
+  - Model call: model, usage, reply (up to 400 characters), names of tools called. It also notes when it compacted because the input was too long.
+  - Tool call: arguments (up to 200 characters) and result (up to 400 characters), whether it failed.
+  - Permission decision: allow, ask, deny, target, rule.
+  - Waits: the approval's answer (allow or deny, and the reason), the question's answer, timeouts.
+  - Compaction, subagents (child turns), flows.
+- The entry points are the server's `GET /sessions/{id}/log`, `kairocode log [-json] <session>`, and ACP's `/log`. It only reads and writes nothing.
+- **Changed from the decision:** for cost, only usage (tokens) is shown. Amounts will be added once ADR 0024's price table exists.
+- Test: `TestSessionLog` (lines for reading, writing after waiting for approval, and compaction appear).
 
-### 2. 再生は作らない（2026-10-22、利用者の判断）
+### 2. Replay is not built (2026-10-22, the user's decision)
 
-- 決定 2（`kairocode replay`）は、一度作ってから外しました。
-- **理由:**
-  - 利用者がセッションを続けたいなら、`resume`（再開）で足ります。
-  - 再生は「今のコードで記録をたどり直すと、同じ呼び出しをするか」を見る道具で、使うのは KairoCode を作る側だけです。
-  - 正しく作るには、記録された版の関数で動かすこと、止めたターンを止めたものとして扱うこと、動いている最中のセッションを見分けること、などが要ります。版の上げ忘れは、強制終了と再開のテストと決定性の検査で、ある程度は捕まります。手間に見合いません。
-- **要件の FR-25（記録した応答で、モデルを呼ばずに再生する）からは外れます。** 要件の側の見直しとして、ここに残します。kairo の不足 #6 は「後で」のままです。
-- **今後:** 意味が出るのは「セッションの内容からフローを作る」流れの中です。そこで要るのは、たどり直す再生ではなく、記録を読める形で取り出すことです。閲覧（`kairocode log -json`）が、そのまま材料になります（`docs/milestones.md` の「段階に割り当てていない今後の作業」）。
+- Decision 2 (`kairocode replay`) was built once and then removed.
+- **Reasons:**
+  - If the user wants to continue a session, `resume` is enough.
+  - Replay is a tool to see "whether walking the record again with the current code makes the same calls", and only people building KairoCode use it.
+  - Building it correctly needs running with the function of the recorded version, treating stopped turns as stopped, telling apart sessions that are currently running, and so on. Forgotten version bumps are caught to some extent by the kill-and-resume tests and the determinism check. It is not worth the effort.
+- **This departs from requirement FR-25 (replay with recorded responses, without calling the model).** It is left here for a review on the requirements side. kairo gap #6 stays "later".
+- **Going forward:** it becomes meaningful within the flow of "make a flow from a session's contents". What is needed there is not a replay that walks the record again, but taking the record out in a readable form. Viewing (`kairocode log -json`) serves directly as the material (under "future work not assigned to a milestone" in `docs/milestones.md`).

@@ -1,44 +1,44 @@
-# kairo に足りないもの
+# What kairo is missing
 
-KairoCode を作るのに、kairo の側に足りないものの一覧です。kairo 0.3.0 の Go の SDK を使う前提（ADR 0001）で見直し、0.4.1 に上げたとき（2026-10-15）に解けたものを下に移しました。実装中に見つけたものは `/kairo-gap` スキルで足していきます。
+A list of what kairo lacks for building KairoCode. It was reviewed assuming kairo 0.3.0's Go SDK (ADR 0001); the items solved when we moved to 0.4.1 (2026-10-15) were moved below. Gaps found during implementation are added with the `/kairo-gap` skill.
 
-kairo の側の変更は、kairo のリポジトリで ADR を起票し、承認を得てから入れます。このリポジトリから `../kairo` を編集してはいけません。
+Changes on kairo's side go in only after an ADR is filed in the kairo repository and approved. Do not edit `../kairo` from this repository.
 
-## 足りないもの
+## Missing
 
-| # | 足りないもの | 使う要件 | 必要度 | kairo の ADR | KairoCode の側の回避策 |
+| # | What is missing | Requirement that uses it | Need | kairo ADR | Workaround on KairoCode's side |
 |---|---|---|---|---|---|
-| 6 | 再生のための「記録だけを返す」モード（終わっていない呼び出しに当たったら、実行せずに止まる） | FR-25 | 後で（M2 以降） | 未起票 | なし。`kairotest` の記録（`Calls`）が手がかりになる |
-| 11 | 埋め込みのランタイムでの TPM の上限と、プロセスをまたぐ RPM・TPM。今は `Rate(perMinute)` がプロセスごとの開始数だけで、トークンでは数えない | FR-27 | チームの利用で必須 | 未起票 | 手元では 1 プロセスなので、`Rate` と `Concurrency` で足りる |
-| 14 | `Signal` が、どの待ち（何番目）を満たしたかを返さない | FR-24 | あるとよい | 未起票 | `Runtime.Send` が、終わった `kairo.wait/message` の子を数えて番号を出す。プロセスの中のロックだけなので、2 つのプロセスが同時に送ると同じ番号を返し得る。SDK の内部の名前（`kairo.wait/`）にも依存する |
-| 15 | SQLite で、別のプロセスが子の実行を作ったこと、シグナルを送ったこと、実行を終えたことを知る手段がない。待ちモードのプロセスは、借用の期間（既定 30 秒）ごとの掃除で気づく。別のプロセスから出した承認は、待っているプロセスに最大で借用の期間だけ遅れて届く（2026-10-09、`TestApprovalFromAnotherProcess`）。PostgreSQL は LISTEN/NOTIFY ですぐに伝わる | FR-11、FR-24 | あるとよい | 未起票 | ADR 0008 のデーモンで避けた（2026-10-09）。DB を開くのはデーモンだけなので、別のプロセスのことを知る必要がない。`Runtime.WaitTurn` は、このプロセスの観測（`Options.Observe`）で起きる。ターンが別のプロセスで作られると、ctx が切れるまで待つ（ターンの実行が見つかった後は、`Await` がプロセスをまたいで待つ） |
-| 16 | ワークフローの中で `Child` や `Call` が保存先の一時的なエラーを返すと、そのエラーを返したワークフローは失敗として記録される。一時的なエラーを「記録しないで後でやり直す」道がない | NFR-1 | あるとよい | 未起票 | セッションは、記録されていないエラーでは次へ進まずに返す（会話の分岐を避ける）。その代わり、保存先のエラーでセッションが失敗のまま固まり得る。固まったセッションには送らずに `ErrSessionFailed` を返し、TUI は最後に終わったターンから分岐して続ける（ADR 0021 の追記、2026-10-28） |
-| 17 | ワークフローの外から、親を指定して実行を始める手段（`Submit` の `parent`）が無い | ADR 0007、不変条件 4 | あるとよい | 未起票 | Claude Code のエンジンの MCP の呼び出しは、ID をターンの下に置いた独立の根の実行にしている。ターンの木に入らないので、終わってから `KeepFinished`（既定 24 時間）が過ぎると、ターンが待っている間でも消され得る。KairoCode は、呼び出しを自前の表（`kc_mcp_call`）にも記録して選ぶので、消えても二重には動かない。消えた実行の結果が要るときは、結果が失われたとモデルに返す |
-| 19 | SQLite で、プロセスの間で実行の終わりやシグナルを知らせる仕組み。`Notifier` は保存先が「受け取る」側だけを持ち、SQLite の保存先には知らせる側の hook が無い。たとえば、DB の隣の Unix ソケットで知らせ合う `sqlitenotify` を、`pgnotify` と同じ形で用意する | FR-11、不変条件 7 | あるとよい（KairoCode はデーモンの形で避ける。ADR 0008） | 未起票 | データの置き場ごとにデーモンを 1 つにし、生きているプロセスどうしのやり取りを、デーモンの中の出来事にする |
-| 21 | 待っているときだけシグナルを送る手段（たとえば `Signal` の選択肢で、待ちが無ければ送らずに知らせる）。今の `Signal` は、待ちが無ければ「先に来たシグナル」として次の待ちを作る（ADR 0059）ので、承認に 2 つの答えが同時に来ると、2 つ目が使われない待ちとして残る | FR-24、ADR 0008（複数のクライアントの承認） | 複数のプロセスで同じ DB を使うとき（チーム、サーバーレス）に必須 | 未起票 | 手元はデータの置き場ごとにデーモンが 1 つなので、`Runtime.Approve` がロックの中で「まだ待っているか」を確かめてから送る（kairo の `Signal` と `Resolve` は、呼び出しの中で待ちを終える）。2 つ目の答えは `ErrAnswered`（409） |
-| 22 | 完了と取り消しが排他でない。コードで書くワークフローの関数が成功で返った後、`done` のシグナルが記録される前に `k.Cancel` が先に記録されると、`done` は決着した実行への出来事として黙って捨てられる。live の `Child` は値を返すが、記録は `cancelled` で、再開すると `ErrCancelled` が返る（live と再開で、親のワークフローが別の道に入る） | ADR 0011、不変条件 1・2 | ターンの取り消し（ADR 0011）を確かなものにするのに必須 | 未起票（案: `docs/proposals/kairo-done-and-cancel.md`、0061 として。2026-10-28 に kairo の `00376a0` でまだ直っていないことを確かめた） | あり（2026-10-21）。セッションの版 7 は、ターンの子の結果（値、失敗、取り消し）を受け取ったら、そのターンの実行が取り消しで記録されたかを読むアクション（`turn.settled`）を呼び、記録された答えで分岐する。live で値や失敗が返っても、記録が取り消しなら取り消しとして扱う（止めたターンの書き添えを足す）。live と再開で同じ呼び出しになる。版 6 は `Draining` で残した。`TestTurnStoppedAsItEnds`（版 6 では再開でターンがもう一度動くことも確かめる）。kairo の側で直れば、`turn.settled` は要らなくなる。`Runtime.Cancel` と `runSession` に `// kairo-gap #22` |
-| 12 | kairod につないだとき（`kairo.Connect`）の `Resolve`、`Children`、`List`、サスペンドモード（今は `ErrNeedsEmbedded`） | FR-7、FR-24、チーム | チームの利用で必須 | 未起票 | 最初の版は埋め込みだけで動かす（ADR 0001） |
+| 6 | A "return only the record" mode for replay (when it hits a call that has not finished, it stops without running it) | FR-25 | Later (M2 or after) | Not filed | None. The `kairotest` record (`Calls`) is a lead |
+| 11 | A TPM limit in the embedded runtime, and RPM and TPM across processes. Today `Rate(perMinute)` only counts starts per process, not tokens | FR-27 | Required for team use | Not filed | Locally there is one process, so `Rate` and `Concurrency` are enough |
+| 14 | `Signal` does not return which wait (which number) it satisfied | FR-24 | Nice to have | Not filed | `Runtime.Send` counts the finished `kairo.wait/message` children to get the number. It only uses an in-process lock, so two processes sending at the same time can return the same number. It also depends on an SDK-internal name (`kairo.wait/`) |
+| 15 | With SQLite, there is no way to learn that another process created a child run, sent a signal, or finished a run. A process in wait mode notices during the cleanup that runs every lease period (default 30 seconds). An approval given from another process reaches the waiting process up to one lease period late (2026-10-09, `TestApprovalFromAnotherProcess`). PostgreSQL passes it on at once with LISTEN/NOTIFY | FR-11, FR-24 | Nice to have | Not filed | Avoided with ADR 0008's daemon (2026-10-09). Only the daemon opens the DB, so it does not need to know about other processes. `Runtime.WaitTurn` wakes on this process's observation (`Options.Observe`). If the turn is created in another process, it waits until ctx ends (once the turn's run is found, `Await` waits across processes) |
+| 16 | When `Child` or `Call` returns a transient storage error inside a workflow, the workflow that returned that error is recorded as failed. There is no way to "not record it and retry later" for a transient error | NFR-1 | Nice to have | Not filed | The session returns on an unrecorded error without moving on (to avoid forking the conversation). In exchange, a storage error can leave the session stuck as failed. For a stuck session, sending returns `ErrSessionFailed` instead, and the TUI forks from the last finished turn and continues (ADR 0021's addendum, 2026-10-28) |
+| 17 | No way to start a run from outside a workflow with a given parent (a `parent` for `Submit`) | ADR 0007, invariant 4 | Nice to have | Not filed | The Claude Code engine's MCP calls are independent root runs whose IDs sit under the turn. They are not in the turn's tree, so once `KeepFinished` (default 24 hours) passes after they finish, they can be deleted even while the turn waits. KairoCode also records the calls in its own table (`kc_mcp_call`) and chooses from it, so even if they are deleted nothing runs twice. When the result of a deleted run is needed, it tells the model the result was lost |
+| 19 | A way, with SQLite, to notify the end of a run or a signal between processes. `Notifier` only has the "receiving" side for a store, and the SQLite store has no hook for the notifying side. For example, provide a `sqlitenotify` that notifies over a Unix socket next to the DB, in the same shape as `pgnotify` | FR-11, invariant 7 | Nice to have (KairoCode avoids it with the daemon. ADR 0008) | Not filed | One daemon per data directory, so exchanges between live processes become events inside the daemon |
+| 21 | A way to send a signal only when something waits (for example, an option on `Signal` that tells you instead of sending when there is no wait). Today, if there is no wait, `Signal` creates the next wait as an "early signal" (ADR 0059), so when two answers to an approval arrive at the same time, the second stays behind as an unused wait | FR-24, ADR 0008 (approvals from many clients) | Required when many processes use the same DB (teams, serverless) | Not filed | Locally there is one daemon per data directory, so `Runtime.Approve` checks under a lock that it "still waits" before sending (kairo's `Signal` and `Resolve` end the wait within the call). The second answer gets `ErrAnswered` (409) |
+| 22 | Completion and cancellation are not exclusive. If a code-written workflow function returns success and `k.Cancel` is recorded before the `done` signal, `done` is silently dropped as an event for a settled run. The live `Child` returns the value, but the record says `cancelled`, and on resume it returns `ErrCancelled` (live and resume send the parent workflow down different paths) | ADR 0011, invariants 1 and 2 | Required to make turn cancellation (ADR 0011) reliable | Not filed (draft: `docs/proposals/kairo-done-and-cancel.md`, as 0061. On 2026-10-28 we confirmed it is still not fixed in kairo's `00376a0`) | Yes (2026-10-21). Session version 7, after it receives the turn child's result (value, failure, cancellation), calls an action (`turn.settled`) that reads whether that turn's run was recorded as cancelled, and branches on the recorded answer. Even if live returns a value or a failure, if the record says cancelled it is treated as cancelled (it adds the note for a stopped turn). Live and resume make the same calls. Version 6 is kept with `Draining`. `TestTurnStoppedAsItEnds` (for version 6 it also checks that the turn runs again on resume). If kairo fixes it, `turn.settled` is no longer needed. `// kairo-gap #22` on `Runtime.Cancel` and `runSession` |
+| 12 | `Resolve`, `Children`, `List` and suspend mode when connected to kairod (`kairo.Connect`) (today `ErrNeedsEmbedded`) | FR-7, FR-24, teams | Required for team use | Not filed | The first version runs embedded only (ADR 0001) |
 
-## kairo 0.3.0 で解けたもの
+## Solved in kairo 0.3.0
 
-| # | もとの不足 | 手段 |
+| # | Original gap | Means |
 |---|---|---|
-| 1 | アクションのライブの出力 | `TaskContext.Emit`、`k.Subscribe(id)`（ID の前方一致。セッションの ID で子孫の出力も届く） |
-| 2 | 要確認の決着 | `k.Resolve(callID, output)`、`k.ResolveFailed(callID, msg)` |
-| 3 | 子の実行の一覧 | `k.Children(id)` |
-| 4 | 実行の上限 | SDK にはない。KairoCode の側で、記録された使用量から判定する（設計 5 節） |
-| 5 | 大きな出力の退避 | `kc_message` に本文を置き、記録はハッシュだけにする（設計 2.2 節） |
-| 7 | 冪等なやり直し | `kairo.IdempotentRetry()`、`TaskContext.IdempotencyKey` |
-| 8 | Go のコードで書く API | `github.com/r-hashi01/kairo/sdk/go`（kairo の ADR 0058） |
-| 9 | Go での常駐しない埋め込み | `Mode: kairo.Suspend`、`k.Tick`、`Options.Wake` |
-| 10 | 待っている間に、終わった呼び出しの記録が消える | 木の単位の削除（kairo の ADR 0054）。2026-10-09 に v0.3.0 で確かめた（48 時間待ったターンを別のプロセスで再開して、終わった実の呼び出しが再実行されない） |
+| 1 | Live output of actions | `TaskContext.Emit`, `k.Subscribe(id)` (prefix match on the ID. With the session's ID, descendants' output arrives too) |
+| 2 | Settling blocked (needs confirmation) calls | `k.Resolve(callID, output)`, `k.ResolveFailed(callID, msg)` |
+| 3 | Listing child runs | `k.Children(id)` |
+| 4 | Run limits | Not in the SDK. KairoCode decides from the recorded usage (design section 5) |
+| 5 | Moving large outputs aside | Put the body in `kc_message` and record only the hash (design section 2.2) |
+| 7 | Idempotent retries | `kairo.IdempotentRetry()`, `TaskContext.IdempotencyKey` |
+| 8 | An API written in Go code | `github.com/r-hashi01/kairo/sdk/go` (kairo's ADR 0058) |
+| 9 | Non-resident embedding in Go | `Mode: kairo.Suspend`, `k.Tick`, `Options.Wake` |
+| 10 | Records of finished calls are deleted while waiting | Deletion by whole tree (kairo's ADR 0054). Confirmed with v0.3.0 on 2026-10-09 (a turn that waited 48 hours was resumed in another process, and the finished real call did not run again) |
 
-## kairo 0.4.x で解けたもの
+## Solved in kairo 0.4.x
 
-2026-10-15 に v0.4.1 に上げました。
+We moved to v0.4.1 on 2026-10-15.
 
-| # | もとの不足 | 手段 |
+| # | Original gap | Means |
 |---|---|---|
-| 13 | 1 つのワークフローの中の 2 回目の `kairo.Parallel` が、1 回目と同じ枝の番号（p0、p1…）を使い、同じ入力の `Call` が 1 回目の記録を返す | 0.4.0 で、2 回目以降の `Parallel` の枝は `p<i>@<k>` になった（1 回目は `p<i>` のまま）。ツールの呼び出しの入力のステップの番号と位置（`ToolInput.Step`、`Index`）は、ID を変えないためにそのまま残す。**上げ方の注意:** ターンはモデルの 1 歩ごとに `Parallel` を呼ぶので、0.3.0 で始まって 2 歩目以降に進んだターンは、0.4.x で再開すると、2 歩目以降のツールの呼び出しを新しい ID でもう一度動かす（実のツールが二重に動き得る）。上げたときに進行中のターンは無かった（データの置き場が無い）ので、利用者の判断で版は上げていない（2026-10-15）。0.3.0 のデーモンの進行中のターンを残したまま上げてはいけない |
-| 18 | `Parallel` の枝の中の `WaitFor` に `Signal` が届かない | 0.4.0 で、待ちはワークフロー全体で番号を振るようになった（kairo の変更履歴による。KairoCode では確かめていない）。承認の待ちは、ターンの ID を変えないために `Parallel` の外のまま残す |
-| 20 | 埋め込みのランタイムを、ステップの間で止める手段 | `k.Drain(ctx)`（r-hashi01/kairo#1、0.4.0）。デーモンは止まるときに、新しいステップを始めず、走っているステップを最大 `DefaultDrain`（30 秒）待ってから閉じる。走っていたモデルの呼び出しは、次のデーモンで呼び直されない（`TestStopLetsTheRunningStepFinish`）。30 秒を超えたステップは、今までどおり切られ、実のステップは要確認になる |
+| 13 | The second `kairo.Parallel` in one workflow uses the same branch numbers (p0, p1…) as the first, and a `Call` with the same input returns the first one's record | Since 0.4.0, branches of the second and later `Parallel` are `p<i>@<k>` (the first stays `p<i>`). The step number and position in the tool call's input (`ToolInput.Step`, `Index`) stay as they are so the IDs do not change. **Note on upgrading:** a turn calls `Parallel` on every model step, so a turn that started on 0.3.0 and reached step 2 or later will, when resumed on 0.4.x, run the tool calls of step 2 and later again under new IDs (a real tool can run twice). When we upgraded there were no turns in progress (there was no data directory), so by the user's decision we did not raise the version (2026-10-15). Do not upgrade while a 0.3.0 daemon still has turns in progress |
+| 18 | A `Signal` does not reach a `WaitFor` inside a `Parallel` branch | Since 0.4.0, waits are numbered across the whole workflow (per kairo's changelog. Not confirmed in KairoCode). The approval wait stays outside `Parallel` so the turn's IDs do not change |
+| 20 | A way to stop the embedded runtime between steps | `k.Drain(ctx)` (r-hashi01/kairo#1, 0.4.0). When the daemon stops, it starts no new steps, waits up to `DefaultDrain` (30 seconds) for running steps, then closes. A model call that was running is not called again by the next daemon (`TestStopLetsTheRunningStepFinish`). A step that runs past 30 seconds is cut as before, and a real step becomes blocked (needs confirmation) |

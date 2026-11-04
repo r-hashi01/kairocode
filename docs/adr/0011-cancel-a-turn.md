@@ -1,85 +1,85 @@
-# 0011 ターンの取り消し: kairo の取り消しで止め、止めたことを会話に残す
+# 0011 Cancelling a turn: stop it with kairo's cancellation, and keep the fact that it was stopped in the conversation
 
-- 状態: 承認（2026-10-19）
-- 日付: 2026-10-19
-- 関連: issue #11、M2、ADR 0002（ACP の `session/cancel`）、0006（会話の保存）、0010（TUI の Esc）、AGENTS.md の不変条件 2・4・8、kairo の ADR 0026（走っているタスクへの取り消し）
+- Status: Accepted (2026-10-19)
+- Date: 2026-10-19
+- Related: issue #11, M2, ADR 0002 (ACP's `session/cancel`), 0006 (saving the conversation), 0010 (Esc in the TUI), AGENTS.md invariants 2, 4 and 8, kairo's ADR 0026 (cancelling a running task)
 
-## 背景
+## Context
 
-利用者は、走っているターンを止めたいことがあります。モデルが違う方向に進んだときや、長いコマンドを待ちたくないときです。claude では Esc、ACP では `session/cancel` で止めます。KairoCode には、まだその手段がありません（#11）。
+The user sometimes wants to stop a running turn: when the model heads in the wrong direction, or when they do not want to wait for a long command. In claude you stop it with Esc, and in ACP with `session/cancel`. KairoCode has no way to do that yet (#11).
 
-kairo には `k.Cancel(ctx, id)` があります。実行と、その実行が作った子孫、それらが待っている呼び出しを取り消します。走っているステップの `TaskContext` も切れます（kairo の ADR 0026）。ターンはセッションの子の実行なので、ターンの実行を取り消せば、モデルの呼び出し、ツール、承認の待ちがまとめて止まります。
+kairo has `k.Cancel(ctx, id)`. It cancels a run, the descendants that run created, and the calls they are waiting on. The `TaskContext` of a running step is also cancelled (kairo's ADR 0026). A turn is a child run of the session, so cancelling the turn's run stops the model call, tools and approval waits all together.
 
-セッションのワークフローは、取り消されたターンを、失敗したターンと同じに扱っています（版 3 と 4）。会話はターンの前のままで、次のメッセージに進みます。この扱いには 2 つの問題があります。
+The session workflow treats a cancelled turn the same as a failed turn (versions 3 and 4). The conversation stays as it was before the turn and moves on to the next message. This handling has 2 problems.
 
-- 止めたターンで利用者が言ったことも、そのターンの中でツールがファイルを変えたことも、モデルは知りません。次のターンで、同じことをもう一度頼み直すことになります。
-- claude は、止めた依頼を会話に残し、「利用者が止めた」と書き添えます。
+- The model knows neither what the user said in the stopped turn nor that tools changed files in that turn. The user ends up asking for the same thing again in the next turn.
+- claude keeps the stopped request in the conversation and adds a note that "the user stopped it".
 
-## 決定
+## Decision
 
-1. **止め方:** `Runtime.Cancel(session)` を作ります。
-   - セッションの最後のターン（送った出来事の数 − 1）の実行を `TurnRun` で引き、終わっていなければ `k.Cancel` で取り消します。
-   - 終わっていれば何もせず、そう返します（`ErrNoTurnToCancel`）。
-   - 入口は 3 つです。
-     - HTTP: `POST /sessions/{id}/cancel`（終わっていれば 409）
-     - デーモンのクライアント: `Client.Cancel`
+1. **How to stop:** Create `Runtime.Cancel(session)`.
+   - Look up the run of the session's last turn (number of events sent − 1) with `TurnRun`, and if it has not finished, cancel it with `k.Cancel`.
+   - If it has finished, do nothing and say so (`ErrNoTurnToCancel`).
+   - There are 3 entry points.
+     - HTTP: `POST /sessions/{id}/cancel` (409 if finished)
+     - Daemon client: `Client.Cancel`
      - ACP: `session/cancel`
-   - ACP の `session/prompt` は、`stopReason: "cancelled"` で答えます。
-2. **走っているステップ**
-   - モデルの呼び出しとツールの handler は、`TaskContext` が切れるので止まります。bash は、プロセスのグループごと止めます。
-   - **途中で切った実の呼び出しは、要確認にしません。** 利用者自身が止めたので、聞き直さずにターンを終えます（不変条件 4 は、成功扱いしないことを求めています。ここでは成功とも失敗とも記録しません）。
-   - 効いたかどうかわからないことは、下の 3 の書き添えでモデルに伝えます。
-   - 待っていた承認と要確認は、kairo の取り消しで消えます。クライアントには「答えが出た」を送ります（出来事のハブが、待ちの一覧の差分から出す。今のまま）。
-3. **会話に残すもの（セッションの版 5）**
-   - 取り消されたターンの後、セッションのワークフローが `history.extend` を呼びます。足すのは次の 2 つです。
-     - 利用者のメッセージ（そのターンの入力）
-     - KairoCode が書く 1 通: 「利用者がこのターンを途中で止めた。ツールの呼び出しが、作業ファイルを変えたかもしれない」
-   - ターンの途中のモデルの応答とツールの結果は、足しません。取り消されたターンは結果を記録していないので、ワークフローが記録された値だけから決められるのは、ここまでです（不変条件 2）。
-   - 書き添えの文は、ワークフローの定数ではなく、アクション（`history.cancelled`）の中で作ります。メッセージを 1 度だけ書く規則（`kc_message`）にも沿います。
-   - `kairo.Call` の順番が変わるので、セッションの版を 5 に上げ、版 4 を `kairo.Draining()` で残します。版 4 のセッションは、今までどおり止めたターンを捨てます。
-4. **undo との関係**
-   - 取り消されたターンの始まりのスナップショットは、ターンの出力に載らないので、undo の対象になりません。
-   - そのターンが変えたファイルは、次に終わるターンの「後」に含まれます。そのターンを undo しても、止めたターンの変更は戻りません。
-   - これは書き添えと `/undo` の説明に書きます。
+   - ACP's `session/prompt` answers with `stopReason: "cancelled"`.
+2. **Running steps**
+   - The model call and tool handlers stop because their `TaskContext` is cancelled. bash is stopped together with its whole process group.
+   - **A real call cut off midway is not made blocked (needs confirmation).** The user stopped it themselves, so the turn ends without asking again (invariant 4 requires not treating it as success; here it is recorded as neither success nor failure).
+   - That we do not know whether it took effect is told to the model through the note in 3 below.
+   - Pending approvals and blocked (needs confirmation) items disappear with kairo's cancellation. Clients are sent "answered" (the event hub emits it from the diff of the wait list; as it is now).
+3. **What stays in the conversation (session version 5)**
+   - After a cancelled turn, the session workflow calls `history.extend`. It adds these 2 things.
+     - The user's message (that turn's input)
+     - 1 message written by KairoCode: "The user stopped this turn midway. Tool calls may have changed the working files."
+   - Model responses and tool results from the middle of the turn are not added. A cancelled turn has not recorded its result, so this is as far as the workflow can decide from recorded values alone (invariant 2).
+   - The note's text is made inside an action (`history.cancelled`), not as a workflow constant. This also follows the rule of writing a message only once (`kc_message`).
+   - The order of `kairo.Call` changes, so the session version goes up to 5, and version 4 is kept with `kairo.Draining()`. Version 4 sessions discard a stopped turn as before.
+4. **Relation to undo**
+   - The snapshot at the start of a cancelled turn is not in the turn's output, so it is not an undo target.
+   - Files changed by that turn are included in the "after" of the next turn that finishes. Undoing that turn does not revert the stopped turn's changes either.
+   - This is written in the note and in the description of `/undo`.
 
-## 結果
+## Consequences
 
-- Esc（ADR 0010）と ACP の `session/cancel` で、ターンを止められます。止めた依頼は会話に残り、次のターンでモデルが続きを判断できます。
-- 実の呼び出しを途中で切ると、効いたかどうかを人に聞きません。止めたのは利用者なので、作業ファイルを見て判断してもらいます。
-- 守らせるテスト（実装のとき足す）
-  - モデルの呼び出しの最中に取り消すと、ターンが cancelled で終わり、次のターンの履歴に、利用者のメッセージと書き添えが入る。
-  - 承認を待っている最中に取り消すと、待ちが消え、ツールは動かない（handler の回数）。
-  - 取り消しの後に落ちて再開しても、書き添えが二重にならない（`TestCrash...`）。
-  - 版 4 のセッションは、取り消したターンを捨てる（今の動き）。
-  - ACP の `session/cancel` で `session/prompt` が `cancelled` で答える。HTTP は終わったターンに 409 を返す。
+- Turns can be stopped with Esc (ADR 0010) and ACP's `session/cancel`. The stopped request stays in the conversation, and in the next turn the model can decide how to continue.
+- When a real call is cut off midway, the person is not asked whether it took effect. The user stopped it, so they judge by looking at the working files.
+- Tests that enforce this (added at implementation)
+  - Cancelling during a model call ends the turn as cancelled, and the next turn's history contains the user's message and the note.
+  - Cancelling while waiting for approval removes the wait, and the tool does not run (handler count).
+  - Crashing after a cancel and resuming does not duplicate the note (`TestCrash...`).
+  - Version 4 sessions discard the cancelled turn (current behavior).
+  - ACP's `session/cancel` makes `session/prompt` answer `cancelled`. HTTP returns 409 for a finished turn.
 
-## 検討した代替案
+## Alternatives considered
 
-- **今のまま（取り消したターンを捨てる）:** 版を上げずに済みます。ただし、利用者が言ったことと、ファイルが変わったかもしれないことが、会話から消えます。
-- **ターンの途中までのモデルの応答とツールの結果を残す:** claude に近くなります。ただし、取り消されたターンには結果の記録がありません。残すには、ターンが進むたびに会話を書き足す（ターンの形を変える）か、取り消された実行の呼び出しを読み出すアクションが要ります。まず書き添えから始めます。
-- **ワークフローの中のシグナルで止める（ターンがステップの合間に見る）:** 走っているモデルの呼び出しや長いコマンドが、終わるまで止まりません。
-- **途中で切った実の呼び出しを要確認にする:** 不変条件 4 の考え方には近くなります。ただし、自分で止めたものを「効いたか」と聞かれ、止めたのにターンが進みません。
+- **Leave it as is (discard the cancelled turn):** No version bump. But what the user said, and that files may have changed, disappear from the conversation.
+- **Keep the model responses and tool results up to the middle of the turn:** Closer to claude. But a cancelled turn has no record of its result. Keeping them needs either appending to the conversation as the turn progresses (changing the turn's shape) or an action that reads out the cancelled run's calls. We start with the note.
+- **Stop with a signal inside the workflow (the turn checks between steps):** A running model call or long command does not stop until it finishes.
+- **Make a real call cut off midway blocked (needs confirmation):** Closer to the idea of invariant 4. But you get asked "did it take effect" about something you stopped yourself, and the turn does not move on even though you stopped it.
 
-## 実装（2026-10-19、M2）
+## Implementation (2026-10-19, M2)
 
-- `workflows.RunSession`（版 5）と `RunSessionV4`（版 4、`Draining`）を、1 つの関数 `runSession` から作りました。違いは、止めたターンを `history.cancelled` で残すかどうかだけです。ターンの版（4）は変えていません。
-- `Runtime.Cancel` は、最後のターンの実行が現れるまで待ってから取り消します（送った直後の Esc も、そのターンを止める）。
-- 止めたターンの終わりは、失敗ではなく `stopped: "cancelled"` として伝えます（SSE の `turn.end`、`GET /sessions/{id}/turns/{n}`、ACP の `stopReason`）。
-- ACP の `session/cancel` は通知なので、デーモンへの取り消しは別の goroutine で行い、後に続くメッセージの読み取りを止めません。
-- **止めたターンかどうかは、エラーの型で決めます**（durability-reviewer の指摘）。ターンの実行そのものが取り消されたときだけ、`ErrCancelled` が `WorkflowError` の外で返ります。ターンの中の呼び出しが取り消されてターンが失敗したときは `WorkflowError` で、live ではその中に `ErrCancelled` が見えますが、読み直すと見えません。そこで「`WorkflowError` でなく、`ErrCancelled` である」ときだけを止めたターンとして扱い、live と再開で同じ道に入るようにしました（`TestCancelledCallIsAFailure`）。
-- **止めるのは、走っているターンです**（同じく指摘）。最後に送った出来事ではなく、終わっていないターンの実行を止めます。後ろに並んだメッセージは、止めた後に動きます（`TestCancelStopsTheTurnUnderWay`）。走っているターンがなく、送ったばかりのターンがまだ始まっていなければ、始まるのを待って止めます。
-- **残る隙間（kairo-gap #22）:** ターンの関数が成功で返った直後に取り消しが記録されると、kairo は完了を捨てて `cancelled` と記録します。live のセッションは値を受け取りますが、再開すると止めたターンとして読み直します。kairo の側で、完了と取り消しを排他にする必要があります（案: `docs/proposals/kairo-done-and-cancel.md`）。
-- undo と redo のターンを止めると、作業ファイルは途中まで戻った状態で残ります。書き添えはありません（メッセージのターンではないため）。次の undo の対象も変わりません。
-- 版 4 のセッションの undo も、引き続き受け付けます（undo の版の検査を「4 か 5」にした）。
-- テスト: `TestCancelTurn`（SSE の `turn.end` も）、`TestCancelledCallIsAFailure`、`TestCancelStopsTheTurnUnderWay`、`TestCancelWhileAwaitingApproval`、`TestCancelStopsARunningCommand`（bash のプロセスが消える。グループで止めないと落ちることを確かめた）、`TestCancelInAVersion4Session`、`TestCrashCancel`、`TestCancelOverHTTP`、`TestACPCancel`、`TestEscStopsTheTurn`。
+- `workflows.RunSession` (version 5) and `RunSessionV4` (version 4, `Draining`) are built from one function, `runSession`. The only difference is whether a stopped turn is kept with `history.cancelled`. The turn version (4) is unchanged.
+- `Runtime.Cancel` waits until the last turn's run appears and then cancels it (Esc right after sending also stops that turn).
+- The end of a stopped turn is reported as `stopped: "cancelled"`, not as a failure (SSE's `turn.end`, `GET /sessions/{id}/turns/{n}`, ACP's `stopReason`).
+- ACP's `session/cancel` is a notification, so the cancel to the daemon is done in a separate goroutine and does not block reading the messages that follow.
+- **Whether a turn was stopped is decided by the error type** (a point raised by durability-reviewer). Only when the turn's run itself is cancelled does `ErrCancelled` come back outside a `WorkflowError`. When a call inside the turn is cancelled and the turn fails, it is a `WorkflowError`; live, `ErrCancelled` is visible inside it, but on re-reading it is not. So only "not a `WorkflowError`, and `ErrCancelled`" is treated as a stopped turn, so that live and resume take the same path (`TestCancelledCallIsAFailure`).
+- **What is stopped is the running turn** (also a point raised). It stops the turn run that has not finished, not the last event sent. Messages queued behind it run after the stop (`TestCancelStopsTheTurnUnderWay`). If no turn is running and the just-sent turn has not started yet, it waits for it to start and then stops it.
+- **Remaining gap (kairo-gap #22):** If a cancel is recorded right after the turn function returns successfully, kairo discards the completion and records `cancelled`. The live session receives the value, but on resume it re-reads it as a stopped turn. kairo needs to make completion and cancellation mutually exclusive (proposal: `docs/proposals/kairo-done-and-cancel.md`).
+- Stopping an undo or redo turn leaves the working files partly reverted. There is no note (it is not a message turn). The next undo target does not change either.
+- Undo in version 4 sessions is still accepted (the undo version check is now "4 or 5").
+- Tests: `TestCancelTurn` (including SSE's `turn.end`), `TestCancelledCallIsAFailure`, `TestCancelStopsTheTurnUnderWay`, `TestCancelWhileAwaitingApproval`, `TestCancelStopsARunningCommand` (the bash process goes away; we confirmed it fails without stopping the group), `TestCancelInAVersion4Session`, `TestCrashCancel`, `TestCancelOverHTTP`, `TestACPCancel`, `TestEscStopsTheTurn`.
 
-## 追記: 終わる瞬間に止めたターン（2026-10-21、kairo-gap #22 の回避）
+## Addendum: A turn stopped at the moment it ends (2026-10-21, workaround for kairo-gap #22)
 
-- **起きていたこと:** ターンのワークフローが成功で返ってから完了が記録されるまでの、ごく短い間に取り消しが記録されると、kairo は実行を「取り消し」で記録し、完了の知らせを捨てます。失敗で返ったときも、SDK が取り消しにまだ気づいていなければ同じです（live では失敗、再開では取り消し）。セッションは live では値を受け取り、再開すると `ErrCancelled` を受け取ります。live と再開で別の道に入り、次のターンの入力（履歴）が変わって、次のターンが別の ID でもう一度動き得ました。
-- **回避:** セッションの版 7（`RunSession`）は、ターンの子の結果（値、失敗、`ErrCancelled`）を受け取ったら、`turn.settled` のアクションで、そのターンの実行が取り消しで記録されたかを読みます。分岐は、その記録された答えで決めます。記録が取り消しなら、値や失敗が来ていても止めたターンとして扱います（書き添えを足す）。
-  - live と再開のどちらでも同じ呼び出しをするので、呼び出しの列がずれません。
-  - ターンの結果でないもの（駆動が止まった、版がない、記録が失われた）のときは、どちらでも呼びません。
-  - 最初は失敗のときを外していましたが、durability-reviewer の指摘で、失敗の側にも同じ隙間があると分かり、含めました。
-- **版:** セッションを 7 に上げ、版 6 を `Draining` で残しました。ターンの版は変えていません。
-- **テスト:** `TestTurnStoppedAsItEnds`。偽のターンが自分の実行を取り消してから成功か失敗で返り、この隙間を作ります。版 7 では、どちらでも再開してターンの実行が増えません。版 6 では、成功のときにターンがもう一度動くことも確かめています。失敗のときを外すと、版 7 のテストが落ちることを確かめました。
-- kairo の側で完了と取り消しが排他になれば（`docs/proposals/kairo-done-and-cancel.md`）、`turn.settled` は要らなくなります。
+- **What was happening:** If a cancel is recorded in the very short window between the turn workflow returning successfully and its completion being recorded, kairo records the run as "cancelled" and discards the completion notice. The same happens when it returns with a failure, if the SDK has not yet noticed the cancel (failure live, cancelled on resume). Live, the session receives the value; on resume it receives `ErrCancelled`. Live and resume took different paths, the next turn's input (history) changed, and the next turn could run again under a different ID.
+- **Workaround:** Session version 7 (`RunSession`), on receiving the turn child's result (a value, a failure, or `ErrCancelled`), reads with the `turn.settled` action whether that turn's run was recorded as cancelled. The branch is decided by that recorded answer. If the record says cancelled, the turn is treated as stopped even if a value or a failure came (the note is added).
+  - It makes the same call both live and on resume, so the call sequence does not shift.
+  - When it is not a turn result (the driver stopped, no version, the record was lost), it calls it in neither case.
+  - At first the failure case was left out, but a point raised by durability-reviewer showed the same gap exists on the failure side, so it was included.
+- **Version:** The session went up to 7, and version 6 is kept with `Draining`. The turn version is unchanged.
+- **Test:** `TestTurnStoppedAsItEnds`. A fake turn cancels its own run and then returns with success or failure, creating this gap. In version 7, resuming in either case does not add turn runs. For version 6, it also checks that the turn runs again in the success case. We confirmed that leaving out the failure case makes the version 7 test fail.
+- If kairo makes completion and cancellation mutually exclusive (`docs/proposals/kairo-done-and-cancel.md`), `turn.settled` will no longer be needed.

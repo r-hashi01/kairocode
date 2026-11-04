@@ -1,71 +1,71 @@
-# 0012 GitHub から起動し、待つ間はプロセスを持たない（サーバーレス）
+# 0012 Start from GitHub, and hold no process while waiting (serverless)
 
-- 状態: 提案
-- 日付: 2026-10-19
-- 関連: 要件「CI・自動化」、NFR-4、NFR-6、設計 1・8・10 節（M4）、ADR 0003（`wait`）、0005（sandbox）、0006（会話の保存）、0008（デーモン）、kairo の ADR 0052・0053（HTTP、サスペンドモード）
+- Status: Proposed
+- Date: 2026-10-19
+- Related: requirements "CI and automation", NFR-4, NFR-6, design sections 1, 8 and 10 (M4), ADR 0003 (`wait`), 0005 (sandbox), 0006 (saving the conversation), 0008 (daemon), kairo's ADR 0052 and 0053 (HTTP, suspend mode)
 
-## 背景
+## Context
 
-M4 の受け入れ条件は「Issue のコメントから起動し、承認と CI の結果を待つ間、プロセスが残らない」です。これまでの KairoCode は、手元のデーモン（ADR 0008）が SQLite を開き、待ちモードで動き続けます。サーバーレスでは、次のことを決める必要があります。
+M4's acceptance criteria are "start from an Issue comment, and no process remains while waiting for approval and the CI result". Until now, KairoCode's local daemon (ADR 0008) opens SQLite and keeps running in wait mode. For serverless, we need to decide the following.
 
-1. 出来事（Issue のコメント、承認、CI の結果）が、どこからどう届くか。
-2. 待つ間にプロセスが無いので、作業ディレクトリ（エージェントが編集中のファイル）を、次の起動にどう持ち越すか。
-3. 承認と CI の結果を、どの名前の待ちに届けるか。
-4. 保存先（PostgreSQL）と、時計の待ち（`wait` の期限）を誰が起こすか。
+1. Where and how events (Issue comments, approvals, CI results) arrive.
+2. With no process while waiting, how to carry the working directory (the files the agent is editing) over to the next start.
+3. To which named wait approvals and CI results are delivered.
+4. The store (PostgreSQL), and who wakes up clock waits (the deadline of `wait`).
 
-kairo 0.4.1 には、サスペンドモード（`kairo.Suspend`）、`k.Handler()` の `/tick`、`Options.Wake`、`TickHandler`、PostgreSQL の保存先（`NewSQLStore`、`pgnotify`）があります。
+kairo 0.4.1 has suspend mode (`kairo.Suspend`), `/tick` in `k.Handler()`, `Options.Wake`, `TickHandler`, and a PostgreSQL store (`NewSQLStore`, `pgnotify`).
 
-## 決定
+## Decision
 
-1. **入口は `kairocode github`（HTTP のハンドラー）にします**（`internal/github`、`cmd/kairocode`）。
-   - GitHub の webhook（`issue_comment`、`check_suite`/`check_run`、`workflow_run`）を `POST /github` で受けます。署名（`X-Hub-Signature-256`）を、環境変数の秘密で確かめます。合わなければ何もしません。
-   - kairo はサスペンドモードで開き、`k.Handler()` を同じサーバーに載せます（`/tick`、`TickSecret` は環境変数）。
-   - 1 つの要求の中で、出来事をシグナルにして、`k.Tick` で進められるところまで進め、返します。プロセスは、ホスト（Cloud Run、Fly、Lambda など）の都合で終わってかまいません。
-   - 時計の待ち（`wait` の `timeout`、承認の期限）は、`Options.Wake` が知らせる時刻を、外のスケジューラーが `/tick` で起こします。毎分の cron で `/tick` を呼ぶだけでも動きます（何もなければすぐ返る）。
-   - 同じ中身の 1 回きりの形として、`kairocode github -event <file>` も用意します（GitHub Actions から、出来事の JSON を渡して 1 回進めて終わる）。
-2. **Issue のコメント `/kairo <依頼>` で、セッションを始めます。**
-   - セッションの ID は `s/gh/<owner>/<repo>/<Issue の番号>/<コメントの ID>` です（不変条件 8。同じ webhook が 2 回届いても、同じセッションになる）。
-   - 誰が起動できるかは、リポジトリへの書き込みの権限（`author_association` が `OWNER`、`MEMBER`、`COLLABORATOR`）で決めます。それ以外のコメントは無視します。
-3. **作業ディレクトリは、セッションのブランチ `kairocode/<Issue の番号>-<コメントの ID>` で持ち越します。**
-   - 要求の始めに、作業ディレクトリ（`<データの置き場>/work/<セッション>`）が無ければ、そのブランチ（無ければ既定のブランチ）を clone します。
-   - 要求の終わり（`Tick` が返り、走っているステップが無いとき）に、作業ディレクトリに変更があれば、そのブランチに commit して push します。これはモデルのツールではなく、ディスクの代わりの基盤の処理なので、承認は求めません。
-   - ステップは 1 つの要求の中で終わります（借用）。そのため、要求の境目で持ち越せば、ファイルとステップの記録は食い違いません。
-   - **限界:** 要求の途中でプロセスが殺されると、最後の push の後の変更は失われ、記録（書いた、と記録された edit）と食い違います。書くツールは「書く前のハッシュ」で比べてから書くので、次の edit は衝突としてモデルに返ります（二重に書いたり、黙って上書きしたりはしない）。
-   - CI は、このブランチへの push で走ります。
-4. **承認と出来事は、コメントと webhook で届けます。**
-   - 承認を待ち始めたら、Issue に「`/kairo approve <キー>` か `/kairo deny <キー>` で答えてください」とコメントします。要確認（`blocked`）も同じく、`/kairo ran <キー>` か `/kairo notran <キー>` で答えます。
-   - コメントは、キーを本文の目印（`<!-- kairocode:<キー> -->`）に入れ、同じ目印のコメントがあれば書きません（二重に書かない）。
-   - 答えのコメントは、起動と同じ権限の人のものだけを受けます。今の `Runtime.Approve`、`Resolve` に渡します。
-   - フローの `wait(event, timeout=)`（ADR 0003）は、`kairo.WaitFor` でシグナル `event/<名前>` を待ちます（`timeout` は `kairo.WaitTimeout`）。返る値は `{"ok": bool, "value": <出来事の中身>, "timed_out": bool}` です。
-   - `check_suite` と `workflow_run` の完了は、出来事 `ci.result`（中身は `conclusion`、`url`、`head_sha`）として、そのブランチのセッションの中で `event/ci.result` を待っている実行に送ります。待っている実行が無ければ捨てます。
-   - 手元でも、`kairocode event <セッション> <名前> <JSON>` で出来事を送れます（テストと手での確認）。
-5. **保存先は、`KAIROCODE_DB` が `postgres://` で始まれば PostgreSQL にします。**
-   - kairo の保存先は `kairo.NewSQLStore(db, kairo.Postgres)` です。`kc_message` などの表は、同じ列を PostgreSQL の型で作ります（形は ADR 0006 のまま）。
-   - ドライバーは `github.com/jackc/pgx/v5`（`stdlib`）を使います（許可済みの依存）。
-   - 手元のデーモンは、今までどおり SQLite と待ちモードです。
-6. **秘密は、環境変数からアクションと基盤の処理の中で読みます。**
-   - 対象は、GitHub のトークン（App のインストールのトークンか `GITHUB_TOKEN`）、webhook の秘密、`TickSecret`、モデルの API キーです。
-   - 記録、コメント、ログには入れません（不変条件 6）。
-7. **サーバーレスでは、人に聞くツールの承認の既定は、手元と同じ規則を使います。**
-   - sandbox はホストの OS のもの（Linux なら bubblewrap）で、無ければ ADR 0005 のとおり失敗します。
+1. **The entry point is `kairocode github` (an HTTP handler)** (`internal/github`, `cmd/kairocode`).
+   - Receive GitHub webhooks (`issue_comment`, `check_suite`/`check_run`, `workflow_run`) at `POST /github`. Verify the signature (`X-Hub-Signature-256`) with a secret from an environment variable. If it does not match, do nothing.
+   - Open kairo in suspend mode and mount `k.Handler()` on the same server (`/tick`; `TickSecret` from an environment variable).
+   - Within one request, turn the event into a signal, advance as far as `k.Tick` can, and return. The process may end at the host's convenience (Cloud Run, Fly, Lambda and so on).
+   - For clock waits (the `timeout` of `wait`, approval deadlines), an outside scheduler wakes `/tick` at the time `Options.Wake` reports. Just calling `/tick` from a cron every minute also works (it returns right away if there is nothing to do).
+   - As a one-shot form with the same content, also provide `kairocode github -event <file>` (from GitHub Actions: pass the event JSON, advance once, and exit).
+2. **An Issue comment `/kairo <request>` starts a session.**
+   - The session ID is `s/gh/<owner>/<repo>/<Issue number>/<comment ID>` (invariant 8; even if the same webhook arrives twice, it is the same session).
+   - Who can start it is decided by write permission on the repository (`author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`). Other comments are ignored.
+3. **The working directory is carried over on the session's branch `kairocode/<Issue number>-<comment ID>`.**
+   - At the start of a request, if the working directory (`<data directory>/work/<session>`) does not exist, clone that branch (or the default branch if it does not exist).
+   - At the end of a request (when `Tick` returns and no step is running), if the working directory has changes, commit and push them to that branch. This is not a model tool but infrastructure processing that stands in for a disk, so it does not ask for approval.
+   - A step finishes within one request (lease). So if we carry over at request boundaries, files and the step record do not disagree.
+   - **Limit:** If the process is killed in the middle of a request, changes after the last push are lost and disagree with the record (edits recorded as written). Writing tools compare against the "hash before writing" before they write, so the next edit comes back to the model as a conflict (it does not write twice or silently overwrite).
+   - CI runs on pushes to this branch.
+4. **Approvals and events are delivered by comments and webhooks.**
+   - When it starts waiting for an approval, it comments on the Issue: "Answer with `/kairo approve <key>` or `/kairo deny <key>`". Blocked (needs confirmation) (`blocked`) works the same way, answered with `/kairo ran <key>` or `/kairo notran <key>`.
+   - A comment puts the key in a marker in its body (`<!-- kairocode:<key> -->`), and is not written if a comment with the same marker exists (it does not write twice).
+   - Answer comments are accepted only from people with the same permission as for starting. They are passed to the current `Runtime.Approve` and `Resolve`.
+   - A flow's `wait(event, timeout=)` (ADR 0003) waits on the signal `event/<name>` with `kairo.WaitFor` (`timeout` is `kairo.WaitTimeout`). The returned value is `{"ok": bool, "value": <event content>, "timed_out": bool}`.
+   - Completion of `check_suite` and `workflow_run` is sent as the event `ci.result` (content: `conclusion`, `url`, `head_sha`) to the run in that branch's session that is waiting on `event/ci.result`. If no run is waiting, it is dropped.
+   - Locally too, `kairocode event <session> <name> <JSON>` can send an event (for tests and checking by hand).
+5. **If `KAIROCODE_DB` starts with `postgres://`, the store is PostgreSQL.**
+   - kairo's store is `kairo.NewSQLStore(db, kairo.Postgres)`. Tables such as `kc_message` are created with the same columns in PostgreSQL types (the shape stays as in ADR 0006).
+   - The driver is `github.com/jackc/pgx/v5` (`stdlib`) (an allowed dependency).
+   - The local daemon stays SQLite and wait mode, as before.
+6. **Secrets are read from environment variables inside actions and infrastructure processing.**
+   - This covers the GitHub token (an App installation token or `GITHUB_TOKEN`), the webhook secret, `TickSecret`, and the model API key.
+   - They are not put in records, comments or logs (invariant 6).
+7. **In serverless, the default for tool approvals that ask a person uses the same rules as locally.**
+   - The sandbox is the host OS's (bubblewrap on Linux), and if there is none it fails as in ADR 0005.
 
-## 結果
+## Consequences
 
-- Issue のコメントから始まり、承認と CI を待つ間はプロセスが要りません。待ちは DB にあり、出来事（コメント、webhook、`/tick`）が来たときだけ動きます。
-- 作業ディレクトリはブランチに残るので、人も途中の状態を見られます。
-- 要求の途中で殺されると、最後の push の後の変更が失われます。安全な側（衝突）に倒れますが、作業はやり直しになります。
-- テスト（実装のとき足す）
-  - 偽の GitHub（`httptest` のサーバー）と偽のモデル、SQLite のサスペンドモードで、受け入れ条件を最後まで流します。
-    - 流れ: `/kairo <依頼>` → 承認のコメント → `/kairo approve` → push → `ci.result` → 終わり。
-    - 各要求の間に、プロセス（kairo を開いたもの）が残っていないこと（要求ごとに開いて閉じる）を確かめます。
-  - 署名の合わない webhook と、権限の無い人のコメントを無視すること。
-  - 同じ webhook が 2 回届いても、セッションとコメントが 1 つずつであること。
-  - 要求の途中で強制終了し、次の要求で、終わったステップをやり直さないこと（`TestCrash...`）。
-  - PostgreSQL のテストは、`KAIROCODE_TEST_PG` があるときだけ走らせます（ネットワークにつながないテストは、SQLite で同じ流れを通す）。
+- It starts from an Issue comment, and no process is needed while waiting for approval and CI. Waits live in the DB, and it runs only when an event (a comment, a webhook, `/tick`) arrives.
+- The working directory stays on a branch, so people can also see the state midway.
+- If it is killed in the middle of a request, changes after the last push are lost. It falls to the safe side (a conflict), but the work has to be redone.
+- Tests (added at implementation)
+  - Run the acceptance criteria through to the end with a fake GitHub (an `httptest` server), a fake model, and SQLite in suspend mode.
+    - Flow: `/kairo <request>` → approval comment → `/kairo approve` → push → `ci.result` → done.
+    - Check that between requests no process (the one that opened kairo) remains (open and close per request).
+  - Webhooks with a mismatched signature and comments from people without permission are ignored.
+  - Even if the same webhook arrives twice, there is one session and one comment.
+  - Kill the process in the middle of a request, and the next request does not redo finished steps (`TestCrash...`).
+  - PostgreSQL tests run only when `KAIROCODE_TEST_PG` is set (the network-free tests go through the same flow with SQLite).
 
-## 検討した代替案
+## Alternatives considered
 
-- **GitHub Actions だけで動かす（webhook のサーバーを持たない）:** 基盤は PostgreSQL だけで済みます。ただし、出来事のたびに Actions のジョブが起動し（遅く、分単位で課金される）、期限の `/tick` も cron の Actions が要ります。`-event` の 1 回きりの形で、この使い方もできるようにします。
-- **作業ディレクトリをスナップショット（設計 7 節の `snapshot` の tree）として DB に持つ:** push が要りません。ただし、CI がブランチを要るので、どのみち push します。人が途中の状態を見られるのもブランチです。
-- **ステップごとに push する:** 殺されても失われません。ただし、push が多く遅くなり、push 自体が実の作用になります。
-- **承認を GitHub の PR のレビューで受ける:** PR が無い段階（Issue だけ）でも承認が要るので、コメントにします。PR のレビューは、`wait("github.pr_review")` の出来事として後で足せます。
+- **Run with GitHub Actions only (no webhook server):** The only infrastructure is PostgreSQL. But an Actions job starts for every event (slow, billed by the minute), and deadline `/tick`s also need cron Actions. The one-shot `-event` form makes this usage possible too.
+- **Keep the working directory in the DB as a snapshot (the tree of `snapshot` in design section 7):** No push needed. But CI needs a branch, so we push anyway. A branch is also what lets people see the state midway.
+- **Push on every step:** Nothing is lost when killed. But there are many pushes, it gets slow, and the push itself becomes a real effect.
+- **Take approvals through GitHub PR reviews:** Approvals are needed even at a stage with no PR (only an Issue), so we use comments. PR reviews can be added later as an event of `wait("github.pr_review")`.

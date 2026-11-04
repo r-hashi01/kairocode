@@ -5,8 +5,8 @@ description: Run the full KairoCode verification (gofmt, vet, build, all tests w
 
 # verify
 
-1. `scripts/check.sh` を実行します（`--quick` ではなく、`-race` と crash のテストを含む全部）。
-2. 失敗したら、どの段（gofmt / vet / build / test / adr）で落ちたかを特定し、原因を直してから、もう一度実行します。
-3. `internal/invariants` か `TestCrash...` が落ちたら、期待値を緩めてはいけません。AGENTS.md の該当する不変条件を読み、実装の側を直します。
-4. `internal/workflows`、`internal/runtime`、`internal/tools` を変えたなら、`durability-reviewer` サブエージェントに差分をレビューさせます。
-5. 報告には、実行したコマンド、通ったか落ちたか、落ちたなら失敗の出力の要点を含めます。直せなかったものは、直せなかったと明記します。
+1. Run `scripts/check.sh` (not `--quick`; the full run, including `-race` and the crash tests).
+2. If it fails, find which step (gofmt / vet / build / test / adr) failed, fix the cause, and run it again.
+3. If `internal/invariants` or a `TestCrash...` fails, do not relax the expected values. Read the matching invariant in AGENTS.md and fix the implementation.
+4. If you changed `internal/workflows`, `internal/runtime` or `internal/tools`, have the `durability-reviewer` subagent review the diff.
+5. In the report, include the commands you ran, whether they passed or failed, and, if they failed, the gist of the failure output. State plainly anything you could not fix.

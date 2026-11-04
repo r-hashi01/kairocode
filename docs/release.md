@@ -1,35 +1,35 @@
-# 公開とリリースの手順
+# Publishing and releasing
 
-KairoCode を個人向けの OSS として公開し（M6）、版を出す手順です。
+How to publish KairoCode as open source for individuals (M6) and how to cut a version.
 
-## 1. 公開の前に確かめること
+## 1. Check before publishing
 
-- M6 の受け入れ条件（`docs/milestones.md`）が、リリースの項目を除いて済んでいる。特に「公開の前の関門」（Zed と TUI での手での確認）。
-- README が、手での確認の結果に合っている。
-- `main` で CI（`check`、macOS と Linux）が通っている。
-- kairo の SDK を、`replace` なしで取れる（proxy.golang.org に `github.com/r-hashi01/kairo` の使う版がある）。
-- 作者のアドレスが、すべてのコミットで GitHub の noreply になっている（2026-10-27 に書き換え済み）。
+- M6's acceptance criteria (`docs/milestones.md`) are done, except the release item. In particular, the "gate before publishing" (checking by hand in Zed and the TUI).
+- The README matches the results of the hand check.
+- CI (`check`, macOS and Linux) passes on `main`.
+- kairo's SDK can be fetched without `replace` (proxy.golang.org has the version of `github.com/r-hashi01/kairo` we use).
+- The author address is GitHub's noreply on every commit (rewritten on 2026-10-27).
 
 ```sh
 git log --format='%ae%n%ce' | sort | uniq -c
-# 146686591+r-hashi01@users.noreply.github.com と、GitHub の上でマージしたコミットの
-# コミッターの noreply@github.com だけ
+# Only 146686591+r-hashi01@users.noreply.github.com, and noreply@github.com as the
+# committer of commits merged on GitHub
 ```
 
-## 2. リポジトリを公開する
+## 2. Publish the repository
 
-今のリポジトリ（非公開）は、PR #12 の force push の記録から、書き換える前のコミット（古いアドレス）を辿れます。そのまま公開にはしません。
+In the current (private) repository, the commits from before the rewrite (with the old address) can be reached from the force-push record of PR #12. So we do not make it public as is.
 
-モジュールのパスが `github.com/r-hashi01/kairocode` なので、公開するリポジトリもこの名前にします（`go install` がこの名前で取りに来る）。
+The module path is `github.com/r-hashi01/kairocode`, so the public repository gets this name too (`go install` fetches by this name).
 
-1. 今のリポジトリの名前を変えて、非公開のまま残す（例: `kairocode-dev`）。GitHub の Settings → Repository name。手元の `origin` も付け替える。
+1. Rename the current repository and keep it private (for example `kairocode-dev`). GitHub's Settings → Repository name. Repoint the local `origin` too.
 
    ```sh
    git remote set-url origin https://github.com/r-hashi01/kairocode-dev.git
    ```
 
-2. 同じ名前 `r-hashi01/kairocode` で、空の公開リポジトリを作る（README や LICENSE は足さない）。
-3. `main` とタグだけを push する（PR、Issue、古いブランチは持ち込まない）。
+2. Create an empty public repository with the same name, `r-hashi01/kairocode` (do not add a README or LICENSE).
+3. Push only `main` and the tags (do not bring PRs, issues or old branches).
 
    ```sh
    git remote add public https://github.com/r-hashi01/kairocode.git
@@ -37,13 +37,13 @@ git log --format='%ae%n%ce' | sort | uniq -c
    git push public --tags
    ```
 
-4. 公開したリポジトリで、`main` の CI が通ることを確かめる。Settings で、`main` を守る（force push を禁じる）。
+4. Check that CI passes on `main` in the public repository. In Settings, protect `main` (forbid force pushes).
 
-## 3. 版を出す
+## 3. Cut a version
 
-版は `vMAJOR.MINOR.PATCH` のタグです（最初は `v0.1.0`）。
+A version is a `vMAJOR.MINOR.PATCH` tag (the first is `v0.1.0`).
 
-1. `main` を最新にして、タグを打って push する。
+1. Bring `main` up to date, tag it and push the tag.
 
    ```sh
    git switch main && git pull
@@ -51,22 +51,22 @@ git log --format='%ae%n%ce' | sort | uniq -c
    git push public v0.1.0
    ```
 
-2. `.github/workflows/release.yml` が動く。
-   - まず `check.yml`（macOS と Linux、全部の検査）。通らなければ、リリースは作られない。
-   - 通れば、`scripts/release-build.sh` が、macOS と Linux の amd64・arm64 の 4 つの tar.gz、`checksums.txt`、Homebrew の formula（`kairocode.rb`）を作り、**下書き**のリリースに載せる。
-3. GitHub の Releases で下書きを開き、載ったファイルと、自動で作られた変更の一覧を確かめて、公開する。
+2. `.github/workflows/release.yml` runs.
+   - First `check.yml` (macOS and Linux, all checks). If it fails, no release is created.
+   - If it passes, `scripts/release-build.sh` builds four tar.gz files for macOS and Linux on amd64 and arm64, `checksums.txt` and the Homebrew formula (`kairocode.rb`), and attaches them to a **draft** release.
+3. Open the draft in GitHub's Releases, check the attached files and the generated list of changes, and publish it.
 
-同じものは手元でも作れます（中身を確かめたいとき）。
+You can build the same thing locally (when you want to check the contents).
 
 ```sh
 scripts/release-build.sh v0.1.0 dist
 ```
 
-## 4. Homebrew の tap
+## 4. Homebrew tap
 
-1. 初回だけ: 公開リポジトリ `r-hashi01/homebrew-tap` を作る。
-2. リリースに載った `kairocode.rb` を、tap の `Formula/kairocode.rb` に置いて push する（版ごとに置き換える）。
-3. 確かめる。
+1. First time only: create the public repository `r-hashi01/homebrew-tap`.
+2. Put the `kairocode.rb` attached to the release at the tap's `Formula/kairocode.rb` and push it (replace it for each version).
+3. Check it.
 
    ```sh
    brew install r-hashi01/tap/kairocode
@@ -74,19 +74,19 @@ scripts/release-build.sh v0.1.0 dist
    brew test kairocode
    ```
 
-Linux の Homebrew では、`bubblewrap` を一緒に入れます（formula の `depends_on`）。
+With Homebrew on Linux, `bubblewrap` is installed along with it (the formula's `depends_on`).
 
-## 5. 入れ方（公開の後、README に書く）
+## 5. How to install (write in the README after publishing)
 
-| 入れ方 | コマンド |
+| Method | Command |
 |---|---|
-| Homebrew（macOS、Linux） | `brew install r-hashi01/tap/kairocode` |
-| Go | `go install github.com/r-hashi01/kairocode/cmd/kairocode@latest`（`kairo` のリンクは作られない） |
-| バイナリ | Releases から tar.gz を落として、`kairocode` と `kairo` を `PATH` に置く |
-| ソース | `make build` |
+| Homebrew (macOS, Linux) | `brew install r-hashi01/tap/kairocode` |
+| Go | `go install github.com/r-hashi01/kairocode/cmd/kairocode@latest` (the `kairo` link is not created) |
+| Binary | Download the tar.gz from Releases and put `kairocode` and `kairo` on your `PATH` |
+| Source | `make build` |
 
-## 6. 気をつけること
+## 6. Things to watch
 
-- **macOS の署名と公証はしていません。** Go が arm64 のバイナリに付ける ad-hoc の署名だけです。Homebrew と `curl` で入れたものは、そのまま動きます。ブラウザで落としたものは、Gatekeeper に止められることがあります（`xattr -d com.apple.quarantine kairocode`）。公証には Apple の開発者の登録が要るので、必要になったら別に決めます。
-- **Windows には出しません**（sandbox が無い）。
-- リリースのワークフローが使う権限は、リリースを作る `contents: write` だけです（`GITHUB_TOKEN`）。tap への push は手で行うので、別のトークンは要りません。自動にするなら、tap に書ける細かい権限のトークンを secret に置くことになります（そのとき決める）。
+- **macOS binaries are not signed or notarized.** They only have the ad-hoc signature Go adds to arm64 binaries. What you install with Homebrew or `curl` runs as is. What you download in a browser may be stopped by Gatekeeper (`xattr -d com.apple.quarantine kairocode`). Notarization needs an Apple developer registration, so we will decide on it separately if it becomes necessary.
+- **We do not ship for Windows** (there is no sandbox).
+- The only permission the release workflow uses is `contents: write` to create the release (`GITHUB_TOKEN`). Pushing to the tap is done by hand, so no other token is needed. To automate it, we would put a fine-grained token that can write to the tap in a secret (to be decided then).

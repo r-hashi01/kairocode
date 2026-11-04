@@ -1,17 +1,17 @@
-# NNNN 題
+# NNNN Title
 
-- 状態: 提案
-- 日付: YYYY-MM-DD
-- 関連: （要件の番号、設計の節、関係する ADR、kairo の ADR）
+- Status: Proposed
+- Date: YYYY-MM-DD
+- Related: (requirement numbers, design sections, related ADRs, kairo's ADRs)
 
-## 背景
+## Context
 
-## 決定
+## Decision
 
-（実装のどこに現れるか: ディレクトリ・型・関数）
+(Where it shows in the implementation: directories, types, functions)
 
-## 結果
+## Consequences
 
-（守らせるテストや hook。まだないなら「なし」）
+(The tests or hooks that enforce it. If there are none yet, "none")
 
-## 検討した代替案
+## Alternatives considered
