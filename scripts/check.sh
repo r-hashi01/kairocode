@@ -4,6 +4,8 @@
 #                             including the crash/resume tests
 #   scripts/check.sh --quick  what the hooks run: go test -short (crash tests
 #                             skip themselves under -short)
+# KAIROCODE_CHECK_RACE=0 runs the full tests without the race detector (CI's
+# macOS: races are looked for once, on Linux).
 # Exit 3: the tests cannot run here (an agent's sandbox; == env says why).
 # Passed, it notes so for the Stop hook (.claude/.cache/last-green), which
 # then does not run it again until the sources change.
@@ -55,6 +57,8 @@ step test
 export KAIROCODE_SKIPPED="$envcheck/skipped"
 if $quick; then
   go test -short -count=1 ./...
+elif [ "${KAIROCODE_CHECK_RACE:-1}" = 0 ]; then
+  go test -count=1 ./...
 else
   go test -race -count=1 ./...
 fi

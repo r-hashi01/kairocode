@@ -1,12 +1,18 @@
 # The definition of done (AGENTS.md), on macOS and Linux: scripts/check.sh
-# (gofmt, vet, build, all tests with -race including the crash tests, the
-# invariants, the ADRs).
+# (gofmt, vet, build, all tests including the crash tests, the invariants,
+# the ADRs). A change of documentation only runs the ADR check, not the
+# tests (scripts/ci-changes.sh says which); a tag, the weekly run and a
+# manual run always run everything. The ruleset of main requires one
+# check, "ci", which sums up the others.
 name: check
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays: everything, whatever changed
+  workflow_dispatch:
   workflow_call: # a release is made only once it passes (release.yml)
 
 permissions:
@@ -17,18 +23,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    # Named by the system, not its version: the ruleset of main requires
-    # "check (linux)" and "check (macos)", which a newer runner keeps.
-    name: check (${{ matrix.system }})
+  changes:
+    runs-on: ubuntu-26.04
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          # A pull request: its base and head. A push to main: before and
+          # after. Neither (a tag, the weekly or a manual run): everything.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.before || '' }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: scripts/ci-changes.sh
+
+  docs:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/adr-lint.sh
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Named by the system, not its version: a newer runner keeps the names.
+    name: test (${{ matrix.system }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - system: linux
             os: ubuntu-26.04
+            race: "1"
           - system: macos
             os: macos-26
+            race: "0" # races are looked for once, on Linux
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -51,3 +82,20 @@ jobs:
           git config --global user.name ci
           git config --global user.email ci@example.invalid
       - run: scripts/check.sh
+        env:
+          KAIROCODE_CHECK_RACE: ${{ matrix.race }}
+
+  # The one check the ruleset requires: passed when every job above passed
+  # or was not needed (test, for documentation only).
+  ci:
+    needs: [changes, docs, test]
+    if: always()
+    runs-on: ubuntu-26.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "changes, docs, test: $RESULTS"
+          for r in $RESULTS; do
+            case $r in success | skipped) ;; *) exit 1 ;; esac
+          done
