@@ -10,7 +10,7 @@ KairoCode は、セッションを [kairo](https://github.com/r-hashi01/kairo)�
 - **どのエージェントの上でも同じ。** Claude API のほか、手元の Claude Code・Codex・GitHub Copilot の CLI や ACP のエージェントをエンジンにでき、権限の規則・sandbox・記録は KairoCode の側で揃えます。
 - **手順を、壊れないフローにする。** 決まった手順を Starlark のフロー（`.kairocode/workflows/*.star`）に書くか、言葉から作らせ、図で見て、試運転してから使えます。途中で落ちても、終わったところはやり直しません。
 
-> まだ公開前の版です。使い方や設定の形は変わることがあります。
+> 最初の版（v0.1）です。使い方や設定の形は変わることがあります。
 
 ## 対応する環境
 
@@ -20,15 +20,16 @@ KairoCode は、セッションを [kairo](https://github.com/r-hashi01/kairo)�
 
 ## 入れる
 
-Go 1.27.2 以上で、ソースからビルドします。
+| 入れ方 | コマンド |
+|---|---|
+| Homebrew（macOS、Linux） | `brew install r-hashi01/tap/kairocode` |
+| Go | `go install github.com/r-hashi01/kairocode/cmd/kairocode@latest`（`kairo` のリンクは作られません） |
+| バイナリ | [Releases](https://github.com/r-hashi01/kairocode/releases) から自分の OS と CPU の tar.gz を落とし、`kairocode` と `kairo` を `PATH` に置く |
+| ソース | `git clone https://github.com/r-hashi01/kairocode && cd kairocode && make build`（Go 1.27.2 以上。`bin/kairocode` と `bin/kairo` ができる） |
 
-```sh
-git clone https://github.com/r-hashi01/kairocode
-cd kairocode
-make build          # bin/kairocode と、同じコマンドの bin/kairo ができる
-```
+`kairo` は `kairocode chat` と同じで、端末の対話を開きます。`kairocode version` で版を確かめられます。
 
-`bin/` を `PATH` に入れるか、`go install ./cmd/kairocode` で入れてください。`kairocode version` で版を確かめられます。
+macOS のバイナリは Apple の公証を受けていません。ブラウザで落としたものが止められたら、`xattr -d com.apple.quarantine kairocode kairo` を実行してください（Homebrew と `curl` で入れたものは、そのまま動きます）。
 
 ## 最初の設定
 
