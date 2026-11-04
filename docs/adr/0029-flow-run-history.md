@@ -1,59 +1,59 @@
-# 0029 フローの実行の履歴: 終わった回を保存し、後から見返す
+# 0029 Flow run history: keep finished runs, and look back at them later
 
-- 状態: 承認（2026-10-27）
-- 日付: 2026-10-27
-- 関連: ADR 0003（フロー）、ADR 0017（試し）、ADR 0023（記録の閲覧）、kairo の ADR 0054（終わった木を消す）
+- Status: Accepted (2026-10-27)
+- Date: 2026-10-27
+- Related: ADR 0003 (flows), ADR 0017 (try), ADR 0023 (browsing the record), kairo's ADR 0054 (deleting finished trees)
 
-## 背景
+## Context
 
-フローを後から見返す口は、次の 3 つだけです。
+There are only 3 ways to look back at a flow later.
 
-- `kairocode flow show <セッション>`: そのセッションの最新のフローの図と、各ステップの状態。
-- `kairocode log <セッション>`: セッションの記録全体。
-- `kairocode flow stats`: フローごとの回数。
+- `kairocode flow show <session>`: the diagram of that session's latest flow, and the state of each step.
+- `kairocode log <session>`: the whole record of the session.
+- `kairocode flow stats`: run counts per flow.
 
-過去の回を一覧から選んで見る口はありません。それに、記録そのものが消えます。kairo は、根が終わった木の記録を `KeepFinished`（既定 24 時間）で消すからです。会話のセッションは待ち続けるので残りますが、`kairocode run "/flow …"`（CI、hook、定期の起動）はセッションを閉じるので、1 日たつと、その回の記録は何も残りません。
+There is no way to pick a past run from a list and look at it. Also, the record itself disappears. kairo deletes the record of a tree whose root has finished after `KeepFinished` (24 hours by default). Conversation sessions keep waiting, so they stay, but `kairocode run "/flow …"` (CI, hooks, scheduled starts) closes its session, so after a day nothing of that run's record remains.
 
-## 決定
+## Decision
 
-1. **フローの実行が終わったら、その回を KairoCode の側に保存する。** 新しいテーブル `kc_flow_run` に、1 回を 1 行で残します。
-   - 列: 実行の ID（フローの実行の kairo の ID）、作業フォルダー、フローの名前、始まり、終わり、どう終わったか、本文（JSON）。
-   - 本文:
-     - 誰がどこから起動したか（会話の `/flow`、エージェント、hook）
-     - 引数、セッション、ターン
-     - どう終わったか（成功、失敗、壊れた、取り消し）と、フローが返した文、エージェントの数、使用量
-     - フローの図と、各ステップの状態（`flowchart.View`）
-     - 各ステップの時刻つきの流れ（`kairocode log` と同じ形の項目。エージェント、ツールの呼び出しと結果、承認や問いと誰がどう答えたか、モデルの呼び出しと使用量）
-   - 本文の長さは `kairocode log` と同じです（返事や結果は 400 文字まで）。全文は、記録が残っている間は `kairocode log` で見られます。
-   - 秘密は、ほかの記録と同じく入れません（不変条件 6。記録にないものは書かない）。
-2. **保存するのはデーモンの側で、ワークフローは変えない。** kairo が「実行が終わった」と知らせたもの（`ObsRunSettled`）のうち、フローの実行のものを、その場で保存します。デーモンが落ちて書きそびれた回は、次の起動時に、kairo に記録が残っているものから保存します。同じ回を 2 度書いても、1 行のままです。
-3. **どれだけ残すか:** フォルダーとフローごとに直近 200 回、かつ 90 日以内です。保存のたびに、それを超えた古いものを消します。利用者の `kairocode.json` の `flowHistory`（`{"keep": 200, "days": 90}`）で変えられます。
-4. **見返す口**
-   - `kairocode flow runs [-dir DIR] [-flow 名前] [-n N] [-json]`: 過去の実行の一覧（新しい順）。動いている回も、kairo から読んで載せます。
-   - `kairocode flow show <実行の ID>`: その回の図（各ステップの状態つき）と、時刻つきの流れ。`<セッション>` を渡したときは、これまでどおり最新のフローを見せ、動いている回なら `-follow` で追えます。
-   - 端末の画面: `/flow runs` で一覧を出し、選ぶと、その回の図と流れを見られます。レビューと同じく別の画面（alt screen）に出します。ACP のエージェントの拡張のメソッド（`_kairocode/flow_runs`、`_kairocode/flow_run`）が渡します。
-   - API: `GET /flows/runs`、`GET /flows/run?id=…`。
+1. **When a flow run finishes, save that run on KairoCode's side.** In a new table `kc_flow_run`, one run is kept as one row.
+   - Columns: run ID (the kairo ID of the flow run), working folder, flow name, start, end, how it ended, body (JSON).
+   - Body:
+     - Who started it and from where (the conversation's `/flow`, an agent, a hook)
+     - Arguments, session, turn
+     - How it ended (succeeded, failed, broken, cancelled), the text the flow returned, the number of agents, usage
+     - The flow's diagram and the state of each step (`flowchart.View`)
+     - The timestamped sequence of each step (entries in the same form as `kairocode log`: agents, tool calls and results, approvals and questions and who answered how, model calls and usage)
+   - The length of the body is the same as `kairocode log` (replies and results up to 400 characters). The full text can be seen with `kairocode log` while the record remains.
+   - No secrets go in, as with other records (invariant 6; nothing that is not in the record is written).
+2. **Saving happens on the daemon's side, and the workflow is not changed.** Of the notices kairo sends that "a run finished" (`ObsRunSettled`), those for flow runs are saved on the spot. Runs that were missed because the daemon crashed are saved at the next start, from what remains in kairo's record. Writing the same run twice still leaves one row.
+3. **How much is kept:** the latest 200 runs per folder and flow, and within 90 days. On each save, older ones beyond that are deleted. This can be changed with `flowHistory` (`{"keep": 200, "days": 90}`) in the user's `kairocode.json`.
+4. **Ways to look back**
+   - `kairocode flow runs [-dir DIR] [-flow name] [-n N] [-json]`: a list of past runs (newest first). Runs in progress are also listed, read from kairo.
+   - `kairocode flow show <run ID>`: that run's diagram (with the state of each step) and its timestamped sequence. When given a `<session>`, it shows the latest flow as before, and a run in progress can be followed with `-follow`.
+   - The terminal UI: `/flow runs` shows the list, and choosing one shows that run's diagram and sequence. Like the review, it is shown on a separate screen (alt screen). The ACP agent's extension methods (`_kairocode/flow_runs`, `_kairocode/flow_run`) supply it.
+   - API: `GET /flows/runs`, `GET /flows/run?id=…`.
 
-実装に現れるところ: `internal/store`（`kc_flow_run`）、`internal/runtime/flowruns.go`（保存、一覧、1 回、消す）、`internal/runtime/runtime.go`（`observe` から保存、起動時の保存）、`internal/server` と `internal/daemon`（API とクライアント）、`internal/cli`（`flow runs`、`flow show`）、`internal/acp`（拡張のメソッド）、`internal/tui`（`/flow runs`）。
+Where this shows up in the implementation: `internal/store` (`kc_flow_run`), `internal/runtime/flowruns.go` (save, list, one run, delete), `internal/runtime/runtime.go` (saving from `observe`, saving at start), `internal/server` and `internal/daemon` (API and client), `internal/cli` (`flow runs`, `flow show`), `internal/acp` (extension methods), `internal/tui` (`/flow runs`).
 
-追記（2026-10-27、利用者の要望）: **試しも、試しとして残す。** 書く前の試し（ADR 0017）は、承認に答えると見る手段がなくなっていました。
-- 試しも `kc_flow_run` に保存し、`try` の列（と本文の `try`）で印を付けます。前の版で作ったテーブルには、開くときに列を足します。
-- 件数と日数の上限（`flowHistory`）は、試しと本物の実行で別々に数えます。試しを何度しても、本物の実行の履歴が押し出されないようにするためです。
-- `kairocode flow runs` は両方を並べ、試しを「名前 (try)」と出します。`-tries` で試しだけ、`-no-tries` で実行だけです。API と ACP の拡張のメソッドは `only`（`tries`、`runs`）で絞ります。
-- `kairocode flow show <ID>` と端末の `/flow runs` は、試しも同じく図と流れで見せます（端末では `try` の印と「書く前の試し」の見出し）。
-- テスト: `TestTryFlowWithPluginTools`（試しが試しとして残る）、`TestFlowTriesCountedApart`、`TestFlowRunsScreen`。
+Addendum (2026-10-27, the user's request): **tries are also kept, as tries.** A try before writing (ADR 0017) could no longer be seen once the approval was answered.
+- Tries are also saved in `kc_flow_run`, marked with the `try` column (and `try` in the body). For a table created by the earlier version, the column is added when it is opened.
+- The count and day limits (`flowHistory`) are counted separately for tries and real runs. This is so that trying many times does not push out the history of real runs.
+- `kairocode flow runs` lists both, showing tries as "name (try)". `-tries` shows only tries, `-no-tries` only runs. The API and the ACP extension methods filter with `only` (`tries`, `runs`).
+- `kairocode flow show <ID>` and the terminal's `/flow runs` show tries the same way, with diagram and sequence (in the terminal, with the `try` mark and the heading "try before writing").
+- Tests: `TestTryFlowWithPluginTools` (a try is kept as a try), `TestFlowTriesCountedApart`, `TestFlowRunsScreen`.
 
-## 結果
+## Consequences
 
-- `kairocode run` で動かしたフローも、終わった後に何日たっても、どう動いたかを見返せます。
-- テスト
-  - フローが終わると保存され、kairo の記録が消えた後も、一覧と 1 回の図・流れが見られる。
-  - デーモンが保存しそびれた回を、次の起動時に保存する。同じ回を 2 度書いても 1 行。
-  - 古いものが、件数と日数の上限で消える。
-  - 端末の `/flow runs` が、一覧と 1 回を別の画面に出す。
+- Even for flows run with `kairocode run`, how they ran can be looked back at after they finish, however many days later.
+- Tests
+  - When a flow finishes it is saved, and after kairo's record is deleted, the list and one run's diagram and sequence can still be seen.
+  - Runs the daemon missed saving are saved at the next start. Writing the same run twice leaves one row.
+  - Old ones are deleted by the count and day limits.
+  - The terminal's `/flow runs` shows the list and one run on a separate screen.
 
-## 検討した代替案
+## Alternatives considered
 
-- **kairo の `KeepFinished` を延ばす:** 全部の記録が残り続け、DB が大きくなります。フローの回だけを見返したいのに、ターンやモデルの呼び出しの細かい記録まで抱えることになります。
-- **フローのワークフローの最後に、保存のアクションを足す:** 確実ですが、ワークフローの呼び出しの順番が変わり、版を上げる必要があります。終わりの知らせと起動時の拾い直しで足ります。
-- **全文を保存する:** 長いモデルの返事やツールの結果まで残すと、行が大きくなります。全文が要るときは、記録が残っている間の `kairocode log` で見られます。
+- **Extend kairo's `KeepFinished`:** all records would keep remaining, and the DB would grow. We only want to look back at flow runs, but we would be holding the detailed records of turns and model calls too.
+- **Add a saving action at the end of the flow workflow:** reliable, but the order of the workflow's calls changes, and the version must be bumped. The finish notice plus picking up again at start is enough.
+- **Save the full text:** keeping long model replies and tool results would make rows large. When the full text is needed, it can be seen with `kairocode log` while the record remains.

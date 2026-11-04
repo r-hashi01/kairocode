@@ -1,64 +1,64 @@
-# 0028 裏で動くコマンド: 長いループの中で、何時間でも待てる
+# 0028 Background commands: waiting for hours inside a long loop
 
-- 状態: 承認（2026-10-26）
-- 日付: 2026-10-26
-- 関連: 設計 3 節（ツールの作用の型）、ADR 0005（sandbox）、ADR 0007（Claude Code のエンジンの MCP の呼び出し）、ADR 0008（デーモン）、不変条件 3・4・6・7
+- Status: Accepted (2026-10-26)
+- Date: 2026-10-26
+- Related: design section 3 (tool effect types), ADR 0005 (sandbox), ADR 0007 (MCP calls of the Claude Code engine), ADR 0008 (daemon), invariants 3, 4, 6 and 7
 
-## 背景
+## Context
 
-`bash` は 1 回の呼び出しが最長 10 分で、それを超えるコマンド（全体の検査、大きなビルド、長いテスト、データの移行）は途中で止められます。KairoCode で KairoCode を作るドッグフーディングで、`scripts/check.sh` が KairoCode の中で 10 分を超えて止まり、エージェントは利用者に外で動かすよう頼むしかありませんでした。
+One `bash` call lasts at most 10 minutes, and commands that run longer (the full check, a large build, long tests, a data migration) are stopped midway. While dogfooding (building KairoCode with KairoCode), `scripts/check.sh` ran over 10 minutes inside KairoCode and was stopped, and the agent could only ask the user to run it outside.
 
-また、エージェントは、サブエージェントに分けるより、1 つのエージェントに長いループで全部やらせる方が効率がよい、という方向にあります（Anthropic の発表）。KairoCode の耐久ワークフローは、その長いループを、何時間でも、落ちても安全に回すためのものです。長いループの中では、コマンドを裏で始め、ほかの作業を続け、要るところで終わりを待つことが欠かせません。Claude Code の `run_in_background` が同じ役です。
+Also, agents are moving toward having one agent do everything in a long loop rather than splitting the work into subagents, because it is more efficient (Anthropic's announcement). KairoCode's durable workflows exist to run such a long loop for hours, safely even through crashes. Inside a long loop, it is essential to start a command in the background, keep working on other things, and wait for its end where it is needed. Claude Code's `run_in_background` plays the same role.
 
-## 決定
+## Decision
 
-1. **`bash` に `background: true` を足す。** コマンドを裏で始め、すぐに ID（`bg_<12 文字>`）と、出力の読み方を返します。
-   - 作用の型は `bash` と同じく「実」です。始めたかどうか結果がわからないときは、これまでどおり人に聞きます（不変条件 4）。権限の規則と sandbox（`escalate` を含む）も `bash` と同じです。
-   - ID は、セッションとツールの呼び出しの ID から決まります（記録から同じ ID になる）。
-   - 上限: 1 つのセッションで同時に 8 つまで。長さの既定は 2 時間、`timeout_ms` で 24 時間まで。超えたら止めます。
-2. **コマンドはデーモンから切り離して動かす。** 裏のコマンドは、KairoCode のバイナリの見張り役（`kairocode jobs run <フォルダー>`）が、自分のプロセスグループで動かします。
-   - 見張り役は、sandbox の中のコマンドの出力をファイルに書き、終わったら終了コードを書き、長さの上限で止めます。
-   - デーモンが止まっても（何もしないときの終了、別のビルドへの入れ替え、落ちたとき）、コマンドは動き続けます。終わったら見張り役がデーモンに知らせます（いなければ起こす）。
-   - 記録の置き場は、データの置き場の `jobs/<ID>/` です（コマンド、出力、終了コード、待っている実行、伝えたかどうか）。
-3. **`bash_wait <ID>`: 終わるまで待つ。待つ間はプロセスを手放す。** ワークフローがこの呼び出しを待ちとして扱います（不変条件 7）。
-   - 待ちを登録するアクション（`job.watch`）が、終わっていればすぐ結果を返し、まだなら「この実行が待っている」と記録します。そのうえで、ワークフローが kairo の `WaitFor` で待ちます。終わると、デーモンがその実行にシグナルを送ります。
-   - 待つ前にシグナルが届いても、kairo が待ちに着いたときに渡します。デーモンが落ちても、待ちは kairo に残り、登録はファイルに残ります。
-   - 既定では、終わるまで待ちます。タイマーは掛けません（はじめは既定 30 分の期限でしたが、利用者の指摘で 2026-10-27 にやめました。期限のたびにタイマーと、そのためにデーモンを起こしておくことが要るため）。終わりは、次のどれかで待ちに届きます。
-     - 見張り役が終わり方を書いて、デーモンに知らせる（いなければ起こす。届くまで 3 分繰り返す）。
-     - 見張り役を始めたデーモンが、見張り役のプロセスの終わりを見る。
-     - 見張り役を始めていないデーモン（入れ替わった後など）は、起きたときに生きている見張り役のロックを待ち、取れたとき（見張り役がどう終わっても、SIGKILL でも、OS が外す）に知らせる。
-     - 見張り役ごと消えたとき（PC の再起動など）は、次に起きたデーモンが「わからない終わり方」（lost）として知らせる。デーモンを次に起こすのは、利用者の接続か、ほかの見張り役の知らせです。それまでは待ちが続きます。
-   - `timeout_ms`（最長 24 時間）を付けたときだけ、kairo の期限つきの待ちにします。期限が来たら、「まだ動いている」と出力の終わりを返します（待つ間に別の作業をして、また待つため）。
-   - MCP で呼ばれるとき（Claude Code のエンジン、ADR 0007）は、相手の CLI が応答を待っているので、待ちは 1 回 10 分までです。
-   - 作用の型は「読む」です（待つだけで、何も変えない）。
-4. **`bash_output <ID>`（読む）と `bash_kill <ID>`（実）。** 出力の続き（`since` から）と状態を読みます。止めるのは、プロセスグループごとです。
-5. **待つ者がいないまま終わったら、セッションに伝える。** 終わったときに `bash_wait` も `bash_output` もその結果をまだ受け取っていなければ、デーモンはセッションに「裏のコマンド bg_… が終わった（終了コード N）」というメッセージを送ります。セッションは、それをいつものメッセージとして、今のターンの後に新しいターンで扱います（ワークフローは変えない）。
-6. **既定の権限:** `bash_output` と `bash_wait` は読むだけなので、聞かずに通します。`bash_kill` は、既定の「聞く」のままです。
+1. **Add `background: true` to `bash`.** It starts the command in the background and immediately returns an ID (`bg_<12 characters>`) and how to read the output.
+   - The effect type is "real", the same as `bash`. When it is unknown whether it started, the user is asked as before (invariant 4). Permission rules and the sandbox (including `escalate`) are also the same as `bash`.
+   - The ID is derived from the session and the tool call's ID (the same ID comes out of the record).
+   - Limits: up to 8 at the same time per session. The default duration is 2 hours, up to 24 hours with `timeout_ms`. Past that, it is stopped.
+2. **Commands run detached from the daemon.** A background command is run by a watcher in the KairoCode binary (`kairocode jobs run <folder>`), in its own process group.
+   - The watcher writes the output of the command inside the sandbox to a file, writes the exit code when it ends, and stops it at the duration limit.
+   - Even if the daemon stops (exiting when idle, being replaced by another build, crashing), the command keeps running. When it ends, the watcher tells the daemon (waking it if there is none).
+   - The record lives in `jobs/<ID>/` in the data directory (the command, the output, the exit code, the waiting runs, whether it was told).
+3. **`bash_wait <ID>`: wait until it ends. While waiting, the process is released.** The workflow treats this call as a wait (invariant 7).
+   - The action that registers the wait (`job.watch`) returns the result right away if it has ended, and if not, records "this run is waiting". Then the workflow waits with kairo's `WaitFor`. When it ends, the daemon sends a signal to that run.
+   - Even if the signal arrives before the wait starts, kairo delivers it when it reaches the wait. If the daemon crashes, the wait stays in kairo and the registration stays in the file.
+   - By default, it waits until the end. No timer is set (at first there was a default 30-minute deadline, but it was dropped on 2026-10-27 after the user pointed it out, because each deadline needs a timer and keeping the daemon awake for it). The end reaches the wait in one of these ways.
+     - The watcher writes how it ended and tells the daemon (waking it if there is none; it retries for 3 minutes until delivered).
+     - The daemon that started the watcher sees the watcher process end.
+     - A daemon that did not start the watcher (after a replacement and so on) waits, when it wakes, for the lock of a live watcher, and tells when it gets it (however the watcher ended, even by SIGKILL, the OS releases it).
+     - When the watcher itself is gone (a PC restart and so on), the next daemon to wake reports it as "unknown ending" (lost). The next thing to wake the daemon is a user connection or another watcher's notice. Until then the wait continues.
+   - Only when `timeout_ms` (up to 24 hours) is given does it become a kairo wait with a deadline. When the deadline comes, it returns "still running" and the end of the output (so the agent can do other work while waiting, and wait again).
+   - When called over MCP (the Claude Code engine, ADR 0007), the other CLI is waiting for the response, so one wait is up to 10 minutes.
+   - The effect type is "read" (it only waits and changes nothing).
+4. **`bash_output <ID>` (read) and `bash_kill <ID>` (real).** Reads the rest of the output (from `since`) and the state. Stopping is done for the whole process group.
+5. **If it ends with no one waiting, the session is told.** If, when it ends, neither `bash_wait` nor `bash_output` has received that result yet, the daemon sends the session a message: "background command bg_… ended (exit code N)". The session handles it as an ordinary message, in a new turn after the current one (the workflow is not changed).
+6. **Default permissions:** `bash_output` and `bash_wait` only read, so they pass without asking. `bash_kill` stays at the default "ask".
 
-実装に現れるところ: `internal/tools/bash.go`（`background`）、`internal/tools/jobs.go`（`bash_output`、`bash_wait`、`bash_kill` の定義と、`Env.Jobs`）、`internal/runtime/jobs.go`（ジョブの管理、見張り役、知らせ）、`internal/workflows/turn.go` の `runGated`（`bash_wait` を待ちにする）、`internal/cli`（`kairocode jobs run`）、`internal/daemon`（見張り役からの知らせ）。
+Where this shows up in the implementation: `internal/tools/bash.go` (`background`), `internal/tools/jobs.go` (the definitions of `bash_output`, `bash_wait` and `bash_kill`, and `Env.Jobs`), `internal/runtime/jobs.go` (managing jobs, the watcher, notices), `runGated` in `internal/workflows/turn.go` (making `bash_wait` a wait), `internal/cli` (`kairocode jobs run`), `internal/daemon` (notices from the watcher).
 
-## 結果
+## Consequences
 
-- 長いループの 1 つのエージェントが、10 分を超えるコマンドを裏で動かし、ほかの作業を続け、終わりを待てます。待ちは何時間でも、デーモンが入れ替わっても続きます。
-- テスト
-  - 裏で始め、`bash_output` で途中の出力を読み、`bash_wait` で終わりを受け取る。待ちの間にワークフローの実行がシグナルで起きる。
-  - 待っている間に Runtime を閉じて開き直しても、終わったら待ちが起きる（記録とファイルからの再開）。
-  - 長さの上限で止まる。`bash_kill` で止まる。同時の上限を超えると断る。
-  - 待つ者がいないまま終わると、セッションに新しいメッセージが届く。受け取り済みなら届かない。
-  - 出力と記録に秘密が入らない（`bash` と同じく、コマンドの出力はそのまま）。
-  - 実装: `TestBackgroundCommandWaited`、`TestBackgroundWaitSurvivesRestart`、`TestBackgroundEndToldToTheSession`、`TestBackgroundTimeoutKillAndLimit`、`TestCrashBackgroundWait`（待っている間にプロセスを SIGKILL。コマンドは続き、次のプロセスが待ちを引き取る。1 回だけ動き、1 回だけ始まる）、`TestJobsRun`（CLI の見張り役）、`TestBackgroundWaitRanOutThenEnded`、`TestBackgroundTwoWaitsInARun`、`TestJobRunnerAlive`、`TestRunnerKilledAfterRestart`（始めていないデーモンが、SIGKILL された見張り役の終わりに気づく）。
+- One agent in a long loop can run commands over 10 minutes in the background, keep working on other things, and wait for the end. The wait lasts for hours, and survives the daemon being replaced.
+- Tests
+  - Start in the background, read the output so far with `bash_output`, and receive the end with `bash_wait`. While waiting, the workflow run is woken by a signal.
+  - Even if the Runtime is closed and reopened while waiting, the wait wakes when it ends (resuming from the record and the files).
+  - It stops at the duration limit. It stops with `bash_kill`. Going over the concurrency limit is refused.
+  - If it ends with no one waiting, a new message reaches the session. If the result was already received, it does not.
+  - No secrets get into the output or the record (as with `bash`, the command output is passed as is).
+  - Implementation: `TestBackgroundCommandWaited`, `TestBackgroundWaitSurvivesRestart`, `TestBackgroundEndToldToTheSession`, `TestBackgroundTimeoutKillAndLimit`, `TestCrashBackgroundWait` (SIGKILL the process while waiting; the command continues, and the next process takes over the wait; it runs once and starts once), `TestJobsRun` (the CLI watcher), `TestBackgroundWaitRanOutThenEnded`, `TestBackgroundTwoWaitsInARun`, `TestJobRunnerAlive`, `TestRunnerKilledAfterRestart` (a daemon that did not start it notices the end of a watcher that was SIGKILLed).
 
-実装で決めたこと（決定の趣旨は変えない）:
-- 止めるときは、先に「止めるよう頼まれた」印（`stop`）を書いてから、見張り役に SIGTERM を送ります。見張り役が言う前に消えても（始まった直後など）、「止めた」になります。
-- 見張り役は、終わったら毎回デーモンに知らせます（つなぐときに、版の違うデーモンを入れ替えない）。`bash_kill` で止められても知らせ、閉じかけのデーモン（503）には、次のデーモンに届くまで最長 3 分、繰り返します。始めた Runtime も見張り役の終わりを待って知らせるので、2 回届くことがありますが、知らせるのは 1 回です。
-- 「知らせた」（`notified`）は、待ちへのシグナルとセッションへのメッセージを送り終えてから書きます。その前にプロセスが止まれば、次のプロセスがもう一度知らせます（2 度目のシグナルは害がない。セッションへのメッセージは、送れたら `told` を書くので 2 度送らない）。閉じかけの Runtime は「知らせた」を書きません。
-- 待ちは呼び出しごとに別のシグナル（`job/<ID>/<呼び出し>`）です。1 つの実行が同じコマンドを 2 か所で待っても、互いに取り合いません。期限が来た待ちは登録を外すので、その後に終われば、セッションに伝わります。
-- 見張り役は、生きている間ロック（`lock`、flock）を持ち、自分の pid を書きます。生きているかは pid ではなくロックで見ます（再起動の後、pid は別のプロセスのものかもしれない）。デーモンが見張り役を始めた直後に止まっても、見張り役は自分で見えるようになります。
-- **期限つきの待ちがある間、デーモンは止まらない。** デーモンは、動いているステップもクライアントもなければ 10 分で止まります。ただ、kairo のタイマー（今は、`timeout_ms` を付けた `bash_wait` と、ワークフローの眠り）がある間は止まりません（`Runtime.Awaiting`。止まる時刻が来るたびに見直す）。kairo の期限はプロセスの中でしか起きないからです。期限のない待ちと、裏で動くコマンドだけなら、止まって構いません（終われば見張り役がデーモンを起こす）。デーモンが落ちたときは、次に起きたときに、過ぎた期限がまとめて来ます。テスト: `TestIdleDaemonStaysWhileAwaiting`、`TestAwaitingWhileWaiting`（期限のない待ちはタイマーを掛けず、期限つきの待ちはデーモンを止めない）。
-- 始めたかどうか結果がわからないときに人に聞くのは、これまでの「実」と同じです。そのとき、`jobs/<ID>` があれば始まっています（ID は呼び出しから決まる）。これを聞き方に出すのは、今後の課題です。
+Decided during implementation (the intent of the decision is unchanged):
+- To stop it, a "asked to stop" marker (`stop`) is written first, and then SIGTERM is sent to the watcher. Even if the watcher disappears before saying so (right after starting and so on), it counts as "stopped".
+- The watcher tells the daemon every time it ends (it does not replace a daemon of a different version when connecting). It tells even when stopped by `bash_kill`, and against a daemon that is closing (503) it retries for up to 3 minutes until it reaches the next daemon. The Runtime that started it also waits for the watcher's end and tells, so it can arrive twice, but it is reported once.
+- "Told" (`notified`) is written after the signal to the wait and the message to the session have been sent. If the process stops before that, the next process tells again (a second signal is harmless; for the session message, `told` is written once it is sent, so it is not sent twice). A Runtime that is closing does not write "told".
+- Each call's wait is a separate signal (`job/<ID>/<call>`). Even if one run waits for the same command in 2 places, they do not take each other's. A wait whose deadline passed is unregistered, so if the command ends after that, the session is told.
+- While alive, the watcher holds a lock (`lock`, flock) and writes its pid. Whether it is alive is judged by the lock, not the pid (after a restart, the pid may belong to another process). Even if the daemon stops right after starting the watcher, the watcher makes itself visible.
+- **While there is a wait with a deadline, the daemon does not stop.** The daemon stops after 10 minutes with no running steps and no clients. But while there is a kairo timer (today, a `bash_wait` with `timeout_ms` and workflow sleeps), it does not stop (`Runtime.Awaiting`; reconsidered each time the stop time comes). This is because kairo deadlines fire only inside a process. If there are only waits without deadlines and background commands, it may stop (the watcher wakes the daemon when one ends). When the daemon crashes, the passed deadlines all come together the next time it wakes. Tests: `TestIdleDaemonStaysWhileAwaiting`, `TestAwaitingWhileWaiting` (a wait without a deadline sets no timer, and a wait with a deadline keeps the daemon from stopping).
+- Asking the user when it is unknown whether it started is the same as for "real" so far. In that case, if `jobs/<ID>` exists, it has started (the ID is derived from the call). Showing this in the question is future work.
 
-## 検討した代替案
+## Alternatives considered
 
-- **`bash` の上限を延ばす:** 簡単です。ただ、その間ターンは何もできず、プロセスも持ち続けます。長いループの中で、待つ間に別の作業をすることができません。
-- **終わったら常に新しいターンを始める（待ちの道具なし）:** ワークフローを変えずに済みます。ただ、長いループの 1 つのターンの中で結果を使えず、ターンを区切るたびに文脈が途切れます。
-- **デーモンの中でコマンドを持つ（切り離さない）:** 作りは小さいです。ただ、デーモンの入れ替えや何もしないときの終了で、長いコマンドが止まるか、終わりがわからなくなります。
+- **Raise `bash`'s limit:** simple. But during that time the turn can do nothing, and keeps holding the process. Inside a long loop, it cannot do other work while waiting.
+- **Always start a new turn when it ends (no waiting tool):** the workflow need not change. But the result cannot be used inside the one turn of a long loop, and the context breaks each time a turn is cut.
+- **Hold commands inside the daemon (not detached):** a small build. But replacing the daemon or exiting when idle would stop a long command, or lose track of how it ended.

@@ -1,48 +1,48 @@
-# 0032 端末の通知: 人を待つときとターンの終わりを、画面を見ていない利用者に知らせる
+# 0032 Terminal notifications: telling a user who is not looking at the screen when a human is needed and when a turn ends
 
-- 状態: 承認（2026-10-28）
-- 日付: 2026-10-28
-- 関連: ADR 0010（端末の画面）、0016（auto モード）、0008（デーモン）、M7（手元の外への知らせは別）
+- Status: Accepted (2026-10-28)
+- Date: 2026-10-28
+- Related: ADR 0010 (the terminal UI), 0016 (auto mode), 0008 (daemon), M7 (notices outside the local machine are separate)
 
-## 背景
+## Context
 
-利用者は、ターンが長く動く間に別の窓で作業します。今の `kairo` の画面は、承認や質問で人を待っても、ターンが終わっても、何も知らせません。気づくまでターンが止まったままになります（利用者の指摘、2026-10-28）。
+The user works in another window while a turn runs for a long time. Today the `kairo` screen gives no notice when it waits for a human on an approval or a question, or when a turn ends. The turn stays stopped until the user notices (the user pointed this out, 2026-10-28).
 
-Claude Code は、人を待つときとターンの終わりに、端末の通知（ベルか、端末の通知の仕組み）を出します。
+Claude Code gives a terminal notification (a bell, or the terminal's notification mechanism) when it waits for a human and when a turn ends.
 
-M7 の「承認の求めを Slack などに知らせる」は、手元の外に送るもので、hook とフローで作る別の話です。この ADR は、手元の端末の通知だけを扱います。
+M7's "notify Slack and the like of approval requests" sends things outside the local machine, and is a separate matter built with hooks and flows. This ADR covers only notifications in the local terminal.
 
-## 決定
+## Decision
 
-1. **知らせるとき**
-   - 人を待つとき: 承認、質問（フローの `ask`、hook を動かすかの問い）、要確認（「効いたか」）。画面に問いが出たときに 1 度。
-   - ターンが終わったとき（返事を書き終えた、失敗した、止めた）。続けて送る待ちの依頼があって次のターンが始まるときは、知らせません。
-2. **知らせる条件:** 端末が画面の焦点を失っているときだけです（`tea.View.ReportFocus` で、`FocusMsg`・`BlurMsg` を受ける）。
-   - 焦点の知らせを返さない端末（`FocusMsg` も `BlurMsg` も来ない）では、10 秒を超えて動いたターンの終わりと、人を待つときに知らせます。
-3. **知らせ方（依存を足さない）:** `tea.Raw` で、端末の通知の制御の列を送ります。
-   - `TERM_PROGRAM` が iTerm.app、WezTerm、ghostty: OSC 9（`ESC ] 9 ; <文> BEL`）。
-   - kitty（`TERM=xterm-kitty`）: OSC 99。
-   - それ以外と tmux の中（`TMUX` がある）: ベル（`BEL`）だけです。Terminal.app は、ベルで Dock のアイコンに印を付けます。tmux の通り抜けは扱いません。
-   - 文は「kairo: 承認を待っています — <ツールの名前>」「kairo: 終わりました — <返事の最初の行、60 字まで>」のように短くします。読む人の言語（`internal/locale`）で出します。
-4. **設定:** 利用者の `kairocode.json` の `"notify"` で、`"unfocused"`（既定）、`"always"`、`"never"` を選びます。プロジェクトの設定では変えません（通知は利用者のもの）。
-5. **持つところ:** `internal/tui` だけです。デーモンとワークフローは変えません。ACP のクライアント（Zed など）は、それぞれの通知を使います。
+1. **When to notify**
+   - When waiting for a human: approvals, questions (a flow's `ask`, the question whether to run a hook), and blocked (needs confirmation) ("did it take effect?"). Once, when the question appears on screen.
+   - When a turn ends (finished writing the reply, failed, stopped). When there is a queued request to send next and the next turn starts, no notice is given.
+2. **Condition for notifying:** only when the terminal has lost screen focus (with `tea.View.ReportFocus`, receiving `FocusMsg` and `BlurMsg`).
+   - In terminals that do not report focus (neither `FocusMsg` nor `BlurMsg` arrives), notify at the end of turns that ran over 10 seconds, and when waiting for a human.
+3. **How to notify (no added dependency):** send the terminal's notification control sequence with `tea.Raw`.
+   - `TERM_PROGRAM` is iTerm.app, WezTerm or ghostty: OSC 9 (`ESC ] 9 ; <text> BEL`).
+   - kitty (`TERM=xterm-kitty`): OSC 99.
+   - Anything else, and inside tmux (`TMUX` is set): just the bell (`BEL`). Terminal.app marks the Dock icon on a bell. tmux passthrough is not handled.
+   - The text is short, like "kairo: waiting for approval — <tool name>" or "kairo: done — <first line of the reply, up to 60 characters>". It is shown in the reader's language (`internal/locale`).
+4. **Settings:** `"notify"` in the user's `kairocode.json` chooses `"unfocused"` (default), `"always"` or `"never"`. Project settings do not change it (notifications belong to the user).
+5. **Where it lives:** only in `internal/tui`. The daemon and workflows are not changed. ACP clients (Zed and so on) use their own notifications.
 
-実装に現れるところ: `internal/tui`（`notify.go`、焦点の状態、`askMsg`・`turnDoneMsg` での呼び出し、`View.ReportFocus`）、`internal/locale`（文）、利用者の設定の読み方。
+Where this shows up in the implementation: `internal/tui` (`notify.go`, focus state, calls from `askMsg` and `turnDoneMsg`, `View.ReportFocus`), `internal/locale` (the text), reading the user's settings.
 
-## 結果
+## Consequences
 
-- 別の窓で作業していても、人を待つときとターンの終わりに気づけます。
-- 画面を見ているときは、知らせません。
-- テスト: 焦点を失っているときだけ、人を待つときとターンの終わりに制御の列が 1 度出る。焦点があるとき、`"never"` のときは出ない。端末ごとの列（OSC 9、OSC 99、ベル）。焦点の知らせの無い端末で、短いターンでは出ない。本物の端末（iTerm2、Terminal.app、Ghostty）では手で確かめる。
+- Even while working in another window, the user notices when a human is needed and when a turn ends.
+- While the user is looking at the screen, no notice is given.
+- Tests: only when focus is lost, the control sequence is output once when waiting for a human and at the end of a turn. Not output when focused or with `"never"`. The sequence for each terminal (OSC 9, OSC 99, bell). In a terminal without focus reports, not output for short turns. Checked by hand in real terminals (iTerm2, Terminal.app, Ghostty).
 
-## 検討した代替案
+## Alternatives considered
 
-- **OS の通知を直接出す（`osascript -e 'display notification'`、`notify-send`）:** どの端末でも出せますが、外のコマンドを起動します（ADR 0005 の例外が増える）。端末の通知なら、通知を押すとその端末に戻れます。
-- **いつも知らせる:** 画面を見ているときの通知はうるさいだけです。
-- **デーモンが知らせる:** デーモンは画面を持たず、どのクライアントが前にいるかを知りません。
+- **Give OS notifications directly (`osascript -e 'display notification'`, `notify-send`):** works in any terminal, but starts outside commands (more exceptions to ADR 0005). With a terminal notification, clicking it brings you back to that terminal.
+- **Always notify:** notifications while looking at the screen are just noise.
+- **Let the daemon notify:** the daemon has no screen, and does not know which client is in front.
 
-## 実装（2026-10-28）
+## Implementation (2026-10-28)
 
-- `internal/tui/notify.go`。焦点は `FocusMsg`・`BlurMsg` で持ち、`View.ReportFocus` を立てます。問いが画面に出たとき（`askMsg`）と、続けて送る依頼の無いターンの終わり（`turnDoneMsg`）に知らせます。ターンの終わりの文は、返事の最初の行（コードブロックの外）か、失敗の理由です。
-- 利用者の設定は `locale.UserSetting("notify")` で読みます（`language` と同じ読み方に揃えた）。
-- テスト: `TestNotifyWhenNotLooking`、`TestNotifyModes`、`TestTerminalSequence`。本物の端末での確かめは残り。
+- `internal/tui/notify.go`. Focus is tracked with `FocusMsg` and `BlurMsg`, and `View.ReportFocus` is set. It notifies when a question appears on screen (`askMsg`) and at the end of a turn with no queued request to send next (`turnDoneMsg`). The text at the end of a turn is the first line of the reply (outside code blocks), or the reason for failure.
+- The user's setting is read with `locale.UserSetting("notify")` (made to match how `language` is read).
+- Tests: `TestNotifyWhenNotLooking`, `TestNotifyModes`, `TestTerminalSequence`. Checking in real terminals remains.

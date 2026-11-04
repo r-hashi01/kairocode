@@ -43,7 +43,7 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 		}
 	}
 	// A session that names no model or effort gets those last chosen for
-	// its provider (ADR 0014, 追記).
+	// its provider (ADR 0014, addendum).
 	engine := in.Engine
 	if engine == "" {
 		engine = r.cfg.Engine
@@ -120,7 +120,7 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
 	// A session that failed takes nothing more (kairo-gap #16): said so,
-	// not sent to be lost (ADR 0021, 追記 2026-10-28).
+	// not sent to be lost (ADR 0021, addendum 2026-10-28).
 	if err := r.failed(ctx, session); err != nil {
 		return 0, err
 	}

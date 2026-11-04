@@ -1,16 +1,16 @@
-# 例: フローからプラグインのツールを呼ぶ（GitHub）
+# Example: call a plugin's tool from a flow (GitHub)
 
-プラグイン（ADR 0025）のツールは、フロー（ADR 0003）の `tool(...)` から、会話で使うときと同じ名前（`<プラグイン>_<ツール>`）で呼べます。フローの `agent(...)` で動くエージェントも、同じツールを使えます。
+A plugin's (ADR 0025) tools can be called from a flow's (ADR 0003) `tool(...)` with the same name as in a conversation (`<plugin>_<tool>`). Agents run by the flow's `agent(...)` can use the same tools too.
 
-## 1. プラグインを入れる
+## 1. Install the plugin
 
 ```sh
-kairocode plugin install github   # 続けてトークンを聞かれる（gh auth token の値）
+kairocode plugin install github   # then it asks for a token (the value of gh auth token)
 ```
 
-## 2. 権限の規則
+## 2. Permission rules
 
-フローの中の呼び出しにも、会話と同じ権限の規則が効きます。何も書かなければ、どのツールも呼ぶ前に聞かれます。読むだけのものを聞かずに通すなら、`~/.config/kairocode/kairocode.json` に書きます。
+The same permission rules as in a conversation apply to calls inside a flow. If you write nothing, every tool asks before it is called. To let the read-only ones through without asking, write this in `~/.config/kairocode/kairocode.json`.
 
 ```json
 {
@@ -24,14 +24,14 @@ kairocode plugin install github   # 続けてトークンを聞かれる（gh au
 }
 ```
 
-これは同梱の github のプラグインが「読むだけ」と宣言しているツールと同じ並びです。ほかのツール（`github_add_issue_comment` など、書き込むもの）は、既定の規則（`"*": "ask"`）のとおり聞かれます。
+This is the same set as the tools that the bundled github plugin declares as "read-only". The other tools (the ones that write, such as `github_add_issue_comment`) ask, following the default rule (`"*": "ask"`).
 
-## 3. フロー
+## 3. The flow
 
 `.kairocode/workflows/triage.star`:
 
 ```python
-DESCRIPTION = "開いている issue を読み、優先して直すものを選んで、その方針をコメントする"
+DESCRIPTION = "Read the open issues, choose the one to fix first, and comment the plan on it"
 
 def main(input):
     repo = input["args"] or "r-hashi01/kairocode"
@@ -43,10 +43,10 @@ def main(input):
         return {"ok": False, "message": issues.error}
 
     phase("choose")
-    pick = agent(agent = "plan", prompt = "次の issue から、先に直すべきものを 1 つ選び、番号と理由を書いて:\n" + issues.output)
+    pick = agent(agent = "plan", prompt = "From the following issues, choose the one to fix first, and write its number and the reason:\n" + issues.output)
 
     phase("comment")
-    number = decide("選ばれた issue の番号は？\n" + pick.output, type = "number")
+    number = decide("What is the number of the chosen issue?\n" + pick.output, type = "number")
     if not number.ok:
         return {"ok": False, "message": number.error}
     done = tool("github_add_issue_comment", owner = owner, repo = name,
@@ -55,13 +55,13 @@ def main(input):
 ```
 
 ```sh
-kairocode run "/flow triage r-hashi01/kairocode"   # か、会話で /flow triage r-hashi01/kairocode
+kairocode run "/flow triage r-hashi01/kairocode"   # or, in a conversation, /flow triage r-hashi01/kairocode
 ```
 
-- `github_list_issues` は読むだけなので、規則のとおり聞かれずに動きます。
-- `github_add_issue_comment` は書き込むので、承認を聞かれます。承認を待つ間はプロセスを手放し、落ちても、もう一度コメントすることはありません（結果がわからないときは、人に「されたか」を聞きます）。
-- 引数の名前は、そのツールのスキーマのとおりです。`/plugin` の詳細でツールの名前を、会話でモデルに聞けば引数を確かめられます。
+- `github_list_issues` only reads, so it runs without asking, as the rules say.
+- `github_add_issue_comment` writes, so it asks for approval. While waiting for approval, it releases the process, and even if it crashes, it does not comment again (when the outcome is unknown, it asks a person "was it done?").
+- The argument names follow that tool's schema. You can check the tool names in the details of `/plugin`, and the arguments by asking the model in a conversation.
 
-## 4. 言葉から作る
+## 4. Make it from words
 
-`/flow new 開いている issue から先に直すものを選んでコメントする` と頼むと、モデルが入っているプラグインのツールを使って、フローの下書き（`.kairocode/workflows/drafts/`）を書きます（ADR 0030）。下書きは `/flow triage --draft` で試し、`/flow triage --publish` で公開します（そのときにレビューが出ます）。試し（ADR 0017）では、MCP サーバーとプラグインを起動しません。そのツールは読むものも書くものも呼ばず、「何を渡して呼んだはずか」を試しの結果に出して、フローは先に進みます（その呼び出しは成功として返り、`.output` は「試しなので呼んでいない」という文です）。
+If you ask `/flow new choose the issue to fix first from the open issues and comment on it`, the model writes a flow draft (`.kairocode/workflows/drafts/`) using the installed plugins' tools (ADR 0030). Try the draft with `/flow triage --draft`, and publish it with `/flow triage --publish` (a review appears then). A try (ADR 0017) does not start MCP servers or plugins. It calls none of their tools, neither the ones that read nor the ones that write; it puts "what it would have called them with" in the try's result, and the flow moves on (that call returns as a success, and `.output` is a sentence saying "not called because this is a try").

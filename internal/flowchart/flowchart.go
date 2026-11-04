@@ -94,7 +94,7 @@ type Chart struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	// Args is what the flow is to be given (its ARGS): the words after
-	// /flow <name>, as their use says (ADR 0003, 追記).
+	// /flow <name>, as their use says (ADR 0003, addendum).
 	Args  string `json:"args,omitempty"`
 	Nodes []Node `json:"nodes"`
 }

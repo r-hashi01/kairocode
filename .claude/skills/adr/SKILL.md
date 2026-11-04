@@ -5,14 +5,14 @@ description: Write an Architecture Decision Record for KairoCode in docs/adr (ne
 
 # adr
 
-1. `docs/adr/README.md` と、関係しそうな既存の ADR を読みます。同じ判断がすでにあるなら、新しく書かずにそれを示します。kairo の側の判断なら、`/kairo-gap` を使います。
-2. 番号は、既存の最大番号 + 1（4 桁）にします。ファイル名は `docs/adr/NNNN-slug.md`（slug は英小文字とハイフン）です。
-3. `docs/adr/template.md` の構成（背景 / 決定 / 結果 / 検討した代替案）で書きます。
-   - 決定には、実装のどこに現れるか（ディレクトリ・型・関数）を書きます。
-   - 結果には、それを守らせるテストや hook を書きます。まだないなら「なし」と書き、足すかどうかを利用者に聞きます。
-   - 代替案は、実際に検討したものだけを書きます。
-   - 状態は「提案」、日付は今日にします。「承認」にするのは利用者です。
-4. 既存の判断を覆すときは、新しい ADR の関連欄に古い番号を書き、古い ADR の状態行だけを「NNNN により置き換え」に変えます。本文は書き換えません。
-5. `docs/adr/README.md` の表に 1 行足し、`scripts/adr-lint.sh` を実行します。
-6. 利用者には、起票した ADR のパスと、決定の要点を 1〜2 文で伝え、承認を求めます。
-7. **承認されるまで実装に入りません。** 承認されたら、状態を「承認（日付）」にし、索引も更新してから実装を始めます。
+1. Read `docs/adr/README.md` and the existing ADRs that look related. If the same decision already exists, point to it instead of writing a new one. If the decision is on kairo's side, use `/kairo-gap`.
+2. The number is the largest existing number + 1 (4 digits). The file name is `docs/adr/NNNN-slug.md` (the slug is lowercase English letters and hyphens).
+3. Write it with the structure of `docs/adr/template.md` (`## Context` / `## Decision` / `## Consequences` / `## Alternatives considered`).
+   - In Decision, write where it shows up in the implementation (directories, types, functions).
+   - In Consequences, write the tests or hooks that enforce it. If there are none yet, write "None", and ask the user whether to add them.
+   - In Alternatives considered, write only the ones actually considered.
+   - Set `- Status:` to `Proposed` and the date to today. Only the user sets it to `Accepted`.
+4. When overturning an existing decision, write the old number in the new ADR's `- Related:` line, and change only the old ADR's status line to `Superseded by NNNN`. Do not rewrite its body.
+5. Add 1 row to the table in `docs/adr/README.md`, and run `scripts/adr-lint.sh`.
+6. Tell the user the path of the ADR you wrote and the gist of the decision in 1–2 sentences, and ask for approval.
+7. **Do not start implementing until it is approved.** Once it is approved, set the status to `Accepted (date)`, update the index too, and then start implementing.

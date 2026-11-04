@@ -69,7 +69,7 @@ type override struct {
 // server's "initialization". Only the user's own file may add a server or
 // change one's "command", "extensions" or "env" (one not built in needs
 // its command and extensions): a project does not choose the commands run
-// on every write (ADR 0009, 追記). What a project sets that it may not is
+// on every write (ADR 0009, addendum). What a project sets that it may not is
 // left out, and said in the error, with the servers still given.
 func Servers(user, project string) ([]Server, error) {
 	if os.Getenv(Off) == "off" {

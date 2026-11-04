@@ -1,141 +1,141 @@
-# 0022 利用者の MCP サーバー、カスタムツール、todo
+# 0022 The user's MCP servers, custom tools, todo
 
-- 状態: 承認（2026-10-21）
-- 日付: 2026-10-21
-- 関連: 要件 FR-5（todo）・FR-8（MCP）・FR-9（カスタムツール）、設計 3 節（作用の表）、不変条件 3・4・6、ADR 0002（opencode の設定）、0005（sandbox）、0009（言語サーバーの寿命）、0018（プロジェクトのものは承認）
+- Status: Accepted (2026-10-21)
+- Date: 2026-10-21
+- Related: requirements FR-5 (todo), FR-8 (MCP) and FR-9 (custom tools), design section 3 (the table of effects), invariants 3, 4 and 6, ADR 0002 (opencode's settings), 0005 (sandbox), 0009 (language server lifetime), 0018 (project-defined things need approval)
 
-## 背景
+## Context
 
-KairoCode は、自分のツールを MCP で CLI のエンジンに渡しています（ADR 0007）。一方で、利用者が持つ MCP サーバー（GitHub、Linear など）のツールを、KairoCode のエージェントが使うことはできません（FR-8）。利用者がツールを足すこと（FR-9）も、todo（FR-5）もありません。
+KairoCode passes its own tools to CLI engines over MCP (ADR 0007). On the other hand, KairoCode's agents cannot use the tools of the user's own MCP servers (GitHub, Linear and so on) (FR-8). There is also no way for the user to add tools (FR-9), and no todo (FR-5).
 
-どのツールも作用の型を宣言し、宣言がなければ「実」として扱います（不変条件 3）。MCP のツールは、サーバーが作用を宣言しません（MCP の `readOnlyHint` などの注記はあるが、サーバーの自己申告）。
+Every tool declares its effect type, and without a declaration it is treated as "real" (invariant 3). MCP servers do not declare the effects of their tools (MCP has annotations such as `readOnlyHint`, but they are the server's own claim).
 
-MCP サーバーとカスタムツールは、利用者の機械でコマンドを動かします。プロジェクトの設定が定めるものは、clone したリポジトリが動かすコマンドなので、ADR 0018 のフックと同じく、承認なしに sandbox の外で動かしてはいけません。
+MCP servers and custom tools run commands on the user's machine. Those defined by a project's settings are commands run by a cloned repository, so, like ADR 0018's hooks, they must not run outside the sandbox without approval.
 
-## 決定
+## Decision
 
-1. **MCP サーバーの設定は、opencode の形で読む。** `kairocode.json` の `mcp`（opencode の `opencode.json` の `mcp` と同じ形。ADR 0002）です。
-   - `{"<名前>": {"type": "local", "command": ["..."], "environment": {...}}}` と `{"type": "remote", "url": "...", "headers": {...}}` です。`enabled: false` は使いません。
-   - Claude Code の `.mcp.json` と `~/.claude.json` の `mcpServers` も読みます（ADR 0018 の「各エージェントの設定を読む」に沿う）。
-2. **作用の型は、KairoCode の設定で宣言する。** `kairocode.json` の `tools` に、ツールごとに書きます。
-   - 例: `{"tools": {"github_search_issues": {"effect": "read"}, "github_*": {"effect": "real"}}}`。名前は `<サーバー>_<ツール>` で、`*` で前方一致を書けます。
-   - 宣言がなければ `real` です（不変条件 3）。MCP の `readOnlyHint` は、宣言の代わりにしません（サーバーの自己申告なので）。利用者に宣言を勧める文面には使います。
-   - `idempotent` と宣言されたツールの、結果が不明なときの確かめ方は、KairoCode には分かりません。自動でやり直すのは `read` だけで、`idempotent` は MCP のツールでは `real` と同じに扱います（人に聞く）。
-3. **権限:** MCP のツールの名前で、ほかのツールと同じ規則を書けます（`{"permission": {"github_*": "ask"}}`）。既定は `ask` です。判定の対象（`subject`）は、引数の JSON です。
-4. **どこで動かすか:**
-   - 利用者の設定（`~/.config/kairocode/kairocode.json`、`~/.claude.json`）の `local` のサーバーは、利用者のコマンドなので、sandbox の外で動かします（利用者自身の `bash` の設定と同じ扱い）。
-   - プロジェクトの設定（`kairocode.json`、`.mcp.json`）の `local` のサーバーは、最初に使うときに、ADR 0018 のフックと同じ問い（KairoCode の sandbox で / sandbox の外で / 動かさない）で聞きます。答えは、ディレクトリー・名前・コマンドごとに記録し、コマンドが変われば聞き直します。sandbox ではネットワークが切れるので、多くのサーバーは「外で」を選ぶことになります。
-   - `remote` のサーバーは、KairoCode のプロセスからつなぎます。プロジェクトの `remote` は、宛先を聞きます（利用者の認証のヘッダーを、プロジェクトが選んだ宛先に送らせないため）。
-5. **寿命:** MCP サーバーのプロセスは、デーモンの中で (作業ディレクトリー, 名前) ごとに 1 つ持ち、しばらく使われなければ止めます（ADR 0009 の言語サーバーと同じ形）。ツールの一覧は、ターンの始めに `agent.load` で記録します（ターンの途中でサーバーのツールが変わっても、そのターンは始めの一覧で進む。不変条件 2）。
-6. **秘密:** `environment` と `headers` の値は、アクションの中で読み、記録に残しません（不変条件 6）。`{env:NAME}` の形（opencode と同じ）で環境変数を指せます。
-7. **カスタムツール:** `kairocode.json` の `tools` に、コマンドとして書きます。
-   - 例: `{"tools": {"deploy_preview": {"description": "...", "schema": {...}, "command": ["./scripts/preview.sh"], "effect": "real"}}}`。入力の JSON を標準入力で渡し、標準出力を結果にします。
-   - `effect` は必須です（FR-9）。ないものは読み込まず、理由を利用者に示します（`/tools` か読み込みの警告）。
-   - 動かし方は MCP の `local` のサーバーと同じです。利用者の設定のものは sandbox の外、プロジェクトの設定のものは、最初に使うときに聞きます。
-8. **todo:** 組み込みのツールとして足します（`internal/tools/todo.go`、作用は `read`）。
-   - 一覧（内容、状態: 未着手・作業中・済み）を丸ごと受け取り、そのまま結果として返します。保存はしません。一覧は、ターンの記録（ツールの結果）に残ります（設計 3 節の「ターンの出力に含める」）。
-   - クライアントは、セッションの最後の todo の結果を表示します。ACP では `plan` の更新（`sessionUpdate: "plan"`）として送ります。
-   - 次のターンでも、会話の中に最後の一覧があるので、モデルは続きから使えます。
+1. **MCP server settings are read in opencode's form.** It is `mcp` in `kairocode.json` (the same form as `mcp` in opencode's `opencode.json`. ADR 0002).
+   - `{"<name>": {"type": "local", "command": ["..."], "environment": {...}}}` and `{"type": "remote", "url": "...", "headers": {...}}`. Entries with `enabled: false` are not used.
+   - `mcpServers` in Claude Code's `.mcp.json` and `~/.claude.json` is also read (in line with ADR 0018's "read each agent's settings").
+2. **Effect types are declared in KairoCode's settings.** Write them per tool in `tools` in `kairocode.json`.
+   - Example: `{"tools": {"github_search_issues": {"effect": "read"}, "github_*": {"effect": "real"}}}`. Names are `<server>_<tool>`, and `*` can express a prefix match.
+   - Without a declaration it is `real` (invariant 3). MCP's `readOnlyHint` is not used in place of a declaration (it is the server's own claim). It is used in the text that suggests a declaration to the user.
+   - For tools declared `idempotent`, KairoCode does not know how to check an unknown outcome. Only `read` is retried automatically; `idempotent` is treated the same as `real` for MCP tools (a person is asked).
+3. **Permissions:** rules can be written by MCP tool name, like any other tool (`{"permission": {"github_*": "ask"}}`). The default is `ask`. The target of the decision (`subject`) is the arguments' JSON.
+4. **Where they run:**
+   - `local` servers in the user's settings (`~/.config/kairocode/kairocode.json`, `~/.claude.json`) are the user's commands, so they run outside the sandbox (treated the same as the user's own `bash` settings).
+   - `local` servers in project settings (`kairocode.json`, `.mcp.json`) are asked about the first time they are used, with the same question as ADR 0018's hooks (in KairoCode's sandbox / outside the sandbox / do not run). The answer is recorded per directory, name and command, and asked again when the command changes. The sandbox cuts off the network, so for most servers the choice will be "outside".
+   - `remote` servers are connected from KairoCode's process. For a project's `remote`, the destination is asked about (so the user's authentication headers are not sent to a destination the project picked).
+5. **Lifetime:** MCP server processes are held in the daemon, one per (working directory, name), and stopped after a while unused (the same form as ADR 0009's language servers). The tool list is recorded at the start of a turn by `agent.load` (even if a server's tools change during a turn, that turn proceeds with the list from its start. Invariant 2).
+6. **Secrets:** values of `environment` and `headers` are read inside actions and not kept in the record (invariant 6). Environment variables can be referred to in the `{env:NAME}` form (the same as opencode).
+7. **Custom tools:** written as commands in `tools` in `kairocode.json`.
+   - Example: `{"tools": {"deploy_preview": {"description": "...", "schema": {...}, "command": ["./scripts/preview.sh"], "effect": "real"}}}`. The input JSON is passed on standard input, and standard output is the result.
+   - `effect` is required (FR-9). Ones without it are not loaded, and the reason is shown to the user (`/tools` or a loading warning).
+   - They run the same way as MCP `local` servers. Ones from the user's settings run outside the sandbox; ones from project settings are asked about the first time they are used.
+8. **todo:** added as a built-in tool (`internal/tools/todo.go`, effect `read`).
+   - It receives the whole list (contents, state: not started, in progress, done) and returns it as the result as is. It stores nothing. The list stays in the turn's record (the tool result) (design section 3's "include it in the turn's output").
+   - Clients show the result of the session's last todo. In ACP it is sent as a `plan` update (`sessionUpdate: "plan"`).
+   - In the next turn, the last list is in the conversation, so the model can continue from it.
 
-実装に現れるところ: `internal/runtime`（MCP のクライアントの管理、`agent.load` でのツールの記録、`tool.<名前>` のアクション、カスタムツールの実行、作用の宣言の読み込み、問いの記録）、`internal/tools/todo.go`、`internal/opencode`（`mcp` の読み込み）、`internal/acp`（`plan` の更新）、`internal/tui`（todo の表示）、`internal/invariants`（コマンドを起動してよいファイルの許可）。
+Where this shows in the implementation: `internal/runtime` (managing MCP clients, recording tools in `agent.load`, `tool.<name>` actions, running custom tools, reading effect declarations, recording questions), `internal/tools/todo.go`, `internal/opencode` (reading `mcp`), `internal/acp` (`plan` updates), `internal/tui` (showing todo), `internal/invariants` (allowing files that may launch commands).
 
-## 結果
+## Consequences
 
-- 利用者の MCP サーバーのツールを、作用の型と権限の規則のもとで使えます。宣言がなければ実として扱い、結果が不明なら人に聞きます（不変条件 3・4）。
-- プロジェクトが定めるサーバーやツールは、承認なしに sandbox の外で動きません。
-- テスト（実装のとき足す）
-  - 偽の MCP サーバー（テストのバイナリ）のツールを、宣言した `read` で呼べる。宣言のないツールは実として扱い、呼んでいる最中に落ちると要確認になる（`TestCrashMCPServerTool`）。
-  - `github_*` のような宣言が、前方一致で効く。
-  - プロジェクトの MCP サーバーとカスタムツールを、聞く前に起動しない。「動かさない」と答えると起動しない。
-  - `environment` の値が記録に残らない。
-  - `effect` のないカスタムツールは読み込まない。
-  - todo の結果が、ACP の `plan` の更新として届く。
+- The user's MCP server tools can be used under effect types and permission rules. Without a declaration they are treated as real, and if the outcome is unknown a person is asked (invariants 3 and 4).
+- Servers and tools defined by a project do not run outside the sandbox without approval.
+- Tests (added during implementation)
+  - A fake MCP server's (the test binary) tool can be called as a declared `read`. An undeclared tool is treated as real, and crashing while it is being called makes it blocked (needs confirmation) (`TestCrashMCPServerTool`).
+  - A declaration like `github_*` takes effect as a prefix match.
+  - A project's MCP servers and custom tools are not started before asking. Answering "do not run" means they are not started.
+  - The values of `environment` are not kept in the record.
+  - A custom tool without `effect` is not loaded.
+  - todo results arrive as ACP `plan` updates.
 
-## 検討した代替案
+## Alternatives considered
 
-- **MCP の `readOnlyHint` を作用の宣言として使う:** 宣言の手間がなくなりますが、サーバーの自己申告で実の作用を読むだけとして扱う誤りが起き得ます（不変条件 3）。
-- **カスタムツールを opencode と同じ TypeScript のファイルで書く:** opencode の利用者には便利ですが、KairoCode は Go の単一のバイナリなので、TypeScript を動かす仕組みが要ります。コマンドの形なら、どの言語でも書けます。
-- **todo を KairoCode の表に保存する:** 状態を持つ分、記録が増えます。ツールの結果として残せば、新しい保存の形は要りません。
+- **Use MCP's `readOnlyHint` as the effect declaration:** no declaring effort, but the server's own claim could cause a real effect to be treated as read-only by mistake (invariant 3).
+- **Write custom tools as TypeScript files, like opencode:** convenient for opencode users, but KairoCode is a single Go binary, so it would need a way to run TypeScript. In command form, they can be written in any language.
+- **Store todo in a KairoCode table:** holding state adds to the record. Kept as a tool result, no new storage form is needed.
 
-## 実装
+## Implementation
 
-### 1. todo（2026-10-21）
+### 1. todo (2026-10-21)
 
-- `internal/tools/todo.go` に、作用が `read` の `todo` を足しました。一覧を丸ごと受け取り、印を付けた文字にして返します（`[x]` 済み、`[>]` 作業中、`[ ]` 未着手）。状態が 3 つのどれでもない項目は、失敗として返します。
-- 権限の規則の既定は `allow` です（一覧を見せるだけなので）。
-- ACP のエージェントは、`todo` の呼び出しが始まったとき、その一覧をセッションの `plan` の更新として送ります（Zed などが計画として表示する）。端末の対話は、ツールの結果（印を付けた一覧）を表示します。
-- テスト: `TestTodo`、`TestACPTodoPlan`。
+- Added `todo`, with effect `read`, in `internal/tools/todo.go`. It receives the whole list and returns it as marked text (`[x]` done, `[>]` in progress, `[ ]` not started). Items whose state is none of the three are returned as a failure.
+- The default permission rule is `allow` (it only shows a list).
+- When a `todo` call starts, the ACP agent sends the list as the session's `plan` update (Zed and others show it as a plan). The terminal UI shows the tool result (the marked list).
+- Tests: `TestTodo`, `TestACPTodoPlan`.
 
-### 2・3. MCP サーバーとカスタムツール（2026-10-21）
+### 2 and 3. MCP servers and custom tools (2026-10-21)
 
-- **読む設定（`internal/runtime/external.go` の `externals`）:** 利用者の `kairocode.json`、`~/.claude.json`（`mcpServers`）、プロジェクトの `kairocode.json`、`.mcp.json` です。後のものほどプロジェクトに近い順です。
-  - `mcp` は opencode の形（`local` の `command`・`environment`、`remote` の `url`・`headers`、`enabled: false` は使わない）で読みます。`mcpServers` は Claude Code の形（`command`・`args`・`env`、`url`・`headers`）で読みます。
-  - `tools` のうち `command` のあるものはカスタムツールで、ないものは MCP のツールの作用の宣言です。
-- **作用の型（`effectOf`）:** 名前の完全一致が、`*` で終わる前方一致より先に効きます。前方一致どうしでは長いものが効きます。`read` のときだけ読むツールとして扱い、それ以外（宣言なし、`idempotent`、`real`）は実です。プロジェクトの宣言は、プロジェクトのサーバーのツールにだけ効きます（プロジェクトが、利用者のサーバーのツールを「読むだけ」と言えないようにするため）。
-- **ターンの流れ**
-  - `agent.load` が、API のエンジンのときに、設定にあるサーバーとカスタムツールを `Agent.External` として記録します。
-  - ターンは `loadExternal`（`internal/workflows/hooks.go`）で、プロジェクトのものの動かし方を決めます。ADR 0018 のフックと同じ問いと記録（`hook.check`、`hook.decide`）で、名前は `mcp:<名前>`・`tool:<名前>` です。リモートのサーバーには、「つなぐ / つながない」を聞きます。利用者のものは聞かずに、利用者の設定のとおり（sandbox の外）で動かします。
-  - 次に `ext.load` が、サーバーを起動してツールを一覧にし、ツールごとの定義（サーバーの名前、ツールの名前、作用の型、動かし方。環境変数とヘッダーの値は含めない）を `kc_message` に記録します。モデルに渡すツールの一覧も足します。
-  - 呼び出しは、記録した定義で `tool.ext.read`（非保護）か `tool.ext.real`（実）として動きます。権限の判定も、記録した定義の作用で plan モードを判断します。
-  - `Agent.External` がないターン（前の記録、設定がないとき）は、何も呼ばないので、ターンの版は上げていません。
-- **カスタムツール:** 入力の JSON を標準入力で渡し、標準出力を結果にします。終了コードが 0 でなければ失敗として返します。2 分で打ち切り、打ち切られた実のツールは「結果が不明」にします。sandbox で動かすと答えたものは KairoCode の sandbox で、それ以外は外で動かします。
-- **MCP サーバーのプロセス:** デーモンの中で、(作業ディレクトリー, 設定の場所, 名前, 動かし方) ごとに 1 つ持ち、10 分使われなければ止めます。`environment` と `headers` は、起動するときとつなぐときに読み、`{env:NAME}` を環境変数の値に置き換えます。記録には残しません。sandbox の外で動かすサーバーには、利用者の環境変数もそのまま渡します（利用者が自分で動かすときと同じ）。
-- **invariants:** `internal/runtime/external.go` を、sandbox の外で動かしてよいファイル（`fullAccessUsers`）に足しました。
-- **durability-reviewer の指摘で直したこと（どれも承認と秘密の扱い）**
-  - **同じ名前のサーバーで承認をすり抜けられた:** 動かし方を名前だけで引いていたので、利用者のサーバーと同じ名前のプロジェクトのサーバーが、利用者のものの「外で」で起動し得ました。いまは、ターンが記録した位置で対応させ、設定の場所と名前と指紋が同じものだけに、その答えを使います。
-  - **承認した後に変えたコマンドが起動し得た:** 起動のときに設定を読み直していたので、答えを待つ間や、モデルがファイルを書き換えた後に、別のコマンドが古い答えで起動し得ました。いまは、サーバーの設定の全体（コマンド、URL、環境変数とヘッダーの値）の指紋（`ExtSource.Spec`）を記録します。問いの鍵にも指紋を入れるので、変わったものはもう一度聞きます。起動するのは指紋が同じものだけで、違えば呼ばずに失敗として返します。値そのものは記録しません。
-  - **プロジェクトの設定で、利用者の秘密を外へ出せた:** `{env:NAME}` を、プロジェクトのサーバーの環境変数・ヘッダー・URL でも展開していました。いまは、利用者の設定のものだけ展開し、プロジェクトのものは書いてあるまま渡します。問いには、渡す環境変数とヘッダーの名前を出します。
-  - **秘密が記録とログに入り得た:** リモートのサーバーの URL は、資格情報と問い合わせの部分を除いて記録し、表示します。接続の失敗の文面からも URL を除きます（`safeErr`）。
-  - **接続の競合:** 使われていないときに止めるタイマーが、渡したばかりの接続や新しい接続を閉じ得ました。呼び出しの失敗のときも、同じサーバーのほかの呼び出しの接続を閉じ得ました。いまは、止めるのは同じ接続で、しばらく使われていないときだけです。
-  - 権限の判定は、外のツールの記録した定義を、組み込みのツールより先に引きます。
-  - Claude Code の `~/.claude.json` と `.mcp.json` の形が合わないときは、そのファイルを飛ばします（前は、API のエンジンのターンがすべて失敗した）。
-  - テスト: `TestProjectMCPServerOfTheUsersName`、`TestProjectMCPServerChanged`、`TestProjectMCPServerGetsNoUsersValues`。
-- **まだのこと**
-  - MCP の `readOnlyHint` を、宣言を勧める文面に使うことはまだです。
-- **テスト:** `TestMCPServerTool`、`TestCustomTool`（作用の型のないものは渡さない）、`TestProjectMCPServerAsks`（聞く前に起動しない。「動かさない」なら起動しない）、`TestMCPEnvironmentNotRecorded`（DB に値が残らない）、`TestCrashMCPServerTool`（宣言のないツールの呼び出しの途中で落ちると、もう一度呼ばずに人に聞く。呼ばれたのは 1 回）。
+- **Settings read (`externals` in `internal/runtime/external.go`):** the user's `kairocode.json`, `~/.claude.json` (`mcpServers`), the project's `kairocode.json`, `.mcp.json`. Later ones are closer to the project.
+  - `mcp` is read in opencode's form (`command` and `environment` for `local`, `url` and `headers` for `remote`; `enabled: false` entries are not used). `mcpServers` is read in Claude Code's form (`command`, `args`, `env`, `url`, `headers`).
+  - Entries in `tools` with `command` are custom tools; those without are effect declarations for MCP tools.
+- **Effect types (`effectOf`):** an exact name match takes precedence over a prefix match ending in `*`. Among prefix matches, the longer one wins. Only `read` is treated as a read-only tool; everything else (no declaration, `idempotent`, `real`) is real. A project's declarations apply only to tools of the project's servers (so a project cannot say the user's servers' tools are "read-only").
+- **The turn's flow**
+  - For the API engine, `agent.load` records the servers and custom tools in the settings as `Agent.External`.
+  - The turn decides how to run the project's ones in `loadExternal` (`internal/workflows/hooks.go`). It uses the same question and record as ADR 0018's hooks (`hook.check`, `hook.decide`), with names `mcp:<name>` and `tool:<name>`. For remote servers it asks "connect / do not connect". The user's own are not asked about and run as the user's settings say (outside the sandbox).
+  - Next, `ext.load` starts the servers, lists the tools, and records each tool's definition (server name, tool name, effect type, how to run it. Without the values of environment variables and headers) in `kc_message`. It also adds to the tool list passed to the model.
+  - Calls run with the recorded definition as `tool.ext.read` (unprotected) or `tool.ext.real` (real). The permission decision also judges plan mode by the effect in the recorded definition.
+  - Turns without `Agent.External` (earlier records, no settings) call nothing, so the turn's version was not bumped.
+- **Custom tools:** the input JSON is passed on standard input, and standard output is the result. A nonzero exit code is returned as a failure. It is cut off after 2 minutes, and a real tool that was cut off becomes "unknown outcome". Ones answered to run in the sandbox run in KairoCode's sandbox; others run outside.
+- **MCP server processes:** held in the daemon, one per (working directory, settings location, name, how it runs), and stopped after 10 minutes unused. `environment` and `headers` are read when starting and connecting, with `{env:NAME}` replaced by the environment variable's value. They are not kept in the record. Servers run outside the sandbox also get the user's environment variables as they are (the same as when the user runs them).
+- **invariants:** `internal/runtime/external.go` was added to the files allowed to run things outside the sandbox (`fullAccessUsers`).
+- **What was fixed after durability-reviewer's findings (all about approval and secrets)**
+  - **Approval could be slipped past with a server of the same name:** how to run was looked up by name only, so a project server with the same name as a user server could start under the user's "outside". Now the positions the turn recorded are matched, and the answer is used only for one whose settings location, name and fingerprint are the same.
+  - **A command changed after approval could start:** settings were reread at start time, so while waiting for the answer, or after the model rewrote the file, a different command could start under the old answer. Now the fingerprint of the whole server setting (command, URL, values of environment variables and headers) is recorded (`ExtSource.Spec`). The fingerprint is also in the question's key, so a changed one is asked about again. Only one with the same fingerprint is started; if it differs, it is returned as a failure without calling. The values themselves are not recorded.
+  - **Project settings could leak the user's secrets:** `{env:NAME}` was also expanded in a project server's environment variables, headers and URL. Now it is expanded only in the user's settings, and a project's are passed as written. The question shows the names of the environment variables and headers to be passed.
+  - **Secrets could end up in records and logs:** a remote server's URL is recorded and shown without its credentials and query parts. The URL is also removed from connection failure messages (`safeErr`).
+  - **Connection races:** the timer that stops unused servers could close a connection just handed out or a new one. On a call failure, it could also close the connection of other calls to the same server. Now it only stops the same connection, and only when it has been unused for a while.
+  - The permission decision looks up the recorded definitions of outside tools before built-in tools.
+  - When Claude Code's `~/.claude.json` or `.mcp.json` has a form that does not match, that file is skipped (before, all API engine turns failed).
+  - Tests: `TestProjectMCPServerOfTheUsersName`, `TestProjectMCPServerChanged`, `TestProjectMCPServerGetsNoUsersValues`.
+- **Not yet**
+  - Using MCP's `readOnlyHint` in the text suggesting a declaration is not done yet.
+- **Tests:** `TestMCPServerTool`, `TestCustomTool` (ones without an effect type are not passed), `TestProjectMCPServerAsks` (not started before asking. Not started if "do not run"), `TestMCPEnvironmentNotRecorded` (no values left in the DB), `TestCrashMCPServerTool` (crashing in the middle of a call of an undeclared tool asks a person instead of calling again. It was called once).
 
-### 4. CLI のエンジン（2026-10-22）
+### 4. CLI engines (2026-10-22)
 
-- `agent.load` は、どのエンジンでも外の MCP サーバーとカスタムツールを記録します。ターンは、API のエンジンと同じく、ターンの始めに動かし方を決めて（`loadExternal`）一覧にします。
-- CLI のエンジン（Claude Code、codex、copilot）には、KairoCode の MCP のサーバーに、組み込みのツールと一緒に外のツールを載せて渡します（`ClaudeTurnInput.Ext`、`mcpServer.open`）。Claude Code には `--mcp-config` で、codex と copilot には ACP の `mcpServers` で渡す、今までの経路のままです。利用者のサーバーをエージェントに直接は渡しません（直接渡すと、呼び出しが KairoCode を通らず、作用の型・要確認・権限・sandbox・プロジェクトの承認が効かないため）。
-- 呼び出しは、記録した定義を `MCPCallInput.Ext` で運び、API のエンジンと同じく `tool.ext.read` か `tool.ext.real` で動きます。落ちた後に Claude Code が同じ実の呼び出しをもう一度したときに聞くこと（ADR 0007）も、外のツールに同じく効きます。
-- 新しい欄（`ClaudeTurnInput.Ext`、`MCPCallInput.Ext`）は `omitempty` なので、外のツールがない記録の ID は変わりません。
-- テスト: `TestMCPServerToolOnClaudeCode`（Claude Code に `mcp__kairocode__fake_lookup` として渡り、呼び出しが動く）、`TestCrashMCPServerToolOnClaudeCode`（宣言のないツールを Claude Code が呼んでいる途中で落ちると、再開した Claude Code が同じ呼び出しをしても、もう一度は呼ばずに人に聞く。呼ばれたのは 1 回）。
+- `agent.load` records outside MCP servers and custom tools on every engine. As with the API engine, the turn decides how to run them at its start (`loadExternal`) and lists them.
+- To CLI engines (Claude Code, codex, copilot), the outside tools are passed on KairoCode's MCP server together with the built-in tools (`ClaudeTurnInput.Ext`, `mcpServer.open`). The route is the same as before: `--mcp-config` for Claude Code, ACP's `mcpServers` for codex and copilot. The user's servers are not passed to the agent directly (if passed directly, calls would not go through KairoCode, and effect types, blocked (needs confirmation), permissions, the sandbox and project approval would not apply).
+- Calls carry the recorded definition in `MCPCallInput.Ext` and run as `tool.ext.read` or `tool.ext.real`, as with the API engine. Asking when Claude Code makes the same real call again after a crash (ADR 0007) applies to outside tools too.
+- The new fields (`ClaudeTurnInput.Ext`, `MCPCallInput.Ext`) are `omitempty`, so IDs of records without outside tools do not change.
+- Tests: `TestMCPServerToolOnClaudeCode` (passed to Claude Code as `mcp__kairocode__fake_lookup`, and the call runs), `TestCrashMCPServerToolOnClaudeCode` (crashing while Claude Code is calling an undeclared tool: even if the resumed Claude Code makes the same call, it is not called again but a person is asked. It was called once).
 
-### 5. codex 自身の MCP サーバーと `/mcp`（2026-10-22）
+### 5. codex's own MCP servers and `/mcp` (2026-10-22)
 
-- **確かめたこと（codex-acp 2.2.2。モデルは呼ばない）**
-  - 使い捨ての `CODEX_HOME` に、起動されたら印のファイルを作るだけの MCP サーバーを書きました。ACP の `authenticate` は、偽の API キーで通しました。そのうえで、codex-acp に `session/new` だけを送りました。
-  - **codex は、ACP でも、セッションを作るときに自分の設定の MCP サーバーを起動します。** 利用者の `config.toml` のものも、作業ディレクトリーの `.codex/config.toml` のものも起動しました。codex が信頼したことのないフォルダーでも起動しました。
-  - KairoCode が渡す `CODEX_CONFIG` で `mcp_servers.<名前>.enabled = false` とすると、そのサーバーは起動しません。`mcp_servers = {}` では止まりません。
-- **決定（利用者の判断、2026-10-22）:** codex 自身の設定の MCP サーバーは、KairoCode が止めます。
-  - プロジェクトの `.codex/config.toml` のものは、いつも止めます。clone したリポジトリのコマンドが、承認なしに sandbox の外で動くためです（copilot のリポジトリのフック、ADR 0018 の 6 節と同じ種類）。
-  - 利用者の `~/.codex/config.toml`（`CODEX_HOME`）のものも、既定で止めます。その呼び出しは KairoCode を通らない（作用の型、要確認、権限が効かない）ためです。使いたいサーバーは、`kairocode.json` の `mcp` に書けば、KairoCode を通して、どのエンジンでも使えます。
-  - 利用者の `kairocode.json` の `{"agents": {"ownMCP": true}}` で、利用者のものだけを止めないようにできます。プロジェクトのものは止めたままです。
-- **実装:** `codexMCPOff`（`internal/runtime/agenthooks.go`）が、プロジェクトの（根から作業ディレクトリーまでの）`.codex/config.toml` と、利用者の `config.toml` から、サーバーの名前を読みます。`acpArgv` が、それぞれの `enabled = false` を `CODEX_CONFIG` に足します。
-  - TOML の読み込みの依存は足さず、`[mcp_servers.<名前>]`、`[mcp_servers."<名前>"]`、`mcp_servers.<名前>.<鍵> =` の形から名前を読みます。`mcp_servers` がほかの形（`mcp_servers = { ... }` など）で書かれていたら、止められないので codex を起動しません。
-  - `agents.ownHooks` で codex のフックを許していても、MCP サーバーは止めます（別の設定）。
-- **`/mcp`:** ACP の組み込みのコマンドです（サーバーの `GET /sessions/{id}/mcp`、`Runtime.MCP`）。次を見せます。
-  - MCP サーバーごとに、利用者のものかプロジェクトのものか、動かし方（sandbox で・外で・動かさない・まだ聞いていない）、つながったか、ツールとその作用の型。
-  - カスタムツール（作用の型のないものは、読み込まない理由とともに）。
-  - codex 自身のサーバー（止めること）。
-  - まだ聞いていないプロジェクトのサーバーは、一覧のためにも起動しません。
-- **テスト:** `TestCodexOwnMCPServersOff`（プロジェクトのものはいつも、利用者のものは `ownMCP` がなければ止まる。読めない形なら codex を起動しない）、`TestMCPList`。
-- **durability-reviewer の指摘で直したこと**
-  - **名前の読み違いで、別の名前を止めていた:** TOML には、表の名前の書き方がたくさんあります（`'…'`、空白を挟む、エスケープ、`"mcp_servers".x` のように `mcp_servers` 自体を引用する、など）。最初の読み方では、それらから違う名前を読み、存在しない名前を止めて、本物のサーバーが起動し得ました。clone したリポジトリの設定は、どの書き方でも書けます。
-    - いまは、読むのは素直な形だけです（`[mcp_servers.<名前>…]`、`[mcp_servers."<名前>"…]`、`mcp_servers.<名前>.<鍵> =`。名前は英数字と `_`・`-`、引用の中では空白と `.` も）。
-    - `mcp_servers` を含むほかの行と、エスケープを含む表の名前と鍵は、どれも誤りとして codex を起動しません。
-  - **誤りの文面に秘密が入り得た:** 文面には、行の中身ではなく、ファイルと行の番号だけを書きます（ターンの返事として記録されるため）。
-  - 利用者が `CODEX_CONFIG` に自分で書いたサーバーも、利用者のものとして止めます（`ownMCP` がなければ）。
-  - codex の設定の場所は、エージェントに渡す環境（`CODEX_HOME`、なければその `HOME` の `.codex`）で決めます。`/mcp` も同じ場所を見ます。
-  - `CODEX_CONFIG` が `null` のとき、落ちていました。
-  - テスト: `TestCodexMCPNamesStrict`、`TestCodexConfigServersOff`。
-- **確かめていないこと:** codex のシステムの設定（`/etc/codex` など）は読んでいません。
+- **What we checked (codex-acp 2.2.2. No model calls)**
+  - In a throwaway `CODEX_HOME`, we wrote an MCP server that only creates a marker file when started. ACP's `authenticate` was passed with a fake API key. Then only `session/new` was sent to codex-acp.
+  - **codex, even over ACP, starts the MCP servers in its own settings when creating a session.** Both those in the user's `config.toml` and those in the working directory's `.codex/config.toml` were started. They were started even in a folder codex had never trusted.
+  - With `mcp_servers.<name>.enabled = false` in the `CODEX_CONFIG` KairoCode passes, that server does not start. `mcp_servers = {}` does not stop them.
+- **Decision (the user's decision, 2026-10-22):** KairoCode stops the MCP servers in codex's own settings.
+  - Those in the project's `.codex/config.toml` are always stopped. A cloned repository's commands would run outside the sandbox without approval (the same kind as copilot's repository hooks, ADR 0018 section 6).
+  - Those in the user's `~/.codex/config.toml` (`CODEX_HOME`) are also stopped by default. Their calls do not go through KairoCode (effect types, blocked (needs confirmation) and permissions do not apply). A server the user wants to use can be written in `mcp` in `kairocode.json`, and then it is used through KairoCode on any engine.
+  - `{"agents": {"ownMCP": true}}` in the user's `kairocode.json` leaves only the user's own unstopped. The project's stay stopped.
+- **Implementation:** `codexMCPOff` (`internal/runtime/agenthooks.go`) reads server names from the project's `.codex/config.toml` (from the root to the working directory) and the user's `config.toml`. `acpArgv` adds `enabled = false` for each to `CODEX_CONFIG`.
+  - No TOML-parsing dependency was added; names are read from the forms `[mcp_servers.<name>]`, `[mcp_servers."<name>"]`, `mcp_servers.<name>.<key> =`. If `mcp_servers` is written in another form (`mcp_servers = { ... }` and so on), they cannot be stopped, so codex is not launched.
+  - Even if codex's hooks are allowed with `agents.ownHooks`, MCP servers are stopped (a separate setting).
+- **`/mcp`:** an ACP built-in command (the server's `GET /sessions/{id}/mcp`, `Runtime.MCP`). It shows:
+  - For each MCP server, whether it is the user's or the project's, how it runs (in the sandbox, outside, do not run, not yet asked), whether it connected, and its tools with their effect types.
+  - Custom tools (ones without an effect type, with the reason they are not loaded).
+  - codex's own servers (that they are stopped).
+  - Project servers not yet asked about are not started even for the list.
+- **Tests:** `TestCodexOwnMCPServersOff` (the project's are always stopped, the user's are stopped unless `ownMCP`. With an unreadable form codex is not launched), `TestMCPList`.
+- **What was fixed after durability-reviewer's findings**
+  - **Misreading names stopped a different name:** TOML has many ways to write a table name (`'…'`, surrounding spaces, escapes, quoting `mcp_servers` itself as in `"mcp_servers".x`, and so on). The first reader read different names from those, stopped names that did not exist, and the real server could start. A cloned repository's settings can use any of those forms.
+    - Now only the plain forms are read (`[mcp_servers.<name>…]`, `[mcp_servers."<name>"…]`, `mcp_servers.<name>.<key> =`. Names are letters, digits, `_` and `-`; inside quotes, spaces and `.` too).
+    - Any other line containing `mcp_servers`, and table names and keys containing escapes, are all errors, and codex is not launched.
+  - **Error messages could contain secrets:** the message gives only the file and line number, not the line's contents (because it is recorded as the turn's reply).
+  - Servers the user wrote in `CODEX_CONFIG` themselves are also stopped as the user's (unless `ownMCP`).
+  - The location of codex's settings is decided by the environment passed to the agent (`CODEX_HOME`, or else `.codex` in its `HOME`). `/mcp` looks at the same place.
+  - It crashed when `CODEX_CONFIG` was `null`.
+  - Tests: `TestCodexMCPNamesStrict`, `TestCodexConfigServersOff`.
+- **Not checked:** codex's system settings (`/etc/codex` and so on) are not read.
 
-### 6. フローとサブエージェント（2026-10-26）
+### 6. Flows and subagents (2026-10-26)
 
-- フローの `tool(...)` は、セッションのエージェントの定義を読むとき（最初の `tool()`）に外のツールも一覧にし（`loadExternal`）、外のツールの呼び出しを `tool.ext.read`・`tool.ext.real` で動かします。
-- フローの `agent(...)` とサブエージェント（`task`）のターンも、外のツールを持ちます（前は `Sub` のターンでは読まなかった）。
-- 試運転（ADR 0017）では、外のツールを読み込みません（問いを出さず、サーバーも起動しない）。
-- どれも、記録された `agent.load` に外の設定があるときだけ呼び出しが増えるので、版は上げていません。
-- テスト: `TestFlowUsesMCPServerTools`。
+- A flow's `tool(...)` also lists outside tools when it reads the session agent's definition (the first `tool()`) (`loadExternal`), and runs calls of outside tools with `tool.ext.read` and `tool.ext.real`.
+- Turns of a flow's `agent(...)` and of subagents (`task`) also have outside tools (before, `Sub` turns did not read them).
+- In a try run (ADR 0017), outside tools are not loaded (no questions, no servers started).
+- In every case, calls are added only when the recorded `agent.load` has outside settings, so the version was not bumped.
+- Tests: `TestFlowUsesMCPServerTools`.

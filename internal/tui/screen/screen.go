@@ -16,7 +16,7 @@
 //     up, its bottom at the terminal's bottom. Getting shorter at the
 //     bottom, it stays there: what is above it moves down as much, blank
 //     rows left at the terminal's top (Codex leaves its bottom up until
-//     lines written push it down; ADR 0033, 追記). Getting shorter not at
+//     lines written push it down; ADR 0033, addendum). Getting shorter not at
 //     the bottom, its top stays: the next lines written push it down.
 //
 // So, once the terminal is full, the area's bottom (the input, the status

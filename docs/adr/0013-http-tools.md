@@ -1,78 +1,78 @@
-# 0013 HTTP(S) のツール: GET の `fetch` と、POST の `http`
+# 0013 HTTP(S) tools: `fetch` for GET and `http` for POST
 
-- 状態: 承認（2026-10-21）
-- 日付: 2026-10-19
-- 関連: 設計 10 節（M4 の HTTP(S) のツール）、AGENTS.md の不変条件 3・4・6、ADR 0002（opencode の webfetch）、0005（sandbox）
+- Status: Accepted (2026-10-21)
+- Date: 2026-10-19
+- Related: design section 10 (M4's HTTP(S) tools), AGENTS.md invariants 3, 4 and 6, ADR 0002 (opencode's webfetch), 0005 (sandbox)
 
-## 背景
+## Context
 
-M4 の中身に「HTTP(S) のツール」があります。モデルが文書を読み（opencode の `webfetch`）、API を呼ぶ（CI の再実行、Issue へのコメントなど）ためのものです。作用の型はツールごとに 1 つです（不変条件 3）。しかし、HTTP の作用はメソッドで変わります（GET は読むだけ、POST は実の作用）。認証の秘密（トークン）も、記録に残さずに渡す必要があります（不変条件 6）。
+M4 includes "HTTP(S) tools". They let the model read documents (opencode's `webfetch`) and call APIs (re-running CI, commenting on an Issue, and so on). There is one effect type per tool (invariant 3). But the effect of HTTP changes with the method (GET only reads, POST is a real effect). Authentication secrets (tokens) also have to be passed without leaving them in the record (invariant 6).
 
-## 決定
+## Decision
 
-1. **メソッドは GET と POST だけです。ツールを 2 つにします**（`internal/tools/fetch.go`、`http.go`）。
-   - `fetch`（作用 `Read`）: GET です。URL と、任意のヘッダー（`Accept` など）を受け、本文を返します。HTML は文字にし、大きいものは切って、切ったことを書きます（opencode の `webfetch` と同じ形。`format` は `text`、`markdown`、`html`）。
-   - `http`（作用 `Real`）: POST です。URL、ヘッダー、本文を受け、状態、ヘッダーの一部、本文を返します。
-     - GraphQL のように、読むだけの問い合わせも POST で送る API があります。本文から読むだけかを見分けることはせず、POST はすべて `Real` として扱います（安全な側に倒す）。そのため、読むだけの POST も、結果が不明なら人に聞きます。
-     - PUT、PATCH、DELETE などは扱いません。要るときは、bash の `curl` を昇格して使います（ADR 0005）。
-     - 結果が不明（応答の前に切れた）なら `kairo.Unknown` で、要確認（blocked）にします（不変条件 4）。
-     - 冪等キーのヘッダー（`Idempotency-Key`）を付けるかは、呼ぶ側が決めます。KairoCode は自動ではやり直しません。
-2. **権限の規則は、ホストで書きます**（`permission`）。
-   - 例: `{"fetch": {"*": "allow"}, "http": {"api.github.com/*": "ask", "*": "deny"}}`。
-   - 既定は `fetch` が `ask`、`http` が `ask` です。判定の対象（`Subject`）は `<ホスト><パス>` です（メソッドはツールで決まる）。
-3. **秘密は、設定のホストごとの認証で、アクションの中で足します。**
-   - 書く場所は `kairocode.json` の `http.auth`。例: `{"api.github.com": {"header": "Authorization", "env": "GITHUB_TOKEN", "prefix": "Bearer "}}`。
-   - 値は環境変数から、アクションの中で読みます。ツールの入力、結果、記録、ログには入りません。
-   - 応答に同じ値が含まれていたら、伏せ字にします。
-   - この設定は、利用者自身の設定でだけ書けます。プロジェクトの設定では書けません（ADR 0009 の追記と同じ理由。プロジェクトが、利用者のトークンを任意のホストに送らせないため）。
-4. **リクエストは、KairoCode のプロセス（デーモン）から出します。** sandbox の中のコマンドではありません。
-   - 宛先は http と https だけです。`localhost`、私的なアドレス、リンクローカル（`169.254.0.0/16` など）は、既定で拒否します（設定 `http.allowPrivate` で許す）。
-   - 転送（redirect）は 5 回までで、転送先のホストにも権限の判定を通します。
-   - 時間の上限は 30 秒、本文の上限は 5 MB です。
+1. **Only GET and POST. There are 2 tools** (`internal/tools/fetch.go`, `http.go`).
+   - `fetch` (effect `Read`): GET. Takes a URL and optional headers (`Accept` and so on) and returns the body. HTML is turned into text, large bodies are cut, and the cut is noted (the same shape as opencode's `webfetch`; `format` is `text`, `markdown` or `html`).
+   - `http` (effect `Real`): POST. Takes a URL, headers and a body, and returns the status, some headers, and the body.
+     - Some APIs, like GraphQL, send read-only queries with POST too. We do not try to tell from the body whether it only reads; every POST is treated as `Real` (falling to the safe side). So even a read-only POST asks a person if its outcome is unknown.
+     - PUT, PATCH, DELETE and so on are not handled. When needed, use bash's `curl` with escalation (ADR 0005).
+     - If the outcome is unknown (cut off before the response), it is `kairo.Unknown` and goes to blocked (needs confirmation) (invariant 4).
+     - Whether to add an idempotency key header (`Idempotency-Key`) is up to the caller. KairoCode does not retry automatically.
+2. **Permission rules are written by host** (`permission`).
+   - Example: `{"fetch": {"*": "allow"}, "http": {"api.github.com/*": "ask", "*": "deny"}}`.
+   - The default is `ask` for `fetch` and `ask` for `http`. The subject of the decision (`Subject`) is `<host><path>` (the method is decided by the tool).
+3. **Secrets are added inside the action by per-host authentication in the configuration.**
+   - It is written in `http.auth` in `kairocode.json`. Example: `{"api.github.com": {"header": "Authorization", "env": "GITHUB_TOKEN", "prefix": "Bearer "}}`.
+   - The value is read from the environment variable inside the action. It does not go into the tool's input, result, record or logs.
+   - If the response contains the same value, it is masked.
+   - This setting can be written only in the user's own configuration, not in the project configuration (for the same reason as ADR 0009's addendum: so a project cannot make the user's token be sent to an arbitrary host).
+4. **Requests go out from the KairoCode process (the daemon),** not from a command inside the sandbox.
+   - Only http and https destinations. `localhost`, private addresses and link-local (`169.254.0.0/16` and so on) are refused by default (allowed with the setting `http.allowPrivate`).
+   - Redirects are followed up to 5 times, and the redirect target's host also goes through the permission decision.
+   - The time limit is 30 seconds, and the body limit is 5 MB.
 
-## 結果
+## Consequences
 
-- モデルが文書を読み、API を呼べます。読むだけのものは作用が `Read` なので、再開で呼び直しても害がありません。
-- 作用のあるものは、結果が不明なら人に聞きます。
-- トークンは記録に残りません。
-- テスト（実装のとき足す）
-  - `httptest` のサーバーで、`fetch` が本文を返し、HTML を文字にし、大きいものを切ること。
-  - `http` の POST が 1 回だけ届くこと。応答の前に強制終了すると要確認になり、確かめずにもう一度送らないこと（`TestCrash...`）。
-  - ホストの規則（許可・聞く・拒否）と、転送先にも判定が通ること。
-  - 私的なアドレスが既定で拒否されること。
-  - 認証のヘッダーが送られ、記録（入力、結果、`kc_message`）に値が無いこと（`TestNoSecretsInSources` に加えて、記録を走査する）。
-  - プロジェクトの設定の `http.auth` が使われないこと。
+- The model can read documents and call APIs. Read-only ones have effect `Read`, so calling them again on resume does no harm.
+- Ones with an effect ask a person if the outcome is unknown.
+- Tokens do not stay in the record.
+- Tests (added at implementation)
+  - With an `httptest` server, `fetch` returns the body, turns HTML into text, and cuts large bodies.
+  - An `http` POST arrives only once. Killing the process before the response leads to blocked (needs confirmation), and it is not sent again without checking (`TestCrash...`).
+  - Host rules (allow, ask, deny), and the decision also applies to redirect targets.
+  - Private addresses are refused by default.
+  - The authentication header is sent, and the value is not in the record (input, result, `kc_message`) (in addition to `TestNoSecretsInSources`, scan the record).
+  - `http.auth` in the project configuration is not used.
 
-## 検討した代替案
+## Alternatives considered
 
-- **すべてのメソッドを `http` で扱う:** PUT・PATCH・DELETE を足しても、作用の型は `Real` で同じです。ただ、使う場面がまだ見えず、権限の規則とレビューの見せ方が増えます。GET と POST で足りない場面が出たら足します（2026-10-21、利用者との相談で GET と POST に絞った）。
-- **POST の本文を見て、読むだけの問い合わせ（GraphQL の `query`）を `Read` にする:** API ごとに約束が違い、見分けを誤ると実の作用を読むだけとして扱います（不変条件 3・4）。
-- **ツールを 1 つにして、メソッドで作用を変える:** 作用の型はツールごとに 1 つで、宣言で決まります（不変条件 3）。メソッドで変えると、実のものを読むだけとして扱う誤りが起き得ます。
-- **bash の `curl` に任せる:** sandbox はネットワークを切るので、許すには昇格が要ります。作用の型も、秘密の扱いも、ツールとして書けません。
-- **kairo の HTTP(S) のアクション（ADR 0052）を使う:** あれは、アクションの処理そのものを別の場所で動かす仕組みです。外の API を呼ぶツールとは別のものです。
+- **Handle every method with `http`:** Adding PUT, PATCH and DELETE keeps the same effect type, `Real`. But we do not yet see where they would be used, and they add to the permission rules and how reviews are shown. We will add them if a case comes up that GET and POST cannot cover (2026-10-21; narrowed to GET and POST after discussion with the user).
+- **Look at the POST body and make read-only queries (GraphQL's `query`) `Read`:** Each API has different conventions, and a wrong call treats a real effect as read-only (invariants 3 and 4).
+- **One tool whose effect changes with the method:** There is one effect type per tool, decided by its declaration (invariant 3). Changing it by method can lead to the mistake of treating something real as read-only.
+- **Leave it to bash's `curl`:** The sandbox cuts off the network, so allowing it needs escalation. Neither the effect type nor the handling of secrets can be written as a tool.
+- **Use kairo's HTTP(S) actions (ADR 0052):** That is a mechanism for running the action's processing itself somewhere else. It is a different thing from a tool that calls an outside API.
 
-## 実装（2026-10-21）
+## Implementation (2026-10-21)
 
-- **ツール:** `internal/tools/fetch.go`（`Read`）、`http.go`（`Real`）、共通の部分は `net.go` です。`tools.Env.Net` に利用者の設定（`allowPrivate`、`auth`）が入ります。
-- **設定:** `internal/runtime/netconfig.go` の `userNet` が、ツールを動かすときに、利用者の `kairocode.json` の `http` だけを読みます。プロジェクトの `http` は読みません。
-  - 例: `{"http": {"auth": {"api.github.com": {"header": "Authorization", "env": "GITHUB_TOKEN", "prefix": "Bearer "}}}}`。
-  - 認証は https でだけ送ります。環境変数が空なら、送らずに失敗を返します（変数の名前だけを書く）。
-  - 応答の中の同じ値は `[redacted]` にします。
-- **判定の対象:** `<ホスト（小文字。ポートを含む）><パス>` です（`subject`）。問い合わせの部分（`?` から後）は含めません。規則は `api.github.com/*` のように書きます。
-- **私的なアドレス:** 名前を解決した後、つなぐ直前にアドレスを見ます（DNS で私的なアドレスへ向ける抜け道を塞ぐ）。プロキシは使いません。
-- **転送:** `fetch` は、同じホストの中で 5 回まで追います。ほかのホストへの転送と、https から http への転送は追わず、転送先をモデルに返します。モデルがそれを取りに行けば、ふつうの判定を通ります。`http` は転送を追わず、状態と `Location` を返します。
-- **結果が不明:** `http` は、接続ができた後に答えが来なかったら「結果が不明」（`Unknown`）にし、要確認で止めます。接続の前の失敗は「送っていない」失敗です。接続を使い回さないので、Go が POST を自分で送り直すこともありません。
-- **表示:** 応答は 5 MB まで読み、モデルには 100,000 文字まで見せます（切ったら書く）。テキストでないもの（画像など）は、種類と大きさだけを書きます。HTML は、小さな自前の変換で Markdown か文字にします（依存を足さない）。状態が 400 以上なら、結果を失敗として返します。
-- **ACP:** `fetch` と `http` の種類は `fetch` です。
-- **テスト:** `TestFetch`、`TestHTTPPost`、`TestHTTPUnknown`、`TestNetAuth`、`TestNetPrivateRefused`、`TestNetRedirects`（`internal/tools`）、`TestNetSubject`、`TestNetSettingsAreTheUsers`、`TestCrashHTTPPost`（`internal/runtime`。`http` の作用を `Read` にすると落ちることを確かめた）。
-- **記録に秘密が残らないこと:** 値はアクションの中で環境変数から読み、ツールの入力にも結果にも入りません（結果は伏せ字）。実行時の記録（DB）を走査するテストは、テストの TLS の証明書をランタイムから渡す口がないので、まだありません。ツールの単体テスト（`TestNetAuth`）で、結果に値が出ないことを確かめています。
-- **durability-reviewer の指摘で直したこと**
-  - **判定の対象をモデルが選べた（直した）:** `subject` は `path` や `command` を先に見ていたので、`fetch` と `http` の呼び出しに `path` を足せば、URL と違うものが判定の対象になり、規則をすり抜けられました。`fetch` と `http` は、URL のホストとパスだけを対象にします（`subject` がツールの名前を受ける）。ACP の題名も URL だけにしました。ほかのツールの対象は変わりません。
-  - **`..` で規則のパスを抜けられた（直した）:** パスに `.` か `..` の区切りがある URL（`%2e%2e` も）は、送らずに失敗を返します。
-  - **承認する人に、送る中身が見えなかった（直した）:** `http` を聞くときは、URL（問い合わせの部分も）、モデルが付けたヘッダー、本文（2,000 文字まで）を見せます（`preview`）。
-  - **私的なアドレスの範囲を足した:** `0.0.0.0/8`、`100.64.0.0/10`（CGNAT、Tailscale、クラウドのメタデータ）、`192.0.0.0/24`、`198.18.0.0/15`、`240.0.0.0/4`、IPv4 を運ぶ IPv6（`::/96`、NAT64、6to4）。
-  - テスト: `TestNetSubject`（モデルの足した引数で対象が変わらない）、`TestHTTPPreview`、`TestNetDotSegments`、`TestNetPrivateRefused`（範囲）、`TestHTTPUnknown`（つないだ後の時間切れ）。
-- **受け入れた弱さ**
-  - `fetch` は、同じホストの中の転送を、規則を見直さずに追います。パスで書いた `fetch` の規則（`example.com/public/*`）は、同じホストの転送で外へ出られます。`fetch` は読むだけなので、受け入れます。
-  - 伏せ字は、値そのものだけです。形を変えて（エスケープ、base64 など）返された値は、伏せられません。
-  - 規則の `*` は `/` にも合います。ホストを `*.github.com/*` のように書くと、`evil.example/.github.com/x` にも合います。ホストは `*` を使わずに書いてください。
+- **Tools:** `internal/tools/fetch.go` (`Read`), `http.go` (`Real`); the shared part is `net.go`. `tools.Env.Net` holds the user's configuration (`allowPrivate`, `auth`).
+- **Configuration:** `userNet` in `internal/runtime/netconfig.go` reads only `http` in the user's `kairocode.json` when running the tool. The project's `http` is not read.
+  - Example: `{"http": {"auth": {"api.github.com": {"header": "Authorization", "env": "GITHUB_TOKEN", "prefix": "Bearer "}}}}`.
+  - Authentication is sent only over https. If the environment variable is empty, it does not send and returns a failure (writing only the variable's name).
+  - The same value in the response becomes `[redacted]`.
+- **Subject of the decision:** `<host (lowercase, including port)><path>` (`subject`). The query part (from `?` on) is not included. Rules are written like `api.github.com/*`.
+- **Private addresses:** The address is checked after the name is resolved, right before connecting (closing the loophole of pointing DNS at a private address). No proxy is used.
+- **Redirects:** `fetch` follows up to 5 within the same host. It does not follow redirects to other hosts or from https to http, and returns the redirect target to the model. If the model goes to fetch it, it goes through the normal decision. `http` does not follow redirects and returns the status and `Location`.
+- **Unknown outcome:** `http` makes it "outcome unknown" (`Unknown`) if no answer comes after the connection is made, and stops at blocked (needs confirmation). A failure before connecting is a "not sent" failure. Connections are not reused, so Go does not resend a POST on its own either.
+- **Display:** Responses are read up to 5 MB, and the model is shown up to 100,000 characters (noting the cut). Non-text content (images and so on) is described only by type and size. HTML is turned into Markdown or text by a small converter of our own (no added dependency). If the status is 400 or above, the result is returned as a failure.
+- **ACP:** The kind for `fetch` and `http` is `fetch`.
+- **Tests:** `TestFetch`, `TestHTTPPost`, `TestHTTPUnknown`, `TestNetAuth`, `TestNetPrivateRefused`, `TestNetRedirects` (`internal/tools`), `TestNetSubject`, `TestNetSettingsAreTheUsers`, `TestCrashHTTPPost` (`internal/runtime`; we confirmed it fails if the effect of `http` is made `Read`).
+- **No secrets left in the record:** The value is read from the environment variable inside the action and goes into neither the tool's input nor its result (the result is masked). There is not yet a test that scans the runtime record (DB), because there is no way to pass the test's TLS certificate in from the runtime. The tool unit test (`TestNetAuth`) checks that the value does not appear in the result.
+- **Fixed after points raised by durability-reviewer**
+  - **The model could choose the subject of the decision (fixed):** `subject` looked at `path` and `command` first, so adding `path` to a `fetch` or `http` call made something other than the URL the subject, slipping past the rules. `fetch` and `http` now use only the URL's host and path as the subject (`subject` takes the tool's name). The ACP title is also just the URL. Other tools' subjects are unchanged.
+  - **`..` could get out of a rule's path (fixed):** A URL whose path has a `.` or `..` segment (including `%2e%2e`) is not sent and returns a failure.
+  - **The person approving could not see what would be sent (fixed):** When asking about `http`, it shows the URL (including the query part), the headers the model added, and the body (up to 2,000 characters) (`preview`).
+  - **Added private address ranges:** `0.0.0.0/8`, `100.64.0.0/10` (CGNAT, Tailscale, cloud metadata), `192.0.0.0/24`, `198.18.0.0/15`, `240.0.0.0/4`, IPv6 that carries IPv4 (`::/96`, NAT64, 6to4).
+  - Tests: `TestNetSubject` (arguments added by the model do not change the subject), `TestHTTPPreview`, `TestNetDotSegments`, `TestNetPrivateRefused` (ranges), `TestHTTPUnknown` (timeout after connecting).
+- **Accepted weaknesses**
+  - `fetch` follows redirects within the same host without re-checking the rules. A `fetch` rule written with a path (`example.com/public/*`) can be escaped by a redirect within the same host. `fetch` only reads, so we accept this.
+  - Masking covers only the value itself. A value returned in a changed form (escaped, base64 and so on) cannot be masked.
+  - A rule's `*` also matches `/`. Writing a host like `*.github.com/*` also matches `evil.example/.github.com/x`. Write hosts without `*`.

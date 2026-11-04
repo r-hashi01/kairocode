@@ -1,147 +1,147 @@
-# 0007 手元では、利用者自身の Claude Code（サブスクリプション）をモデルのエンジンとして使える
+# 0007 Locally, the user's own Claude Code (subscription) can be used as the model engine
 
-- 状態: 承認（2026-10-09）
-- 日付: 2026-10-09
-- 関連: 要件 FR-18、FR-19、NFR-1、NFR-7、ADR 0001、0002（ACP）、0005（sandbox）、0006（会話の保存）
+- Status: Accepted (2026-10-09)
+- Date: 2026-10-09
+- Related: requirements FR-18, FR-19, NFR-1, NFR-7; ADR 0001, 0002 (ACP), 0005 (sandbox), 0006 (conversation storage)
 
-## 背景
+## Context
 
-利用者の方針（2026-10-09）: 最終的には API キーで動かす。今の手元の開発では、Claude Code のサブスクリプションで動かしたい。エンジンは、Claude API と Claude Code の 2 つで足りる。
+The user's policy (2026-10-09): in the end, run it with an API key. For local development now, run it on a Claude Code subscription. Two engines, the Claude API and Claude Code, are enough.
 
-Anthropic の文書には、次のように書かれています（2026-10-09 に確認）。
+Anthropic's documents say the following (checked on 2026-10-09).
 
-- 「第三者の開発者が、自分のアプリに Claude.ai のログインを提供すること、または利用者に代わって Free・Pro・Max のプランの資格情報でリクエストを流すことを認めない」（https://code.claude.com/docs/en/legal-and-compliance）
-- 一方で、例外もあります。「利用者自身が、改変していない Claude Code のバイナリに、自分のサブスクリプションでログインすることは妨げない」
+- "Third-party developers are not allowed to offer Claude.ai login in their apps, or to route requests on behalf of users with the credentials of a Free, Pro or Max plan" (https://code.claude.com/docs/en/legal-and-compliance)
+- There is also an exception: "this does not prevent users themselves from logging in to an unmodified Claude Code binary with their own subscription"
 
-課金の扱いも確かめました（https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan、2026-10-07 の更新）。
+We also checked how billing is handled (https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan, updated 2026-10-07).
 
-- 2026-05-14 に、`claude -p` や Agent SDK の利用を、6 月 15 日からサブスクリプションの枠の外（API の料金で数える月のクレジット）に移す、と発表されました。
-- その変更は、6 月 15 日に止められました。プランでログインした `claude -p` は、今もサブスクリプションの利用の枠から使われます。
-- 2026-10-07 から、Max と Team のプランには月ごとの API のクレジットが付きます。利用者は Max のプランではないので、この ADR では扱いません。
+- On 2026-05-14, it was announced that use of `claude -p` and the Agent SDK would move outside the subscription's allowance (a monthly credit counted at API prices) from June 15.
+- That change was stopped on June 15. `claude -p` logged in with a plan is still used from the subscription's usage allowance.
+- From 2026-10-07, the Max and Team plans come with a monthly API credit. The user is not on a Max plan, so this ADR does not deal with it.
 
-この扱いは一度変わりかけて止まった経緯があるので、また変わりうるものとして扱います。
+This handling once nearly changed and then stopped, so we treat it as something that may change again.
 
-そこで、KairoCode がサブスクリプションの資格情報に触れることはせず、利用者がログインした**改変していない `claude`** を、ヘッドレスで起動する形に限ります。これを配る製品の機能にするかどうかは、Anthropic に確かめてから決めます。
+So KairoCode does not touch subscription credentials, and is limited to starting, headless, the **unmodified `claude`** the user has logged in to. Whether to make this a feature of a distributed product is decided after checking with Anthropic.
 
-2026-10-09 に、`claude` 2.1.295 で試作して、次のことを確かめました。
+On 2026-10-09 we prototyped with `claude` 2.1.295 and confirmed the following.
 
-- `claude -p --tools "" --strict-mcp-config --mcp-config <設定>` で、組み込みのツールが無くなり、渡した MCP のツールだけになる。モデル自身が「echo と slow しか無く、ファイルは読めない」と答えた。
-- MCP の `tools/call` の `_meta["claudecode/toolUseId"]` に、tool_use の ID が来る。
-- ツールの実行中に `claude` を強制終了し、`--resume <ID>` で続けると、次のことが起きる。
-  - 終わったツールの呼び出しは、もう一度来ない。
-  - 実行中だった呼び出しは、**同じ引数で、新しい tool_use の ID で**もう一度来る。
-- `--session-id <uuid>` で始めたセッションは、`--resume` しても同じ ID のままで、会話の記録は `~/.claude/projects/<作業ディレクトリ>/<ID>.jsonl` に残る。
+- With `claude -p --tools "" --strict-mcp-config --mcp-config <config>`, the built-in tools disappear and only the MCP tools passed in remain. The model itself answered "there are only echo and slow, and I can't read files".
+- The tool_use ID comes in `_meta["claudecode/toolUseId"]` of MCP's `tools/call`.
+- When `claude` is forcibly stopped while a tool is running and continued with `--resume <ID>`, the following happens.
+  - Finished tool calls do not come again.
+  - The call that was running comes again **with the same arguments and a new tool_use ID**.
+- A session started with `--session-id <uuid>` keeps the same ID after `--resume`, and the conversation's record stays in `~/.claude/projects/<working directory>/<ID>.jsonl`.
 
-## 決定
+## Decision
 
-### 1. モデルのエンジンを 2 つにする
+### 1. Two model engines
 
-| エンジン | 動かし方 | 使う場面 |
+| Engine | How it runs | When it is used |
 |---|---|---|
-| `api`（既定） | KairoCode がモデルを 1 回ずつ呼び、ループを回す（ADR 0001、0006） | API キー。最終的な配り方 |
-| `claude-code` | 利用者の `claude` がループを回し、KairoCode はツールを MCP で出す | 手元の開発。利用者が明示的に選んだときだけ |
+| `api` (default) | KairoCode calls the model one call at a time and runs the loop (ADR 0001, 0006) | API key. The final way of distribution |
+| `claude-code` | The user's `claude` runs the loop, and KairoCode offers tools over MCP | Local development. Only when the user chooses it explicitly |
 
-- エンジンは、設定（`kairocode.json` の `engine`、または `KAIROCODE_ENGINE`）で選びます。`claude-code` を既定にはしません。
-- エージェントの定義（ADR 0002）の `engine` で、エージェントごとに選ぶこともできます。
+- The engine is chosen in the configuration (`engine` in `kairocode.json`, or `KAIROCODE_ENGINE`). `claude-code` is not made the default.
+- It can also be chosen per agent with `engine` in the agent definition (ADR 0002).
 
-### 2. `claude-code` のエンジンのターン
+### 2. A turn on the `claude-code` engine
 
-- ターンは、アクション `claude.turn`（作用は `Unprotected`）1 つです。このアクションは、次の形で `claude` を起動します。
+- A turn is a single action, `claude.turn` (effect `Unprotected`). This action starts `claude` in the following form.
 
   ```
-  claude -p <プロンプト> --session-id|--resume <uuid> --tools "" \
+  claude -p <prompt> --session-id|--resume <uuid> --tools "" \
     --setting-sources "" --disable-slash-commands --strict-mcp-config \
-    --mcp-config <KairoCode の MCP> --allowedTools mcp__kairocode__<ツール>,… \
-    --system-prompt <エージェントのプロンプト> [--model <モデル>] \
-    --output-format stream-json --verbose --include-partial-messages   (標準入力は /dev/null)
+    --mcp-config <KairoCode's MCP> --allowedTools mcp__kairocode__<tool>,… \
+    --system-prompt <the agent's prompt> [--model <model>] \
+    --output-format stream-json --verbose --include-partial-messages   (stdin is /dev/null)
   ```
 
-  - `--setting-sources ""` と `--disable-slash-commands`: 利用者の設定、hook、プラグイン、スキルを読み込みません。2026-10-09 に確かめたところ、これが無いと、利用者のグローバルな hook（プラグインの SessionStart など）が `claude -p` の中でも走り、KairoCode のターンに余計な文脈を差し込みました。これを付けると、hook は走らず、プラグインは Claude Code に組み込みのものだけになり、`apiKeySource` は `none`（サブスクリプション）のままでした。`--bare` も hook を切りますが、認証が API キーだけになるので使いません。
-  - `stream-json` には `--verbose` が要ります。標準入力を開いたままにすると、`claude -p` は入力を 3 秒待ちます。
-  - `--model` は、エージェントにモデルの指定があるときだけ付けます。無ければ、利用者の Claude Code の既定のモデルです。
+  - `--setting-sources ""` and `--disable-slash-commands`: the user's settings, hooks, plugins and skills are not loaded. When we checked on 2026-10-09, without these the user's global hooks (a plugin's SessionStart and so on) ran inside `claude -p` too and inserted extra context into KairoCode's turn. With them, hooks did not run, the only plugins were the ones built into Claude Code, and `apiKeySource` stayed `none` (the subscription). `--bare` also cuts hooks, but it limits authentication to API keys only, so it is not used.
+  - `stream-json` needs `--verbose`. If stdin is left open, `claude -p` waits 3 seconds for input.
+  - `--model` is added only when the agent specifies a model. Otherwise it is the default model of the user's Claude Code.
 
-  - **セッションの ID:** KairoCode のセッションの ID から、決まった規則で作る UUID です（不変条件 8）。最初のターンは `--session-id`、2 回目からは `--resume` で始めます。
-  - **ストリーミング:** `stream-json` の出力を、`TaskContext.Emit` でライブの出力として流します。結果の行から、最終の応答と使用量を取り出して記録します。
-  - **環境変数:** 子のプロセスからは、Claude Code の中で動いていることを示す変数（`CLAUDECODE` など）を外します。KairoCode 自身が Claude Code の中で開発されていても、入れ子として拒まれないようにするためです。
-- **落ちたときの再開:** 何をするかは、Claude Code 自身の記録（transcript、`$CLAUDE_CONFIG_DIR` か `~/.claude` の `projects/*/<uuid>.jsonl`）で決めます。
-  - transcript が無ければ `--session-id` で始め、あれば `--resume` で続けます。
-  - プロンプトの末尾に、ターンの目印（`[kairocode turn <ターンの ID>]`）を付けます。transcript に目印が既にあれば、プロンプトは送り直さず、「中断したところから続けて」を送ります。
-  - 失うのは、実行中だったモデルの呼び出しだけです（NFR-1）。ただし、`claude` が終わってから KairoCode が応答を記録するまでの間に落ちると、記録される応答は「続けて」への答えになります（元の応答は transcript にあります）。
-- **残った `claude` を止める:** `claude` は、自分のプロセスグループで起動し、PID を `kc_claude_proc` に記録します。ターンをやり直す前に、記録された PID が、まだこのセッションの `claude` として動いていれば止めます。Linux では、親が死んだら子も止まるようにします（`Pdeathsig`）。macOS では、子は親より長く生きるので、この止め方に頼ります。
+  - **The session ID:** a UUID made by a fixed rule from KairoCode's session ID (invariant 8). The first turn starts with `--session-id`, and from the second on with `--resume`.
+  - **Streaming:** the `stream-json` output is streamed as live output with `TaskContext.Emit`. The final response and usage are taken from the result line and recorded.
+  - **Environment variables:** variables that indicate running inside Claude Code (`CLAUDECODE` and so on) are removed from the child process. This is so that even when KairoCode itself is being developed inside Claude Code, it is not refused as nested.
+- **Resuming after a crash:** what to do is decided by Claude Code's own record (the transcript, `projects/*/<uuid>.jsonl` in `$CLAUDE_CONFIG_DIR` or `~/.claude`).
+  - If there is no transcript, it starts with `--session-id`; if there is one, it continues with `--resume`.
+  - A turn marker (`[kairocode turn <turn ID>]`) is appended to the end of the prompt. If the marker is already in the transcript, the prompt is not sent again; "continue from where you were interrupted" is sent instead.
+  - What is lost is only the model call that was running (NFR-1). However, if it crashes between `claude` finishing and KairoCode recording the response, the recorded response is the answer to "continue" (the original response is in the transcript).
+- **Stopping a leftover `claude`:** `claude` is started in its own process group, and its PID is recorded in `kc_claude_proc`. Before redoing a turn, if the recorded PID is still running as this session's `claude`, it is stopped. On Linux, the child is made to stop when the parent dies (`Pdeathsig`). On macOS, the child outlives the parent, so this way of stopping is relied on.
 
-### 3. ツールの呼び出しを kairo の記録に結びつける
+### 3. Tie tool calls to kairo's records
 
-- KairoCode の MCP のサーバーは、ランタイムのプロセスが HTTP で出します。ターンごとのトークンで、どのターンの呼び出しかを見分けます。
-- MCP の呼び出しは、それぞれ kairo の実行になります。その ID は `tool_use の ID` ではなく、`<ターンの ID>/mcp/<sha256(ツールの名前 + 正規化した引数) の先頭 24 文字>.<同じ組み合わせの何回目か>` です。
-  - 理由: 落ちた後に呼び直される呼び出しは、新しい tool_use の ID で来るからです（上の試作）。
-  - 新しい呼び出しが来たら、まず、同じ名前と引数で、**結果が Claude Code に届いたと確かめられていない**実行を探し、あればそれに合流します。無ければ、次の回数の実行を新しく始めます。
-  - 合流した実行が、要確認（結果が不明な実の手順）で止まっていれば、待たずに「人の確認待ち。ここで止まって利用者に伝えて」という結果を返します。待つと、`claude` のプロセスを抱えたままになります（不変条件 7）。
-  - 「届いた」と確かめるのは、次のどちらかを見たときです。どちらも、Claude Code が結果を受け取ってから次へ進むことに拠っています。
-    - 同じ `claude` のプロセスから、次の MCP の呼び出しが来た。
-    - そのプロセスが、結果の行を出して終わった。
-  - 結果を書き出した時点では「届いた」としません。2026-10-09 のテストで、その形では、死んだプロセスへの応答を「届いた」と記録してしまい、60 回に 1 回ほど実のツールが二重に動きました。サーバーの側は、接続が切れたことに気づくのが遅れるためです。
-  - 実行は `Submit` で始め、`Await` で待ちます。1 つの実行を、2 つの handler が駆動しないようにするためです。今まさに別の handler が待っている実行には、合流しません（並列に出た、同じ内容の 2 つの呼び出しは、2 つの呼び出しです）。
-  - **M1 で詰めたこと（2026-10-09）:**
-    - 呼び出しの記録は、kairo の実行とは別に、自前の表（`kc_mcp_call`。どの `claude` のプロセスから来たか、届いたと確かめられたか）にも持ちます。kairo が古い実行を消しても（kairo の不足 #17）、呼び出しの選び方は変わりません。消えた実行の結果が要るときは、「結果は失われた。もう一度しないで利用者に伝えて」とモデルに返します。
-    - 「届いた」とされた実の呼び出しと同じ内容のものが、別の `claude` のプロセスから来たら、黙って実行せずに、人に「もう一度実行するか」を訊きます。「届いた」は、Claude Code が結果をメモリに持ったことしか意味しないからです（1 つの応答の中の複数の呼び出しの途中で落ちると、結果が transcript に残っていないことがある）。読むだけのツールと冪等なツールは、そのまま実行し直します。
-    - 代わりに、落ちた後に、同じ実の呼び出しを正当にもう一度したい場合も、訊かれます。
-- ツールそのもの（作用の型、権限の判定、sandbox）は、`api` のエンジンと同じです（ADR 0005）。
+- KairoCode's MCP server is served over HTTP by the runtime process. A per-turn token tells which turn a call belongs to.
+- Each MCP call becomes a kairo run. Its ID is not the `tool_use ID` but `<turn ID>/mcp/<first 24 characters of sha256(tool name + normalized arguments)>.<which occurrence of the same combination>`.
+  - Reason: a call that is made again after a crash comes with a new tool_use ID (the prototype above).
+  - When a new call comes, it first looks for a run with the same name and arguments **whose result has not been confirmed to have reached Claude Code**, and joins it if there is one. If not, it starts a new run for the next occurrence.
+  - If the run it joined is stopped at blocked (needs confirmation) (a real step whose result is unknown), it returns without waiting a result saying "waiting for a person's confirmation; stop here and tell the user". Waiting would keep holding the `claude` process (invariant 7).
+  - "Reached" is confirmed when either of the following is seen. Both rely on Claude Code moving on only after it has received the result.
+    - The next MCP call came from the same `claude` process.
+    - That process printed its result line and ended.
+  - Writing out the result does not count as "reached". In a test on 2026-10-09, that form recorded a response to a dead process as "reached", and about once in 60 runs a real tool ran twice. This is because the server side is late to notice that the connection was cut.
+  - A run is started with `Submit` and waited on with `Await`, so that one run is not driven by two handlers. A run that another handler is waiting on right now is not joined (two calls with the same content issued in parallel are two calls).
+  - **What was settled in M1 (2026-10-09):**
+    - The record of calls is kept, apart from kairo's runs, in a table of our own too (`kc_mcp_call`: which `claude` process it came from, and whether it was confirmed to have reached). Even if kairo deletes old runs (kairo's gap #17), the way calls are chosen does not change. When the result of a deleted run is needed, the model is told "the result was lost; do not do it again, tell the user".
+    - If a call with the same content as a real call marked "reached" comes from a different `claude` process, it is not run silently; a person is asked "run it again?". "Reached" only means that Claude Code held the result in memory (if it crashes partway through several calls in one response, the result may not be left in the transcript). Read-only tools and idempotent tools are simply run again.
+    - In exchange, after a crash, when someone legitimately wants to make the same real call again, they are asked too.
+- The tools themselves (effect types, permission decisions, the sandbox) are the same as on the `api` engine (ADR 0005).
 
-### 4. 承認の待ち
+### 4. Waiting for approval
 
-- 承認が要るツールは、MCP の呼び出しを待たせ続けません（M1 で実装。`TestClaudeEngineAsksForApproval`）。待たせると、`claude` のプロセスが承認を待つ間ずっと残ります（NFR-4）。
-- 代わりに、承認待ちを示す結果を返し、システムプロンプトの指示に従って、モデルにターンを終えさせます。
-- ワークフローは承認を `kairo.WaitFor` で待ちます。答えは `kc_mcp_grant`（ターンと、呼び出しの内容のキーごと）に記録し、次の `claude.turn` で、答えを伝えて `--resume` します。`claude` が同じ呼び出しを出し直すと、記録された答えで通るか、拒まれます。
+- A tool that needs approval does not keep the MCP call waiting (implemented in M1; `TestClaudeEngineAsksForApproval`). If it waited, the `claude` process would stay alive the whole time the approval is waited for (NFR-4).
+- Instead, it returns a result showing that it is waiting for approval, and following the system prompt's instructions, the model ends the turn.
+- The workflow waits for the approval with `kairo.WaitFor`. The answer is recorded in `kc_mcp_grant` (per turn and per key of the call's content), and the next `claude.turn` tells the answer and does `--resume`. When `claude` issues the same call again, it goes through or is refused according to the recorded answer.
 
-- 追記（2026-10-09、M1 のレビュー）: 1 つの答えは、1 つの MCP の呼び出しの実行にだけ使われます（`kc_mcp_grant.used_by`）。同じ内容の呼び出しを、`claude` がもう一度出したら、もう一度利用者に尋ねます。また、途中で切れて「人の確認待ち」になった MCP の呼び出しは、ターンが終わった後も `kairocode approvals` に並び、`kairocode approve` で決着します（`TestCrashClaudeEngine`）。
+- Addendum (2026-10-09, M1's review): one answer is used by only one MCP call's run (`kc_mcp_grant.used_by`). If `claude` issues a call with the same content again, the user is asked again. Also, an MCP call that was cut off partway and became "waiting for a person's confirmation" stays listed in `kairocode approvals` even after the turn ends, and is settled with `kairocode approve` (`TestCrashClaudeEngine`).
 
-### 5. このエンジンでは使えないもの
+### 5. What cannot be used with this engine
 
-- 会話は Claude Code の記録（transcript）が持ちます。ADR 0006 の会話の鎖は、`api` のエンジンだけのものです。`kc_message` には、利用者のメッセージと、ターンの最終の応答だけを置きます。
-- 記録だけからの再生（FR-25）は、このエンジンでは使えません。
-- RPM と TPM、費用の上限は、サブスクリプションの側の制限に従います。
+- The conversation is held by Claude Code's record (the transcript). ADR 0006's conversation chain is only for the `api` engine. Only the user's messages and the turn's final response are put in `kc_message`.
+- Replay from the records alone (FR-25) cannot be used with this engine.
+- RPM, TPM and cost limits follow the subscription's limits.
 
-### 6. 資格情報
+### 6. Credentials
 
-- KairoCode は、Claude Code の資格情報を読みません。保存もしません。記録にも残しません（NFR-7、不変条件 6）。
-- 子のプロセスの環境変数からは、API キーらしい名前の変数を外します（ADR 0005）。そうしないと、`claude` が利用者のサブスクリプションではなく、そのキーで課金されることがあり得ます。
+- KairoCode does not read Claude Code's credentials. It does not store them. It does not leave them in records (NFR-7, invariant 6).
+- Variables with names that look like API keys are removed from the child process's environment (ADR 0005). Otherwise `claude` might be billed with that key rather than the user's subscription.
 
-## 結果
+## Consequences
 
-- 手元の開発は、サブスクリプションの範囲で回せます。`api` のエンジンは、そのまま最終の道として残ります。
-- `claude-code` のエンジンの耐久性は、ターンを単位にします。KairoCode が確実に守るのは、「実のツールが二重に起きない」ことです。
-- テスト:
-  - `claude` の代わりに、決まった MCP の呼び出しを行う偽のコマンドを使います。本物の `claude` は、テストでは呼びません（不変条件 9）。
-  - 2 ターンが、`--session-id` と同じ ID の `--resume` で動き、MCP のツールの結果が応答に届くこと（`TestClaudeEngineTurns`）。
-  - 落ちた後に新しい ID で呼び直された実のツールが、二重に動かないこと（`TestClaudeEngineResumeDoesNotRepeatARealCall`。300 回まわして確かめた）。
-  - 同じプロセスが同じ呼び出しを 2 回したら、2 回動くこと（`TestClaudeEngineRepeatedCallRunsAgain`）。
-  - KairoCode を実のツールの実行中に SIGKILL して開き直すと、残った `claude` を止めて `--resume` し、「続けて」を送る。同じ呼び出しは要確認の実行に合流して、もう一度は動かず、「人の確認待ち」がモデルに返る（`TestCrashClaudeEngine`）。
-  - 承認待ちでターンが終わり、承認の後に再開すること（`TestClaudeEngineAsksForApproval`）。
-- 本物の `claude` を使う確かめは、手で行います（利用者のサブスクリプションの枠を使うため）。
+- Local development can be run within the subscription. The `api` engine stays as the final path, as it is.
+- The durability of the `claude-code` engine is per turn. What KairoCode reliably keeps is "a real tool does not run twice".
+- Tests:
+  - Instead of `claude`, a fake command that makes fixed MCP calls is used. The real `claude` is not called in tests (invariant 9).
+  - Two turns run with `--session-id` and `--resume` of the same ID, and the MCP tool's result reaches the response (`TestClaudeEngineTurns`).
+  - A real tool called again with a new ID after a crash does not run twice (`TestClaudeEngineResumeDoesNotRepeatARealCall`; checked by running it 300 times).
+  - If the same process makes the same call twice, it runs twice (`TestClaudeEngineRepeatedCallRunsAgain`).
+  - When KairoCode is SIGKILLed while a real tool is running and reopened, it stops the leftover `claude`, does `--resume` and sends "continue". The same call joins the blocked (needs confirmation) run, does not run again, and "waiting for a person's confirmation" goes back to the model (`TestCrashClaudeEngine`).
+  - A turn ends waiting for approval and resumes after the approval (`TestClaudeEngineAsksForApproval`).
+- Checks with the real `claude` are done by hand (because they use the user's subscription allowance).
 
-## 検討した代替案
+## Alternatives considered
 
-- **サブスクリプションの OAuth のトークンを、KairoCode の HTTP クライアントから使う:** 上の文書の禁止にそのまま当たります。
-- **ACP の Claude の adapter（`@agentclientprotocol/claude-agent-acp`）を通して動かす:**
-  - この adapter は、0.18.0 から編集や bash を Claude Code の中で実行し、クライアントに回しません。ACP v2 では、クライアントにファイルや端末の操作を任せる仕組みそのものが無くなります。
-  - 組み込みのツールを外すには、`_meta` の拡張に頼る必要があります。
-  - ACP は、KairoCode の利用者の側の入口として使います（ADR 0002）。
-- **Claude Code の組み込みのツールをそのまま使う:** 作用が KairoCode の記録と sandbox の外で起きます。落ちたときに、二重に起きないことを守れません。
+- **Use the subscription's OAuth token from KairoCode's HTTP client:** this falls directly under the prohibition in the document above.
+- **Run it through ACP's Claude adapter (`@agentclientprotocol/claude-agent-acp`):**
+  - From 0.18.0, this adapter runs edits and bash inside Claude Code and does not pass them to the client. In ACP v2, the very mechanism that leaves file and terminal operations to the client goes away.
+  - Removing the built-in tools would rely on a `_meta` extension.
+  - ACP is used as the entry point on KairoCode's user side (ADR 0002).
+- **Use Claude Code's built-in tools as they are:** the effects would happen outside KairoCode's records and sandbox. After a crash, "nothing happens twice" could not be kept.
 
-## 追記（2026-10-27）: 画像のあるターンの入力（ADR 0026）
+## Addendum (2026-10-27): the input of a turn with images (ADR 0026)
 
-ユーザーのメッセージに画像があるターンだけ、プロンプトを `-p <プロンプト>` の引数でなく、`-p --input-format stream-json` で標準入力に 1 行の JSON（`{"type":"user","message":{"role":"user","content":[文、画像…]}}`）として渡し、標準入力を閉じます。出力の読み方、`--session-id` と `--resume`、組み込みのツールを切ることは変えません。画像のないターンは今のままです。1 回の文字列のプロンプトでは画像を添えられないためです（Agent SDK の文書）。2026-10-27 に本物の `claude`（2.1.311）で、閉じた標準入力でもターンを終えて出ていくこと、`--resume` で前の画像を覚えていることを確かめました。
+Only for a turn whose user message has images, the prompt is passed not as the argument of `-p <prompt>` but with `-p --input-format stream-json`, as one line of JSON on stdin (`{"type":"user","message":{"role":"user","content":[text, images…]}}`), and stdin is closed. How the output is read, `--session-id` and `--resume`, and cutting the built-in tools do not change. Turns without images stay as they are. This is because a single string prompt cannot carry images (the Agent SDK's documents). On 2026-10-27, with the real `claude` (2.1.311), we confirmed that it finishes the turn and exits even with a closed stdin, and that with `--resume` it remembers the earlier images.
 
 
-## 追記（2026-10-28、同じ呼び出しを聞く場面を狭める）
+## Addendum (2026-10-28, narrowing when the same call is asked about)
 
-- 前の claude の実行の同じ実の呼び出しを、「落ちた後に呼び直されたかもしれない」として聞くのは、前の実行が途切れたときだけにします。前の実行が結果を返して終わっていれば（承認を待つために終えた、など）、渡した結果は Claude Code が保存したセッションにあるので、同じ呼び出しは新しい呼び出しです。
-- 前は、別の実行であれば必ず聞いていました。KairoCode で動かす Claude Code は、承認に答えるたびに新しい実行になるので、同じターンの中で同じコマンドをもう一度呼ぶと、落ちていないのに聞かれていました（利用者の指摘、2026-10-28）。
-- 結果を返して終えた実行の印（その実行の token）を、`kc_message` の種類 `mcp-run-ended` に 1 度だけ書きます（フックの答えと同じ書き方。保存の形式は変えない）。書く前に落ちたら印は無く、今までどおり聞きます。
-- テスト: `TestClaudeEngineSameCallAfterARunThatEnded`。`TestClaudeEngineRepeatAfterInterruptionAsks`、`TestClaudeEngineApprovalServesOneRun`（途切れた後は聞く）はそのまま通ります。
+- The same real call from an earlier claude run is asked about as "it may have been called again after a crash" only when the earlier run was cut off. If the earlier run returned its result and ended (for example, it ended to wait for an approval), the result given is in the session Claude Code saved, so the same call is a new call.
+- Before, it always asked if the run was a different one. Claude Code run by KairoCode becomes a new run every time an approval is answered, so calling the same command again within the same turn was asked about even though nothing had crashed (the user's comment, 2026-10-28).
+- A mark for a run that returned its result and ended (that run's token) is written once in `kc_message` with the kind `mcp-run-ended` (the same way of writing as a hook's answer; the storage format does not change). If it crashes before writing, there is no mark, and it asks as before.
+- Tests: `TestClaudeEngineSameCallAfterARunThatEnded`. `TestClaudeEngineRepeatAfterInterruptionAsks` and `TestClaudeEngineApprovalServesOneRun` (it asks after a cut-off) still pass as they are.
 
-## 追記（2026-10-28、Claude Code が KairoCode のツールを待つ時間）
+## Addendum (2026-10-28, how long Claude Code waits for KairoCode's tools)
 
-- Claude Code は、KairoCode の MCP の呼び出しを既定で 1 分しか待たず、それを過ぎると「The operation timed out.」で諦めていました（2026-10-28 に、`sleep 58` は通り `sleep 70` は切れることで確かめた）。KairoCode の側ではコマンドは動き続けますが、結果はモデルに届きません。長いテスト、`bash_wait`（ADR 0028。最大 1 日待つ）が、Claude Code のエンジンでは使えていませんでした。
-- ターンの `claude` を起動するとき、待つ時間を `bash_wait` の上限（1 日）と 1 分にします。`--mcp-config` の KairoCode のサーバーの `timeout` と、環境変数 `MCP_TOOL_TIMEOUT` の両方で渡します（利用者がもっと長く設定していれば、そのまま）。サーバーの `timeout` は、何も返さない間の待ち（既定 5 分）も同じだけ延ばします。
-- テスト: `TestClaudeWaitsForLongCalls`（偽の `claude` が受け取った値）。本物の `claude` での確かめは、デーモンが新しいビルドに入れ替わった後。
+- By default, Claude Code waited only 1 minute for KairoCode's MCP calls, and gave up with "The operation timed out." after that (checked on 2026-10-28: `sleep 58` went through and `sleep 70` was cut off). On KairoCode's side the command keeps running, but the result does not reach the model. Long tests and `bash_wait` (ADR 0028; waits up to a day) could not be used with the Claude Code engine.
+- When starting a turn's `claude`, the wait is set to `bash_wait`'s limit (one day) plus one minute. It is passed both as `timeout` of KairoCode's server in `--mcp-config` and as the environment variable `MCP_TOOL_TIMEOUT` (if the user has set something longer, that is kept). The server's `timeout` also extends the wait while nothing is returned (default 5 minutes) by the same amount.
+- Tests: `TestClaudeWaitsForLongCalls` (the values the fake `claude` received). Checking with the real `claude` comes after the daemon is replaced with the new build.

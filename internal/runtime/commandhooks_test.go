@@ -524,7 +524,7 @@ func TestHookCache(t *testing.T) {
 	}
 }
 
-// agents.claudeHooks (ADR 0018, 9 節): "off" in the user's kairocode.json,
+// agents.claudeHooks (ADR 0018, section 9): "off" in the user's kairocode.json,
 // Claude Code's hooks are not read; a project's cannot turn them back on,
 // but can turn them off; "ask" and nothing are as before, and a value not
 // known is taken as off.

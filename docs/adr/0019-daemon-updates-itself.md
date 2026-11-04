@@ -1,94 +1,94 @@
-# 0019 デーモンを自動で新しい版にする
+# 0019 Move the daemon to a new version automatically
 
-- 状態: 承認（2026-10-21）
-- 日付: 2026-10-21
-- 関連: ADR 0008（データの置き場ごとに 1 つのデーモン。決定 1 の「版の入れ替え」を置き換える）、0010（端末の対話）、要件 NFR-4、不変条件 4・7
+- Status: Accepted (2026-10-21)
+- Date: 2026-10-21
+- Related: ADR 0008 (one daemon per data directory. Replaces "swapping versions" in its decision 1), 0010 (the terminal UI), requirement NFR-4, invariants 4 and 7
 
-## 背景
+## Context
 
-ADR 0008 の決定 1 では、版の違うクライアントがデーモンを入れ替えられるのは、デーモンが何もしておらず、ほかのクライアントもつないでいないときだけです。それ以外は、デーモンは古い版のまま動き続け、クライアントは「`kairocode daemon stop` を手で」と伝えます。端末の対話（`kairo`）は開きっぱなしになりやすく、ターンも長いので、新しい版を入れても古いデーモンが長く残ります。
+In ADR 0008's decision 1, a client of a different version can replace the daemon only when the daemon is doing nothing and no other client is connected. Otherwise, the daemon keeps running at the old version, and the client says "run `kairocode daemon stop` by hand". The terminal UI (`kairo`) tends to stay open, and turns are long, so even after a new version is installed, the old daemon stays around for a long time.
 
-利用者の要望は、デーモンを意識せずに使えること、つまり起動・停止・版の入れ替えがすべて自動であることです（2026-10-21）。
+The user wants to use it without thinking about the daemon, that is, starting, stopping and swapping versions should all be automatic (2026-10-21).
 
-起動と停止は、すでに自動です（ADR 0008）。
-- 起動: クライアントが要るときに、自動で起動します。
-- 停止: 走っているステップもクライアントもない状態が 10 分続くと止まります。承認を待つだけのセッションは、プロセスを持ちません（NFR-4）。
-- kairo の時計を待っているもの（`Retryable` のやり直しの間隔、`ctx.Sleep`、フローの `wait` の期限）があっても止まります。時計は失われず、次にデーモンが起動したときに、時刻の過ぎたものから拾われます（遅れるだけ）。時刻どおりに動く必要がある無人の実行は、M4 のサスペンドモード（外のスケジューラーが kairo を起こす）が受け持ちます。
+Starting and stopping are already automatic (ADR 0008).
+- Start: a client starts it automatically when it is needed.
+- Stop: it stops after 10 minutes with no running steps and no clients. A session that is only waiting for approval holds no process (NFR-4).
+- It also stops even if something is waiting on kairo's clock (the interval of a `Retryable` retry, `ctx.Sleep`, the deadline of a flow's `wait`). The clock is not lost; the next time the daemon starts, the ones whose time has passed are picked up (they are only late). Unattended runs that need to run on time are handled by M4's suspend mode (an outside scheduler wakes kairo).
 
-自動にしていないのは、版の入れ替えだけです。その難しさは 2 つあります。
-- 版のハッシュには前後がありません。古い版のクライアント（メモリーにある古い実行ファイル）と新しい版のクライアントが両方つなぐと、互いに相手のデーモンを入れ替えようとして行き来し得ます。
-- デーモンが止まると、つないでいるクライアントの接続と出来事の流れ（SSE）が切れます。
+Only swapping versions is not automatic. There are two difficulties.
+- Version hashes have no order. If both a client of the old version (an old executable in memory) and a client of the new version connect, each could try to replace the other's daemon, going back and forth.
+- When the daemon stops, the connected clients' connections and event streams (SSE) are cut.
 
-検討の途中で、デーモンをなくす（各クライアントが自分で kairo を動かす）ことも考えました。クライアントを閉じてもターンが続くこと、プロセスの間の知らせがイベントで届くことのために、デーモンは残します（利用者の判断、2026-10-21）。
+During the discussion we also considered removing the daemon (each client runs kairo itself). The daemon stays, so that turns continue after a client is closed, and so that notices between processes arrive as events (the user's decision, 2026-10-21).
 
-## 決定
+## Decision
 
-1. **正しい版は「いまディスクに入っている版」とする。**
-   - デーモンは、起動に使われた実行ファイルのパス（`server.json` に書く）と、そのハッシュ（今の版）を持ちます。
-   - デーモンは、次のときにそのパスのファイルのハッシュを計り直します。時計では見ません（ポーリングしない）。
-     - 版の違うクライアントがつないできたとき。
-     - 走っているステップが 0 になったとき。
-   - ディスクの版が自分と違えば、デーモンは「退く」状態になります。
-   - クライアントはデーモンを入れ替えようとしません。版が違えば、デーモンに「確かめて」と頼むだけです（`POST /daemon/update`。`stop?idle` を置き換える）。
-     - 決めるのはディスクなので、古いクライアントと新しいクライアントが行き来することはありません。
-     - クライアント自身がディスクの版より古ければ、利用者に「このクライアントは古い版です。開き直してください」と伝えます。
-2. **退くデーモンは、走っているステップが 0 になったら止まる。**
-   - つないでいるクライアントは待ちません。kairo の `Drain` で、走っているステップの終わりを待ってから止まります（ADR 0008 の追記と同じ）。
-   - ターンの途中でも、ステップとステップの間なら止まって構いません。ワークフローは記録から再開し、実のステップは走っていないので、要確認にもなりません。
-   - 承認の待ちは、ステップを持たないので、止まるのを妨げません。
-3. **つないでいるクライアントがいれば、退くデーモンは新しい版を起動してから止まる。**
-   - つなぎ直し先を用意するためです。クライアントがいなければ、ただ止まり、次に要ったときにクライアントが起動します（今と同じ）。
-   - 起動は、今と同じく `start.lock` で 1 つに限り、新しいデーモンは前のデーモンがロックを離すのを待ちます（ADR 0008 の追記）。
-4. **クライアントは、つなぎ直す。**
-   - `daemon.Client` は、デーモンにつながらないとき（ソケットがない、`server.json` が変わった）に、`server.json` を読み直し、なければ起動の手順（`Connect`）で新しいデーモンを起動します。起動するのはディスクのパスの実行ファイルなので、古いクライアントからでも新しい版が起動します。
-   - つなぎ直すのは、接続ができなかったとき（要求を送っていないとき）だけです。送った後に切れた要求（メッセージを送る、承認する）は、送り直しません。届いたかわからないので、エラーとして返します（不変条件 4 と同じ考え方）。
-   - 出来事の流れが切れたら、ACP のエージェントは今と同じく見張り直します。見張り直しで、待っているもの（承認）はもう一度伝わります。
-5. **パス:** パッケージ管理（Homebrew など）は、版ごとに別のディレクトリーに入れ、シンボリックリンクを付け替えます。デーモンは `os.Executable` ではなく、起動に使われたパス（リンクのまま）を持ち、計るときにリンクをたどります。
-6. **起動と停止は変えない。** ADR 0008 のとおり、要るときに起動し、何もしない状態が 10 分続けば止まります。時計を待っているものがあっても止まり、次の起動で拾います（NFR-4）。
+1. **The right version is "the version currently on disk".**
+   - The daemon holds the path of the executable it was started from (written in `server.json`) and its hash (the current version).
+   - The daemon re-measures the hash of the file at that path at these times. It does not watch on a clock (no polling).
+     - When a client of a different version connects.
+     - When the number of running steps becomes 0.
+   - If the version on disk differs from its own, the daemon enters a "retiring" state.
+   - Clients do not try to replace the daemon. If the versions differ, they only ask the daemon to "check" (`POST /daemon/update`. Replaces `stop?idle`).
+     - Since the disk decides, old and new clients never go back and forth.
+     - If the client itself is older than the version on disk, it tells the user "This client is an old version. Please reopen it."
+2. **A retiring daemon stops when the number of running steps becomes 0.**
+   - It does not wait for connected clients. With kairo's `Drain`, it waits for running steps to finish and then stops (the same as ADR 0008's addendum).
+   - Stopping in the middle of a turn is fine, as long as it is between steps. The workflow resumes from the record, and no real step is running, so nothing becomes blocked (needs confirmation).
+   - Waiting for approval holds no step, so it does not prevent stopping.
+3. **If clients are connected, a retiring daemon starts the new version before stopping.**
+   - This is so there is somewhere to reconnect. If no client is connected, it just stops, and a client starts it the next time it is needed (as now).
+   - Starting is limited to one with `start.lock`, as now, and the new daemon waits for the previous daemon to release the lock (ADR 0008's addendum).
+4. **Clients reconnect.**
+   - When `daemon.Client` cannot reach the daemon (no socket, `server.json` changed), it rereads `server.json`, and if there is none, starts a new daemon through the startup steps (`Connect`). What it starts is the executable at the path on disk, so even an old client starts the new version.
+   - It reconnects only when the connection could not be made (when the request was not sent). A request cut off after being sent (sending a message, approving) is not sent again. It is unknown whether it arrived, so it is returned as an error (the same idea as invariant 4).
+   - When the event stream is cut, the ACP agent watches again as it does now. Watching again re-delivers whatever is waiting (approvals).
+5. **Paths:** package managers (Homebrew and others) install each version in its own directory and repoint a symbolic link. The daemon holds the path it was started from (still as the link), not `os.Executable`, and follows the link when measuring.
+6. **Starting and stopping do not change.** As in ADR 0008, it starts when needed and stops after 10 minutes of doing nothing. It stops even if something is waiting on the clock, and that is picked up at the next start (NFR-4).
 
-実装に現れるところ: `internal/daemon`（`Info` にパス、`idleTimer` のステップ 0 の知らせ、`/daemon/update`、退く状態と次のデーモンの起動、`Client` のつなぎ直し）、`internal/cli`（古いクライアントの知らせ）。
+Where this shows in the implementation: `internal/daemon` (the path in `Info`, `idleTimer`'s notice of zero steps, `/daemon/update`, the retiring state and starting the next daemon, `Client`'s reconnecting), `internal/cli` (the notice for old clients).
 
-## 結果
+## Consequences
 
-- 利用者は、デーモンを起動も停止もしなくてよいです。`kairocode daemon stop` は、手で止めたいときのためだけに残します。
-- 新しい版を入れると、デーモンは、次にステップが途切れたときに新しい版に替わります。
-- 端末の対話は、つなぎ直しで続きます。つなぎ直しの間に送ったメッセージは、エラーとして返ることがあります（届いたかわからないものを送り直さない）。
-- テスト（実装のとき足す）
-  - ディスクの実行ファイルを差し替えると、ステップが 0 になったときにデーモンが止まり、クライアントがいれば新しい版が起動する。
-  - ステップが走っている間は止まらない。
-  - 古い版のクライアントがつないでも、新しい版のデーモンは止まらない（行き来しない）。
-  - つなぎ直しで、承認の待ちがもう一度伝わる。送った後に切れた要求は送り直さない。
-  - ADR 0008 の `TestOtherBuildKeepsABusyDaemon` などは、新しい形に書き換える。
+- The user does not need to start or stop the daemon. `kairocode daemon stop` stays only for when you want to stop it by hand.
+- After a new version is installed, the daemon switches to the new version the next time steps run out.
+- The terminal UI continues through reconnecting. A message sent during reconnection may come back as an error (what may or may not have arrived is not sent again).
+- Tests (added during implementation)
+  - When the executable on disk is replaced, the daemon stops once steps reach 0, and if clients are connected the new version starts.
+  - It does not stop while a step is running.
+  - When an old-version client connects, the new-version daemon does not stop (no going back and forth).
+  - Reconnecting re-delivers pending approvals. A request cut off after being sent is not sent again.
+  - ADR 0008's `TestOtherBuildKeepsABusyDaemon` and others are rewritten for the new form.
 
-## 検討した代替案
+## Alternatives considered
 
-- **今のまま（何もしていないときだけ入れ替え、それ以外は手で止める）:** 確実ですが、要望に合いません。
-- **デーモンをなくし、各クライアントが kairo を動かす:** 版の入れ替えの管理が要らなくなります。ただし、クライアントを閉じるとターンが止まり（次に開いたときに続く）、プロセスの間の知らせに kairo の SDK の変更（kairo の不足 #19）が、ライブの出力をほかのクライアントに流す仕組みが要ります。利用者の判断で、デーモンを残します。
-- **時計を待っている間はデーモンを止めない:** 時刻どおりに動きますが、NFR-4（待つ間はプロセスを占有しない）に反します。無人の実行の時計は、M4 のサスペンドモードが受け持ちます。
-- **版の違うクライアントが来たら、走っているものを切ってでも入れ替える:** 壊れはしませんが、走っている実のステップが要確認になり、利用者に聞くことが増えます。
-- **新しい版のクライアントが勝つ（来た順）:** 古いクライアントが開いたままだと行き来します。ディスクを正とすれば起きません。
-- **デーモンが自分の実行ファイルを時計で見張る:** ポーリングになります。ファイルの変化の通知は依存が要ります（fsnotify）。
+- **Keep things as they are (swap only when idle, otherwise stop by hand):** reliable, but does not meet the request.
+- **Remove the daemon and have each client run kairo:** managing version swaps would no longer be needed. But closing a client stops the turn (it continues the next time it is opened), and notices between processes need a change to kairo's SDK (kairo gap #19) and a way to stream live output to other clients. By the user's decision, the daemon stays.
+- **Do not stop the daemon while something waits on the clock:** things run on time, but it goes against NFR-4 (do not hold a process while waiting). The clock for unattended runs is handled by M4's suspend mode.
+- **When a client of a different version comes, swap even if it cuts off running work:** nothing breaks, but running real steps become blocked (needs confirmation), and the user gets asked more.
+- **The newer client wins (first come):** if an old client stays open, it goes back and forth. Treating the disk as the truth avoids that.
+- **The daemon watches its own executable on a clock:** that is polling. File change notification needs a dependency (fsnotify).
 
-## 実装（2026-10-21）
+## Implementation (2026-10-21)
 
-- **デーモン（`internal/daemon/daemon.go`）**
-  - `Options.Installed`（いまディスクに入っている版）と `Options.Successor`（新しい版の起動の仕方）を足しました。`InstalledAt(path)` は、ファイルの大きさ・時刻・実体が変わったときだけハッシュを計り直すので、ステップが 0 になるたびに見ても、費用は `stat` 1 回です。
-  - `handover`: `start.lock` を取り、排水して手放し、クライアントがつないでいれば新しい版を起動して準備ができるのを待ち、`start.lock` を離します。その間に来たクライアントは `start.lock` で待ち、新しい版につなぎます。
-  - 走っているステップが 0 になると（`idleTimer` の `onNoStep`）、版を見て、古ければ引き渡します。
-  - `POST /daemon/update`: 版を見て、古くてステップが走っていなければその場で引き渡し（`replaced`）、走っていれば後で（`later`）と答えます。
-  - 0019 より前の版のクライアントのために、`POST /daemon/stop?idle` は残しました。
-- **クライアント（`internal/daemon/client.go`）**
-  - 版が違えば `/daemon/update` を頼みます。0019 より前の版のデーモン（`/daemon/update` がない）には、ADR 0008 の入れ替えで頼みます。
-  - デーモンの版がディスクの版で、自分が違えば、「古い版です。開き直してください」と伝えます（`Stale`）。
-  - デーモンに届かなかった要求（つながらない、古いトークンで 401）だけ、つなぎ直してから送り直します（`unreached`）。送った後に切れた要求は送り直しません。
-- **CLI（`internal/cli/cli.go`）**
-  - デーモンを、起動に使われたパス（リンクのまま、絶対パス）で起動します（`invokedPath`）。クライアント自身の版は、今までどおり動いている実行ファイルのハッシュです（`daemon.FileVersion`）。
-  - デーモンは、自分の `os.Args[0]` のパスの版を見て、同じ引数と環境で新しい版を起動します。
-- **テスト:** `TestNewBuildReplacesTheDaemon`、`TestNewBuildReplacesADaemonInUse`（つないでいたクライアントがつなぎ直し、古い版だと知らされる）、`TestNewBuildWaitsForTheStep`（ステップの間で引き渡し、ターンは新しい版で終わる）、`TestOlderClientKeepsTheDaemon`（行き来しない）、`TestOnlyUnreachedIsSentAgain`。つなぎ直しを外すと `TestNewBuildReplacesADaemonInUse` が、ステップが 0 のときの確かめを外すと `TestNewBuildWaitsForTheStep` が落ちることを確かめました。ADR 0008 の `TestOtherBuildKeepsABusyDaemon`、`TestOtherBuildKeepsADaemonThatRuns` は、この形に置き換えました。
-- **まだ:** つなぎ直しの後に承認の待ちがもう一度伝わることは、ACP のエージェントの見張り直し（今の作り）に任せていて、この ADR のためのテストは足していません。
-- **durability-reviewer の指摘で直したこと**
-  - 版の名前を計れなかったデーモン（`""`）は、ディスクの版と比べません。前は、処理が途切れるたびに入れ替わり続け得ました。
-  - 引き渡しの前に、つなぎっぱなしの接続をやめます（`SetKeepAlivesEnabled(false)`）。前は、閉じたランタイムに既存の接続の要求が届き得ました。今は、つながらない（送り直してよい）失敗になります。
-  - プロセスが終わる前に引き渡しを待つ時間を、新しい版の準備を待つ分だけ延ばしました。前は、準備の途中で `start.lock` が外れ、待っていたクライアントがもう 1 つ起動し得ました。
-  - 「古い版です」の文面を、「インストールされた版ではありません」にしました（開発用のビルドなど、新しい場合もあるため）。
-- **まだ:** つなぎ直しの後の「インストールされた版ではありません」は、`Client.Stale` に入りますが、ACP と端末の対話では表示していません（CLI が表示するのは、最初につないだときだけ）。
+- **Daemon (`internal/daemon/daemon.go`)**
+  - Added `Options.Installed` (the version currently on disk) and `Options.Successor` (how to start the new version). `InstalledAt(path)` re-measures the hash only when the file's size, time or inode changes, so checking it every time steps reach 0 costs one `stat`.
+  - `handover`: takes `start.lock`, drains and lets go, starts the new version and waits for it to be ready if clients are connected, then releases `start.lock`. Clients that come in the meantime wait on `start.lock` and connect to the new version.
+  - When running steps reach 0 (`onNoStep` of `idleTimer`), it checks the version and hands over if it is old.
+  - `POST /daemon/update`: checks the version; if it is old and no step is running, hands over on the spot (`replaced`); if steps are running, answers later (`later`).
+  - `POST /daemon/stop?idle` was kept for clients from before 0019.
+- **Client (`internal/daemon/client.go`)**
+  - If the versions differ, it asks `/daemon/update`. To a daemon from before 0019 (no `/daemon/update`), it asks with ADR 0008's swap.
+  - If the daemon's version is the version on disk and its own differs, it says "This is an old version. Please reopen it." (`Stale`).
+  - Only requests that did not reach the daemon (could not connect, 401 with an old token) are sent again after reconnecting (`unreached`). A request cut off after being sent is not sent again.
+- **CLI (`internal/cli/cli.go`)**
+  - The daemon is started with the path that was used to invoke it (still as the link, an absolute path) (`invokedPath`). The client's own version is, as before, the hash of the running executable (`daemon.FileVersion`).
+  - The daemon checks the version at the path of its own `os.Args[0]`, and starts the new version with the same arguments and environment.
+- **Tests:** `TestNewBuildReplacesTheDaemon`, `TestNewBuildReplacesADaemonInUse` (the connected client reconnects and is told it is an old version), `TestNewBuildWaitsForTheStep` (hands over between steps; the turn finishes on the new version), `TestOlderClientKeepsTheDaemon` (no going back and forth), `TestOnlyUnreachedIsSentAgain`. We checked that removing reconnection makes `TestNewBuildReplacesADaemonInUse` fail, and removing the check at zero steps makes `TestNewBuildWaitsForTheStep` fail. ADR 0008's `TestOtherBuildKeepsABusyDaemon` and `TestOtherBuildKeepsADaemonThatRuns` were replaced with this form.
+- **Not yet:** that pending approvals are re-delivered after reconnecting is left to the ACP agent's re-watching (the current design), and no test was added for this ADR.
+- **What was fixed after durability-reviewer's findings**
+  - A daemon that could not measure its version name (`""`) is not compared with the version on disk. Before, it could keep swapping every time work paused.
+  - Before handing over, keep-alive connections are turned off (`SetKeepAlivesEnabled(false)`). Before, requests on existing connections could reach the closed runtime. Now they become a could-not-connect failure (safe to send again).
+  - The time to wait for the handover before the process exits was extended by the time to wait for the new version to be ready. Before, `start.lock` could be released while it was getting ready, and a waiting client could start another one.
+  - The text "This is an old version" was changed to "This is not the installed version" (it may be newer, such as a development build).
+- **Not yet:** "This is not the installed version" after reconnecting goes into `Client.Stale`, but ACP and the terminal UI do not show it (the CLI shows it only on the first connection).

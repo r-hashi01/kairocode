@@ -1,101 +1,101 @@
-# 0017 書く前のフローを試す（試運転）: 外への作用は止め、「するはずだったこと」を見せる
+# 0017 Try a flow before it is written (a try run): stop effects on the outside and show "what it would have done"
 
-- 状態: 承認（2026-10-20）
-- 日付: 2026-10-20
-- 関連: ADR 0003（フロー、レビュー）、0005（sandbox）、0016（承認）、AGENTS.md の不変条件 2・3・4・7・8
+- Status: Accepted (2026-10-20)
+- Date: 2026-10-20
+- Related: ADR 0003 (flows, review), 0005 (sandbox), 0016 (approval), invariants 2, 3, 4, 7 and 8 in AGENTS.md
 
-## 背景
+## Context
 
-フローのレビューで、利用者が一番信じられるのは、読んだ説明ではなく動きです（Zapier・n8n の「試す」、Terraform の `plan`）。利用者の言葉では「レビューでみんな何が欲しいんだろ」に対する答えの 3 番目です。
+In a flow review, what the user trusts most is not an explanation they read but behavior they see (Zapier's and n8n's "test", Terraform's `plan`). In the user's words, this is the third answer to "what does everyone want from a review?".
 
-レビューの最初の画面（概要、ADR 0003 の追記）では、届く範囲を読み取れます。ただ、「Slack に実際に何が送られるか」は動かしてみないと分かりません。
+The first screen of the review (the overview, ADR 0003's addendum) shows what the flow can reach. But "what exactly gets sent to Slack" is something you only know by running it.
 
-## 決定
+## Decision
 
-1. **レビューの画面から試せるようにします。** キーは `t` です。
-   - 利用者は見本の入力（`/flow <name>` の後に付ける言葉）を打ちます。
-   - KairoCode は、まだ書いていないスクリプト（`kc_message` にハッシュで置いたもの）を試運転します。
-2. **試運転の決まり**（`FlowInput.Dry`、`omitempty`）
-   - **エージェント:** 読むだけで動かします（plan と同じ。書くツールは計画だけで、書きません）。モデルは本当に呼ぶので、費用はかかります。
-   - **decide:** 本当に判断させます（モデル）。
-   - **ask:** 本当に利用者に聞きます。分岐を選ぶのは利用者です。
-   - **作用のあるツール**（`Idempotent`・`Real`・MCP・知らないもの）: 動かしません。名前と引数を「するはずだったこと」として記録し、「試運転なので動かしていない」という結果をフローに返します。読むだけのツール（`Read`）は動かします。
-   - 実の作用が起きないので、不変条件 4 の「結果が不明」も起きません。
-   - **試運転かどうかは、記録された入力だけから決めます**（不変条件 2・8）。フローが始めるエージェントのターンにも、子の入力に `Dry` を渡します。どこかの状態から「今は試運転」と読むことはしません。
-   - **CLI と ACP のエンジン**（Claude Code、codex、copilot など。ADR 0007・0014・0015）: これらのエージェントは自分のツールを持ちます。
-     - KairoCode のツールを MCP で渡すときは、試運転の印を付けた口を渡し、作用のあるものは「するはずだったこと」として返します。
-     - エージェント自身のツール（シェルなど）は、試運転では人に聞かずに断ります（ADR 0015 の「エージェント自身のツール」の求めを、試運転では一律に断る）。
-     - 読むだけで動かせないエンジンがあれば、そのエンジンでは試運転を断り、理由を出します。
-3. **ID と記録**
-   - 試運転は、セッションの子として、ふだんのフローの実行と同じ規則で始めます（`kairo.Child`。入力に `Dry: true` とスクリプトのハッシュを入れるので、本番の実行と ID が分かれます。不変条件 8）。
-   - 試運転の結果は記録され、落ちても続きから進みます（ふだんのフローと同じ）。
-4. **待っている承認との関係**
-   - `flow_write` の承認を待っているターンは止めたままにします。試運転は、その横で別の子として動かします。
-   - セッションのワークフローに、承認の待ちと並べて試運転を始める出来事（`EventTryFlow`）を足します。ワークフローの版を上げます（kairo の ADR 0060）。
-   - 承認のシグナルと試運転の出来事を同時に待つ必要があります。kairo の SDK でそれが表せない（`WaitFor` を 2 つ並べて待てない）なら、回避策は作りません。`docs/kairo-gaps.md` に足し、kairo の ADR として提案します（`/kairo-gap`）。実装の最初に、これを確かめます。
-5. **結果の見せ方:** 試運転が終わると、レビューに「Try」の節が増えます。
-   - 通った段の順
-   - 「するはずだったこと」（Slack に送る文の全文、書くはずだったファイルの差分）
-   - エージェントの返事
-   - 失敗したところ
+1. **Allow a try from the review screen.** The key is `t`.
+   - The user types a sample input (the words that follow `/flow <name>`).
+   - KairoCode does a try run of the script that is not yet written (the one placed in `kc_message` by its hash).
+2. **Rules of a try run** (`FlowInput.Dry`, `omitempty`)
+   - **Agents:** run read-only (the same as plan. Writing tools only plan and do not write). The model is really called, so it costs money.
+   - **decide:** really decides (the model).
+   - **ask:** really asks the user. The user picks the branch.
+   - **Tools with effects** (`Idempotent`, `Real`, MCP, unknown ones): not run. Their name and arguments are recorded as "what it would have done", and the flow gets back a result that says "not run because this is a try run". Read-only tools (`Read`) run.
+   - Since no real effect happens, the "unknown outcome" of invariant 4 does not happen either.
+   - **Whether it is a try run is decided only from recorded input** (invariants 2 and 8). The agent turns a flow starts also get `Dry` in the child's input. Nothing reads "this is a try run now" from some state.
+   - **CLI and ACP engines** (Claude Code, codex, copilot and others. ADR 0007, 0014, 0015): these agents have their own tools.
+     - When KairoCode's tools are passed over MCP, the endpoint passed is marked as a try run, and tools with effects return "what it would have done".
+     - The agent's own tools (a shell and so on) are refused in a try run without asking a person (requests for "the agent's own tools" from ADR 0015 are refused across the board in a try run).
+     - If an engine cannot be run read-only, try runs are refused on that engine, with the reason shown.
+3. **IDs and records**
+   - A try run starts as a child of the session, under the same rules as a normal flow run (`kairo.Child`. The input carries `Dry: true` and the script's hash, so its ID differs from the real run's. Invariant 8).
+   - The try run's results are recorded, and it continues from where it was after a crash (the same as a normal flow).
+4. **Relation to the pending approval**
+   - The turn waiting for the `flow_write` approval stays stopped. The try run runs beside it as a separate child.
+   - Add an event (`EventTryFlow`) to the session workflow that starts a try run, waited on alongside the approval. Bump the workflow version (kairo's ADR 0060).
+   - We need to wait for the approval signal and the try event at the same time. If kairo's SDK cannot express that (it cannot wait on two `WaitFor`s side by side), we do not build a workaround. We add it to `docs/kairo-gaps.md` and propose it as a kairo ADR (`/kairo-gap`). This is checked first in the implementation.
+5. **How results are shown:** when the try run ends, the review gets a "Try" section.
+   - The order of the steps it went through
+   - "What it would have done" (the full text it would send to Slack, the diff of files it would write)
+   - The agent's replies
+   - Where it failed
 
-## 結果
+## Consequences
 
-- 利用者は、許す前に、実際に外へ出るはずだったものを見られます。
-- 費用: 試運転でもモデルは呼びます。レビューの画面に、呼ぶ回数の目安（概要の「Models」）を出したうえで、試すかどうかを利用者が選びます。
-- テスト（実装のとき足す）
-  - 試運転で、作用のあるツールの handler が呼ばれないこと（数えてファイルに残す）。
-  - 「するはずだったこと」に引数の全文が残ること。
-  - 試運転の途中で落としても、作用のあるツールが動かないまま続きから進むこと（`TestCrash...`）。
-  - 承認の待ちが、試運転の間も残ること。
+- Before allowing, the user can see what would really have gone out.
+- Cost: a try run also calls the model. The review screen shows an estimate of the number of calls (the overview's "Models"), and the user chooses whether to try.
+- Tests (added during implementation)
+  - In a try run, the handler of a tool with effects is not called (counted and kept in a file).
+  - "What it would have done" keeps the full text of the arguments.
+  - Killed in the middle of a try run, it continues from where it was without the effectful tools running (`TestCrash...`).
+  - The pending approval stays during the try run.
 
-## 検討した代替案
+## Alternatives considered
 
-- **作用のあるツールも動かす（本番と同じ）:** 「試す」で Slack に送ってしまいます。試運転の意味がありません。
-- **モデルも呼ばない（すべて見本の返事）:** 安く済みますが、エージェントの返事しだいで送る文が変わるので、肝心の「何が送られるか」が分かりません。
-- **ask も自動で選ぶ:** 分岐ごとに全部試す案です。組み合わせが増え、費用が読めません。利用者が選ぶ形にしました。
-- **承認の後（書いた後）に試す:** 書く前に確かめたい、という要望に合いません。
+- **Run effectful tools too (same as production):** "try" would send to Slack. A try run would be pointless.
+- **Do not call the model either (all sample replies):** cheaper, but the text sent depends on the agent's reply, so the key question, "what gets sent", stays unknown.
+- **Pick ask answers automatically too:** try every branch. The combinations grow and the cost is unpredictable. We let the user pick.
+- **Try after approval (after writing):** does not meet the wish to check before writing.
 
-## 実装（2026-10-20）
+## Implementation (2026-10-20)
 
-- **待ち方（決定 4 からの変更）**
-  - kairo の SDK には、2 つのシグナルを同時に待つ手段がありません。そこで、出来事（`EventTryFlow`）は足さず、試運転の頼みを承認と同じシグナルに載せました（`Approval.Try`、`omitempty`）。
-  - 承認を待つところ（`waitApproval`）は、`Try` を受け取ると、待っている実行の子として試運転のフロー（`kairo.Child`、`FlowInput{Dry, Script}`）を動かし、終わったらまた同じシグナルを待ちます。待つ場所は、ターンのツール、Claude Code など CLI のエンジンの MCP の承認、の 2 つです。フローの中のツールの承認では、試運転を受けません。
-  - セッションは変えていないので、kairo-gap は要りませんでした。
-  - この決定 4 の変更は、利用者が了承しました（2026-10-20）。
-- **版を上げない理由**
-  - 足したものはすべて `omitempty` の欄（`Policy.Dry`、`TurnInput.Dry`、`FlowInput.Dry`・`Script`、`FlowLoadInput.Script`、`Approval.Try`）と、`Dry` か `Try` があるときだけ通る道です。
-  - この変更の前の記録には `Dry` も `Try` も無いので、再開しても同じ呼び出しの列になり、ID も変わりません（不変条件 1・8）。
-- **作用の止め方**
-  - `gateTool` で、`Policy.Dry` なら先に `flow.would`（`Unprotected`）を呼びます。
-    - 読むだけのツール（`Read`。MCP のツールは除く）: そのまま進みます。
-    - それ以外: 動かさず、「試運転なので呼んでいない。呼ぶはずだった引数」をツールの結果として返します。
-  - フローのツール、試運転のエージェントのターン（`TurnInput.Dry`）、サブエージェント（task）、MCP の呼び出しは、すべてこの道を通ります。
-  - ACP のエージェント自身のツールは、試運転では聞かずに断ります。Claude Code は自分のツールを持たない形で動かすので、MCP の口だけです。
-  - 試運転のエージェントのターンは `Sub` なので、フック（tool.after、turn.end）も動きません。
-- **見せ方**
-  - 承認の一覧は、待っている実行の子から最新の試運転（`Dry` で、同じスクリプトのハッシュのもの）を探し、「Try」の節を足します。
-    - 何で試したか、どう終わったか。
-    - 順に、エージェントの返事と「呼ぶはずだったこと」（引数の全文）。
-  - 試運転できる承認には、ACP の選択肢 `try`（「Try it first」）を足します。言葉は、断る理由と同じ `_meta`（`kairocode/reason`）で送ります。
-  - デーモンの API は `POST /approvals/try` です。
-  - TUI はレビューで `t` を押して言葉を打ちます。試運転が終わってレビューが戻ると、コメントは残り、Try の節が開きます。行の対話では `t <言葉>` と打ちます。
-- **durability-reviewer の指摘で直したこと**
-  - **試運転の間も、承認は一覧に残します**（`Pending.Trying`）。
-    - 試運転の子（`FlowInput.For` がその呼び出し）が動いている間は、待ちがまだ無くても、承認を「試運転中」として一覧に出します。
-    - その間の答えは、試運転が終わってから効きます（シグナルは次の待ちに渡る）。
-    - 試運転中に重ねて試すことはできません（`ErrTrying`）。
-    - 試運転が終わると、同じ鍵の承認を「頼まれた」としてもう一度知らせます。クライアントは、Try の節付きで聞き直します。
-  - **CLI のエンジンの「するはずだったこと」:** Claude Code などの MCP の呼び出しは、ターンの子ではない別の実行です（kairo-gap #17）。Try の節は、それらもたどって作ります（`TestTryFlowOnClaudeCode`。たどらない形にすると落ちることを確かめた）。
-  - **フローの中の `flow_write`:** フローのスクリプトが直接書くものには、試運転を出しません。
-  - **聞かずに動けるエージェント:** codex など、自分のツールを持つ ACP のエージェントは、聞かずに書けるかもしれません。
-    - そのため、試運転では動かしません（決定 2 の「読むだけで動かせないエンジンでは断る」）。
-    - 試せるエンジンは、API、Claude Code（KairoCode のツールだけで動かす）、copilot（KairoCode のツールだけを渡す）です。
-    - それ以外では、`TryFlow` が理由を返します。ターンの側でも、念のため動かしません。
-  - **同じスクリプトの別の承認:** 試運転は、承認の呼び出し（`For`）で照らします。
-- **テスト**
-  - `TestTryFlow`: エージェントは動き、読むツールは動き、書くツールは呼ばれず引数が見える。承認は同じ鍵で戻り、許せばフローが書かれる。
-    - `flow.would` を「全部動かす」に壊すと落ちることを確かめました。
-  - `TestCrashTryFlow`: 試運転のエージェントの途中で強制終了し、再開すると試運転が続く。書くツールは動かず、承認が Try 付きで戻る。
-  - `TestTryFlow` は、試運転の間も承認が「試運転中」で残ること、重ねて試せないことも確かめます。
-  - `TestTryFlowOnClaudeCode`、`TestTryFlowRefusedOnCodex`、`TestACPTryFlow`、`TestFlowReviewTry`、`TestChatAsks`（`t`）。
+- **How it waits (a change from decision 4)**
+  - kairo's SDK has no way to wait on two signals at once. So instead of adding an event (`EventTryFlow`), the try request rides on the same signal as the approval (`Approval.Try`, `omitempty`).
+  - Where the approval is waited on (`waitApproval`), on receiving `Try`, it runs the try flow as a child of the waiting run (`kairo.Child`, `FlowInput{Dry, Script}`), and when that ends it waits on the same signal again. There are two such places: a turn's tool, and the MCP approval of a CLI engine such as Claude Code. Approvals of tools inside a flow do not accept try runs.
+  - The session was not changed, so no kairo-gap was needed.
+  - The user agreed to this change to decision 4 (2026-10-20).
+- **Why the version is not bumped**
+  - Everything added is `omitempty` fields (`Policy.Dry`, `TurnInput.Dry`, `FlowInput.Dry` and `Script`, `FlowLoadInput.Script`, `Approval.Try`) and paths taken only when `Dry` or `Try` is present.
+  - Records from before this change have neither `Dry` nor `Try`, so on resume the sequence of calls is the same and the IDs do not change (invariants 1 and 8).
+- **How effects are stopped**
+  - In `gateTool`, if `Policy.Dry`, it first calls `flow.would` (`Unprotected`).
+    - Read-only tools (`Read`, excluding MCP tools): go ahead as usual.
+    - Others: not run; "not called because this is a try run; the arguments it would have been called with" is returned as the tool result.
+  - Flow tools, the try run's agent turns (`TurnInput.Dry`), subagents (task) and MCP calls all go through this path.
+  - The ACP agent's own tools are refused without asking in a try run. Claude Code runs without its own tools, so it only has the MCP endpoint.
+  - The try run's agent turn is `Sub`, so hooks (tool.after, turn.end) do not run either.
+- **How it is shown**
+  - The approval list looks among the waiting run's children for the latest try run (`Dry`, with the same script hash) and adds a "Try" section.
+    - What it was tried with and how it ended.
+    - In order, the agent's replies and "what it would have called" (the full arguments).
+  - Approvals that can be tried get an ACP option `try` ("Try it first"). The words are sent in the same `_meta` (`kairocode/reason`) as a refusal's reason.
+  - The daemon API is `POST /approvals/try`.
+  - In the TUI, press `t` in the review and type the words. When the try run ends and the review comes back, comments stay and the Try section is open. In the line-based chat, type `t <words>`.
+- **What was fixed after durability-reviewer's findings**
+  - **The approval stays in the list during a try run** (`Pending.Trying`).
+    - While the try run's child (whose `FlowInput.For` is that call) is running, the approval is listed as "trying", even though there is no wait yet.
+    - An answer given in that time takes effect after the try run ends (the signal is passed to the next wait).
+    - You cannot start another try during a try run (`ErrTrying`).
+    - When the try run ends, the approval with the same key is announced again as "requested". The client asks again with the Try section.
+  - **"What it would have done" for CLI engines:** MCP calls from Claude Code and others are separate runs, not children of the turn (kairo-gap #17). The Try section follows those too (`TestTryFlowOnClaudeCode`. We checked that it fails if they are not followed).
+  - **`flow_write` inside a flow:** what a flow's script writes directly gets no try run.
+  - **Agents that can act without asking:** ACP agents with their own tools, such as codex, might write without asking.
+    - So they are not run in a try run (decision 2's "refuse on engines that cannot be run read-only").
+    - Engines that can be tried are the API, Claude Code (run with only KairoCode's tools) and copilot (given only KairoCode's tools).
+    - For others, `TryFlow` returns the reason. The turn side does not run them either, just in case.
+  - **Another approval of the same script:** a try run is matched by the approval's call (`For`).
+- **Tests**
+  - `TestTryFlow`: the agent runs, reading tools run, writing tools are not called and their arguments are visible. The approval comes back under the same key, and allowing it writes the flow.
+    - We checked that it fails if `flow.would` is broken into "run everything".
+  - `TestCrashTryFlow`: killed in the middle of the try run's agent, on resume the try run continues. Writing tools do not run, and the approval comes back with Try.
+  - `TestTryFlow` also checks that the approval stays as "trying" during the try run, and that a second try cannot be started.
+  - `TestTryFlowOnClaudeCode`, `TestTryFlowRefusedOnCodex`, `TestACPTryFlow`, `TestFlowReviewTry`, `TestChatAsks` (`t`).

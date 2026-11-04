@@ -1,114 +1,114 @@
-# 0009 ファイルを書いたツールの結果に、言語サーバーの診断のエラーを足す
+# 0009 Add language server diagnostic errors to the result of a tool that wrote a file
 
-- 状態: 承認（2026-10-19）
-- 日付: 2026-10-19
-- 関連: M2 の受け入れ条件（LSP の診断）、ADR 0002（opencode を手本にする）、0005（sandbox）、0008（デーモン）、AGENTS.md の不変条件 3・4・7
+- Status: Accepted (2026-10-19)
+- Date: 2026-10-19
+- Related: M2's acceptance criteria (LSP diagnostics), ADR 0002 (opencode as the model), 0005 (sandbox), 0008 (daemon), AGENTS.md invariants 3, 4 and 7
 
-## 背景
+## Context
 
-M2 の受け入れ条件に「edit のあと、LSP の診断のエラーがツールの出力に足される」があります。モデルは、書いたコードが型の検査を通るかを、次の手を打つ前に知れます。
+M2's acceptance criteria include "after an edit, LSP diagnostic errors are added to the tool's output". The model learns whether the code it wrote passes type checking before it takes its next step.
 
-opencode v1.19.3 のソース（`packages/opencode/src/lsp/`、`tool/edit.ts`）を読みました。
+We read the source of opencode v1.19.3 (`packages/opencode/src/lsp/`, `tool/edit.ts`).
 
-- **報告の形:** edit・write・patch の後に、そのファイルを言語サーバーに開かせ（`didOpen`、2 回目からは `didChange`）、診断が届くのを待ちます。そのファイルの重大度 1（ERROR）だけを、最大 20 件、次の形でツールの出力に足します。
-  `LSP errors detected in this file, please fix:\n<diagnostics file="...">\nERROR [行:列] 文面\n</diagnostics>`
-- **待ち方:** `textDocument/publishDiagnostics` を待ちます。最後の通知から 150ms 待って決め（debounce）、5 秒で打ち切ります。
-- **サーバー:** 38 種類が組み込みです。拡張子と、根を決める目印のファイル（`go.mod` など）で選びます。サーバーはプロセスの中に持ち続けます。
-- **自動のダウンロード:** 見つからない言語サーバーは、自動で取ってきます（`go install gopls@latest`、npm など）。
-- **設定:** `opencode.json` の `lsp` で行います。`false` で全部止めます。サーバーごとに `disabled`、`command`、`extensions`、`env`、`initialization` を書けます。
+- **Report format:** After edit, write and patch, it has the language server open the file (`didOpen`, then `didChange` from the second time on) and waits for diagnostics to arrive. It adds only that file's severity 1 (ERROR) diagnostics, at most 20, to the tool's output in this form.
+  `LSP errors detected in this file, please fix:\n<diagnostics file="...">\nERROR [line:col] message\n</diagnostics>`
+- **How it waits:** It waits for `textDocument/publishDiagnostics`. It settles 150ms after the last notification (debounce) and gives up after 5 seconds.
+- **Servers:** 38 kinds are built in. It picks one by extension and by marker files that decide the root (`go.mod` and so on). It keeps the servers inside the process.
+- **Automatic download:** It fetches a language server that is not found on its own (`go install gopls@latest`, npm and so on).
+- **Configuration:** Done in `lsp` in `opencode.json`. `false` stops all of them. Per server you can write `disabled`, `command`, `extensions`, `env` and `initialization`.
 
-KairoCode では、コマンドは sandbox の中でしか起動しません（ADR 0005、AGENTS.md）。言語サーバーは、ターンをまたいで生き続けるプロセスです。そのため、起動の仕方・寿命・書き込める場所を決める必要があります。
+In KairoCode, commands start only inside the sandbox (ADR 0005, AGENTS.md). A language server is a process that lives across turns. So we need to decide how it starts, how long it lives, and where it can write.
 
-## 決定
+## Decision
 
-1. **書いたツールの結果に、opencode と同じ形で診断のエラーを足します。**
-   - 対象は、ファイルを書くツール（今は `write`、`edit`。`internal/tools` の `Plan` を持つもの）です。書き終えた後、同じアクション（`file.apply`）の中で、そのファイルの診断を取ります。
-   - ERROR だけを最大 20 件、上の形で結果に足します。
-   - 結果は記録されるので、再開したターンは記録された診断を使います。結果が不明な書き込みを確かめてやり直すとき（設計 3.1）は、その時点の診断を取り直します。
-   - Claude Code のエンジンの MCP の呼び出しも、同じアクションを通るので、同じく足されます。
-2. **待つのは、通知か期限だけです（ポーリングしない）。**
-   - `publishDiagnostics` が届いたら、150ms の静まりを待って決めます。5 秒で打ち切ります。
-   - 打ち切ったときや、サーバーが無い・落ちたときは、何も足さずに結果を返します。ログには残します。
-   - これは 1 つのステップの中の、上限のある待ちです。人や外の出来事を待つもの（不変条件 7）ではありません。
-3. **言語サーバーは、デーモンが持ちます**（`internal/lsp`、ADR 0008）。
-   - (サーバーの種類, 根) ごとに 1 つを、最初に要ったときに起動します。
-   - 10 分使われなければ止めます。デーモンが止まるときにも止めます。
-   - 状態（開いた文書、最新の診断）は、プロセスの中のキャッシュです。失っても、次に要ったときに起動し直すだけで済みます。
-4. **sandbox の中で起動します**（`internal/sandbox`、`WorkspaceWrite`）。
-   - 根はセッションの作業ディレクトリです。
-   - 書き込めるのは、作業ディレクトリ、一時ディレクトリ、そのサーバーのキャッシュの置き場所（利用者のキャッシュのディレクトリの下。例: gopls の `~/Library/Caches/gopls`）だけです。
-   - ネットワークは切ります。モジュールの取得などができないため、依存が手元に無いと、それに関する診断が出ることがあります。
-   - 起動してよいファイルの一覧（`internal/invariants`）は変えません。`internal/sandbox` を通るからです。
-5. **言語サーバーは、自動ではダウンロードしません。** PATH にあるものだけを使います。ネットワークを切った sandbox と合いませんし、利用者の手元に、知らないうちに実行ファイルを入れることになるからです。
-6. **組み込みのサーバーは、まず 5 つにします。** opencode と同じ ID・拡張子・根の目印です。
-   - `gopls`（`.go`。根は `go.work`、なければ `go.mod`）
-   - `typescript`（`typescript-language-server --stdio`）
-   - `pyright`（`pyright-langserver --stdio`）
-   - `rust`（`rust-analyzer`）
+1. **Add diagnostic errors to the result of a tool that wrote, in the same form as opencode.**
+   - The targets are tools that write files (now `write` and `edit`; the ones in `internal/tools` that have a `Plan`). After the write finishes, inside the same action (`file.apply`), get the diagnostics for that file.
+   - Add only ERRORs, at most 20, to the result in the form above.
+   - The result is recorded, so a resumed turn uses the recorded diagnostics. When a write with an unknown outcome is checked and redone (design section 3.1), the diagnostics at that point are taken again.
+   - MCP calls from the Claude Code engine go through the same action, so they get them added too.
+2. **We wait only for a notification or a deadline (no polling).**
+   - When `publishDiagnostics` arrives, wait for 150ms of quiet and settle. Give up after 5 seconds.
+   - When it gives up, or the server is missing or has crashed, return the result with nothing added. Log it.
+   - This is a bounded wait inside one step. It is not something that waits for a person or an outside event (invariant 7).
+3. **The daemon holds the language servers** (`internal/lsp`, ADR 0008).
+   - Start one per (server kind, root) the first time it is needed.
+   - Stop it if it is unused for 10 minutes. Also stop it when the daemon stops.
+   - The state (open documents, latest diagnostics) is a cache inside the process. Losing it only means starting again the next time it is needed.
+4. **Start them inside the sandbox** (`internal/sandbox`, `WorkspaceWrite`).
+   - The root is the session's working directory.
+   - It can write only to the working directory, the temp directory, and that server's cache location (under the user's cache directory; e.g. gopls's `~/Library/Caches/gopls`).
+   - The network is cut off. It cannot fetch modules and so on, so if dependencies are not available locally, diagnostics about them may appear.
+   - The list of files allowed to start commands (`internal/invariants`) does not change, because they go through `internal/sandbox`.
+5. **Language servers are not downloaded automatically.** Only ones on PATH are used. Downloading does not fit a sandbox with the network cut off, and it would install executables on the user's machine without their knowledge.
+6. **Start with 5 built-in servers.** Same IDs, extensions and root markers as opencode.
+   - `gopls` (`.go`; root is `go.work`, else `go.mod`)
+   - `typescript` (`typescript-language-server --stdio`)
+   - `pyright` (`pyright-langserver --stdio`)
+   - `rust` (`rust-analyzer`)
    - `clangd`
 
-   ほかは、設定で足せます。
-7. **設定は、`kairocode.json` の `lsp` に、opencode と同じ形で書きます。**
-   - `false` で全部止めます。
-   - `{"<id>": {"disabled": true}}` でサーバーを止めます。
-   - `{"<id>": {"command": [...], "extensions": [...], "env": {...}, "initialization": {...}}}` でサーバーを足す・変えます。組み込みでない ID には `extensions` が要ります。
-   - どのサーバーを使うかは、`file.apply` の中で設定から決め、そのまま結果に現れます（不変条件 2 に沿う）。
+   Others can be added in the configuration.
+7. **Configuration goes in `lsp` in `kairocode.json`, in the same form as opencode.**
+   - `false` stops all of them.
+   - `{"<id>": {"disabled": true}}` stops a server.
+   - `{"<id>": {"command": [...], "extensions": [...], "env": {...}, "initialization": {...}}}` adds or changes a server. An ID that is not built in needs `extensions`.
+   - Which server to use is decided from the configuration inside `file.apply`, and shows up as is in the result (in line with invariant 2).
 
-## 結果
+## Consequences
 
-- モデルは、書いた直後に型や構文のエラーを知れます。opencode と同じ形なので、同じ振る舞いを期待できます。
-- 書き込みのたびに、最大 5 秒かかり得ます。サーバーが温まっていれば、ふつうは 1 秒より短くなります。
-- 守らせるテスト（実装のとき足す）
-  - 偽の言語サーバー（テストのバイナリを子として起動し、決まった診断を返す）を使い、edit の結果にエラーが足されること、ERROR 以外と 21 件目以降が足されないこと。
-  - 5 秒で打ち切ること、サーバーが無いときも結果が変わらないこと。
-  - 設定で止めたサーバーが起動されないこと。
-  - 言語サーバーが sandbox の中で起動されること（`internal/invariants` の既存の検査）。
-  - 書いた直後に落ちて再開しても、二重に書かないこと（既存の crash のテストに、診断が付いても通ることを足す）。
+- The model learns of type and syntax errors right after writing. It is the same form as opencode, so we can expect the same behavior.
+- Each write can take up to 5 seconds. If the server is warm, it is usually under 1 second.
+- Tests that enforce this (added at implementation)
+  - With a fake language server (the test binary started as a child, returning fixed diagnostics): errors are added to the edit result, and non-ERROR diagnostics and the 21st onward are not added.
+  - It gives up at 5 seconds, and the result does not change when there is no server.
+  - A server stopped in the configuration is not started.
+  - Language servers are started inside the sandbox (the existing check in `internal/invariants`).
+  - Crashing right after writing and resuming does not write twice (add to the existing crash test that it passes with diagnostics attached).
 
-## 検討した代替案
+## Alternatives considered
 
-- **opencode と同じく、自動でダウンロードする:** 手間は減ります。ただし、ネットワークを切った sandbox と合いません。利用者の手元に、知らないうちに実行ファイルを入れることにもなります。
-- **言語サーバーの代わりに、コンパイラーや検査のコマンド（`go vet`、`tsc --noEmit`）を毎回動かす:** 言語ごとに作り分けが要り、遅く、出力の形もそろいません。
-- **ツールの呼び出しのたびに、言語サーバーを起動して止める:** 状態を持たずに済みます。ただし、gopls や tsserver は起動と索引づけに数秒から数十秒かかり、待ちの上限に収まりません。
-- **ターンの終わりに、まとめて診断する:** 待ちは 1 回で済みます。ただし、モデルが次の手を打つ前に知れません。opencode とも違います。
+- **Download automatically, like opencode:** Less effort. But it does not fit a sandbox with the network cut off. It would also install executables on the user's machine without their knowledge.
+- **Run a compiler or check command (`go vet`, `tsc --noEmit`) every time instead of a language server:** Needs separate work per language, is slow, and the output formats differ.
+- **Start and stop a language server for each tool call:** No state to hold. But gopls and tsserver take seconds to tens of seconds to start and index, which does not fit within the wait limit.
+- **Diagnose everything at the end of the turn:** Only one wait. But the model does not learn before its next step. It also differs from opencode.
 
-## 追記（2026-10-19）: プロジェクトの設定で決められること
+## Addendum (2026-10-19): What project configuration can decide
 
-durability-reviewer から指摘を受け、利用者が選んで決めました。決定 7 を次のように絞ります。
+After a point raised by durability-reviewer, the user chose and decided this. Decision 7 is narrowed as follows.
 
-- **背景:** プロジェクトの `kairocode.json` で任意のコマンドを言語サーバーにできると、リポジトリが選んだコードが、ファイルを書くたびに確認なしで動きます。sandbox の中でネットワークなしでも、hook（ADR 0003。初めて動く前に聞く）と釣り合いません。
-- **利用者自身の設定（`~/.config/kairocode/kairocode.json`）でだけできること:** サーバーを足すこと、サーバーの `command`、`extensions`、`env` を変えること。
-- **プロジェクトの設定でもできること:** `"lsp": false`、サーバーを止めること（`disabled`）、あるサーバーの `initialization` を変えること。
-- プロジェクトの設定に書かれた許されない欄は使わずに、何を使わなかったかをログに残します。残りの設定はそのまま使います。
-- テスト: `TestServers`、`TestWriteGetsLSPErrors`（プロジェクトが偽のサーバーの `env` を変えようとしても効かない）。この絞り込みを外すと、どちらも落ちることを確かめました。
+- **Context:** If a project's `kairocode.json` can make any command a language server, code chosen by the repository runs on every file write without confirmation. Even inside the sandbox without a network, this is out of balance with hooks (ADR 0003; asked before they first run).
+- **Only in the user's own configuration (`~/.config/kairocode/kairocode.json`):** adding a server, and changing a server's `command`, `extensions` and `env`.
+- **Also in the project configuration:** `"lsp": false`, stopping a server (`disabled`), and changing a server's `initialization`.
+- Disallowed fields written in the project configuration are not used, and what was not used is logged. The rest of the configuration is used as is.
+- Tests: `TestServers`, `TestWriteGetsLSPErrors` (a project trying to change the fake server's `env` has no effect). We confirmed that removing this narrowing makes both fail.
 
-## 実装（2026-10-19）
+## Implementation (2026-10-19)
 
-- `internal/lsp` に置きました。
-  - `Servers` は、組み込みのサーバーと `kairocode.json` の `lsp`（利用者の設定、次にプロジェクトの設定。プロジェクトで決められることは追記のとおり）から、使うサーバーを決めます。
-  - `For` は、ファイルの拡張子でサーバーを選び、根の目印でサーバーを動かす根を決めます。根は作業ディレクトリより上には出ません。
-  - `Manager.Errors` は、診断を取って opencode の形の文字列にします。
-  - `Format` は、ERROR だけを最大 20 件並べます。21 件目以降は `... and N more` にまとめます。
-- 言語サーバーとの話は、JSON-RPC の base protocol を自前で書きました。依存は足していません。
-  - サーバーから届く要求（`workspace/configuration` など）には、空の答えを返します。
-- `file.apply`（`Runtime.applyWrite`）の中で、書き込みが通った後に診断を足します。
-  - 衝突などで書けなかったときは足しません。
-  - 足した結果は、そのまま記録されます。
-  - 書いた後に落ちて再開した書き込みは、「もう書いてある」と判定されます。そのときも、その時点の診断を取り直して足します。
-- `Runtime` が `Manager` を持ち、`Close` で止めます。
-  - デーモンの中では、`Runtime` がデーモンと同じ寿命なので、サーバーはデーモンが持つことになります。
-  - 待ちと寿命の定数は `Settle`（150ms）、`Wait`（5 秒）、`Idle`（10 分）です。
-- サーバーは `sandbox.Command` の `WorkspaceWrite` で起動し、ネットワークは切ります。
-  - 書き込みを足す場所は、利用者のキャッシュのディレクトリの下の、サーバーごとの置き場所だけです（gopls なら `gopls` と `go-build`）。
-  - 本物の gopls で、sandbox の中から診断が届くこと（初回 0.3 秒）を手で確かめました。
-- 環境変数 `KAIROCODE_LSP=off` で、サーバーを 1 つも起動しません。
-  - ファイルを書くパッケージ（runtime、server、cli、acp、daemon）のテストは、`TestMain` でこれを設定します。開発機の gopls などを起動しないためです。
-- テスト
-  - `internal/lsp`: `TestErrorsOfAFile`、`TestNothingInTime`、`TestIdleServerStops`、`TestServers`、`TestRoot`。重大度の絞り込みを外すと落ち、静まりを待たずに最初の通知で決めると落ちることを確かめました。
-  - 偽の言語サーバー（`lsp.FakeServer`）は、テストのバイナリを子として起動して動かします。
-  - `internal/runtime`: `TestWriteGetsLSPErrors` と、診断が付いても二重に書かない `TestCrashWriteOnceWithLSP` です。診断を足す処理を外すと、どちらも落ちることを確かめました。
-- durability-reviewer の指摘で直したこと
-  - サーバーへの書き込みも 5 秒の期限の中で行います。入力を読まなくなったサーバーは止め、次に要ったときに起動し直します（`TestStuckServer`。期限を外すと落ちる）。
-  - サーバーは、設定の中身と作業ディレクトリと根の組ごとに 1 つにしました。設定の違う 2 つのプロジェクトは、同じプロセスを使いません（`TestServerPerSettings`。種類と根だけで分けると落ちる）。
-  - 版の付いた診断は、その文書の今の版より古ければ使いません（`TestStaleDiagnostics`。外すと落ちる）。
-  - 書き込みの crash のテストは、言語サーバーなしの形（sandbox が無くても走る）を残し、診断つきの形を `TestCrashWriteOnceWithLSP` に分けました。
+- Placed in `internal/lsp`.
+  - `Servers` decides which servers to use from the built-in servers and `lsp` in `kairocode.json` (the user's configuration, then the project's; what the project can decide is as in the addendum).
+  - `For` picks a server by file extension and decides the root to run it in by the root markers. The root does not go above the working directory.
+  - `Manager.Errors` gets diagnostics and turns them into a string in opencode's form.
+  - `Format` lists only ERRORs, at most 20. The 21st onward are folded into `... and N more`.
+- We wrote the JSON-RPC base protocol for talking to language servers ourselves. No dependency was added.
+  - Requests from the server (`workspace/configuration` and so on) get an empty answer.
+- Inside `file.apply` (`Runtime.applyWrite`), diagnostics are added after the write goes through.
+  - Not added when it could not write because of a conflict and so on.
+  - The result with them added is recorded as is.
+  - A write that crashed after writing and was resumed is judged "already written". Even then, the diagnostics at that point are taken again and added.
+- `Runtime` holds the `Manager` and stops it in `Close`.
+  - Inside the daemon, `Runtime` has the same lifetime as the daemon, so the daemon ends up holding the servers.
+  - The wait and lifetime constants are `Settle` (150ms), `Wait` (5 seconds) and `Idle` (10 minutes).
+- Servers start with `WorkspaceWrite` of `sandbox.Command`, with the network cut off.
+  - The only added writable locations are per-server locations under the user's cache directory (for gopls, `gopls` and `go-build`).
+  - We confirmed by hand that diagnostics arrive from inside the sandbox with real gopls (0.3 seconds the first time).
+- With the environment variable `KAIROCODE_LSP=off`, no server is started.
+  - Tests of packages that write files (runtime, server, cli, acp, daemon) set this in `TestMain`, so they do not start gopls and the like on the development machine.
+- Tests
+  - `internal/lsp`: `TestErrorsOfAFile`, `TestNothingInTime`, `TestIdleServerStops`, `TestServers`, `TestRoot`. We confirmed they fail when the severity filter is removed, and when it settles on the first notification without waiting for quiet.
+  - The fake language server (`lsp.FakeServer`) runs by starting the test binary as a child.
+  - `internal/runtime`: `TestWriteGetsLSPErrors`, and `TestCrashWriteOnceWithLSP`, which checks it does not write twice with diagnostics attached. We confirmed that removing the code that adds diagnostics makes both fail.
+- Fixed after points raised by durability-reviewer
+  - Writes to the server also happen within the 5-second deadline. A server that stopped reading input is stopped and started again the next time it is needed (`TestStuckServer`; fails without the deadline).
+  - There is one server per combination of configuration content, working directory and root. Two projects with different configurations do not share a process (`TestServerPerSettings`; fails if split only by kind and root).
+  - Versioned diagnostics are not used if older than the document's current version (`TestStaleDiagnostics`; fails without it).
+  - The write crash test keeps a form without a language server (it runs even without a sandbox), and the form with diagnostics was split into `TestCrashWriteOnceWithLSP`.

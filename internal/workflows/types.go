@@ -210,7 +210,7 @@ type SessionInput struct {
 	// recorded before they existed keep their ids.
 	Engine string `json:"engine,omitempty"`
 	Model  string `json:"model,omitempty"`
-	// Effort, if set, is the model's effort (ADR 0014, 追記).
+	// Effort, if set, is the model's effort (ADR 0014, addendum).
 	Effort string `json:"effort,omitempty"`
 	// From and History: a session forked from a turn of another (ADR
 	// 0021) begins with that turn's conversation.
@@ -254,7 +254,7 @@ type Switch struct {
 	Engine string `json:"engine,omitempty"`
 	Model  string `json:"model,omitempty"`
 	// Effort is how hard the model thinks (its reasoning effort), where
-	// the provider has one (ADR 0014, 追記).
+	// the provider has one (ADR 0014, addendum).
 	Effort string `json:"effort,omitempty"`
 	// Mode is how the session's turns go (ADR 0016): ModeManual, ModePlan.
 	Mode string `json:"mode,omitempty"`

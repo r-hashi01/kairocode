@@ -1,103 +1,103 @@
-# 0010 端末の対話を、claude と同じ形の TUI にする（Bubble Tea）。初めてのフォルダは信頼を聞く
+# 0010 Make the terminal UI a TUI shaped like claude (Bubble Tea). Ask about trust in a folder seen for the first time
 
-- 状態: 承認（2026-10-19）
-- 日付: 2026-10-19
-- 関連: 設計 8 節（クライアント）と 11 節の 1（TUI の作り）、M2、ADR 0002（ACP、「端末で使う画面」と代替案「自前の TUI を作る」を改める）、0005（sandbox）、0008（デーモン）、issue #11（ターンの取り消し）
+- Status: Accepted (2026-10-19)
+- Date: 2026-10-19
+- Related: design section 8 (clients) and item 1 of section 11 (how the TUI is built), M2, ADR 0002 (ACP; revises "the screen used in a terminal" and the alternative "build our own TUI"), 0005 (sandbox), 0008 (daemon), issue #11 (cancelling a turn)
 
-## 背景
+## Context
 
-`kairo`（`kairocode chat`）は、行単位の対話として作りました（ADR 0002 の実装）。利用者は、claude と同じ画面を求めています（2026-10-19）。
+We built `kairo` (`kairocode chat`) as a line-based conversation (the implementation of ADR 0002). The user wants the same screen as claude (2026-10-19).
 
-- **起動の見出し:** 版、モデル、作業ディレクトリ
-- **入力の枠:** 例文を薄く出す
-- **下の状態の行:** モード、エージェント、effort
-- **初めてのフォルダ:** 信頼するかを、矢印と Enter で選ぶ
+- **Startup header:** version, model, working directory
+- **Input box:** shows an example sentence faintly
+- **Status line at the bottom:** mode, agent, effort
+- **A folder seen for the first time:** choose whether to trust it with the arrows and Enter
 
-行単位の対話では、次のことができません。
+A line-based conversation cannot do the following.
 
-- 入力の枠と状態の行を、出力の下に固定する
-- 承認の選択肢を、矢印で選ぶ
-- スラッシュのコマンドを補完する
-- Esc でターンを止める
+- Pin the input box and the status line below the output
+- Choose approval options with the arrows
+- Complete slash commands
+- Stop a turn with Esc
 
-これらには、端末を raw にして画面を描き直す仕組み（TUI）が要ります。
+These need a mechanism that puts the terminal in raw mode and redraws the screen (a TUI).
 
-ADR 0002 は「自前の TUI を作る」を代替案として退けました。ACP のクライアントの表示より良くなる見込みが薄い、という理由です。しかし、端末で使う ACP のクライアントで、claude と同じ使い心地のものはありません。設計 11 節の 1 は、Bubble Tea を案としたまま決まっていません。
+ADR 0002 rejected "build our own TUI" as an alternative, on the grounds that it was unlikely to be better than the display of an ACP client. But there is no ACP client used in a terminal that feels like claude. Item 1 of design section 11 is still undecided, with Bubble Tea as a candidate.
 
-もう 1 つ、信頼の問題があります。KairoCode は、作業ディレクトリの `kairocode.json` と `.opencode` を読みます。そこには、権限の規則（`bash: allow` など）、エージェントの本文、コマンドの `` !`…` `` があります。知らないリポジトリで起動すると、そのリポジトリが書いた規則と指示で動きます。sandbox（ADR 0005）は書ける場所とネットワークを絞りますが、規則そのものを疑うことはしません。
+There is one more problem: trust. KairoCode reads `kairocode.json` and `.opencode` in the working directory. They contain permission rules (`bash: allow` and so on), agent bodies, and commands' `` !`…` ``. Starting in an unknown repository means running with rules and instructions written by that repository. The sandbox (ADR 0005) limits where it can write and the network, but it does not question the rules themselves.
 
-## 決定
+## Decision
 
-1. **`kairo` は、端末（stdin と stdout が TTY）では TUI で動きます。** TTY でなければ、今の行単位の対話のままです（パイプ、テスト、dspchr のペインの外の自動化）。
-   - 仕組みは変えません。TUI も ACP のクライアントで、同じプロセスの中の ACP のエージェントを通して、デーモンと話します（ADR 0002、0008）。TUI は表示と入力だけを持ち、待ちの状態は持ちません。
-   - 場所は `internal/tui` です。`internal/cli` の `chat` が、TTY のときにそれを使います。
-2. **依存として Bubble Tea v2 を足します。**
-   - `charm.land/bubbletea/v2`（v2.0.10）
-   - `charm.land/bubbles/v2`（textarea、viewport、spinner）
-   - `charm.land/lipgloss/v2`（色と枠）
-   - 版は、出てから 2 週間以上たったものに固定します。AGENTS.md の「許可済みの依存」に足します。
-3. **画面（claude にならう）**
-   - **見出し:** `kairo`、版、エンジンとモデル、作業ディレクトリ、セッションの ID。起動したときに 1 度だけ出します。
-   - **会話の書き方:**
-     - 全画面（alt screen）を使わず、端末の流れに書き足します。抜けた後も、端末のスクロールに会話が残ります。
-     - 返答は、届いたそばから書きます。
-     - ツールの呼び出しは `⏺ write notes.txt` と、結果の `⎿` 1〜3 行にまとめます。
-   - **入力の枠:**
-     - 罫線で囲み、空のときは例文を薄く出します。
-     - Enter で送ります。改行は Shift+Enter か Alt+Enter で入れます。
-     - ターンの最中にも打てて、終わったら次に送ります。
-   - **状態の行（枠の下）:** エンジンとモデル、エージェント、待っている承認の数、このセッションのトークン数（`usage`）、セッションの ID。
-   - **スラッシュのコマンド:** `/` で、エージェントが知らせた一覧（`available_commands_update`）から補完します。
-   - **承認と要確認:**
-     - 入力の枠の代わりに選択肢を出し、矢印と Enter で選びます。
-     - 要確認では、何も選んでいない状態から始めます（Enter だけで「効いた」にしない。不変条件 4）。
-     - ほかのクライアントが答えたら、選択肢を下げます。
-   - **キー:**
-     - Esc で、走っているターンを止めます（#11 の `session/cancel` を入れてから）。
-     - Ctrl-C は、1 回目で入力を消し、2 回目で抜けます。
-     - Ctrl-D で抜けます。
-     - 抜けても、セッションはデーモンに残ります。
-4. **初めてのフォルダでは、信頼するかを聞きます。**
-   - `kairo` を起動したとき、作業ディレクトリ（実のパス）か、その上のどれかが信頼済みでなければ、セッションを作る前に聞きます。
-   - 「いいえ」なら、何も読まずに終えます。「はい」なら記録して続けます。
-   - 聞く文には、何を読むかを書きます。
-     - そのフォルダの `kairocode.json` と `.opencode` の権限の規則、エージェント、コマンド
-     - 書き込みとコマンドは sandbox の中であること
-   - 記録は、データの置き場の `trust.json`（0600）に、信頼したパスの一覧として持ちます。デーモンではなく、クライアントが読み書きします。セッションの記録（kairo）には入れません。
-   - 聞くのは TUI と行単位の対話だけです。
-     - `kairocode run` は、利用者がディレクトリと依頼を明示して呼ぶので聞きません。
-     - `kairocode acp` は、信頼をエディタ（Zed の信頼の仕組み）に任せます。
-5. **ターンの取り消し（#11）を、この TUI の前に入れます。** Esc で止められない TUI は、claude と同じ使い心地になりません。#11 は、ワークフローの変更（`/workflow-change`）として別に進めます。
+1. **In a terminal (stdin and stdout are TTYs), `kairo` runs as a TUI.** When not a TTY, it stays the current line-based conversation (pipes, tests, automation outside dspchr's panes).
+   - The mechanism does not change. The TUI is also an ACP client and talks to the daemon through the ACP agent in the same process (ADR 0002, 0008). The TUI holds only display and input, and holds no wait state.
+   - The location is `internal/tui`. `chat` in `internal/cli` uses it when on a TTY.
+2. **Add Bubble Tea v2 as a dependency.**
+   - `charm.land/bubbletea/v2` (v2.0.10)
+   - `charm.land/bubbles/v2` (textarea, viewport, spinner)
+   - `charm.land/lipgloss/v2` (colors and borders)
+   - Pin versions released at least 2 weeks ago. Add them to the "allowed dependencies" in AGENTS.md.
+3. **Screen (following claude)**
+   - **Header:** `kairo`, version, engine and model, working directory, session ID. Shown once at startup.
+   - **How the conversation is written:**
+     - It does not use the full screen (alt screen); it appends to the terminal's flow. After exiting, the conversation stays in the terminal's scrollback.
+     - Replies are written as they arrive.
+     - A tool call is summarized as `⏺ write notes.txt` plus 1 to 3 `⎿` lines of result.
+   - **Input box:**
+     - Surrounded by a border; when empty it shows an example sentence faintly.
+     - Enter sends. A newline is entered with Shift+Enter or Alt+Enter.
+     - You can type during a turn, and it is sent next when the turn ends.
+   - **Status line (below the box):** engine and model, agent, number of pending approvals, this session's token count (`usage`), session ID.
+   - **Slash commands:** `/` completes from the list the agent announced (`available_commands_update`).
+   - **Approvals and blocked (needs confirmation):**
+     - Show the options in place of the input box, chosen with the arrows and Enter.
+     - For blocked (needs confirmation), start with nothing selected (Enter alone does not mean "it took effect"; invariant 4).
+     - When another client answers, take the options down.
+   - **Keys:**
+     - Esc stops the running turn (after #11's `session/cancel` is in).
+     - Ctrl-C clears the input the first time and exits the second time.
+     - Ctrl-D exits.
+     - After exiting, the session stays in the daemon.
+4. **In a folder seen for the first time, ask whether to trust it.**
+   - When `kairo` starts, if neither the working directory (real path) nor any directory above it is trusted, ask before creating the session.
+   - On "no", exit without reading anything. On "yes", record it and continue.
+   - The question says what will be read.
+     - The permission rules, agents and commands in that folder's `kairocode.json` and `.opencode`
+     - That writes and commands happen inside the sandbox
+   - The record is kept as a list of trusted paths in `trust.json` (0600) in the data directory. The client reads and writes it, not the daemon. It does not go into the session's record (kairo).
+   - Only the TUI and the line-based conversation ask.
+     - `kairocode run` does not ask, because the user calls it naming the directory and the request explicitly.
+     - `kairocode acp` leaves trust to the editor (Zed's trust mechanism).
+5. **Put turn cancellation (#11) in before this TUI.** A TUI that cannot be stopped with Esc does not feel like claude. #11 proceeds separately as a workflow change (`/workflow-change`).
 
-## 結果
+## Consequences
 
-- `kairo` で、claude と同じ形の画面になります。ACP のクライアントのままなので、Zed から使ったときと動きが分かれません。
-- 依存が 3 つ増えます（推移的な依存も含めて `go.sum` が大きくなる）。KairoCode の本体（workflows、runtime）は、これを import しません（`internal/invariants` の許可リストにも入れない）。
-- 守らせるテスト（実装のとき足す）
-  - Bubble Tea のモデル（`Update` と `View`）に、キーと ACP の更新を直接送ります。次のことを確かめます。
-    - 返答の書き足し、ツールの行、状態の行の数え方
-    - 承認の選択（矢印、Enter、要確認は初めに何も選んでいない）
-    - 取り下げ
-    - スラッシュの補完
-    - Ctrl-C を 2 回押すと抜けること
-  - 信頼: 信頼していないフォルダでは、「いいえ」でセッションが作られない（デーモンにセッションが無い）。「はい」で `trust.json` に記録され、下のフォルダでは聞かない。
-  - TTY でないときは、今の行単位の対話のテスト（`TestChat`）がそのまま通る。
-  - 本物の端末での見え方は、手で確かめます。
+- `kairo` gets a screen shaped like claude. It stays an ACP client, so it does not behave differently from using it from Zed.
+- 3 dependencies are added (`go.sum` grows, including transitive dependencies). KairoCode's core (workflows, runtime) does not import them (nor are they put in the allow list of `internal/invariants`).
+- Tests that enforce this (added at implementation)
+  - Send keys and ACP updates directly to the Bubble Tea model (`Update` and `View`). Check the following.
+    - Appending replies, tool lines, how the status line counts
+    - Choosing approvals (arrows, Enter, blocked (needs confirmation) starting with nothing selected)
+    - Withdrawal
+    - Slash completion
+    - Pressing Ctrl-C twice exits
+  - Trust: in an untrusted folder, "no" creates no session (the daemon has no session). "Yes" records it in `trust.json`, and folders below it are not asked about.
+  - When not on a TTY, the current line-based conversation test (`TestChat`) passes as is.
+  - How it looks in a real terminal is checked by hand.
 
-## 検討した代替案
+## Alternatives considered
 
-- **行単位の対話のままにする（今）:** 依存は増えません。ただし、入力の枠を固定できず、承認を矢印で選べず、Esc で止めることもできません。利用者の求めに届きません。
-- **`golang.org/x/term` で raw にして、自分で描く:** 依存は小さくなります。ただし、入力の編集（日本語の幅、IME、貼り付け）、描き直し、リサイズを自分で書くことになり、Bubble Tea がすでに解いていることを作り直します。
-- **tview / tcell:** 全画面のウィジェットが中心で、端末の流れに書き足す claude の形と合いません。
-- **Bubble Tea v1（`github.com/charmbracelet/bubbletea` v1.3）:** 安定しています。ただし、v2 のほうがキーの扱い（Shift+Enter などの修飾キー、kitty のキーボードの扱い）と描画が改善されています。今から作るなら v2 にします。
-- **信頼を聞かない（sandbox に任せる）:** sandbox は書く場所とネットワークを絞ります。ただし、プロジェクトが書いた権限の規則（`bash: allow`）と指示は、そのまま効きます。
-- **信頼をデーモンが持つ:** どのクライアントも同じ判断を使えます。ただし、聞くのは端末のクライアントだけで、エディタには自分の信頼の仕組みがあります。
+- **Keep the line-based conversation (now):** No added dependencies. But the input box cannot be pinned, approvals cannot be chosen with the arrows, and Esc cannot stop a turn. It falls short of what the user wants.
+- **Go raw with `golang.org/x/term` and draw it ourselves:** Smaller dependencies. But we would write input editing (Japanese widths, IME, paste), redrawing and resizing ourselves, rebuilding what Bubble Tea has already solved.
+- **tview / tcell:** Centered on full-screen widgets; does not fit claude's style of appending to the terminal's flow.
+- **Bubble Tea v1 (`github.com/charmbracelet/bubbletea` v1.3):** Stable. But v2 improves key handling (modifier keys such as Shift+Enter, kitty keyboard handling) and rendering. If building now, v2.
+- **Do not ask about trust (leave it to the sandbox):** The sandbox limits where it can write and the network. But permission rules (`bash: allow`) and instructions written by the project take effect as is.
+- **The daemon holds trust:** Every client could use the same judgment. But only terminal clients ask, and editors have their own trust mechanisms.
 
-## 実装（2026-10-19、M2）
+## Implementation (2026-10-19, M2)
 
-- `internal/tui` と `internal/trust` を足しました。`kairo` は、stdin と stdout が端末なら TUI、そうでなければ行単位の対話で動きます（`KAIROCODE_PLAIN=1` で行単位に固定）。
-- 終わったもの（利用者の発言、返答の段落、ツールの行と結果）は `tea.Println` で端末の流れに書きます。Bubble Tea のコマンドは並行に走るので、書く行は列にためて、1 度に 1 まとまりずつ書きます（順番を保つ）。
-- 書いている途中の返答、入力の枠、状態の行は、画面の下に置きます。返答は段落が終わるたびに流れに移します。
-- テストは、モデルに直接メッセージを送ります。カーソルの点滅とスピナーは、自分の時計で回るので、テストの中では動かしません。
-- 本物の端末では、`script` の疑似端末で、信頼 → 送信 → ツール → 返答 → Ctrl-C 2 回、の流れを確かめました。見え方の確認は、利用者の手元で行います。
-- Esc は、ADR 0011（ターンの取り消し）が承認されるまで、「#11 で入る」と知らせるだけです。
+- Added `internal/tui` and `internal/trust`. `kairo` runs as a TUI if stdin and stdout are terminals, otherwise as the line-based conversation (`KAIROCODE_PLAIN=1` forces line-based).
+- Finished items (the user's messages, reply paragraphs, tool lines and results) are written to the terminal's flow with `tea.Println`. Bubble Tea commands run concurrently, so lines to write are queued and written one batch at a time (keeping order).
+- The reply being written, the input box and the status line sit at the bottom of the screen. A reply moves into the flow each time a paragraph ends.
+- Tests send messages directly to the model. The cursor blink and spinner run on their own clocks, so they do not run in tests.
+- In a real terminal, we checked the flow trust → send → tool → reply → Ctrl-C twice in a pseudo-terminal with `script`. How it looks is checked on the user's machine.
+- Until ADR 0011 (turn cancellation) is accepted, Esc only says "coming in #11".

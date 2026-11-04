@@ -637,7 +637,7 @@ func TestCrashAgentToolAnswerUsedOnce(t *testing.T) {
 
 // A provider switched back to gets the model and effort last chosen for
 // it, and so does a new session of it; an effort reaches the API's model
-// call and an agent's session (ADR 0014, 追記). An agent's models and
+// call and an agent's session (ADR 0014, addendum). An agent's models and
 // efforts, as it said them, are the lists to choose from.
 func TestModelAndEffortKept(t *testing.T) {
 	setupFakeCLI(t, "")
@@ -1031,7 +1031,7 @@ func TestAuthRequired(t *testing.T) {
 	}
 }
 
-// A switch chosen and not yet sent is kept in the store (ADR 0014, 追記
+// A switch chosen and not yet sent is kept in the store (ADR 0014, addendum
 // 2026-11-02): the daemon stopped and opened again, the next turn takes it.
 func TestSwitchSurvivesAReopen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -1,55 +1,55 @@
-# 0030 フローの下書きと公開: 書くことと使えるようにすることを分ける
+# 0030 Flow drafts and publishing: separating writing from making usable
 
-- 状態: 承認（2026-10-27）
-- 日付: 2026-10-27
-- 関連: ADR 0003（フロー）、ADR 0017（試し）、ADR 0029（実行の履歴）
+- Status: Accepted (2026-10-27)
+- Date: 2026-10-27
+- Related: ADR 0003 (flows), ADR 0017 (try), ADR 0029 (run history)
 
-## 背景
+## Context
 
-フローは、モデルが `flow_write` で書くと、許可したその場で `.kairocode/workflows/<名前>.star` に入り、`/flow <名前>`、hook、`kairocode run` からすぐに動きます。レビュー（頼んだことと合っているか、何に触れるか）と試し（ADR 0017）は、この書き込みの承認で出ます。
+When the model writes a flow with `flow_write`, it goes into `.kairocode/workflows/<name>.star` the moment it is allowed, and runs right away from `/flow <name>`, hooks and `kairocode run`. The review (does it match what was asked, what does it touch) and the try (ADR 0017) appear in the approval of this write.
 
-そのため、下書きのまま何度か書き直して試す段階と、みんなが使う版にする段階が、1 つの一歩になっています。書きかけのフローが、hook や CI から動いてしまうこともあり得ます。
+So the stage of rewriting and trying a draft a few times and the stage of making it the version everyone uses are one step. A half-written flow could even run from a hook or CI.
 
-## 決定
+## Decision
 
-1. **書くのは下書き。** `flow_write` は `.kairocode/workflows/drafts/<名前>.star` に書きます。
-   - 下書きは、`/flow <名前>`、hook、エージェントの `workflow:`、`kairocode run` からは動きません。
-   - 書く前の検査（`flowchart.Check`）は、これまでどおりです。
-   - 下書きを書くのは、既定で聞かずに通します（動かないので）。利用者の規則で変えられます。
-2. **公開は `flow_publish`。** 下書きを、そのまま `.kairocode/workflows/<名前>.star` に置きます。
-   - 中身は下書きのファイルから取り、モデルは名前（と、頼まれたことの一覧）だけを渡します。モデルが公開のときに中身を変えることはできません。
-   - これまで `flow_write` の承認で出していたレビューと試しは、`flow_publish` の承認で出します。既定では、毎回聞きます。
-   - 書き込みは、`flow_write` と同じく、計画してから比べて置き換えます（冪等）。
-3. **コマンドは `/flow` 1 つのまま、オプションで分ける。**
-   - `/flow <名前> [引数]`: 公開版を動かします（今と同じ）。
-   - `/flow <名前> --draft [引数]`: 下書きを、試し（ADR 0017。読むだけのツールは動かし、それ以外は呼ばずに「何を渡したはずか」を残す）として動かします。`ask()` は人に聞きます。
-   - `/flow <名前> --publish`: モデルに、その下書きの公開（`flow_publish`）を頼みます。レビューの画面が出て、許可すると公開版になります。
-   - `kairocode run "/flow <名前> --draft …"` も同じ書き方です。
-   - `/flow`（一覧）は、下書きに「(draft)」と付けて並べます。
-4. **履歴（ADR 0029）:** `--draft` で動かした回は、試しとして残ります。
-5. **今あるフロー:** `.kairocode/workflows/<名前>.star` にあるものは、公開版としてそのまま動きます。`drafts/` がなければ、下書きはないだけです。
+1. **Writing makes a draft.** `flow_write` writes to `.kairocode/workflows/drafts/<name>.star`.
+   - A draft does not run from `/flow <name>`, hooks, an agent's `workflow:`, or `kairocode run`.
+   - The check before writing (`flowchart.Check`) stays as before.
+   - Writing a draft passes without asking by default (it does not run). The user's rules can change this.
+2. **Publishing is `flow_publish`.** It puts the draft as is at `.kairocode/workflows/<name>.star`.
+   - The content is taken from the draft file, and the model passes only the name (and the list of what was asked). The model cannot change the content when publishing.
+   - The review and try that used to appear in the approval of `flow_write` now appear in the approval of `flow_publish`. By default, it asks every time.
+   - Like `flow_write`, the write plans first, then compares and replaces (idempotent).
+3. **The command stays a single `/flow`, split by options.**
+   - `/flow <name> [arguments]`: runs the published version (as now).
+   - `/flow <name> --draft [arguments]`: runs the draft as a try (ADR 0017: read-only tools run, others are not called and "what would have been passed" is kept). `ask()` asks the user.
+   - `/flow <name> --publish`: asks the model to publish that draft (`flow_publish`). The review screen appears, and if allowed, it becomes the published version.
+   - `kairocode run "/flow <name> --draft …"` is written the same way.
+   - `/flow` (list) lists drafts with "(draft)" added.
+4. **History (ADR 0029):** runs with `--draft` are kept as tries.
+5. **Existing flows:** what is in `.kairocode/workflows/<name>.star` keeps running as is, as the published version. If there is no `drafts/`, there are simply no drafts.
 
-実装に現れるところ: `internal/tools/flowwrite.go`（下書きの場所）、`internal/tools/flowpublish.go`（新しいツール。作用の型は冪等）、`internal/runtime/permission.go`（レビューを `flow_publish` に。既定の規則）、`internal/workflows`（`FlowCall.Draft`、`FlowLoadInput.Draft`、下書きの回は `Dry`）、`internal/runtime/flow.go`（下書きを読む、`/flow` のオプション、一覧）、`internal/runtime/flownew.go`（モデルへの指示）。
+Where this shows up in the implementation: `internal/tools/flowwrite.go` (the draft location), `internal/tools/flowpublish.go` (the new tool; effect type idempotent), `internal/runtime/permission.go` (review moved to `flow_publish`; default rules), `internal/workflows` (`FlowCall.Draft`, `FlowLoadInput.Draft`, draft runs are `Dry`), `internal/runtime/flow.go` (reading drafts, `/flow` options, the list), `internal/runtime/flownew.go` (instructions to the model).
 
-実装で決めたこと（決定の趣旨は変えない）:
-- **公開するのは、決めたときの下書きだけ。** `flow_publish` の権限の判定（レビューを出すとき）で、その呼び出しと、そのときの下書きのハッシュの組を記録します。公開の計画を立てるときに今の下書きと比べ、違えば公開せずに「レビューの後に下書きが変わった。もう一度 flow_publish を」と返します。同じ返答の中で `flow_write` と `flow_publish` を並べたときや、承認を待つ間に下書きが書き換えられたときに、誰も見ていない中身を公開しないためです。記録は KairoCode の側（`kc_message` の種類 `reviewed`）にあり、ワークフローは変えません。
-- 書き込みの計画のパスは、`.kairocode/workflows/<名前>.star` か `.kairocode/workflows/drafts/<名前>.star` と完全に一致するものだけを受けます。下書きを読むときも、`.kairocode`、`workflows`、`drafts` がリンクなら読みません。
-- `flow_check` は、下書きがあれば下書きを、なければ公開版を検査します。
-- テスト: `TestNewFlow`（下書き、`--draft`、`--publish`）、`TestPublishOnlyWhatWasReviewed`、`TestFlowPublish`、`TestFlowWrite`、`TestTryFlow` ほか（試しは公開の承認で出る）。
-- 端末の画面のフローの編集（`/flow edit`）は、今も公開版を直接直します。利用者が自分で直す操作で、この ADR の対象（モデルが書く `flow_write`）の外です。
+Decided during implementation (the intent of the decision is unchanged):
+- **Only the draft as it was when decided is published.** In the permission check of `flow_publish` (when the review is shown), the pair of that call and the hash of the draft at that time is recorded. When planning the publish, it is compared with the current draft, and if they differ, it does not publish and returns "the draft changed after the review; call flow_publish again". This is so that content no one has seen is not published, when `flow_write` and `flow_publish` are put side by side in the same reply, or when the draft is rewritten while waiting for approval. The record is on KairoCode's side (`kc_message` kind `reviewed`), and the workflow is not changed.
+- The path of a write plan is accepted only if it exactly matches `.kairocode/workflows/<name>.star` or `.kairocode/workflows/drafts/<name>.star`. When reading a draft, too, if `.kairocode`, `workflows` or `drafts` is a link, it is not read.
+- `flow_check` checks the draft if there is one, otherwise the published version.
+- Tests: `TestNewFlow` (draft, `--draft`, `--publish`), `TestPublishOnlyWhatWasReviewed`, `TestFlowPublish`, `TestFlowWrite`, `TestTryFlow` and others (the try appears in the publish approval).
+- Editing flows in the terminal UI (`/flow edit`) still changes the published version directly. That is an operation where the user edits it themselves, and is outside the scope of this ADR (`flow_write`, written by the model).
 
-## 結果
+## Consequences
 
-- 書きかけのフローは、公開するまで、どこからも本当には動きません。下書きは何度でも書き直し、`--draft` で試せます。
-- レビューと試しは、公開するときに 1 度です。
-- テスト
-  - `flow_write` が下書きに書き、公開版はそのまま。下書きは `/flow <名前>` で動かない。
-  - `/flow <名前> --draft` が下書きを試しとして動かし、書き込みのツールは呼ばない。
-  - `flow_publish` が下書きの中身を公開版に置き、その承認でレビューと試しが出る。
-  - 書く前の試し（ADR 0017）が、公開の承認で動く。
+- A half-written flow does not really run from anywhere until it is published. A draft can be rewritten any number of times and tried with `--draft`.
+- The review and try happen once, when publishing.
+- Tests
+  - `flow_write` writes to the draft, and the published version stays as is. A draft does not run with `/flow <name>`.
+  - `/flow <name> --draft` runs the draft as a try, and does not call write tools.
+  - `flow_publish` puts the draft's content into the published version, and the review and try appear in its approval.
+  - The try before writing (ADR 0017) runs in the publish approval.
 
-## 検討した代替案
+## Alternatives considered
 
-- **`/flow publish <名前>`、`/flow draft <名前>` のように、コマンドを分ける:** 利用者の希望で、`/flow` のオプションにしました。フローの名前と予約語がぶつかることも減ります。
-- **公開をモデルを通さずに行う:** 確実ですが、公開のレビューと試しの画面は、ターンの中の承認として作られています。中身は下書きのファイルから取るので、モデルを通しても公開されるものは変わりません。
-- **下書きをデータの置き場に置く:** リポジトリは汚れませんが、ほかの人やほかの機械から見えず、git で差分も見られません。
+- **Separate commands, like `/flow publish <name>` and `/flow draft <name>`:** at the user's wish, these became options of `/flow`. It also reduces clashes between flow names and reserved words.
+- **Publish without going through the model:** reliable, but the publish review and try screens are built as approvals inside a turn. The content is taken from the draft file, so going through the model does not change what is published.
+- **Put drafts in the data directory:** the repository stays clean, but other people and other machines cannot see them, and git cannot show diffs.

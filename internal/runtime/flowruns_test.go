@@ -140,7 +140,7 @@ func TestFlowRunsNotMadeAgain(t *testing.T) {
 }
 
 // Tries are counted apart from runs: trying a flow often does not push its
-// runs out (ADR 0029, 追記).
+// runs out (ADR 0029, addendum).
 func TestFlowTriesCountedApart(t *testing.T) {
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
 	ctx := context.Background()

@@ -481,7 +481,7 @@ func (r *Runtime) finishCLITurn(t *kairo.TaskContext, mt *mcpTurn, text string, 
 }
 
 // keepACPOptions keeps the models and efforts the agent's session says it
-// has, for /model and /effort (ADR 0014, 追記).
+// has, for /model and /effort (ADR 0014, addendum).
 func (r *Runtime) keepACPOptions(ctx context.Context, engine string, opts []acpOption) {
 	var models, efforts []string
 	for _, o := range opts {

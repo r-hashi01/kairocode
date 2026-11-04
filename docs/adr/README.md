@@ -1,46 +1,44 @@
-# KairoCode の設計判断（ADR）
+# KairoCode's design decisions (ADR)
 
-KairoCode の側の設計判断の記録です。kairo の ADR 0000 と同じ運用です。状態は「提案」「承認（日付）」「却下」「NNNN により置き換え」のどれかで、「承認」にするのは利用者です。
+These are the records of the design decisions on KairoCode's side. They are run the same way as kairo's ADR 0000. A status is one of "Proposed", "Accepted (date)", "Rejected" or "Superseded by NNNN", and only the user moves an ADR to "Accepted".
 
-kairo の側の判断は、kairo の `docs/adr/` にあります。
+Decisions on kairo's side are in kairo's `docs/adr/`.
 
-**読み方:** 今の KairoCode の形を決めているのは、状態が「承認」のものだけです。「提案」のものは、まだ決まっていない案で、実装もされていません（「保留」と書いたものは、見直す時期を待っています）。
+**How to read them:** only the ADRs whose status is "Accepted" decide what KairoCode is now. "Proposed" ones are undecided ideas and are not implemented (the ones marked "on hold" are waiting for the time to revisit them).
 
-> Architecture Decision Records of KairoCode, in Japanese. Only those whose state (状態) is 承認 (approved) describe KairoCode as it is; 提案 (proposed) ones are undecided and not implemented. AGENTS.md lists the invariants they keep.
-
-| 番号 | 題 | 状態 |
+| Number | Title | Status |
 |---|---|---|
-| [0000](0000-record-decisions.md) | 設計判断を ADR として記録する | 承認（2026-10-09） |
-| [0001](0001-go-on-the-kairo-go-sdk.md) | KairoCode を Go で書き、kairo の Go の SDK（埋め込みのランタイム）の上で動かす | 承認（2026-10-09） |
-| [0002](0002-opencode-features-and-acp.md) | 機能と設定の形は opencode を手本にし、利用者の側の入口は ACP にする | 承認（2026-10-09） |
-| [0003](0003-workflows-started-by-people-and-events.md) | ワークフローは、人と出来事が始める。中身は Starlark で、言葉から作り、端末にフローの図として見せる | 承認（2026-10-19） |
-| [0004](0004-dspchr-integration.md) | dspchr の中でよく振る舞うエージェントになる | 提案（保留） |
-| [0005](0005-sandbox-for-processes.md) | KairoCode が動かすプロセスは、Codex にならった OS の sandbox の中で動かす | 承認（2026-10-09） |
-| [0006](0006-conversation-storage.md) | 会話は、内容のハッシュで引く 1 つの表と、ターンごとのリンクの鎖で持つ。セッションはターンを子として順に動かす | 承認（2026-10-09） |
-| [0007](0007-claude-code-engine-for-local-use.md) | 手元では、利用者自身の Claude Code（サブスクリプション）をモデルのエンジンとして使える | 承認（2026-10-09） |
-| [0008](0008-one-daemon-per-data-directory.md) | データの置き場ごとに、kairo を動かすデーモンを 1 つだけ置く。ほかはすべてクライアントにする | 承認（2026-10-09） |
-| [0009](0009-lsp-diagnostics-after-edits.md) | ファイルを書いたツールの結果に、言語サーバーの診断のエラーを足す | 承認（2026-10-19） |
-| [0010](0010-terminal-ui.md) | 端末の対話を、claude と同じ形の TUI にする（Bubble Tea）。初めてのフォルダは信頼を聞く | 承認（2026-10-19） |
-| [0011](0011-cancel-a-turn.md) | ターンの取り消し: kairo の取り消しで止め、止めたことを会話に残す | 承認（2026-10-19） |
-| [0012](0012-github-and-serverless.md) | GitHub から起動し、待つ間はプロセスを持たない（サーバーレス）。作業ディレクトリはブランチで持ち越す | 提案 |
-| [0013](0013-http-tools.md) | HTTP(S) のツール: GET の `fetch` と、POST の `http` | 承認（2026-10-21） |
-| [0014](0014-providers-and-models.md) | プロバイダーとモデルを、会話の途中で切り替える（/provider、/model）。codex と copilot は CLI のエンジンから | 承認（2026-10-19） |
-| [0015](0015-install-acp-agents-from-the-registry.md) | ACP のエージェントを、登録簿からチャット欄で入れて使う（/provider）。エージェント自身のツールは人に聞く | 承認（2026-10-19） |
-| [0016](0016-auto-mode.md) | auto モード: 人に聞く呼び出しを、判定のモデルが決める（manual・auto・plan を shift+Tab で） | 承認（2026-10-20） |
-| [0017](0017-try-a-flow-before-it-is-written.md) | 書く前のフローを試す（試運転）: 外への作用は止め、「するはずだったこと」を見せる | 承認（2026-10-20） |
-| [0018](0018-same-across-agents.md) | エージェントが変わっても同じことができる: KairoCode の約束、足りないものを補う、フックは KairoCode の sandbox で（外は承認） | 承認（2026-10-21） |
-| [0019](0019-daemon-updates-itself.md) | デーモンを自動で新しい版にする: ディスクの版を正とし、ステップが途切れたら替わる。クライアントはつなぎ直す | 承認（2026-10-21） |
-| [0020](0020-compact-the-history.md) | 履歴の圧縮: 文脈の上限が近づいたら要約して続け、前の記録は残す | 承認（2026-10-21） |
-| [0021](0021-fork-a-session.md) | セッションの分岐: 過去のターンから、別のセッションとして続ける | 承認（2026-10-21） |
-| [0022](0022-mcp-servers-custom-tools-todo.md) | 利用者の MCP サーバー、カスタムツール、todo | 承認（2026-10-21） |
-| [0023](0023-view-and-replay-records.md) | 記録の閲覧と再生 | 承認（2026-10-22） |
-| [0024](0024-limits-and-rate-limits.md) | 上限（トークン、金額、時間）と、プロバイダーごとの頻度の制限 | 提案（保留） |
-| [0025](0025-plugins.md) | プラグイン: 外のサービスへの接続とスキルの束、`/plugin` と `/plugin connect` | 承認（2026-10-26） |
-| [0026](0026-image-input.md) | 画像の入力: メッセージの画像の部品と、エンジンごとの渡し方 | 承認（2026-10-27） |
-| [0027](0027-plugin-marketplaces.md) | プラグインのマーケットプレイス: 同梱のカタログと、足せるカタログ | 承認（2026-10-26） |
-| [0028](0028-background-commands.md) | 裏で動くコマンド: 長いループの中で、何時間でも待てる | 承認（2026-10-26） |
-| [0029](0029-flow-run-history.md) | フローの実行の履歴: 終わった回を保存し、後から見返す | 承認（2026-10-27） |
-| [0030](0030-flow-drafts-and-publishing.md) | フローの下書きと公開: 書くことと使えるようにすることを分ける | 承認（2026-10-27） |
-| [0031](0031-loopback-sandbox.md) | 手元の通信だけを許す sandbox: 検査を sandbox の外に出さずに動かす | 承認（2026-10-27） |
-| [0032](0032-terminal-notifications.md) | 端末の通知: 人を待つときとターンの終わりを、画面を見ていない利用者に知らせる | 承認（2026-10-28） |
-| [0033](0033-draw-the-inline-area-as-codex-does.md) | 端末の画面の下の領域を、Codex と同じ仕組みで自前で描く | 承認（2026-10-28） |
+| [0000](0000-record-decisions.md) | Record design decisions as ADRs | Accepted (2026-10-09) |
+| [0001](0001-go-on-the-kairo-go-sdk.md) | Write KairoCode in Go and run it on kairo's Go SDK (the embedded runtime) | Accepted (2026-10-09) |
+| [0002](0002-opencode-features-and-acp.md) | Model features and the shape of configuration on opencode, and make ACP the entry point on the user's side | Accepted (2026-10-09) |
+| [0003](0003-workflows-started-by-people-and-events.md) | Workflows are started by people and events. Their body is Starlark, written from words, and shown in the terminal as a flow chart | Accepted (2026-10-19) |
+| [0004](0004-dspchr-integration.md) | Become an agent that behaves well inside dspchr | Proposed (on hold) |
+| [0005](0005-sandbox-for-processes.md) | Run the processes KairoCode starts inside an OS sandbox modeled on Codex | Accepted (2026-10-09) |
+| [0006](0006-conversation-storage.md) | Keep the conversation in one table looked up by content hash, plus a chain of links per turn. The session runs turns as children, in order | Accepted (2026-10-09) |
+| [0007](0007-claude-code-engine-for-local-use.md) | Locally, the user's own Claude Code (subscription) can be used as the model engine | Accepted (2026-10-09) |
+| [0008](0008-one-daemon-per-data-directory.md) | Put exactly one daemon that runs kairo per data directory. Everything else is a client | Accepted (2026-10-09) |
+| [0009](0009-lsp-diagnostics-after-edits.md) | Add language server diagnostic errors to the result of a tool that wrote a file | Accepted (2026-10-19) |
+| [0010](0010-terminal-ui.md) | Make the terminal UI a TUI shaped like claude (Bubble Tea). Ask about trust in a folder seen for the first time | Accepted (2026-10-19) |
+| [0011](0011-cancel-a-turn.md) | Cancelling a turn: stop it with kairo's cancellation, and keep the fact that it was stopped in the conversation | Accepted (2026-10-19) |
+| [0012](0012-github-and-serverless.md) | Start from GitHub, and hold no process while waiting (serverless) | Proposed |
+| [0013](0013-http-tools.md) | HTTP(S) tools: `fetch` for GET and `http` for POST | Accepted (2026-10-21) |
+| [0014](0014-providers-and-models.md) | Switch providers and models in the middle of a conversation (/provider, /model) | Accepted (2026-10-19) |
+| [0015](0015-install-acp-agents-from-the-registry.md) | Install ACP agents from the registry in the chat box and use them (/provider) | Accepted (2026-10-19) |
+| [0016](0016-auto-mode.md) | auto mode: a judge model decides calls that would ask a person | Accepted (2026-10-20) |
+| [0017](0017-try-a-flow-before-it-is-written.md) | Try a flow before it is written (a try run): stop effects on the outside and show "what it would have done" | Accepted (2026-10-20) |
+| [0018](0018-same-across-agents.md) | The same things work whichever agent is used: KairoCode's promise, how missing pieces are filled in, hooks in KairoCode's sandbox | Accepted (2026-10-21) |
+| [0019](0019-daemon-updates-itself.md) | Move the daemon to a new version automatically | Accepted (2026-10-21) |
+| [0020](0020-compact-the-history.md) | Compacting the history: summarize and continue when the context limit is near, and keep the earlier record | Accepted (2026-10-21) |
+| [0021](0021-fork-a-session.md) | Forking a session: continue from a past turn as a separate session | Accepted (2026-10-21) |
+| [0022](0022-mcp-servers-custom-tools-todo.md) | The user's MCP servers, custom tools, todo | Accepted (2026-10-21) |
+| [0023](0023-view-and-replay-records.md) | Viewing and replaying records | Accepted (2026-10-22) |
+| [0024](0024-limits-and-rate-limits.md) | Limits (tokens, cost, time) and per-provider rate limits | Proposed (on hold) |
+| [0025](0025-plugins.md) | Plugins: bundles of connections to outside services and skills, `/plugin` and `/plugin connect` | Accepted (2026-10-26) |
+| [0026](0026-image-input.md) | Image input: an image part in messages, and how each engine receives it | Accepted (2026-10-27) |
+| [0027](0027-plugin-marketplaces.md) | Plugin marketplaces: a bundled catalog, and catalogs you can add | Accepted (2026-10-26) |
+| [0028](0028-background-commands.md) | Background commands: waiting for hours inside a long loop | Accepted (2026-10-26) |
+| [0029](0029-flow-run-history.md) | Flow run history: keep finished runs, and look back at them later | Accepted (2026-10-27) |
+| [0030](0030-flow-drafts-and-publishing.md) | Flow drafts and publishing: separating writing from making usable | Accepted (2026-10-27) |
+| [0031](0031-loopback-sandbox.md) | A sandbox that allows only local traffic: running checks without leaving the sandbox | Accepted (2026-10-27) |
+| [0032](0032-terminal-notifications.md) | Terminal notifications: telling a user who is not looking at the screen when a human is needed and when a turn ends | Accepted (2026-10-28) |
+| [0033](0033-draw-the-inline-area-as-codex-does.md) | Drawing the bottom area of the terminal UI ourselves, the same way Codex does | Accepted (2026-10-28) |

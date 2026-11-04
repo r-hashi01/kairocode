@@ -2,7 +2,7 @@ package api
 
 import ()
 
-// Sign-in states of a provider (ADR 0015, 追記).
+// Sign-in states of a provider (ADR 0015, addendum).
 const (
 	AuthSignedIn = "signed-in"
 	AuthNeeded   = "needed"

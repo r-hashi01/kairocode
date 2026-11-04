@@ -1,69 +1,69 @@
-# 0004 dspchr の中でよく振る舞うエージェントになる
+# 0004 Become an agent that behaves well inside dspchr
 
-- 状態: 提案（2026-10-27、利用者の判断で保留。dspchr の公開か、連携が要る事情が出たときに見直す）
-- 日付: 2026-10-09
-- 関連: 要件 FR-2、FR-11、FR-24、NFR-4、ADR 0002（クライアント）、0003（ワークフローの木）、dspchr の ADR-039、042、050、055、066、068、REQUIREMENTS §8、§24
+- Status: Proposed (2026-10-27; on hold by the user's decision. Revisit when dspchr is published, or when a reason to integrate comes up)
+- Date: 2026-10-09
+- Related: requirements FR-2, FR-11, FR-24, NFR-4; ADR 0002 (clients), 0003 (the workflow tree); dspchr's ADR-039, 042, 050, 055, 066, 068; REQUIREMENTS §8, §24
 
-## 背景
+## Context
 
-dspchr は、Claude Code や Codex のような CLI のエージェントを PTY の中で動かし、プロセスとして見えるようにし、操作できるようにする TUI マルチプレクサです（`../dspchr`）。状態は CPU と画面から推測しますが、エージェントが自分で報告すれば推測しません（dspchr の ADR-039、`dspchr state <state>`）。
+dspchr is a TUI multiplexer that runs CLI agents such as Claude Code and Codex inside a PTY, makes them visible as processes, and lets you operate them (`../dspchr`). It guesses their state from CPU and the screen, but if an agent reports its state itself, it does not guess (dspchr's ADR-039, `dspchr state <state>`).
 
-dspchr の要件は「独自の coding agent は作らない」を範囲の外としています（REQUIREMENTS §24）。そのため、KairoCode は dspchr に取り込まれるのではなく、dspchr の中で動くエージェントの 1 つになります。
+dspchr's requirements put "building our own coding agent" out of scope (REQUIREMENTS §24). So KairoCode is not absorbed into dspchr; it becomes one of the agents that run inside dspchr.
 
-KairoCode は、ほかのエージェントにない情報を出せます。
+KairoCode can provide information other agents cannot.
 
-- 推測の要らない状態。承認待ちと要確認（落ちた実のツール）を含みます。
-- 落ちても続きから進む resume。
-- 記録された使用量。
-- サブエージェントとワークフローの木（ADR 0003）。
+- A state that needs no guessing, including waiting for approval and blocked (needs confirmation) (a real tool that crashed).
+- A resume that continues from where it was after a crash.
+- Recorded usage.
+- The tree of subagents and workflows (ADR 0003).
 
-一方で、KairoCode のセッションは、承認を待つ間はプロセスを持ちません（NFR-4）。今の dspchr は、プロセスの無いものを一覧に出せません。
+On the other hand, a KairoCode session holds no process while it waits for an approval (NFR-4). dspchr today cannot list things that have no process.
 
-## 決定
+## Decision
 
-2 段階で統合します。段階 1 は KairoCode の側だけで済みます。段階 2 は dspchr の変更が要るので、dspchr の ADR として提案します（`docs/proposals/dspchr-kairocode.md`）。dspchr のリポジトリは、このリポジトリから編集しません。
+Integrate in two stages. Stage 1 can be done entirely on KairoCode's side. Stage 2 needs changes to dspchr, so it is proposed as a dspchr ADR (`docs/proposals/dspchr-kairocode.md`). dspchr's repository is not edited from this repository.
 
-### 段階 1: KairoCode の側だけで済むこと（M2）
+### Stage 1: what can be done on KairoCode's side alone (M2)
 
-- **状態の報告:** ペインの中で動く KairoCode の起動役（`kairocode chat` のような端末の対話。ADR 0002）が、セッションの出来事を購読します。環境変数 `DSPCHR_SESSION` があり、`dspchr` が PATH にあれば、状態の変わり目ごとに `dspchr state <state>` を起動します。
-  - 写し方は、dspchr がほかのエージェントに使っているもの（dspchr の `hooks.cpp`）に合わせます。
+- **Reporting state:** the KairoCode launcher that runs inside the pane (a terminal chat like `kairocode chat`; ADR 0002) subscribes to the session's events. If the environment variable `DSPCHR_SESSION` exists and `dspchr` is on the PATH, it starts `dspchr state <state>` at each change of state.
+  - The mapping matches the one dspchr uses for other agents (dspchr's `hooks.cpp`).
 
-    | KairoCode の出来事 | dspchr の状態 |
+    | KairoCode event | dspchr state |
     |---|---|
-    | ターンが始まった | `working` |
-    | ターンが終わり、次のメッセージを待っている | `waiting` |
-    | 承認を求めている、要確認で止まっている | `waiting` |
-    | ターンが失敗した、上限で止まった | `error` |
-    | セッションを閉じた | `idle` |
+    | a turn started | `working` |
+    | a turn ended and it is waiting for the next message | `waiting` |
+    | asking for approval, stopped at blocked (needs confirmation) | `waiting` |
+    | a turn failed, stopped at a limit | `error` |
+    | the session was closed | `idle` |
 
-  - 報告は待たずに起動し、失敗は無視します（dspchr が無いのはエラーではない）。報告はワークフローの外（クライアントの側）で行い、記録しません。
-- **resume の手がかり:** 起動役は、セッションの ID を引数に出します（`kairocode --session <ID>`）。dspchr は claude の `--session-id` を引数から読んでいます（dspchr の resume）。同じ形にしておけば、段階 2 で dspchr が引数から読めます。
-- **使用量:** `kairocode usage --session <ID> --json` で、入力・出力・キャッシュのトークン数を出します。dspchr の使用量の型（`agent::Usage`）と同じ欄にします。
-- **dspchr のスキル:** dspchr は、自分のコマンド（`send`、`read`、`wait`）をエージェントにスキルとして教えます（dspchr の `skill.cpp`）。KairoCode がスキルを読む置き場（ADR 0002）を、dspchr が書ける場所にそろえます。
+  - Reports are started without waiting for them, and failures are ignored (not having dspchr is not an error). Reporting happens outside the workflow (on the client's side) and is not recorded.
+- **A hint for resume:** the launcher puts the session ID in its arguments (`kairocode --session <ID>`). dspchr reads claude's `--session-id` from its arguments (dspchr's resume). With the same shape, dspchr can read it from the arguments in stage 2.
+- **Usage:** `kairocode usage --session <ID> --json` gives the input, output and cache token counts. The fields are the same as dspchr's usage type (`agent::Usage`).
+- **dspchr's skill:** dspchr teaches agents its own commands (`send`, `read`, `wait`) as a skill (dspchr's `skill.cpp`). The places KairoCode reads skills from (ADR 0002) are aligned with where dspchr can write.
 
-### 段階 2: dspchr が KairoCode のサーバーと話す（dspchr の ADR として提案）
+### Stage 2: dspchr talks to KairoCode's server (proposed as a dspchr ADR)
 
-- dspchr のデーモンが、KairoCode のサーバーのクライアントになります。別の dspchr のデーモンのセッションを同じ一覧に並べる仕組み（dspchr の ADR-042）と同じ考え方です。
-- プロセスを持たないセッションも、一覧に並びます（例: 承認待ちのセッション）。
-- 承認と要確認に、dspchr の中央のダイアログで答えます。答えは KairoCode の `POST /approvals/{key}`、`POST /reviews/{key}` に送ります。
-- サブエージェントとワークフローの木を、サイドバーに出します。
-- KairoCode の側が用意するもの:
-  - 手元のサーバーの見つけ方: `~/.local/share/kairocode/server.json` に、アドレスとトークンを書きます。ファイルの権限は 0600 です。
-  - セッションの一覧の API: 状態、使用量、待っているもの（承認のキー、要確認のキー）、子の木を返します。
-  - 出来事の SSE。
+- dspchr's daemon becomes a client of KairoCode's server. It is the same idea as the mechanism that lists sessions of another dspchr daemon in the same list (dspchr's ADR-042).
+- Sessions that hold no process are listed too (for example, a session waiting for approval).
+- Approvals and blocked (needs confirmation) calls are answered in dspchr's central dialog. The answers are sent to KairoCode's `POST /approvals/{key}` and `POST /reviews/{key}`.
+- The tree of subagents and workflows is shown in the sidebar.
+- What KairoCode's side provides:
+  - How to find the local server: the address and token are written to `~/.local/share/kairocode/server.json`. The file's permissions are 0600.
+  - An API listing sessions: it returns the state, usage, what is being waited for (approval keys, keys of blocked (needs confirmation) calls), and the tree of children.
+  - SSE of events.
 
-## 結果
+## Consequences
 
-- 段階 1 だけでも、dspchr のサイドバーで KairoCode の状態が正確に出ます。dspchr を使わない利用者には、何も起きません。
-- 状態の報告は、ワークフローの外で行います。決定性（AGENTS.md の不変条件 1、2）には触れません。
-- テスト:
-  - 出来事から状態への写し方の表のテスト。
-  - `dspchr` を偽のコマンド（PATH に置いた、引数を記録するだけのスクリプト）に差し替えて、報告の起動を確かめるテスト。
-  - `DSPCHR_SESSION` が無いときは何も起動しないテスト。
-- 段階 2 は、dspchr の側で承認されてから進めます。KairoCode の API（セッションの一覧、SSE、承認と要確認の答え）は設計 8.1 節にあり、段階 2 のために新しく足すのは、サーバーの見つけ方のファイルと、一覧の欄だけです。
+- Stage 1 alone makes KairoCode's state show accurately in dspchr's sidebar. For users who do not use dspchr, nothing happens.
+- State is reported outside the workflow. It does not touch determinism (invariants 1 and 2 in AGENTS.md).
+- Tests:
+  - A test of the table mapping events to states.
+  - A test that replaces `dspchr` with a fake command (a script on the PATH that only records its arguments) and checks that reports are started.
+  - A test that nothing is started when `DSPCHR_SESSION` is absent.
+- Stage 2 proceeds after it is approved on dspchr's side. KairoCode's API (listing sessions, SSE, answering approvals and blocked (needs confirmation) calls) is in design section 8.1; the only new things for stage 2 are the file for finding the server and the fields of the list.
 
-## 検討した代替案
+## Alternatives considered
 
-- **dspchr に KairoCode の会話の画面を作る:** dspchr はペインの中でプロセスを動かすマルチプレクサで、会話の画面は持ちません。dspchr の要件（独自の coding agent を作らない）にも反します。
-- **dspchr の hook の仕組み（設定ファイルにコマンドを書く）に乗る:** KairoCode は自分のコードなので、設定ファイルを介さずに直接報告できます。設定の書き換えも、版の管理も要りません。
-- **KairoCode のサーバーが報告する:** サーバーはペインの外で動き、`DSPCHR_SESSION` を知りません。ペインの中の起動役が報告すれば、dspchr の宛先の解決（環境変数）をそのまま使えます。
+- **Build a KairoCode conversation screen into dspchr:** dspchr is a multiplexer that runs processes in panes and has no conversation screen. It would also go against dspchr's requirements (no coding agent of its own).
+- **Ride on dspchr's hook mechanism (writing commands in a configuration file):** KairoCode is our own code, so it can report directly without going through a configuration file. No rewriting of configuration and no versioning are needed.
+- **KairoCode's server reports:** the server runs outside the pane and does not know `DSPCHR_SESSION`. If the launcher inside the pane reports, dspchr's resolution of the destination (the environment variable) can be used as it is.

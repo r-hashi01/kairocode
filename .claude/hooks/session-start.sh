@@ -11,7 +11,7 @@ green=unknown
 # A partial pass: the tests that start a sandbox were skipped (ADR 0031).
 [ "$green" = yes ] && [ -f .claude/.cache/last-green-partial ] && [ "$(cat .claude/.cache/last-green-partial)" = "$(source_hash)" ] &&
   green="yes, partial (the tests that start a sandbox were skipped; run scripts/check.sh outside a sandbox to have them all)"
-stage=$(grep -m1 '^今の段階' docs/milestones.md 2>/dev/null | sed 's/^今の段階: //')
+stage=$(grep -m1 '^Current stage' docs/milestones.md 2>/dev/null | sed 's/^Current stage: //')
 design=missing
 [ -f ../kairo/docs/kairocode/design.md ] && design=present
 cat <<MSG

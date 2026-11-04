@@ -1,5 +1,5 @@
 // Package clipboard reads the clipboard's image, for a paste (ADR 0026,
-// 追記 2026-10-28): the terminal sends only text, so the UI reads the
+// addendum 2026-10-28): the terminal sends only text, so the UI reads the
 // clipboard itself, with the system's own command, outside KairoCode's
 // sandbox (the clipboard is the desktop's). Only these commands, with
 // these arguments, on a key the user pressed: nothing from the model

@@ -6,7 +6,7 @@ import (
 )
 
 // /flow <name> --help says what a flow is to be given: its ARGS, or the
-// lines that read its words; and its phases (ADR 0003, 追記).
+// lines that read its words; and its phases (ADR 0003, addendum).
 func TestHelp(t *testing.T) {
 	withArgs := "DESCRIPTION = \"Comment on the issue to fix first\"\nARGS = \"<owner/repo> [label]\"\ndef main(input):\n    phase(\"read\")\n    owner, repo = input[\"args\"].split(\"/\")\n    phase(\"comment\")\n    return \"done\"\n"
 	h, err := Help("triage", []byte(withArgs), false)

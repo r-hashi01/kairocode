@@ -1,54 +1,54 @@
-# 0024 上限（トークン、金額、時間）と、プロバイダーごとの頻度の制限
+# 0024 Limits (tokens, cost, time) and per-provider rate limits
 
-- 状態: 提案（2026-10-22、利用者の判断で保留。KairoCode 自身が課金する、使えるモデルを絞る、といった事情が出たときに見直す）
-- 日付: 2026-10-21
-- 関連: 要件 FR-26（上限）・FR-27（頻度の制限）、設計 5 節（「予算の判定は記録された値から」）・9 節（kairo の不足 #4）、不変条件 2・7
+- Status: Proposed (2026-10-22; on hold by the user's decision. To be revisited when circumstances arise such as KairoCode itself billing, or narrowing the models that can be used)
+- Date: 2026-10-21
+- Related: requirements FR-26 (limits) and FR-27 (rate limits), design section 5 ("budget decisions are made from recorded values") and section 9 (kairo gap #4), invariants 2 and 7
 
-## 背景
+## Context
 
-要件 FR-26 は「セッションごとに、ステップの数、時間、トークン、金額の上限を設定できる。超えたら止めて人に知らせる」、FR-27 は「プロバイダーごとの RPM と TPM を守る」です。
+Requirement FR-26 is "be able to set limits per session on the number of steps, time, tokens and cost. When exceeded, stop and notify a person", and FR-27 is "respect each provider's RPM and TPM".
 
-今あるのは、ターンごとのステップの数の上限（`Agent.MaxSteps`、既定 50）だけです。使用量（`msg.Usage`）は、モデルの呼び出しごとに記録されています。
+What exists today is only a limit on the number of steps per turn (`Agent.MaxSteps`, default 50). Usage (`msg.Usage`) is recorded for each model call.
 
-kairo の `RunLimits` は、コードで書く API からは指定できません（kairo の不足 #4）。設計は「KairoCode の側で予算を判定して代える」としています。
+kairo's `RunLimits` cannot be specified from the code-written API (kairo gap #4). The design says "KairoCode decides the budget on its side instead".
 
-## 決定
+## Decision
 
-1. **設定:** `kairocode.json` の `limits` です。利用者のものとプロジェクトのものを読み、小さい方が効きます（プロジェクトが上限を緩めることはできない）。
-   - `{"limits": {"steps": 50, "turn_time": "30m", "session_tokens": 2000000, "session_cost": 5.0}}`。
-   - `steps`: ターンごとのステップの数（今の `MaxSteps`）。
-   - `turn_time`: ターンが始まってからの時間。
-   - `session_tokens`: セッションの入力と出力のトークンの合計（キャッシュの読みも数える）。
-   - `session_cost`: セッションの金額（米ドル）。
-   - どれも、書かなければ上限なし（`steps` は今の既定 50）。
-2. **判定は、記録された値だけで行う（不変条件 2）。**
-   - 上限の値は、`agent.load` の出力に記録します。ターンの途中で設定を変えても、そのターンは始めの上限で進みます。
-   - トークンと金額: セッションのそれまでのターンの使用量の合計を、ターンの入力（`TurnInput.Spent`）として渡し、ターンの中のモデルの応答の使用量を足していきます。どちらも記録された値です。モデルを呼ぶ前に判定します。
-   - 時間: ターンの始まりと今を `ctx.Now()` で比べます（記録された時刻）。
-   - 承認を待っている時間は、`turn_time` に数えません（人を待つ時間で止めないため）。
-3. **超えたら:** ターンを `Stopped: "limit"` で終え、どの上限を超えたかを返事に書き、クライアントに知らせます（ACP では `stopReason`、端末の対話では一行）。次のメッセージで続けられます。`session_*` を超えているときは、上限を上げるまで、次のターンもすぐ止まります。
-4. **金額:** 使用量に、モデルごとの値段の表（`internal/provider`）を掛けて出します。表にないモデルは、利用者の設定（`models.<名前>.price`）がなければ金額を数えず、`session_cost` があるときはそのことを知らせます。値段は記録せず、使用量を記録します（表を直すと、閲覧の金額も直る）。
-5. **CLI のエンジン:** CLI が使用量を報告するもの（Claude Code の結果、ACP の `usage`）は、同じく数えます。報告しないものは、トークンと金額の上限が効かないことを知らせます。
-6. **頻度の制限（FR-27）:** `model` のアクションの中（`internal/runtime`）で、プロバイダーごとの RPM と TPM を、デーモンのプロセスの中のトークンバケットで守ります。
-   - 設定は `kairocode.json` の `providers.<名前>.rpm`、`tpm` です。書かなければ制限しません。
-   - プロバイダーが 429 を返したら、`Retry-After` に従って `kairo.Retryable` で返します（kairo がやり直しの間隔を持つ）。
-   - バケットの待ちは、アクションの中の短い待ちです。人や外の出来事を待つのではないので、不変条件 7 の対象ではありません。デーモンは 1 つなので、プロセスをまたいだ制限は要りません（kairod の場合は設計 1 節のとおり別）。
-7. **版:** 上限の判定の呼び出しは増えません（判定はワークフローの中の計算）。ただし、止まる所が変わるので、ターンのワークフローの版を上げます（ADR 0020 と同じ版 5 でまとめる）。
+1. **Settings:** `limits` in `kairocode.json`. Both the user's and the project's are read, and the smaller takes effect (a project cannot loosen a limit).
+   - `{"limits": {"steps": 50, "turn_time": "30m", "session_tokens": 2000000, "session_cost": 5.0}}`.
+   - `steps`: the number of steps per turn (today's `MaxSteps`).
+   - `turn_time`: the time since the turn started.
+   - `session_tokens`: the session's total of input and output tokens (cache reads are counted too).
+   - `session_cost`: the session's cost (US dollars).
+   - For each, if not written, there is no limit (`steps` keeps today's default of 50).
+2. **Decisions use only recorded values (invariant 2).**
+   - The limit values are recorded in `agent.load`'s output. Even if the settings change during a turn, that turn proceeds with the limits from its start.
+   - Tokens and cost: the total usage of the session's earlier turns is passed as the turn's input (`TurnInput.Spent`), and the usage of model responses within the turn is added to it. Both are recorded values. The decision is made before calling the model.
+   - Time: compare the turn's start with now using `ctx.Now()` (a recorded time).
+   - Time spent waiting for approval is not counted in `turn_time` (so as not to stop on time spent waiting for a person).
+3. **When exceeded:** the turn ends with `Stopped: "limit"`, the reply says which limit was exceeded, and the client is notified (`stopReason` in ACP, one line in the terminal UI). It can continue with the next message. When a `session_*` limit is exceeded, the next turn also stops immediately until the limit is raised.
+4. **Cost:** computed by multiplying usage by a per-model price table (`internal/provider`). For models not in the table, unless the user's setting (`models.<name>.price`) exists, cost is not counted, and if `session_cost` is set, the user is told so. Prices are not recorded; usage is (fixing the table also fixes the amounts shown when viewing).
+5. **CLI engines:** for those whose CLI reports usage (Claude Code's result, ACP's `usage`), it is counted the same way. For those that do not report it, the user is told that the token and cost limits do not apply.
+6. **Rate limits (FR-27):** inside the `model` action (`internal/runtime`), each provider's RPM and TPM are respected with a token bucket in the daemon's process.
+   - The settings are `providers.<name>.rpm` and `tpm` in `kairocode.json`. If not written, there is no limit.
+   - When a provider returns 429, it returns `kairo.Retryable` following `Retry-After` (kairo holds the retry interval).
+   - Waiting on the bucket is a short wait inside an action. It does not wait for a person or an outside event, so invariant 7 does not apply. There is one daemon, so no limit across processes is needed (for kairod it is separate, as in design section 1).
+7. **Version:** no calls are added for the limit decisions (the decision is a computation inside the workflow). But where it stops changes, so the turn workflow's version is bumped (grouped into the same version 5 as ADR 0020).
 
-実装に現れるところ: `internal/workflows/turn.go`（判定）、`internal/workflows/session.go`（`Spent` を渡す）、`internal/runtime`（`agent.load` での上限、値段の表、頻度の制限）、`internal/provider`（値段、429）、`internal/acp` と `internal/tui`（知らせ）。
+Where this shows in the implementation: `internal/workflows/turn.go` (the decision), `internal/workflows/session.go` (passing `Spent`), `internal/runtime` (limits in `agent.load`, the price table, rate limits), `internal/provider` (prices, 429), `internal/acp` and `internal/tui` (notification).
 
-## 結果
+## Consequences
 
-- 上限を超えると止まり、人に知らせます。記録された値で決まるので、再開しても同じ所で止まります。
-- プロバイダーの頻度の制限を守ります。
-- テスト（実装のとき足す）
-  - 偽のプロバイダーの使用量で `session_tokens` を超えると、次のモデルの呼び出しの前に止まる。再開しても同じ所で止まる。
-  - `turn_time` を `kairotest` の時計で超えさせると止まる。承認の待ちの時間は数えない。
-  - `session_cost` が値段の表で計算される。表にないモデルは数えず、知らせる。
-  - プロジェクトの `limits` が、利用者の上限を緩めない。
-  - RPM を超える呼び出しが待たされる。429 で `Retryable` になる。
+- When a limit is exceeded, it stops and notifies a person. It is decided by recorded values, so on resume it stops at the same point.
+- Providers' rate limits are respected.
+- Tests (added during implementation)
+  - When the fake provider's usage exceeds `session_tokens`, it stops before the next model call. On resume it stops at the same point.
+  - Exceeding `turn_time` with `kairotest`'s clock stops it. Time waiting for approval is not counted.
+  - `session_cost` is computed with the price table. Models not in the table are not counted, and the user is told.
+  - A project's `limits` does not loosen the user's limits.
+  - Calls over the RPM are made to wait. A 429 becomes `Retryable`.
 
-## 検討した代替案
+## Alternatives considered
 
-- **kairo の `RunLimits` を待つ（kairo の不足 #4）:** kairo のステップの上限は、KairoCode のトークンや金額を知りません。KairoCode の側で判定する方が、要件に合います。
-- **上限をアクションの中（`model` の中）で判定する:** 記録されない値（そのときの合計）で止めることになり、再開で止まる所が変わり得ます。ワークフローの中で、記録された使用量から判定します。
+- **Wait for kairo's `RunLimits` (kairo gap #4):** kairo's step limit does not know about KairoCode's tokens or cost. Deciding on KairoCode's side fits the requirements better.
+- **Decide limits inside the action (inside `model`):** it would stop on an unrecorded value (the total at that moment), and where it stops could change on resume. Decide inside the workflow, from recorded usage.

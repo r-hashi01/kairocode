@@ -1,129 +1,129 @@
-# 0005 KairoCode が動かすプロセスは、Codex にならった OS の sandbox の中で動かす
+# 0005 Run the processes KairoCode starts inside an OS sandbox modeled on Codex
 
-- 状態: 承認（2026-10-09）
-- 日付: 2026-10-09
-- 関連: 要件 FR-6、FR-7、FR-10、FR-12、NFR-7、NFR-8、設計 3.2 節・4 節、ADR 0002（権限の規則）、0003（ワークフロー）、AGENTS.md の不変条件 4・6
+- Status: Accepted (2026-10-09)
+- Date: 2026-10-09
+- Related: requirements FR-6, FR-7, FR-10, FR-12, NFR-7, NFR-8; design sections 3.2 and 4; ADR 0002 (permission rules), 0003 (workflows); invariants 4 and 6 in AGENTS.md
 
-## 背景
+## Context
 
-bash のツールは、作用の型が「実」で、結果が不明なら人に確認します（設計 3.2 節）。権限の規則（ADR 0002）だけで守ると、安全にするには「確認」を増やすしかなく、opencode と同等の手間でこなす、という目標から離れます。
+The bash tool's effect type is "real", and if its result is unknown, a person is asked (design section 3.2). If we protect only with permission rules (ADR 0002), the only way to make it safe is to add more "ask"s, which moves away from the goal of getting work done with the same effort as opencode.
 
-Codex CLI は、実行するコマンドを OS の sandbox に入れ、作業ディレクトリの外への書き込みとネットワークを止めています。利用者は、この方向を良しとしました（2026-10-09）。
+Codex CLI puts the commands it runs in an OS sandbox, stopping writes outside the working directory and the network. The user approved of this direction (2026-10-09).
 
-2026-10-09 に、`github.com/openai/codex` の main（commit `2351d9e1`）のソースを調べました。以下のパスは `https://github.com/openai/codex/blob/main/` からの相対です。
+On 2026-10-09 we looked into the source of `github.com/openai/codex` main (commit `2351d9e1`). The paths below are relative to `https://github.com/openai/codex/blob/main/`.
 
 - **macOS:**
-  - `/usr/bin/sandbox-exec -p <SBPL> -D<KEY>=<path>… -- <cmd>` で動かします（`codex-rs/sandboxing/src/seatbelt.rs`）。
-  - ポリシーは `(deny default)` から始まり、読み取りは全体を許し、書き込みは writable root ごとに許します。
-  - writable root の直下の `.git`、`.agents`、`.codex`、`.aws` は書き込みから除き、それらの祖先の改名と削除も止めています。
-  - パスは文字列に埋め込まず、`-D` の引数で渡します。
+  - It runs `/usr/bin/sandbox-exec -p <SBPL> -D<KEY>=<path>… -- <cmd>` (`codex-rs/sandboxing/src/seatbelt.rs`).
+  - The policy starts from `(deny default)`, allows reading everything, and allows writing per writable root.
+  - `.git`, `.agents`, `.codex` and `.aws` directly under a writable root are excluded from writing, and renaming and deleting their ancestors is stopped too.
+  - Paths are not embedded in the string; they are passed as `-D` arguments.
 - **Linux:**
-  - bubblewrap を使います。`--ro-bind / /` の上に writable root を `--bind` し、`.git` を読み取り専用に戻します。名前空間は `--unshare-user`、`--unshare-pid`、ネットワークを止めるときは `--unshare-net` です。
-  - さらに、自分自身を補助のプロセスとして起動し直し（`codex-linux-sandbox`）、`PR_SET_NO_NEW_PRIVS` と seccomp をかけます。
-  - Landlock は古い道として扱われています。
-- **モード:** `read-only`、`workspace-write`、`danger-full-access` の 3 つです。workspace-write の writable root は、作業ディレクトリ、`/tmp`、`$TMPDIR`、設定で足したものです。ネットワークは既定で止めます。
-- **昇格:** モデルは、ツールの引数（`sandbox_permissions`、`justification`）で sandbox の外での実行を求められます。sandbox に拒まれた失敗は、終了コード（Linux の SIGSYS）と出力の語で推定して見分けます。
-- **環境変数:** 子のプロセスの環境変数は、いったん空にしてから、方針で作り直します。
-- **ライセンス:** Apache-2.0 です。基本のポリシーは Chromium（BSD）に由来します。
-- **既知の問題:**
-  - GHSA-w5fx-fh39-j5rw: モデルが渡した `cwd` を writable root として扱い、作業ディレクトリの外に書けた。
-  - Ubuntu 24.04 の AppArmor による userns の制限で、bubblewrap が動かない。
-  - `sandbox-exec` は Apple が非推奨にしている。
+  - It uses bubblewrap. On top of `--ro-bind / /`, it `--bind`s the writable roots and makes `.git` read-only again. The namespaces are `--unshare-user` and `--unshare-pid`, and `--unshare-net` when the network is stopped.
+  - It also starts itself again as a helper process (`codex-linux-sandbox`) and applies `PR_SET_NO_NEW_PRIVS` and seccomp.
+  - Landlock is treated as the old path.
+- **Modes:** three: `read-only`, `workspace-write` and `danger-full-access`. The writable roots of workspace-write are the working directory, `/tmp`, `$TMPDIR` and those added in the configuration. The network is stopped by default.
+- **Escalation:** the model can ask to run outside the sandbox through the tool's arguments (`sandbox_permissions`, `justification`). A failure refused by the sandbox is told apart by guessing from the exit code (SIGSYS on Linux) and words in the output.
+- **Environment variables:** the child process's environment variables are first emptied and then rebuilt by a policy.
+- **License:** Apache-2.0. The base policy comes from Chromium (BSD).
+- **Known problems:**
+  - GHSA-w5fx-fh39-j5rw: it treated the `cwd` passed by the model as a writable root, so it could write outside the working directory.
+  - bubblewrap does not run because of the userns restriction by AppArmor on Ubuntu 24.04.
+  - Apple has deprecated `sandbox-exec`.
 
-## 決定
+## Decision
 
-### 対象
+### What it covers
 
-- KairoCode が起動するコマンドは、すべて sandbox の中で動かします。対象は、bash のツール、ワークフローの `tool("bash", …)`（ADR 0003）、コマンドの `` !`shell` ``（ADR 0002）です。
-- 対象外のものが 2 つあります。どちらも利用者が設定したものです。
-  - LSP のサーバー（長く動き続けるもの）
-  - MCP のサーバー
+- Every command KairoCode starts runs inside the sandbox. This covers the bash tool, a workflow's `tool("bash", …)` (ADR 0003), and a command's `` !`shell` `` (ADR 0002).
+- Two things are not covered. Both are set up by the user.
+  - LSP servers (which keep running for a long time)
+  - MCP servers
 
-### モード
+### Modes
 
-| モード | 書き込み | ネットワーク | 使うところ |
+| Mode | Writes | Network | Where it is used |
 |---|---|---|---|
-| `read-only` | なし | なし | plan のモード、`effect_limit: read` のエージェント |
-| `workspace-write` | 作業ディレクトリ、`/tmp`、`$TMPDIR`、設定で足した root | なし（設定で開ける） | build のモード（既定） |
-| `full-access` | 制限なし | あり | 昇格を承認したコマンドだけ |
+| `read-only` | none | none | plan mode, agents with `effect_limit: read` |
+| `workspace-write` | the working directory, `/tmp`, `$TMPDIR`, roots added in the configuration | none (can be opened in the configuration) | build mode (default) |
+| `full-access` | no limit | yes | only commands whose escalation was approved |
 
-- **writable root は、セッションを始めたときの作業ディレクトリで固定します。** モデルが渡す `cwd` は、その中に正規化できるときだけ使います（GHSA-w5fx-fh39-j5rw の教訓）。パスの途中にシンボリックリンクがある root は拒否します。
-- **書き込みから守るもの:** writable root の直下の `.git`、`.kairocode`、`.opencode`、`.claude`、`.agents` は、書き込みを止めます。これらの祖先の改名と削除も止めます。
-  - ここには KairoCode の hook と権限の設定（ADR 0002、0003）が置かれます。sandbox の中のコマンドが、自分の権限や自動で走る hook を書き換えられないようにするためです。
-  - `.git` の中身を変える操作（commit など）は、git のツール（設計 3 節の冪等な git の操作）で行います。
+- **The writable root is fixed to the working directory at the time the session started.** The `cwd` the model passes is used only when it can be normalized to a path inside it (the lesson of GHSA-w5fx-fh39-j5rw). A root with a symbolic link along its path is refused.
+- **What is protected from writes:** writes to `.git`, `.kairocode`, `.opencode`, `.claude` and `.agents` directly under a writable root are stopped. Renaming and deleting their ancestors is stopped too.
+  - KairoCode's hooks and permission settings (ADR 0002, 0003) live here. This is so that a command inside the sandbox cannot rewrite its own permissions or the hooks that run automatically.
+  - Operations that change the contents of `.git` (commit and so on) are done with the git tools (the idempotent git operations of design section 3).
 
-### 作用の型との関係
+### Relation to effect types
 
-- `read-only` の sandbox の中のコマンドは、書き込みもネットワークもできません。そのため、作用の型を `tools.Read` として扱えます。結果が不明でもやり直してよく、人に訊く必要がありません。
-- `workspace-write` の中のコマンドは、これまでどおり `tools.Real` です。結果が不明なら要確認で止めます（不変条件 4）。sandbox は、作用の及ぶ範囲を作業ディレクトリに限るものであり、二重に起きないことを保証するものではありません。
+- A command inside the `read-only` sandbox can neither write nor use the network. So its effect type can be treated as `tools.Read`. Even if its result is unknown, it may be retried, and no person needs to be asked.
+- A command inside `workspace-write` is still `tools.Real`, as before. If its result is unknown, it stops at blocked (needs confirmation) (invariant 4). The sandbox limits the reach of the effect to the working directory; it does not guarantee that nothing happens twice.
 
-### 権限の規則との関係
+### Relation to permission rules
 
-- 権限の規則（ADR 0002）の判定は、これまでどおり先に行います。sandbox は、その後の被害の範囲を限るものです。
-- 既定の規則を、sandbox を前提にして緩めます。
-  - build のエージェントの bash は、sandbox の中なら `allow` です。
-  - 昇格（sandbox の外での実行）は、規則によらず必ず `ask` です。
-- **昇格の流れ:**
-  - モデルは bash のツールの引数で `sandbox: "escalate"` と理由（`justification`）を渡します。
-  - KairoCode は理由を添えて利用者に承認を求めます（`kairo.WaitFor`。ACP では `session/request_permission`）。
-  - 承認されたら `full-access` で 1 回だけ動かします。承認を「以後このコマンドの形は許可」として記録する選択肢も用意します。
-- **sandbox に拒まれた失敗:**
-  - 終了コードと出力から推定して、昇格を提案する文をモデルへの結果に足します。
-  - 自動で sandbox の外で動かし直すことはしません。
+- The permission rules (ADR 0002) are still decided first, as before. The sandbox limits the extent of damage after that.
+- The default rules are relaxed on the assumption of the sandbox.
+  - bash for the build agent is `allow` when inside the sandbox.
+  - Escalation (running outside the sandbox) is always `ask`, whatever the rules.
+- **The escalation flow:**
+  - The model passes `sandbox: "escalate"` and a reason (`justification`) in the bash tool's arguments.
+  - KairoCode asks the user for approval with the reason attached (`kairo.WaitFor`; `session/request_permission` in ACP).
+  - If approved, it runs once with `full-access`. There is also an option to record the approval as "allow this shape of command from now on".
+- **A failure refused by the sandbox:**
+  - Guessing from the exit code and the output, a sentence suggesting escalation is added to the result for the model.
+  - It is not automatically run again outside the sandbox.
 
-### OS ごとの仕組み
+### The mechanism on each OS
 
 - **macOS:**
-  - `/usr/bin/sandbox-exec` を絶対パスで使います。
-  - SBPL は Codex のポリシー（`seatbelt_base_policy.sbpl`、`seatbelt_network_policy.sbpl` ほか）を元にします。帰属表示と変更点の明記をつけて、`third_party/codex-sandbox/` に置きます（Apache-2.0 と Chromium の BSD）。
-  - パスは `-D` の引数で渡します。
+  - `/usr/bin/sandbox-exec` is used by its absolute path.
+  - The SBPL is based on Codex's policies (`seatbelt_base_policy.sbpl`, `seatbelt_network_policy.sbpl` and others). It goes in `third_party/codex-sandbox/` with attribution and a clear statement of changes (Apache-2.0 and Chromium's BSD).
+  - Paths are passed as `-D` arguments.
 - **Linux:**
-  - bubblewrap で名前空間とファイルシステムを作ります。
-  - 自分自身を補助のプロセス（`kairocode __sandbox`。引数で役を切り替える）として起動し直し、`PR_SET_NO_NEW_PRIVS` と seccomp をかけてから、目的のコマンドを exec します。
-  - seccomp のフィルタは、cgo の要らない純粋な Go のもの（`github.com/elastic/go-seccomp-bpf`）で作ります。単一のバイナリで配るためです（ADR 0001）。
-- **sandbox が使えないとき（fail-closed）:** bubblewrap が無い、userns が使えない（AppArmor、コンテナ）、`sandbox-exec` が無い、などの場合です。
-  - **黙って sandbox の外に落としません。** 起動時に知らせ、bash は毎回 `ask` にします。
-  - コンテナのように外側で隔離している環境のために、設定 `sandbox: external` を用意します。明示的に選んだときだけ、sandbox なしで動かします。
+  - bubblewrap builds the namespaces and the file system.
+  - It starts itself again as a helper process (`kairocode __sandbox`; the role is switched by an argument), applies `PR_SET_NO_NEW_PRIVS` and seccomp, and then execs the target command.
+  - The seccomp filter is built with a pure Go library that needs no cgo (`github.com/elastic/go-seccomp-bpf`), to distribute a single binary (ADR 0001).
+- **When the sandbox cannot be used (fail-closed):** cases such as no bubblewrap, userns not available (AppArmor, containers), or no `sandbox-exec`.
+  - **It does not silently fall back to running outside the sandbox.** It tells the user at startup, and bash becomes `ask` every time.
+  - For environments isolated from the outside, such as containers, there is a setting `sandbox: external`. Only when it is chosen explicitly does it run without the sandbox.
 
-### 環境変数
+### Environment variables
 
-- 子のプロセスの環境変数は、いったん空にしてから作り直します。
-- 名前に `KEY`、`SECRET`、`TOKEN`、`PASSWORD` を含むものは、**既定で除きます**（Codex の既定より安全側。不変条件 6）。設定 `env.include` で、名前を挙げて渡せます。
-- `KAIROCODE_SANDBOX=<モード>` を設定します。ネットワークを止めたときは `KAIROCODE_SANDBOX_NETWORK_DISABLED=1` も設定します。
+- The child process's environment variables are first emptied and then rebuilt.
+- Those whose names contain `KEY`, `SECRET`, `TOKEN` or `PASSWORD` are **removed by default** (safer than Codex's default; invariant 6). The setting `env.include` can pass them by name.
+- `KAIROCODE_SANDBOX=<mode>` is set. When the network is stopped, `KAIROCODE_SANDBOX_NETWORK_DISABLED=1` is set too.
 
-### この ADR で決めないこと
+### What this ADR does not decide
 
-- ネットワークの許可リスト（プロキシ）。Codex の `network-proxy` のような仕組みは、必要になったら別の ADR で決めます。
-- ワークフローのスクリプトの隔離。ワークフローは Starlark で書くので（ADR 0003）、言語の側で隔離されます。OS の sandbox は要りません。ワークフローから呼ぶ `tool("bash", …)` は、この ADR の sandbox を通ります。
+- A network allowlist (a proxy). A mechanism like Codex's `network-proxy` will be decided in a separate ADR when needed.
+- Isolating workflow scripts. Workflows are written in Starlark (ADR 0003), so they are isolated by the language. No OS sandbox is needed. `tool("bash", …)` called from a workflow goes through this ADR's sandbox.
 
-### 追記（2026-10-09、M1 の実装で詰めたこと）
+### Addendum (2026-10-09, what was settled while implementing M1)
 
-- **守る名前に `kairocode.json` を加えました。** プロジェクトの権限の規則（ADR 0002）がここにあります。sandbox の中のコマンドがこれを書き換えると、次のターンから自分の権限を広げられてしまうためです。
-- **書き込める root が入れ子になる場合:** 作業ディレクトリが `$TMPDIR` の下にあると、`$TMPDIR` の許可の規則が、作業ディレクトリの `.git` を書けるようにしてしまいました（macOS のテストで見つけた）。各 root の許可から、その下にあるすべての root の守る名前を除外します。
-- **Linux:** 自分自身を補助のプロセスとして起動し直す形はやめました。bubblewrap の `--seccomp <fd>` に、`go-seccomp-bpf` で作ったフィルタを直接渡します。拒むのは `ptrace`、`process_vm_readv`、`process_vm_writev`、`io_uring_*` です（Codex と同じ）。ネットワークは `--unshare-net` で切ります。
-- **依存（2026-10-28 に書き足し）:** フィルタの前置き（arch の確かめ、Unix ソケットの拒否）は、`golang.org/x/net/bpf` の命令で組み、`bpf.Assemble` で `go-seccomp-bpf` のフィルタとつなぎます。`golang.org/x/net` は `go-seccomp-bpf` がもともと使っている依存で、これを直接 import しています（2026-10-09 から）。使うのは `internal/sandbox` の Linux の部分だけです。
-- **Linux の既知の限界:** まだ存在しない守る名前（たとえば `.kairocode`）が作られることは防げません。読み取り専用で bind するには、その名前が存在している必要があります。存在しない名前の場所に読み取り専用のものを置くと、ホストの側に空のディレクトリが残ります（空の `.git` は git を混乱させる）。存在している守る名前は守れます。macOS では、存在しない名前も作れません。Codex にも同じ未解決の issue（#40685）があります。
-- **Linux で `kairocode.json` が無いとき:** プロジェクトの直下に `kairocode.json` が無いと（よくある場合）、sandbox の中の bash がそれを作り、次のターンから自分の権限を広げられます。上の限界の、最も影響の大きい例です。write と edit のツールは、この名前を拒みます。bash については、利用者が Linux で使うときに手当てを決めます（たとえば、ターンの始めに作られた `kairocode.json` を読まない）。
-- **write、edit と git のツール（2026-10-09、M1 のレビュー）:** write と edit も、守る名前を拒みます。sandbox の外で動く `git_push` は、リポジトリの hook を動かしません（`-c core.hooksPath=/dev/null push --no-verify`）。コマンドを sandbox の外で始める道（`exec.Command`、`exec.Cmd` の直接の組み立て、`os.StartProcess`、`sandbox.FullAccess`）は、決まったファイルの外では使えないことを、検査（`internal/invariants`）で確かめます。
-- **テスト:** macOS と、Linux（Docker の `golang:1.27` のイメージに bubblewrap を入れ、`--privileged` で動かしたもの）の両方で通しました。CI が無いので、Linux のテストは手で流しています。
+- **`kairocode.json` was added to the protected names.** The project's permission rules (ADR 0002) are here. If a command inside the sandbox rewrote it, it could widen its own permissions from the next turn on.
+- **When writable roots are nested:** when the working directory was under `$TMPDIR`, the allow rule for `$TMPDIR` made the working directory's `.git` writable (found in a macOS test). From each root's allow rule, the protected names of every root below it are excluded.
+- **Linux:** the shape of starting itself again as a helper process was dropped. A filter built with `go-seccomp-bpf` is passed directly to bubblewrap's `--seccomp <fd>`. What is refused is `ptrace`, `process_vm_readv`, `process_vm_writev` and `io_uring_*` (the same as Codex). The network is cut with `--unshare-net`.
+- **Dependencies (added 2026-10-28):** the filter's prefix (checking the arch, refusing Unix sockets) is assembled with `golang.org/x/net/bpf` instructions and joined to the `go-seccomp-bpf` filter with `bpf.Assemble`. `golang.org/x/net` is a dependency `go-seccomp-bpf` already uses, and we import it directly (since 2026-10-09). Only the Linux part of `internal/sandbox` uses it.
+- **A known limit on Linux:** it cannot prevent a protected name that does not exist yet (for example `.kairocode`) from being created. Binding something read-only requires the name to exist. Putting a read-only thing at the place of a name that does not exist leaves an empty directory on the host side (an empty `.git` confuses git). Protected names that exist can be protected. On macOS, names that do not exist cannot be created either. Codex has the same unresolved issue (#40685).
+- **When `kairocode.json` is absent on Linux:** if there is no `kairocode.json` directly under the project (a common case), bash inside the sandbox can create it and widen its own permissions from the next turn on. This is the highest-impact case of the limit above. The write and edit tools refuse this name. For bash, the remedy will be decided when the user uses it on Linux (for example, not reading a `kairocode.json` created at the start of a turn).
+- **write, edit and the git tools (2026-10-09, M1's review):** write and edit also refuse the protected names. `git_push`, which runs outside the sandbox, does not run the repository's hooks (`-c core.hooksPath=/dev/null push --no-verify`). A check (`internal/invariants`) confirms that the ways of starting a command outside the sandbox (`exec.Command`, building an `exec.Cmd` directly, `os.StartProcess`, `sandbox.FullAccess`) are not used outside designated files.
+- **Tests:** they pass on both macOS and Linux (the Docker `golang:1.27` image with bubblewrap installed, run with `--privileged`). There is no CI, so the Linux tests are run by hand.
 
-## 結果
+## Consequences
 
-- 依存に `github.com/elastic/go-seccomp-bpf` を足します。
-- `third_party/codex-sandbox/` に、Codex の SBPL とライセンス、NOTICE を置きます。
-- 不変条件を 1 つ足します（AGENTS.md）: **「KairoCode が起動するコマンドは、sandbox の中で動かす。sandbox の外で動かすのは、利用者が承認した昇格と、明示した `sandbox: external` のときだけ」。** sandbox を使わずに `os/exec` でコマンドを起動するコードは、`internal/sandbox` の外に置かせません。検査を `internal/invariants` に足します。
-- テスト（M1 の受け入れ条件に足す。macOS と Linux の両方で流す）:
-  - `TestSandboxDeniesWriteOutsideWorkspace`、`TestSandboxProtectsGitAndConfig`（`.git`、`.kairocode` などへの書き込みと、その改名が拒否される）。
-  - `TestSandboxDeniesNetwork`、`TestSandboxStripsSecrets`。
-  - `TestSandboxIgnoresModelCwdOutsideRoot`（GHSA-w5fx-fh39-j5rw と同じ形）。
-  - `TestSandboxFailsClosed`（sandbox が使えないとき、bash が毎回 `ask` になる）。
-  - `TestEscalationAlwaysAsks`。
-- CI の Linux のランナーでは、userns の制限（Ubuntu 24.04 の AppArmor）を設定で外す必要があります。外せない環境のためのテストは、fail-closed の側を確かめます。
-- `sandbox-exec` は Apple が非推奨にしています。無くなったときは、macOS での隔離をやり直す必要があります。Codex も同じ立場です。
+- `github.com/elastic/go-seccomp-bpf` is added as a dependency.
+- Codex's SBPL, its license and a NOTICE go in `third_party/codex-sandbox/`.
+- One invariant is added (AGENTS.md): **"Commands KairoCode starts run inside the sandbox. They run outside the sandbox only for an escalation the user approved and for an explicit `sandbox: external`."** Code that starts commands with `os/exec` without the sandbox is not allowed outside `internal/sandbox`. A check is added to `internal/invariants`.
+- Tests (added to M1's acceptance criteria; run on both macOS and Linux):
+  - `TestSandboxDeniesWriteOutsideWorkspace`, `TestSandboxProtectsGitAndConfig` (writes to `.git`, `.kairocode` and so on, and renaming them, are refused).
+  - `TestSandboxDeniesNetwork`, `TestSandboxStripsSecrets`.
+  - `TestSandboxIgnoresModelCwdOutsideRoot` (the same shape as GHSA-w5fx-fh39-j5rw).
+  - `TestSandboxFailsClosed` (when the sandbox cannot be used, bash becomes `ask` every time).
+  - `TestEscalationAlwaysAsks`.
+- On CI's Linux runners, the userns restriction (AppArmor on Ubuntu 24.04) has to be lifted in the configuration. For environments where it cannot be lifted, the tests check the fail-closed side.
+- Apple has deprecated `sandbox-exec`. If it goes away, isolation on macOS will have to be redone. Codex is in the same position.
 
-## 検討した代替案
+## Alternatives considered
 
-- **権限の規則だけで守る:** 安全にするには「確認」を増やすしかなく、操作の手間が増えます。規則のすり抜け（同じ作用の別の書き方）も防げません。
-- **Codex の `codex sandbox` を外のコマンドとして呼ぶ:** 実装は要りませんが、Codex を入れる必要があり、この CLI には安定の保証がありません。
-- **Linux で Landlock を主に使う:** Codex でも古い道として扱われています。ネットワークと Unix ソケットの隔離が足りません。
-- **コンテナ（Docker など）の中で動かす:** 隔離は強いですが、Docker が要り、起動も遅くなります。手元で使う道具には重すぎます。コンテナの中で KairoCode を動かす使い方は、`sandbox: external` で支えます。
+- **Protect only with permission rules:** the only way to make it safe is to add more "ask"s, which adds effort. It also cannot prevent slipping past the rules (other ways of writing the same effect).
+- **Call Codex's `codex sandbox` as an outside command:** no implementation is needed, but Codex has to be installed, and this CLI has no stability guarantee.
+- **Mainly use Landlock on Linux:** Codex also treats it as the old path. Isolation of the network and Unix sockets is not enough.
+- **Run inside a container (Docker and so on):** the isolation is strong, but it needs Docker and starts slower. It is too heavy for a tool used locally. Using KairoCode inside a container is supported with `sandbox: external`.
