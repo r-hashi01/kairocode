@@ -176,6 +176,25 @@ func (cl *Client) InstallProvider(ctx context.Context, id, version string) error
 type Command struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	// Meta: what KairoCode's agent tells of its own commands.
+	Meta *CommandMeta `json:"_meta,omitempty"`
+}
+
+// OptionsMeta is the key, in a command's _meta, of the words it takes
+// after its name.
+const OptionsMeta = "kairocode/options"
+
+// CommandMeta is a command's _meta as KairoCode's agent sends it.
+type CommandMeta struct {
+	Options []CommandOption `json:"kairocode/options,omitempty"`
+}
+
+// CommandOption is what a command takes after its name: a word (or a few,
+// as "marketplace add"), what follows it, and what it does.
+type CommandOption struct {
+	Name        string `json:"name"`
+	Hint        string `json:"hint,omitempty"`
+	Description string `json:"description"`
 }
 
 // PermissionRequest is a session/request_permission.
