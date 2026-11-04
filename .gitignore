@@ -7,3 +7,4 @@
 internal/runtime/hook-outside-*
 # the build cache of scripts/check.sh in a sandbox (ADR 0031)
 /.cache/
+/dist/
