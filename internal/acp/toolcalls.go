@@ -11,6 +11,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/locale"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -151,11 +152,25 @@ func (a *agent) ask(session string, p api.Pending) {
 		if resp.Outcome.Outcome != "selected" {
 			return
 		}
+		// A call only this request made (a question, a review, Claude
+		// Code's or a flow's call) is settled with the answer: a client
+		// marks the call by the option's kind (Zed, a reject kind as
+		// refused), and the call says nothing more. It is settled before
+		// the answer is given, so it shows before what the answer leads to;
+		// an answer not taken asks again, and the call is pending again.
+		settle := func(status, text string) {
+			if !known || question { // a question's call is its own too
+				a.update(session, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "status": status,
+					"content": []any{map[string]any{"type": "content", "content": textBlock(text)}},
+					"_meta":   map[string]any{SettledMeta: true}})
+			}
+		}
 		if question {
 			var i int
 			if _, err := fmt.Sscanf(resp.Outcome.OptionID, "answer_%d", &i); err != nil || i < 0 || i >= len(p.Options) {
 				return // not an answer offered: it still waits in kairo
 			}
+			settle("completed", "Answered: "+p.Options[i])
 			if err := a.b.Answer(a.ctx, p.Key, p.Options[i]); err != nil && !errors.Is(err, api.ErrAnswered) {
 				a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
 			}
@@ -164,6 +179,7 @@ func (a *agent) ask(session string, p api.Pending) {
 		if resp.Outcome.OptionID == TryOption && p.Try != nil {
 			// The words to try it with come as the reason; the approval
 			// is asked again when the try ends.
+			settle("in_progress", "Trying it first: it is asked again when the try ends")
 			if err := a.b.TryFlow(a.ctx, p.Key, resp.Meta.Reason); err != nil && !errors.Is(err, api.ErrAnswered) {
 				a.o.Logger.Warn("acp: trying the flow", "key", p.Key, "err", err)
 			}
@@ -174,11 +190,26 @@ func (a *agent) ask(session string, p api.Pending) {
 			return
 		}
 		// A refusal may say what to do instead: the model is told.
+		switch {
+		case p.Kind == "review" && ok:
+			settle("completed", "It took effect")
+		case p.Kind == "review":
+			settle("completed", "It did not take effect")
+		case ok:
+			settle("completed", "Allowed")
+		default:
+			settle("failed", strings.TrimSpace("Refused "+resp.Meta.Reason))
+		}
 		if err := a.b.Approve(a.ctx, p.Key, ok, resp.Meta.Reason); err != nil && !errors.Is(err, api.ErrAnswered) {
 			a.o.Logger.Warn("acp: answering", "key", p.Key, "err", err)
 		}
 	}()
 }
+
+// SettledMeta marks, in a tool_call_update's _meta, the call a request
+// made settled with its answer: for a client that marks the call by the
+// option chosen. kairo's terminal shows the answer its own way.
+const SettledMeta = "kairocode/settled"
 
 // FlowMeta is the key of a plan update's _meta that holds the flow's chart
 // and states (flowchart.View), for a client that draws it (kairo's TUI).
@@ -242,6 +273,9 @@ func title(tool string, input json.RawMessage) string {
 	keys := []string{"path", "command", "pattern", "url"}
 	if tool == "fetch" || tool == "http" { // judged by their URL alone (ADR 0013)
 		keys = []string{"url"}
+	}
+	if tool == tools.FlowWriteTool.Name || tool == tools.FlowPublishTool.Name { // the flow's name
+		keys = []string{"name"}
 	}
 	for _, k := range keys {
 		if v, ok := args[k].(string); ok && v != "" {

@@ -1130,16 +1130,25 @@ func TestACPFlowQuestion(t *testing.T) {
 	}
 	allow(c, req, p.Options[1].OptionID)
 	_, before := c.until(isResponse(id))
-	got := ""
+	got, settled := "", false
 	for _, m := range before {
 		if m.Method == "session/update" {
 			if u := updateOf(t, m); u.SessionUpdate == "agent_message_chunk" {
 				got += u.text()
 			}
+			// The call the question made is settled with the answer, not
+			// left as the option's kind says (Zed: refused).
+			ps := string(m.Params)
+			if strings.Contains(ps, `"tool_call_update"`) && strings.Contains(ps, `"status":"completed"`) && strings.Contains(ps, "Answered: right") {
+				settled = true
+			}
 		}
 	}
 	if got != "chose right" {
 		t.Fatalf("reply %q", got)
+	}
+	if !settled {
+		t.Fatal("the question's call was not settled with its answer")
 	}
 }
 
@@ -1475,6 +1484,58 @@ func TestACPTodoPlan(t *testing.T) {
 	})
 	if !strings.Contains(string(plan.Params), `"content":"look"`) || !strings.Contains(string(plan.Params), `"status":"in_progress"`) {
 		t.Fatalf("plan %s", plan.Params)
+	}
+}
+
+// flow_write's call is named by the flow, and shows the draft it writes as
+// a diff, while it runs and with its result (whose text says only the
+// flow's shape).
+func TestACPFlowWriteShowsTheDraft(t *testing.T) {
+	ws := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	src := "DESCRIPTION = \"say hi\"\n\ndef main(input):\n    return agent(prompt = \"hi\").output\n"
+	in, _ := json.Marshal(map[string]any{"name": "hello", "source": src})
+	r, err := runtime.Open(ctx, runtime.Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "acp",
+		Provider: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+			{Tools: []provider.FakeTool{{Name: "flow_write", Input: in}}},
+			{Text: "written"},
+		}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	c := start(t, ctx, &local{r: r})
+	initialize(c)
+	resp, _ := c.until(isResponse(c.request("session/new", map[string]any{"cwd": ws, "mcpServers": []any{}})))
+	var out struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		t.Fatal(err)
+	}
+	id := prompt(c, out.SessionID, "write a flow")
+	_, before := c.until(isResponse(id))
+	var started, ended string
+	for _, m := range before {
+		ps := string(m.Params)
+		switch {
+		case m.Method != "session/update" || !strings.Contains(ps, `"type":"diff"`):
+		case strings.Contains(ps, `"sessionUpdate":"tool_call"`):
+			started = ps
+		case strings.Contains(ps, `"status":"completed"`):
+			ended = ps
+		}
+	}
+	draft := filepath.Join(ws, ".kairocode", "workflows", "drafts", "hello.star")
+	path, _ := json.Marshal(draft)
+	for what, ps := range map[string]string{"start": started, "result": ended} {
+		if ps == "" || !strings.Contains(ps, `"path":`+string(path)) || !strings.Contains(ps, `say hi`) {
+			t.Fatalf("the draft is not shown with its %s: %s", what, ps)
+		}
+	}
+	if !strings.Contains(started, `"title":"flow_write hello"`) {
+		t.Fatalf("the call's title: %s", started)
 	}
 }
 

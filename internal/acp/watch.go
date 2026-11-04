@@ -2,9 +2,13 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
+	"path/filepath"
 	"sync"
 
 	"github.com/r-hashi01/kairocode/internal/api"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
+	"github.com/r-hashi01/kairocode/internal/flowfile"
 	"github.com/r-hashi01/kairocode/internal/tools"
 )
 
@@ -131,13 +135,47 @@ func (a *agent) watch(session string) (*sessionWatch, error) {
 	return w, nil
 }
 
+// draftDiff is the draft a flow_write starting writes, as a diff from the
+// draft there is (a client shows it as it shows an edit's), kept to show
+// with its result too: its text says only the flow's shape.
+func (a *agent) draftDiff(session string, ev api.Event) map[string]any {
+	if ev.Tool != tools.FlowWriteTool.Name {
+		return nil
+	}
+	var in struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(ev.Input, &in) != nil || !flowchart.ValidName(in.Name) {
+		return nil
+	}
+	dir := a.dirOf(session)
+	d := map[string]any{"type": "diff", "path": filepath.Join(dir, flowfile.Path(in.Name, true)), "oldText": nil, "newText": in.Source}
+	if dir != "" {
+		if old, err := flowfile.Read(dir, in.Name, true); err == nil {
+			d["oldText"] = string(old)
+		}
+	}
+	a.mu.Lock()
+	if a.drafts == nil {
+		a.drafts = map[string]map[string]any{}
+	}
+	a.drafts[ev.Call] = d
+	a.mu.Unlock()
+	return d
+}
+
 // event maps one event to ACP.
 func (a *agent) event(session string, ev api.Event) {
 	switch ev.Type {
 	case api.EventToken:
 		a.update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(ev.Text)})
 	case api.EventToolStart:
-		a.update(session, toolCall(ev.Call, ev.Tool, ev.Input, "in_progress"))
+		u := toolCall(ev.Call, ev.Tool, ev.Input, "in_progress")
+		if d := a.draftDiff(session, ev); d != nil {
+			u["content"] = []any{d}
+		}
+		a.update(session, u)
 		if ev.Tool == tools.TodoTool.Name {
 			// The model's todo list is the session's plan (ADR 0022).
 			if todos, err := tools.Todos(ev.Input); err == nil {
@@ -149,7 +187,15 @@ func (a *agent) event(session string, ev api.Event) {
 			}
 		}
 	case api.EventToolEnd:
-		a.update(session, toolResult(ev.Call, ev.Tool, ev.Output, ev.IsError))
+		u := toolResult(ev.Call, ev.Tool, ev.Output, ev.IsError)
+		a.mu.Lock()
+		d := a.drafts[ev.Call]
+		delete(a.drafts, ev.Call)
+		a.mu.Unlock()
+		if d != nil && !ev.IsError {
+			u["content"] = append(u["content"].([]any), d)
+		}
+		a.update(session, u)
 	case api.EventApprovalRequested, api.EventReviewRequested, api.EventQuestionRequested:
 		a.ask(session, *ev.Pending)
 	case api.EventFlow:

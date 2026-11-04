@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,5 +117,16 @@ func TestFlowsScreenNew(t *testing.T) {
 				t.Fatalf("open %v, the input %q, sent %v", d.m.flows != nil, d.m.input.Value(), a.prompts)
 			}
 		})
+	}
+}
+
+// An update that only settles a question's call with its answer (for Zed)
+// is not written here: the screen shows the answer its own way.
+func TestSettledCallNotWritten(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.send(updateMsg{Kind: "tool_call_update", ToolCallID: "ask_0_0", Status: "completed", Text: "Answered: left",
+		Meta: json.RawMessage(`{"kairocode/settled":true}`)})
+	if out := d.out(); strings.Contains(out, "Answered") || strings.Contains(out, "tool call") {
+		t.Fatalf("written:\n%s", out)
 	}
 }
