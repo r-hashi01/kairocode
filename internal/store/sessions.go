@@ -70,3 +70,40 @@ func (s *Store) SetEngineSession(ctx context.Context, name, id string) error {
 		name, id)
 	return err
 }
+
+// KeptRun is a run a flow that went another way left running (ADR 0003,
+// addendum 2026-11-04), and the session's turn it is under.
+type KeptRun struct {
+	Run, Top string
+}
+
+// Keep notes run, under turn top of session, as left running.
+func (s *Store) Keep(ctx context.Context, session, top, run string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_kept (run, session, top) VALUES (?, ?, ?) ON CONFLICT (run) DO NOTHING`,
+		run, session, top)
+	return err
+}
+
+// Kept are the runs noted as left running in session.
+func (s *Store) Kept(ctx context.Context, session string) ([]KeptRun, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT run, top FROM kc_kept WHERE session = ? ORDER BY run`, session)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KeptRun
+	for rows.Next() {
+		var k KeptRun
+		if err := rows.Scan(&k.Run, &k.Top); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// Unkeep forgets run, once it has finished.
+func (s *Store) Unkeep(ctx context.Context, run string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM kc_kept WHERE run = ?`, run)
+	return err
+}

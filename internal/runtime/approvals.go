@@ -37,6 +37,39 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		}
 		calls = append(calls, p...)
 	}
+	// What a flow that went another way left running, as it holds a call
+	// to review (ADR 0003, addendum 2026-11-04): nothing above it waits for
+	// it, so it is not reached from the turns. Forgotten once finished.
+	kept, err := r.Store.Kept(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range kept {
+		info, err := r.K.Get(ctx, k.Run)
+		var p []pendingCall
+		if err == nil {
+			p, err = r.pendingIn(ctx, info, k.Top)
+		}
+		// Gone, or finished with nothing left to answer (a finished turn may
+		// still hold an MCP call to review): forgotten.
+		if errors.Is(err, kairo.ErrUnknownRun) || err == nil && info.Finished() && len(p) == 0 {
+			if err := r.Store.Unkeep(ctx, k.Run); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, p...)
+	}
+	// One reached from a turn too (its flow not yet ended) is listed once.
+	seen := map[string]bool{}
+	calls = slices.DeleteFunc(calls, func(c pendingCall) bool {
+		dup := seen[c.Key]
+		seen[c.Key] = true
+		return dup
+	})
 	out := make([]Pending, len(calls))
 	for i, c := range calls {
 		out[i] = c.Pending

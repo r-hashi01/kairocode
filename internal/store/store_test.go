@@ -223,3 +223,28 @@ func TestSwitchClearedAsSent(t *testing.T) {
 		t.Fatalf("still waiting: %s", b)
 	}
 }
+
+// The runs a flow that went another way left running are kept per session,
+// once each, until forgotten (ADR 0003, addendum 2026-11-04).
+func TestKept(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	for _, k := range []KeptRun{{"s/a/t.0/f.0/x.0", "s/a/t.0"}, {"s/a/t.0/f.0/x.0", "s/a/t.0"}, {"s/a/t.1/f.0/y.0", "s/a/t.1"}} {
+		if err := s.Keep(ctx, "s/a", k.Top, k.Run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Keep(ctx, "s/b", "s/b/t.0", "s/b/t.0/f.0/z.0"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Kept(ctx, "s/a")
+	if err != nil || len(got) != 2 || got[0] != (KeptRun{"s/a/t.0/f.0/x.0", "s/a/t.0"}) || got[1].Run != "s/a/t.1/f.0/y.0" {
+		t.Fatalf("kept %+v, %v", got, err)
+	}
+	if err := s.Unkeep(ctx, "s/a/t.0/f.0/x.0"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Kept(ctx, "s/a"); len(got) != 1 || got[0].Run != "s/a/t.1/f.0/y.0" {
+		t.Fatalf("after unkeep %+v", got)
+	}
+}

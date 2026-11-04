@@ -67,6 +67,8 @@ func (r *Runtime) declare() {
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV2, kairo.WorkflowVersion(workflows.FlowVersion2), kairo.Draining())
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1), kairo.Draining())
 	}
+	// flow.step may cancel what a run before left (ADR 0003, addendum
+	// 2026-11-04): a cancel done again does nothing, so it stays unprotected.
 	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
 	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, r.flowLoad)
 	kairo.Action(r.K, workflows.ActFlowWould, kairo.Unprotected, r.flowWould)

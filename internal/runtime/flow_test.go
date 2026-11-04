@@ -909,11 +909,13 @@ def main(input):
 
 // TestWorkflowScriptDivergence: a flow taken up again by code that makes
 // another call where the run before made one (code changed under the same
-// version) stops there, without making it.
+// version) stops there, without making it; and what the run before left
+// running (its second agent's turn) is cancelled rather than going on after
+// the flow (ADR 0003, addendum 2026-11-04; kairo#2). That turn may yet be
+// resumed before it is cancelled, so its prompt may reach the model once;
+// the diverged call's never does.
 func TestWorkflowScriptDivergence(t *testing.T) {
-	// Not in parallel: under load, the changed code sometimes reached the
-	// model before the divergence stopped the run (the model was called
-	// once). Looked into apart from this test's speed.
+	t.Parallel()
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".kairocode/workflows/two.star": `
 def main(input):
@@ -922,7 +924,7 @@ def main(input):
     return "done"
 `})
 	dir := t.TempDir()
-	db, hold, calls := filepath.Join(dir, "k.db"), filepath.Join(dir, "held"), filepath.Join(dir, "calls")
+	db, hold, prompts := filepath.Join(dir, "k.db"), filepath.Join(dir, "held"), filepath.Join(dir, "prompts")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	first, err := Open(ctx, Config{DB: db, Owner: "div", Provider: &provider.Fake{HoldAt: -1, HoldOn: "hold here", HoldFile: hold,
@@ -941,7 +943,7 @@ def main(input):
 		return workflows.RunFlow(ctx, in)
 	}
 	r, err := Open(ctx, Config{DB: db, Owner: "div", flowFunc: changed,
-		Provider: &provider.Fake{HoldAt: -1, CallLog: calls, Script: []provider.FakeReply{{Text: "ok"}}}})
+		Provider: &provider.Fake{HoldAt: -1, PromptLog: prompts, Script: []provider.FakeReply{{Text: "ok"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,8 +951,32 @@ def main(input):
 	if _, err := r.WaitTurn(ctx, s, n); err == nil || !strings.Contains(err.Error(), "went another way") {
 		t.Fatalf("the turn: %v", err)
 	}
-	if b, _ := os.ReadFile(calls); len(b) != 0 {
-		t.Fatalf("the model was called: %q", b)
+	// Nothing under the session is left running but its wait for the next
+	// message, and the run before's second agent was cancelled.
+	var left, cancelled []string
+	waitUntil(t, ctx, "what the run before left to be cancelled", func() bool {
+		left, cancelled = nil, nil
+		var walk func(id string)
+		walk = func(id string) {
+			kids, _ := r.K.Children(ctx, id)
+			for _, k := range kids {
+				if k.Plan != "kairo.workflow" {
+					continue
+				}
+				switch {
+				case !k.Finished():
+					left = append(left, k.RunID)
+				case k.Status == "cancelled":
+					cancelled = append(cancelled, k.RunID)
+				}
+				walk(k.RunID)
+			}
+		}
+		walk(s)
+		return len(left) == 0 && len(cancelled) > 0
+	})
+	if b, _ := os.ReadFile(prompts); strings.Contains(string(b), "first otherwise") {
+		t.Fatalf("the diverged call reached the model: %q", b)
 	}
 }
 
@@ -1280,5 +1306,87 @@ func TestPublishOnlyWhatWasReviewed(t *testing.T) {
 	}
 	if conv := strings.Join(conversationOf(t, r, s, true), "\n"); !strings.Contains(conv, "the draft changed after it was reviewed") {
 		t.Fatalf("not told:\n%s", conv)
+	}
+}
+
+// TestCrashDivergedFlowKeepsAnOpenCall: what a run before left is not
+// cancelled when it holds a call whose outcome is unknown (ADR 0003,
+// addendum 2026-11-04; invariant 4). The flow's second agent is killed in
+// its bash; taken up again by code that goes another way, the flow stops,
+// and the agent's turn stays, its bash to be reviewed as any cut-off call.
+func TestCrashDivergedFlowKeepsAnOpenCall(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Require(t)
+	if testing.Short() {
+		t.Skip("crash test: starts and kills a process")
+	}
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{".kairocode/workflows/two.star": `
+def main(input):
+    agent(agent = "build", prompt = "first " + input["args"])
+    agent(agent = "build", prompt = "second")
+    return "done"
+`})
+	dir := t.TempDir()
+	db := filepath.Join(dir, "k.db")
+	// The first agent answers at once; the second runs bash, where the
+	// process is killed.
+	fake := provider.Fake{HoldAt: -1, Replies: map[string]provider.FakeReply{"first": {Text: "ok"}}, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo ran >> count.txt; touch started; sleep 30"}`)}}},
+		{Text: "done"},
+	}}
+	fakeFile := filepath.Join(dir, "fake.json")
+	b, _ := json.Marshal(fake)
+	if err := os.WriteFile(fakeFile, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "KC_CRASH_CHILD=1", "KC_DB="+db, "KC_DIR="+ws, "KC_FAKE="+fakeFile,
+		"KC_FLOW=two", "KC_FLOW_ARGS=as asked", "KC_LEASE=2s")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, filepath.Join(ws, "started"), cmd)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	changed := func(ctx *kairo.Context, in workflows.FlowInput) (workflows.FlowOutput, error) {
+		in.Call.Args = "otherwise"
+		return workflows.RunFlow(ctx, in)
+	}
+	r, err := Open(ctx, Config{DB: db, Owner: "crash", flowFunc: changed, Provider: &fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s := SessionID("crash")
+	if _, err := r.WaitTurn(ctx, s, 0); err == nil || !strings.Contains(err.Error(), "went another way") {
+		t.Fatalf("the turn: %v", err)
+	}
+	p := waitPending(t, r, s, 1)
+	if p[0].Kind != "review" || p[0].Tool != "bash" {
+		t.Fatalf("pending %+v", p[0])
+	}
+	var walk func(id string) []string
+	walk = func(id string) []string {
+		var out []string
+		kids, _ := r.K.Children(ctx, id)
+		for _, k := range kids {
+			if k.Plan == "kairo.workflow" {
+				out = append(out, k.Status)
+				out = append(out, walk(k.RunID)...)
+			}
+		}
+		return out
+	}
+	if st := walk(s); slices.Contains(st, "cancelled") {
+		t.Fatalf("a run was cancelled though it holds a call to review: %v", st)
+	}
+	if got, _ := os.ReadFile(filepath.Join(ws, "count.txt")); string(got) != "ran\n" {
+		t.Fatalf("the command ran again: %q", got)
 	}
 }
