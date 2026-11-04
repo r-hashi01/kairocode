@@ -187,9 +187,9 @@ func (a *agent) listFlows(ctx context.Context, session string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	text := "There are no flows yet: they are .kairocode/workflows/<name>.star."
+	text := "There are no flows yet: they are .kairocode/workflows/<name>.star. /flow new <what it does> has one written (a draft, drawn, then tried)."
 	if len(fs) > 0 {
-		lines := []string{"Flows here. /flow <name> [what to give it] runs one; /flow <name> --help says what it takes and does; /flow runs, the runs to look back at:"}
+		lines := []string{"Flows here. /flow <name> [what to give it] runs one; /flow <name> --help says what it takes and does; /flow runs, the runs to look back at; /flow new <what it does>, a new one:"}
 		for _, f := range fs {
 			name := f.Name
 			if f.Args != "" {

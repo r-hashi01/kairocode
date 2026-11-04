@@ -149,20 +149,21 @@ func (m *model) flowsKey(key string) tea.Cmd {
 		return nil
 	}
 	vis := s.visible()
-	n := len(vis)
+	n := len(vis) + 1 // the last row makes a new one
 	switch key {
 	case "up":
-		if n > 0 {
-			s.sel = (min(s.sel, n-1) + n - 1) % n
-		}
+		s.sel = (min(s.sel, n-1) + n - 1) % n
 	case "down", "tab":
-		if n > 0 {
-			s.sel = (min(s.sel, n-1) + 1) % n
-		}
+		s.sel = (min(s.sel, n-1) + 1) % n
 	case "enter":
-		if n > 0 {
-			m.showFlow(vis[min(s.sel, n-1)])
+		if sel := min(s.sel, n-1); sel < len(vis) {
+			m.showFlow(vis[sel])
+			return nil
 		}
+		m.flows = nil
+		m.input.SetValue("/flow new ")
+		m.input.CursorEnd()
+		m.note = "say what the flow is to do, then Enter: it is written as a draft, drawn, then tried"
 	case "backspace":
 		if r := []rune(s.filter); len(r) > 0 {
 			s.filter, s.sel = string(r[:len(r)-1]), 0
@@ -220,11 +221,11 @@ func (m *model) flowsView(w int) string {
 		if s.filter != "" {
 			b.WriteString(faint.Render("  nothing has "+s.filter) + "\n")
 		} else {
-			b.WriteString(faint.Render("  no flows yet: they are "+flowchart.Dir+"/<name>.star (ask the agent to write one)") + "\n")
+			b.WriteString(faint.Render("  no flows yet: they are "+flowchart.Dir+"/<name>.star; make one below (/flow new)") + "\n")
 		}
 	}
-	rows := max(m.runRoom()-4, 3)
-	sel := min(s.sel, max(len(vis)-1, 0))
+	rows := max(m.runRoom()-5, 3)
+	sel := min(s.sel, len(vis)) // len(vis): the row that makes a new one
 	from := max(min(sel-rows/2, len(vis)-rows), 0)
 	to := min(from+rows, len(vis))
 	if from > 0 {
@@ -253,6 +254,11 @@ func (m *model) flowsView(w int) string {
 	}
 	if to < len(vis) {
 		b.WriteString(faint.Render(fmt.Sprintf("  ↓ %d more", len(vis)-to)) + "\n")
+	}
+	if line := accent.Render("+ ") + "make a new flow" + faint.Render("  · /flow new <what it does>"); sel == len(vis) {
+		b.WriteString(accent.Render("❯ ") + line + "\n")
+	} else {
+		b.WriteString("  " + line + "\n")
 	}
 	b.WriteString("\n" + faint.Render("↑↓ · Enter to look at it · esc") + "\n")
 	return b.String()

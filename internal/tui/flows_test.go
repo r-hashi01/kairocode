@@ -88,3 +88,33 @@ func TestFlowsScreen(t *testing.T) {
 		t.Fatalf("still open, or sent: %v", a.prompts)
 	}
 }
+
+// The list's last row makes a new flow: /flow new in the input, to say
+// what it is to do. With no flows, it is the row chosen.
+func TestFlowsScreenNew(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		flow bool
+		keys []string
+	}{{"after the flows", true, []string{"up"}}, {"no flows", false, nil}} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if c.flow {
+				os.MkdirAll(filepath.Join(dir, ".kairocode/workflows"), 0o755)
+				os.WriteFile(filepath.Join(dir, ".kairocode/workflows/nightly.star"), []byte("def main(input):\n    agent(prompt = \"check\")\n"), 0o644)
+			}
+			d, a := start(t, Options{Dir: dir})
+			typed(d, "/flow")
+			if v := d.view(); !strings.Contains(v, "make a new flow") {
+				t.Fatalf("no row to make one:\n%s", v)
+			}
+			for _, k := range c.keys {
+				d.send(key(k))
+			}
+			d.send(key("enter"))
+			if d.m.flows != nil || d.m.input.Value() != "/flow new " || len(a.prompts) != 0 {
+				t.Fatalf("open %v, the input %q, sent %v", d.m.flows != nil, d.m.input.Value(), a.prompts)
+			}
+		})
+	}
+}
