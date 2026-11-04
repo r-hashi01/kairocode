@@ -91,25 +91,11 @@ func (a *agent) ask(session string, p api.Pending) {
 	toolCall := map[string]any{"toolCallId": call, "title": title, "kind": kind, "status": "pending"}
 	switch {
 	case len(p.Sections) > 0: // what it would do, a block a section (SectionMeta names it)
-		var content []any
-		for i, s := range p.Sections {
-			s = localized(a.lang, s)
-			text := s.Text
-			if i > 0 {
-				text = "\n\n── " + s.Name + " ──\n" + text
-			}
-			block := textBlock(text)
-			meta := map[string]any{SectionMeta: s.Name, RefsMeta: s.Refs}
-			if len(s.Details) > 0 {
-				meta[DetailsMeta] = s.Details
-			}
-			if len(s.Chart) > 0 {
-				meta[ChartMeta] = s.Chart
-			}
-			block["_meta"] = meta
-			content = append(content, map[string]any{"type": "content", "content": block})
+		sections := make([]api.PreviewSection, len(p.Sections))
+		for i, sec := range p.Sections {
+			sections[i] = localized(a.lang, sec)
 		}
-		toolCall["content"] = content
+		toolCall["content"] = reviewContent(sections, p.Try, a.dirOf(session))
 	case p.Preview != "": // what it would do: a flow's shape
 		toolCall["content"] = []any{map[string]any{"type": "content", "content": textBlock(p.Preview)}}
 	case question: // the question whole; a hook's, with what it runs
