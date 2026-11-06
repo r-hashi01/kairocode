@@ -156,7 +156,11 @@ func TestUndoAfterRestart(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "k.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1, Script: twoWrites}, Owner: "undo"})
+	// Owner "test", as open gives: a runtime opened again under the same name
+	// takes its earlier self's steps up at once, as the daemon does. Under
+	// another name, a step it was running (turn.settled, say) waits for its
+	// lease to run out (30s), as after another process stopped.
+	r, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1, Script: twoWrites}, Owner: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +222,7 @@ func TestUndoRefusedByAnOldSession(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "k.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	old, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1}, Owner: "u", onlyVersion: workflows.SessionVersion3})
+	old, err := Open(ctx, Config{DB: db, Provider: &provider.Fake{HoldAt: -1}, Owner: "test", onlyVersion: workflows.SessionVersion3})
 	if err != nil {
 		t.Fatal(err)
 	}
