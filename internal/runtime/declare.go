@@ -54,6 +54,7 @@ func (r *Runtime) declare() {
 		}
 	}
 	kairo.Workflow(r.K, workflows.MCPCall, workflows.RunMCPCall, kairo.WorkflowVersion(workflows.MCPCallVersion))
+	kairo.Workflow(r.K, workflows.Notify, workflows.RunNotify, kairo.WorkflowVersion(workflows.NotifyVersion))
 	if r.cfg.onlyFlowVersion == workflows.FlowVersion1 {
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1))
 	} else {

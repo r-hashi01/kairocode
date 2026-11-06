@@ -161,6 +161,12 @@ func (r *Runtime) keepMissed(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	// And the flows of the hooks that tell of requests (ADR 0034).
+	notifies, err := r.K.List(ctx, kairo.Filter{Workflow: workflows.Notify})
+	if err != nil {
+		return
+	}
+	sessions = append(sessions, notifies...)
 	keep, days := flowHistory()
 	oldest := time.Now().AddDate(0, 0, -days)
 	for _, s := range sessions {

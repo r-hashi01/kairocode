@@ -103,6 +103,8 @@ type Runtime struct {
 	ext extServers
 	// jobs are the commands in the background (ADR 0028).
 	jobs *jobManager
+	// notes: the sessions to look at for requests to tell of (ADR 0034).
+	notes *notifier
 	// copilotHooks: one change of copilot's settings at a time.
 	copilotHooksMu sync.Mutex
 	auth           auths
@@ -222,6 +224,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	r.ext.logf = r.logf
 	r.bgCtx, r.bgCancel = context.WithCancel(context.Background())
 	r.jobs = newJobs(r)
+	r.notes = newNotifier()
 	if id := registryAgent(cfg.Engine); id != "" && cfg.Engine != workflows.EngineCodex && cfg.Engine != workflows.EngineCopilot &&
 		!r.knownAgent(ctx, id) {
 		r.lsp.Close()
@@ -267,6 +270,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 	r.jobs.recover()
 	r.background(r.keepMissed) // the flows' runs a stopped process did not keep (ADR 0029)
+	r.background(r.notifyLoop) // telling of requests outside the machine (ADR 0034)
 	return r, nil
 }
 

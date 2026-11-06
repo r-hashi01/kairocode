@@ -247,7 +247,7 @@ var ErrQuestion = api.ErrQuestion
 // Answer answers a flow's question (Pending of Kind "question") with one
 // of its options. As with Approve, only the first answer goes through.
 func (r *Runtime) Answer(ctx context.Context, key, option string) error {
-	session := sessionOf(key)
+	session := ownerSession(key)
 	if session == "" {
 		return fmt.Errorf("not a question's key: %q", key)
 	}
@@ -288,7 +288,7 @@ var ErrAnswered = api.ErrAnswered
 // effect: either way the call is settled with a result that tells the model
 // what the user said, and the turn goes on; the call is not run again.
 func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason string) error {
-	session := sessionOf(strings.TrimPrefix(key, reviewPrefix))
+	session := ownerSession(strings.TrimPrefix(key, reviewPrefix))
 	if session == "" {
 		return fmt.Errorf("not an approval key: %q", key)
 	}

@@ -19,9 +19,9 @@ import (
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
-// hookEvents are the events a hook can be bound to (ADR 0003; the others
-// come later).
-var hookEvents = []string{workflows.HookSessionStart, workflows.HookToolAfter, workflows.HookTurnEnd}
+// hookEvents are the events a hook can be bound to (ADR 0003; 0034 for
+// approval.requested).
+var hookEvents = []string{workflows.HookApprovalRequested, workflows.HookSessionStart, workflows.HookToolAfter, workflows.HookTurnEnd}
 
 // loadHooks reads the hooks of kairocode.json, the user's then the
 // project's: {"hooks": {"turn.end": ["<flow>", ...]}}; a tool.after hook

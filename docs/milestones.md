@@ -2,7 +2,7 @@
 
 The milestones of design section 10, turned into acceptance-criteria tests. Work on a milestone with the `/milestone` skill. Write the acceptance criteria as tests before implementing (they fail at first). When they all pass, set that milestone's "Status" to "done (date)".
 
-Current stage: **M7 (show the strengths) is in progress**: the durability demo is done; telling of approval requests outside the machine is ADR 0034 (accepted 2026-11-06). M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
+Current stage: **M7 (show the strengths) is in progress**: the durability demo is done; approval requests are told outside the machine (ADR 0034, 2026-11-06). What remains is the demo with other agents as the engine. M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
 
 ## M0 Skeleton
 
@@ -175,7 +175,7 @@ Acceptance criteria:
 Status: in progress
 
 - [x] A durability demo: a recording showing that it continues after `kill -9` and nothing happens twice, and steps to reproduce it (`docs/durability.md`). Put it at the top of the README. (2026-11-06: `scripts/demo-durability.sh` runs a five-step flow and kills its daemon in the middle of a step, in a folder of its own, with the fake provider; `make demo-gif` records it as `docs/durability.gif` with asciinema and agg.)
-- [ ] Notify approval requests outside the local machine (Slack and so on). Add an "approval request" event to hooks and send it with a flow (needs an ADR). Answering from outside is decided separately later.
+- [x] Notify approval requests outside the local machine (Slack and so on). Add an "approval request" event to hooks and send it with a flow (needs an ADR). Answering from outside is decided separately later. (2026-11-06, ADR 0034: the `approval.requested` hook; the daemon starts a `notify` run per request, `n/<session>/<hash of the key>`, which runs the hooks its turn recorded, those already allowed only. `docs/notify.md` sets it up for Slack with `http.auth`. Tests: `TestApprovalRequestedHookRuns`, `TestApprovalRequestedOncePerRequest`, `TestCrashApprovalRequested`, `TestApprovalRequestedNotAllowedHookSkipped`, `TestNoNotifyOfNotify`, `TestApprovalRequestedSecretNotRecorded`, which runs the flow of `docs/notify.md`.)
 - [ ] An explanation and demo that the same guarantees hold when another company's agent (Claude Code, codex) is the engine. Also finish checking with the real `claude` (what remains of M2) here.
 
 ## M8 Close the gap at the entry points

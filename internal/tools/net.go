@@ -37,6 +37,10 @@ type Net struct {
 	rootCAs *x509.CertPool // tests: their TLS server's
 }
 
+// TestRootCAs, if set, is trusted where a Net has no roots of its own:
+// another package's tests, with their TLS server's.
+var TestRootCAs *x509.CertPool
+
 // HostAuth: Header is Prefix and the value of the environment variable Env.
 type HostAuth struct {
 	Header string `json:"header"`
@@ -100,11 +104,15 @@ func (n Net) client(redirect func(*http.Request, []*http.Request) error) *http.C
 		}
 		return nil
 	}}
+	roots := n.rootCAs
+	if roots == nil {
+		roots = TestRootCAs
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy:             nil,
 			DialContext:       dialer.DialContext,
-			TLSClientConfig:   &tls.Config{RootCAs: n.rootCAs},
+			TLSClientConfig:   &tls.Config{RootCAs: roots},
 			DisableKeepAlives: true, // a request is never sent again on a reused connection
 		},
 		CheckRedirect: redirect,

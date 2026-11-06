@@ -49,7 +49,7 @@ func (r *Runtime) canTry(ctx context.Context, turn string) error {
 // below it; tools that do more than read are not called. The approval is
 // asked again when the try ends, with what it did.
 func (r *Runtime) TryFlow(ctx context.Context, key, args string) error {
-	session := sessionOf(key)
+	session := ownerSession(key)
 	if session == "" {
 		return fmt.Errorf("not an approval key: %q", key)
 	}

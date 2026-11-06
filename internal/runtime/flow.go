@@ -254,7 +254,7 @@ func (r *Runtime) cancelLeft(t *kairo.TaskContext, kids []kairo.RunInfo) error {
 			return kairo.Retryable(err)
 		}
 		if open {
-			if err := r.Store.Keep(t, sessionOf(k.RunID), turnOf(k.RunID), k.RunID); err != nil {
+			if err := r.Store.Keep(t, ownerSession(k.RunID), turnOf(k.RunID), k.RunID); err != nil {
 				return kairo.Retryable(err)
 			}
 			continue
