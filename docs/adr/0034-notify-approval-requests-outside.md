@@ -36,6 +36,10 @@ A review comes from kairo's blocked state: no workflow code runs when a step is 
 
 Where this shows in the implementation: `internal/workflows` (the `notify` workflow, `ApprovalRequested` in the hook events), `internal/runtime` (starting `notify` runs from the event hub and on opening, the input from the turn's `agent.load`, skipping not-yet-allowed hooks, leaving out requests under `n/`), `internal/api` (the input type), `docs/notify.md` (setting it up for Slack).
 
+## Addendum (2026-11-06): the form of the `http` rule in 7
+
+The rule in 7, `"https://slack.com/api/*"`, is not the form `http` rules take. An `http` call is judged by its host and path, with no scheme (ADR 0013), so that rule never matches and every call would wait for approval. The rule is `"http": {"slack.com/api/chat.postMessage": "allow"}`, as in `docs/notify.md`. The decision is otherwise unchanged.
+
 ## Consequences
 
 - A person away from the machine hears of each request once, from a flow they wrote or allowed. The turn does not wait on it.
