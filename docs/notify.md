@@ -9,6 +9,7 @@ When a turn needs you (an approval, a question, or "did this step take effect?" 
 - The flow runs apart from the turn. The turn goes on waiting for you, whatever the flow does; a flow that fails is logged and kept in `kairocode flow runs`, and nothing else fails with it.
 - The hooks are those of the turn the request belongs to, as they were when it started. A change to `kairocode.json` applies from the next turn.
 - **Nobody is asked to run it.** The flow runs only if you allowed it before: KairoCode asks about it at the start of a turn, as about the other hooks, and keeps the answer with the script's hash. Until then (or once the script changes), it is skipped. A rule `"permission": {"hook": "allow"}` allows every hook without asking.
+- A `/flow` turn does not ask: its agents are the flow's, and they ask about no hooks. In a session where only flows have run, the hook is skipped until you allow it, in a turn of your own (any message) or with the rule above.
 - A request of the flow's own (one of its calls waiting for approval) is not told. It is listed in `kairocode approvals` with the others. Allow the calls the flow makes (below), so it never waits.
 
 The flow is given the request as `input["request"]`:
