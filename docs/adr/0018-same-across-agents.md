@@ -286,3 +286,7 @@ The user's point (2026-10-30): it is scary when a hook whose contents you cannot
   - It is read inside `agent.load`, so the value is recorded, and a turn in progress goes on with the value from its start (invariant 2). It does not affect KairoCode's own hooks (`hooks` in `kairocode.json`).
 - **How the question is shown (same day):** a hook's question includes the first 60 lines of the file the command points to (from `~` or the folder), and says that this setting can stop it (read when the ACP agent shows it; not kept in the record). As with flow questions, every option is of a kind that is not selected until the user picks it (reject).
 - Tests: `TestClaudeHooksOff` (combinations of values, and with `"off"` the turn proceeds without asking about hooks), `TestACPHookQuestion`.
+
+## Addendum (2026-11-06)
+
+codex's plugins no longer stay as part of its nature: they bring MCP servers whose calls would not go through KairoCode, and are off unless `agents.ownMCP` (ADR 0022, addendum of 2026-11-06). codex's own shell is off as well (ADR 0015, addendum of 2026-11-06).

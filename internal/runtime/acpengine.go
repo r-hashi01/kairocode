@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -33,6 +34,10 @@ import (
 // it starts, from its session and epoch, and records the agent's id under
 // that name.
 
+// codexReadOnly is codex-acp's mode in which codex's own tools ask before
+// they write a file, run what changes anything or reach the network.
+const codexReadOnly = "read-only"
+
 // acpArgv is how to start engine's agent, and whether it then has no
 // tools of its own: Copilot is told KairoCode's are its only ones
 // (checked with copilot 1.0.54, ADR 0014). Env is the registry's for it.
@@ -49,8 +54,9 @@ func (r *Runtime) acpArgv(engine, dir string, tools []string, effort string) ([]
 		// Codex reads its AGENTS.md and .agents/skills by itself, and
 		// KairoCode gives it the rest (ADR 0018); its own hooks are off
 		// (unless the user lets it run them), KairoCode running hooks; its
-		// own MCP servers are off (ADR 0022). Over the user's CODEX_CONFIG,
-		// if there is one.
+		// own MCP servers are off (ADR 0022); its own shell is off, and its
+		// sessions read-only (ADR 0015). Over the user's CODEX_CONFIG, if
+		// there is one.
 		cfg := map[string]any{}
 		user := env["CODEX_CONFIG"]
 		if user == "" {
@@ -62,14 +68,27 @@ func (r *Runtime) acpArgv(engine, dir string, tools []string, effort string) ([]
 			r.logf("CODEX_CONFIG is not a JSON object: it is not given to codex")
 			cfg = map[string]any{}
 		}
-		if !own {
-			features, _ := cfg["features"].(map[string]any)
-			if features == nil {
-				features = map[string]any{}
-			}
-			features["hooks"] = false
-			cfg["features"] = features
+		mine, err := ownMCP()
+		if err != nil {
+			return nil, nil, false, err
 		}
+		features, _ := cfg["features"].(map[string]any)
+		if features == nil {
+			features = map[string]any{}
+		}
+		if !own {
+			features["hooks"] = false
+		}
+		if !mine {
+			// Its plugins bring MCP servers of their own, which it
+			// would start by itself (ADR 0022, addendum 2026-11-06).
+			features["plugins"] = false
+		}
+		// Its own shell off: commands are run with KairoCode's bash,
+		// recorded and never twice (ADR 0015, addendum 2026-11-06).
+		features["shell_tool"] = false
+		features["unified_exec"] = false
+		cfg["features"] = features
 		// Its own MCP servers off: codex would start them by itself, their
 		// calls not going through KairoCode (ADR 0022).
 		off, err := codexMCPOff(dir, codexHome(env))
@@ -77,9 +96,7 @@ func (r *Runtime) acpArgv(engine, dir string, tools []string, effort string) ([]
 			return nil, nil, false, err
 		}
 		servers, _ := cfg["mcp_servers"].(map[string]any)
-		if mine, err := ownMCP(); err != nil {
-			return nil, nil, false, err
-		} else if !mine {
+		if !mine {
 			// Servers the user's CODEX_CONFIG itself defines: the user's own.
 			for _, n := range slices.Sorted(maps.Keys(servers)) {
 				if !slices.Contains(off, n) {
@@ -101,16 +118,15 @@ func (r *Runtime) acpArgv(engine, dir string, tools []string, effort string) ([]
 			}
 			cfg["mcp_servers"] = servers
 		}
-		if len(cfg) == 0 {
-			return argv, env, false, nil // nothing to say: the user's as they are
-		}
 		b, err := json.Marshal(cfg)
 		if err != nil {
 			return nil, nil, false, err
 		}
-		withConfig := map[string]string{"CODEX_CONFIG": string(b)}
+		// Its sessions start read-only (and are set so, codexReadOnly):
+		// what of its own tools is left asks before it changes anything.
+		withConfig := map[string]string{"CODEX_CONFIG": string(b), "INITIAL_AGENT_MODE": codexReadOnly}
 		for k, v := range env {
-			if k != "CODEX_CONFIG" {
+			if k != "CODEX_CONFIG" && k != "INITIAL_AGENT_MODE" {
 				withConfig[k] = v
 			}
 		}
@@ -226,7 +242,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		// Copilot has none of its own tools here (acpArgv): a bare name is
 		// ours. An agent that keeps its own must name ours with the server.
 		c := &acpClient{r: r, t: t, mt: mt, dir: in.Dir, tools: in.Tools, bare: bare, turn: in.Turn, round: in.Round,
-			terms: map[string]*acpTerminal{}, uses: map[string]int{}}
+			terms: map[string]*acpTerminal{}, uses: map[string]int{}, titles: map[string]string{}}
 		conn := jsonrpc.NewConn(toAgent)
 		served := make(chan error, 1)
 		go func() { served <- conn.Serve(ctx, fromAgent, c.handle) }()
@@ -316,6 +332,20 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 			}
 		}
 		c.session = id
+		if registryAgent(engine) == codexAgent {
+			// Codex's own tools left (apply_patch) would change files
+			// unasked in its default mode: read-only, they ask, and the
+			// asking comes to KairoCode (ADR 0015, addendum 2026-11-06).
+			// Not taken, the turn does not go on.
+			if err := conn.Call(t, "session/set_config_option", map[string]any{"sessionId": id, "configId": "mode", "value": codexReadOnly}, nil); err != nil {
+				var refused *jsonrpc.Error
+				if !errors.As(err, &refused) {
+					return fail("session/set_config_option", err) // it stopped: done again
+				}
+				return r.finishCLITurn(t, mt, fmt.Sprintf("[%s cannot run: it did not take the %s mode, in which its own tools ask before they change anything (%v)]",
+					registryAgent(engine), codexReadOnly, refused), 0, msg.Usage{})
+			}
+		}
 		r.authSeen(providerOf(engine), AuthSignedIn, nil)
 		r.keepACPOptions(t, engine, opts)
 		// A model the agent's session does not have (its list changes
@@ -567,6 +597,10 @@ type acpClient struct {
 	terms     map[string]*acpTerminal
 	nterm     int
 	uses      map[string]int // asks for an agent's own call, by its key
+	// titles: the title each tool call was announced with, by its id. Codex
+	// asks to run an MCP call by the id alone (ADR 0015, addendum
+	// 2026-11-06).
+	titles map[string]string
 }
 
 // acpTerminal is a command an agent ran: done when made (KairoCode runs it
@@ -582,17 +616,26 @@ func (c *acpClient) handle(ctx context.Context, method string, params json.RawMe
 		var p struct {
 			Update struct {
 				SessionUpdate string `json:"sessionUpdate"`
+				ToolCallID    string `json:"toolCallId"`
+				Title         string `json:"title"`
 				Content       struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				} `json:"content"`
 			} `json:"update"`
 		}
-		if json.Unmarshal(params, &p) != nil || p.Update.Content.Type != "text" {
+		if json.Unmarshal(params, &p) != nil {
 			return nil, nil
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		// Calls the agent replays are not this run's: not kept.
+		if u := p.Update; !c.replaying.Load() && strings.HasPrefix(u.SessionUpdate, "tool_call") && u.ToolCallID != "" && u.Title != "" {
+			c.titles[u.ToolCallID] = u.Title
+		}
+		if p.Update.Content.Type != "text" {
+			return nil, nil
+		}
 		switch {
 		case c.replaying.Load():
 			if p.Update.SessionUpdate == "user_message_chunk" {
@@ -617,9 +660,19 @@ func (c *acpClient) handle(ctx context.Context, method string, params json.RawMe
 				OptionID string `json:"optionId"`
 				Kind     string `json:"kind"`
 			} `json:"options"`
+			Meta struct {
+				MCP bool `json:"is_mcp_tool_approval"`
+			} `json:"_meta"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()}
+		}
+		// Codex asks for an MCP call by the id alone, marked so: its title
+		// is the one it was announced with.
+		if p.ToolCall.Title == "" && p.Meta.MCP {
+			c.mu.Lock()
+			p.ToolCall.Title = c.titles[p.ToolCall.ToolCallID]
+			c.mu.Unlock()
 		}
 		want := "allow_once"
 		if !c.ours(p.ToolCall.Title) {
@@ -789,6 +842,9 @@ func (c *acpClient) ours(title string) bool {
 	name, ok := strings.CutPrefix(title, MCPServerName+"-")
 	if !ok {
 		name, ok = strings.CutPrefix(title, "mcp__"+MCPServerName+"__")
+	}
+	if !ok {
+		name, ok = strings.CutPrefix(title, "mcp."+MCPServerName+".") // codex's
 	}
 	if !ok && !c.bare {
 		return false // an agent's own tool may have the same name

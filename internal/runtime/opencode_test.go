@@ -272,7 +272,8 @@ func TestCLIAgentsConfig(t *testing.T) {
 	if err := json.Unmarshal([]byte(env["CODEX_CONFIG"]), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model != "m" || !cfg.Features["x"] || cfg.Features["hooks"] || cfg.Skills != nil || cfg.DocBytes != nil {
+	if cfg.Model != "m" || !cfg.Features["x"] || cfg.Features["hooks"] || cfg.Features["plugins"] ||
+		cfg.Features["shell_tool"] || cfg.Features["unified_exec"] || env["INITIAL_AGENT_MODE"] != "read-only" || cfg.Skills != nil || cfg.DocBytes != nil {
 		t.Fatalf("CODEX_CONFIG %s", env["CODEX_CONFIG"])
 	}
 	argv, env, _, err := r.acpArgv(workflows.EngineCopilot, "", []string{"read"}, "")
@@ -285,7 +286,7 @@ func TestCLIAgentsConfig(t *testing.T) {
 	// Not JSON (codex-acp could not read it): KairoCode's alone, codex's
 	// own hooks still off.
 	t.Setenv("CODEX_CONFIG", "model=m")
-	if _, env, _, err := r.acpArgv(workflows.EngineCodex, "", nil, ""); err != nil || env["CODEX_CONFIG"] != `{"features":{"hooks":false}}` {
+	if _, env, _, err := r.acpArgv(workflows.EngineCodex, "", nil, ""); err != nil || env["CODEX_CONFIG"] != `{"features":{"hooks":false,"plugins":false,"shell_tool":false,"unified_exec":false}}` {
 		t.Fatalf("not JSON: %v %q", err, env["CODEX_CONFIG"])
 	}
 }

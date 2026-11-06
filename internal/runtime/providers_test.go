@@ -43,6 +43,7 @@ type fakeCLIStart struct {
 	Engine string `json:"engine"`
 	Model  string `json:"model"`
 	Resume string `json:"resume"`
+	Mode   string `json:"mode"`
 	Prompt string `json:"prompt"`
 }
 
@@ -50,6 +51,7 @@ type fakeACPSession struct {
 	Cwd     string   `json:"cwd"`
 	Model   string   `json:"model"`
 	Effort  string   `json:"effort"`
+	Mode    string   `json:"mode"`
 	Prompts []string `json:"prompts"`
 }
 
@@ -122,6 +124,8 @@ func fakeCLI() {
 					"options": []any{map[string]any{"value": "low", "name": "low"}, map[string]any{"value": "ultra", "name": "ultra"}}}}}, nil
 		case "session/load":
 			s := load(p.SessionID)
+			s.Mode = "" // a mode is the agent process's, as codex-acp's
+			save(p.SessionID, s)
 			for _, pr := range s.Prompts {
 				update(p.SessionID, "user_message_chunk", pr)
 			}
@@ -129,9 +133,15 @@ func fakeCLI() {
 			return map[string]any{}, nil
 		case "session/set_config_option":
 			s := load(p.SessionID)
-			if p.ConfigID == "reasoning_effort" {
+			switch p.ConfigID {
+			case "reasoning_effort":
 				s.Effort = p.Value
-			} else {
+			case "mode":
+				if os.Getenv("KC_FAKE_CLI_NO_MODE") == "1" { // an agent with no such mode
+					return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "Invalid params"}
+				}
+				s.Mode = p.Value
+			default:
 				s.Model = p.Value
 			}
 			save(p.SessionID, s)
@@ -145,7 +155,7 @@ func fakeCLI() {
 			if loaded[p.SessionID] {
 				resume = p.SessionID
 			}
-			line, _ := json.Marshal(fakeCLIStart{Engine: engine, Model: s.Model, Resume: resume, Prompt: p.Prompt[0].Text})
+			line, _ := json.Marshal(fakeCLIStart{Engine: engine, Model: s.Model, Resume: resume, Mode: s.Mode, Prompt: p.Prompt[0].Text})
 			if f, err := os.OpenFile(os.Getenv("KC_FAKE_CLI_LOG"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 				f.Write(append(line, '\n'))
 				f.Close()
@@ -165,9 +175,22 @@ func fakeCLI() {
 						OptionID string `json:"optionId"`
 					} `json:"outcome"`
 				}
+				call := map[string]any{"toolCallId": "own-" + title, "title": title, "kind": "execute",
+					"rawInput": map[string]any{"command": "ls"}}
+				// KC_FAKE_CLI_BY_ID: as codex asks to run an MCP call, by
+				// the id of a tool call it announced before (or, with
+				// "unannounced", did not), no title.
+				var meta map[string]any
+				if by := os.Getenv("KC_FAKE_CLI_BY_ID"); by != "" {
+					if by != "unannounced" {
+						conn.Notify("session/update", map[string]any{"sessionId": p.SessionID,
+							"update": map[string]any{"sessionUpdate": "tool_call", "toolCallId": "exec-1", "title": title, "kind": "execute"}})
+					}
+					call = map[string]any{"toolCallId": "exec-1", "kind": "execute", "status": "pending"}
+					meta = map[string]any{"is_mcp_tool_approval": true}
+				}
 				if err := conn.Call(ctx, "session/request_permission", map[string]any{"sessionId": p.SessionID,
-					"toolCall": map[string]any{"toolCallId": "own-" + title, "title": title, "kind": "execute",
-						"rawInput": map[string]any{"command": "ls"}},
+					"toolCall": call, "_meta": meta,
 					"options": []any{map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
 						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"}}}, &perm); err != nil {
 					return nil, err
@@ -320,6 +343,11 @@ func TestSwitchProviderAndModel(t *testing.T) {
 		t.Fatalf("%d runs of a cli: %+v", len(starts), starts)
 	}
 	// Codex's session starts with the conversation, then resumes without it.
+	// Codex's sessions run read-only, a new one and one loaded alike: its
+	// own tools ask before they change anything (ADR 0015).
+	if starts[0].Mode != "read-only" || starts[1].Mode != "read-only" {
+		t.Errorf("codex's modes: %q %q", starts[0].Mode, starts[1].Mode)
+	}
 	if starts[0].Engine != "codex" || starts[0].Model != "gpt-x" || starts[0].Resume != "" ||
 		!strings.Contains(starts[0].Prompt, "api says hi") || !strings.Contains(starts[0].Prompt, "<instructions>") {
 		t.Errorf("codex's first run: %+v", starts[0])
@@ -328,7 +356,7 @@ func TestSwitchProviderAndModel(t *testing.T) {
 		t.Errorf("codex's second run: %+v", starts[1])
 	}
 	// Copilot's starts with all of it, Codex's replies too.
-	if starts[2].Engine != "copilot" || starts[2].Model != "" || !strings.Contains(starts[2].Prompt, "codex gpt-x: no call") {
+	if starts[2].Engine != "copilot" || starts[2].Model != "" || starts[2].Mode != "" || !strings.Contains(starts[2].Prompt, "codex gpt-x: no call") {
 		t.Errorf("copilot's run: %+v", starts[2])
 	}
 	if b, err := os.ReadFile(filepath.Join(ws, "notes.txt")); err != nil || string(b) != "from an agent\n" {
@@ -576,6 +604,86 @@ func TestCodexBareNameIsItsOwn(t *testing.T) {
 		p, _ := r.Pending(ctx, s)
 		return len(p) == 1 && p[0].Tool == "write"
 	})
+}
+
+// Codex asks to run a call of KairoCode's MCP server by the id of the tool
+// call it announced, with no title (in its read-only mode): it is allowed,
+// as KairoCode's tool checks it as it runs. A call of its own announced so
+// is asked about (ADR 0015).
+func TestCodexAsksByID(t *testing.T) {
+	setupFakeCLI(t, "")
+	t.Setenv("KC_FAKE_CLI_OWN", "1")
+	t.Setenv("KC_FAKE_CLI_BY_ID", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	t.Setenv("KC_FAKE_CLI_OWN_TITLE", "mcp."+MCPServerName+".read")
+	s, _ := r.CreateSession(ctx, "ours", workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+	if _, err := r.Send(ctx, s, "read it"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.WaitTurn(ctx, s, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); !strings.Contains(text, "mcp."+MCPServerName+".read yes") {
+		t.Fatalf("reply %q", text)
+	}
+	t.Setenv("KC_FAKE_CLI_OWN_TITLE", "web_search")
+	s, _ = r.CreateSession(ctx, "its", workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+	if _, err := r.Send(ctx, s, "search"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, ctx, "the question", func() bool {
+		p, _ := r.Pending(ctx, s)
+		return len(p) == 1 && p[0].Tool == "web_search"
+	})
+	// A call asked for by an id never announced is not taken for ours.
+	t.Setenv("KC_FAKE_CLI_OWN_TITLE", "mcp."+MCPServerName+".read")
+	t.Setenv("KC_FAKE_CLI_BY_ID", "unannounced")
+	s, _ = r.CreateSession(ctx, "unknown", workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+	if _, err := r.Send(ctx, s, "read it"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, ctx, "the question", func() bool {
+		p, _ := r.Pending(ctx, s)
+		return len(p) == 1 && p[0].Kind == "approval"
+	})
+}
+
+// Codex that does not take the read-only mode is not prompted: in its
+// default mode its own tools would act unasked. The user is told why
+// (ADR 0015).
+func TestCodexModeRefused(t *testing.T) {
+	log := setupFakeCLI(t, "")
+	t.Setenv("KC_FAKE_CLI_NO_MODE", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
+		Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s, _ := r.CreateSession(ctx, "nomode", workflows.SessionInput{Dir: repo(t), Engine: "codex"})
+	if _, err := r.Send(ctx, s, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.WaitTurn(ctx, s, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := r.Reply(ctx, out.Reply); !strings.Contains(text, "did not take the read-only mode") {
+		t.Fatalf("reply %q", text)
+	}
+	if st := cliStarts(t, log); len(st) != 0 {
+		t.Fatalf("prompted: %+v", st)
+	}
 }
 
 // TestCrashAgentToolAnswerUsedOnce: an agent's own tool, allowed, runs;

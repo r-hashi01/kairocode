@@ -208,7 +208,10 @@ func copilotRepoHooks(dir string) error {
 // mcp_servers, or a table or key with an escape in it, is an error: codex
 // is then not started, rather than one of its servers missed. An error
 // names the file and the line, not what is on it (it may hold a secret).
-func codexMCPNames(path string) ([]string, error) {
+// With plugins off (codex started with features.plugins = false), a
+// plugin's tables ([plugins.<id>...], its servers' settings among them)
+// name no server that runs, and are passed over.
+func codexMCPNames(path string, pluginsOff bool) ([]string, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -231,7 +234,7 @@ func codexMCPNames(path string) ([]string, error) {
 		if strings.Contains(key, "\\") && (strings.HasPrefix(line, "[") || strings.Contains(line, "=")) {
 			return nil, fmt.Errorf("%s:%d: a table or key with an escape: KairoCode cannot tell whether it is an MCP server, so codex is not started here", path, i+1)
 		}
-		if !strings.Contains(line, "mcp_servers") {
+		if !strings.Contains(line, "mcp_servers") || pluginsOff && strings.HasPrefix(line, "[plugins.") {
 			continue
 		}
 		m := codexServerLine.FindStringSubmatch(line)
@@ -296,11 +299,16 @@ func ownMCP() (bool, error) {
 // always (a cloned repository's commands, run with no one asked), and the
 // user's own (codexHome's config.toml) unless agents.ownMCP. Their calls
 // would not go through KairoCode; servers the user wants are given
-// through KairoCode instead (kairocode.json's mcp).
+// through KairoCode instead (kairocode.json's mcp). Codex's plugins, which
+// bring servers of their own, are off with them (acpArgv).
 func codexMCPOff(dir, codexHome string) ([]string, error) {
+	own, err := ownMCP()
+	if err != nil {
+		return nil, err
+	}
 	var off []string
 	add := func(path string) error {
-		names, err := codexMCPNames(path)
+		names, err := codexMCPNames(path, !own)
 		for _, n := range names {
 			if !slices.Contains(off, n) {
 				off = append(off, n)
@@ -314,10 +322,6 @@ func codexMCPOff(dir, codexHome string) ([]string, error) {
 				return nil, err
 			}
 		}
-	}
-	own, err := ownMCP()
-	if err != nil {
-		return nil, err
 	}
 	if !own && codexHome != "" {
 		if err := add(filepath.Join(codexHome, "config.toml")); err != nil {
