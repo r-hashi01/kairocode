@@ -2,6 +2,10 @@
 
 A coding agent that picks up where it left off after a crash, never runs a side effect twice, and can wait hours for your approval without holding a process.
 
+![A five-step flow, its daemon killed with kill -9 in the middle of a step: it goes on from where it was, asks about the step that was cut off, and every step happens once](docs/durability.gif)
+
+**See it for yourself:** [kill -9 it in the middle of a five-step flow](docs/durability.md). It goes on from where it was, asks about the one step that was cut off, and every step happens once. It takes a minute and needs no API key: `scripts/demo-durability.sh`.
+
 KairoCode runs each session as a workflow on [kairo](https://github.com/r-hashi01/kairo), a durable workflow runtime. It is the same kind of tool as Claude Code or opencode, with these guarantees:
 
 - **It survives crashes.** `kill -9` the process and the next one continues from where it stopped. Model calls and tool runs that already finished are not repeated.
