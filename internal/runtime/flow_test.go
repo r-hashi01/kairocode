@@ -242,10 +242,14 @@ def main(input):
 	s, _ := r.CreateSession(ctx, "slow", workflows.SessionInput{Dir: ws})
 	n, _ := r.RunFlow(ctx, s, "slow", "")
 	waitUntil(t, ctx, "the command starts", func() bool { return exists(filepath.Join(ws, "started")) })
-	r.Close() // the command is cut off with its process
+	start := time.Now()
+	if err := r.Close(); err != nil { // the command is cut off with its process
+		t.Errorf("closing (%v): %v", time.Since(start), err)
+	}
+	closed := time.Since(start)
 	r, err = Open(ctx, Config{DB: db, Owner: "slow", Provider: &provider.Fake{HoldAt: -1}})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("opening again, closed in %v, opening for %v: %v", closed, time.Since(start)-closed, err)
 	}
 	defer r.Close()
 	var p []Pending

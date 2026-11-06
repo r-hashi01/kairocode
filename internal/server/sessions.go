@@ -190,7 +190,7 @@ func (s *Server) getTurn(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"stopped": api.StoppedCancelled})
 		return
 	}
-	if errors.Is(err, kairo.ErrStopped) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, kairo.ErrStopped) || errors.Is(err, context.Canceled) || errors.Is(err, api.ErrClosing) {
 		// The wait was cut (the daemon going, as it hands over: ADR 0019),
 		// not the turn: the client waits again, there.
 		fail(w, http.StatusServiceUnavailable, err)

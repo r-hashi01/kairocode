@@ -139,3 +139,10 @@ Where this shows in the implementation: `internal/runtime` (managing MCP clients
 - In a try run (ADR 0017), outside tools are not loaded (no questions, no servers started).
 - In every case, calls are added only when the recorded `agent.load` has outside settings, so the version was not bumped.
 - Tests: `TestFlowUsesMCPServerTools`.
+
+## Addendum: codex's plugins are off with its MCP servers (2026-11-06, the user's decision)
+
+- **What we found (codex 0.164):** codex's plugins bring MCP servers of their own (`codex mcp list` showed `codex_app` and `cua_repl` from plugins), which codex starts by itself, outside KairoCode. The settings of a plugin's server (`[plugins."<id>".mcp_servers.<name>.tools.js]`) made `codexMCPNames` refuse to start codex, while a plugin with no such line went through: the servers ran either way.
+- **Decision:** unless `agents.ownMCP`, KairoCode starts codex with `features.plugins = false`, like its own MCP servers. Checked: `codex -c features.plugins=false mcp list` lists no plugin's servers. With plugins off, the tables under `[plugins.…]` name no server that runs, and are passed over; with `agents.ownMCP` (plugins on), such a table in a project's `.codex/config.toml` still keeps codex from starting.
+- This changes ADR 0018's "what an agent adds as its own (plugins …) stays" for codex's plugins: their servers' calls would not go through KairoCode.
+- **Tests:** `TestCodexOwnMCPServersOff` (plugins off without `ownMCP`, on with it; a plugin's table in the user's settings read, in a project's with plugins on not), `TestCodexMCPNamesStrict`, `TestAgentsOwnHooks`.

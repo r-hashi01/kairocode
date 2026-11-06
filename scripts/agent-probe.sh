@@ -79,6 +79,13 @@ if command -v codex >/dev/null; then
   for m in PROBE_CLAUDE_MD PROBE_DOT_CLAUDE_MD PROBE_LOCAL_MD PROBE_USER_CLAUDE_MD PROBE_CLAUDE_SKILL; do
     check "it reads $m by itself" no "$(has "$out" "$m")"
   done
+  # Its own shell, as KairoCode turns it off (ADR 0015, addendum
+  # 2026-11-06): declared without, gone with.
+  off="$work/codex-shell-off"
+  (cd "$proj" && HOME="$home" CODEX_HOME="$codex_home" perl -e 'alarm 60; exec @ARGV' codex debug prompt-input \
+    -c features.shell_tool=false -c features.unified_exec=false hi >"$off" 2>/dev/null)
+  check "it has its own shell (exec_command)" yes "$(has "$out" '### `exec_command`')"
+  check "it has its own shell with shell_tool and unified_exec off" no "$(has "$off" '### `exec_command`')"
 else
   echo "codex: not installed, skipped"
 fi

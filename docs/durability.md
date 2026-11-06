@@ -79,6 +79,31 @@ cat ledger.txt
 
 The same holds for a chat session, a subagent, and a flow started by a hook, and for whichever engine runs the model ([README](../README.md#getting-started)).
 
+## With Claude Code or codex as the engine
+
+KairoCode can leave the model loop to another agent: Claude Code, or codex (`-provider claude-code`, `-provider codex`, or `/provider` in the chat). The agent then decides what to call, and keeps the conversation in its own record. The guarantees above still hold, because what the agent does to your files and your machine goes through KairoCode:
+
+- **Its tools are KairoCode's.** Claude Code is started with its built-in tools off and KairoCode's tools on an MCP server (ADR 0007). codex is started with its own shell off, so KairoCode's `bash` is its only shell, and it has KairoCode's tools on the same MCP server; the files it writes and the terminals it opens through ACP's client calls are KairoCode's `write` and `bash` too (ADR 0014, 0015). Each call is a run of kairo, named from the tool and its input: the same rules, effects and sandbox as with the Claude API.
+- **After a crash, the agent is resumed, and its calls meet the record.** The next daemon stops what is left of the agent, and resumes it from its own record (`claude --resume`, ACP's `session/load`), telling it to go on. When it makes a call again, the call finds the run it made before: a finished one returns its result, and one cut off waits for a person, as in the demo above. The agent is told to stop and wait, and the turn waits without holding a process.
+- **What the agent would do by itself asks first.** What is left of codex's own tools (`apply_patch`) runs in codex's read-only mode: it asks before it changes anything, and you are asked, with "runs outside KairoCode" on the question. codex's own MCP servers and plugins, and the agents' own hooks, are off, unless you turn them on in your own settings (`agents.ownMCP`, `agents.ownHooks`; ADR 0018, 0022): what they do is then outside KairoCode.
+
+### Run it
+
+```sh
+scripts/demo-engines.sh claude-code
+scripts/demo-engines.sh codex
+```
+
+The same five steps as above, asked of the agent in words: "run these five commands, one call each". The daemon is killed in the middle of `tag`; the agent, resumed, calls `tag` again, which is not run but asked about; once you answer, the agent goes on with `publish` and `announce`. It ends with five lines in `ledger.txt`, none twice.
+
+This one calls the real model, with your own sign-in to the agent, and takes a minute or two. It runs in a folder of its own, as the first demo does; your own Claude Code hooks are not read there. On 2026-11-06 it passed with Claude Code 2.1.317, and three times out of three with codex 0.164 (codex-acp 2.2.2).
+
+### What differs
+
+- The model calls happen inside the agent, and are not KairoCode's runs: a model call cut off by a crash is made again by the agent. What it costs is the agent's.
+- If you allow one of codex's own tools when asked, what it does is outside KairoCode's record: if it is cut off, nobody is asked whether it took effect.
+- The settings that turn codex's own shell off and make it read-only are codex's own. `scripts/agent-probe.sh` checks them without calling a model; run it when you upgrade codex.
+
 ## What it does not cover
 
 - A command that was cut off may have done part of its work (a `sleep` stopped, a file half written by a script). KairoCode asks whether it took effect; it cannot undo a part.

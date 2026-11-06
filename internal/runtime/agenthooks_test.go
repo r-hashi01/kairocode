@@ -60,7 +60,7 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if fi, _ := os.Stat(settings); fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode %v", fi.Mode())
 	}
-	if c := codexHooks(); c != `{"features":{"hooks":false}}` {
+	if c := codexHooks(); c != `{"features":{"hooks":false,"plugins":false,"shell_tool":false,"unified_exec":false}}` {
 		t.Errorf("codex off: %q", c)
 	}
 
@@ -90,7 +90,8 @@ func TestAgentsOwnHooks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, copilotMark)); !os.IsNotExist(err) {
 		t.Errorf("mark left: %v", err)
 	}
-	if c := codexHooks(); c != "" {
+	// Its plugins stay off: they go with its MCP servers (agents.ownMCP).
+	if c := codexHooks(); c != `{"features":{"plugins":false,"shell_tool":false,"unified_exec":false}}` {
 		t.Errorf("codex released: %q", c)
 	}
 
@@ -198,15 +199,15 @@ func TestCopilotRepoHooks(t *testing.T) {
 }
 
 // Codex's own MCP servers are turned off through CODEX_CONFIG: a
-// project's always, the user's unless agents.ownMCP; settings written in
-// a way not read keep codex from starting (ADR 0022).
+// project's always, the user's (and its plugins) unless agents.ownMCP;
+// settings written in a way not read keep codex from starting (ADR 0022).
 func TestCodexOwnMCPServersOff(t *testing.T) {
 	cfgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
 	t.Setenv("CODEX_CONFIG", "")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
-	os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"x\"\n\n[mcp_servers.playwright]\ncommand = \"npx\"\n\n[mcp_servers.node_repl.env]\nA = \"1\"\n\n[mcp_servers.\"quoted name\"]\ncommand = \"y\"\n"), 0o600)
+	os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"x\"\n\n[mcp_servers.playwright]\ncommand = \"npx\"\n\n[mcp_servers.node_repl.env]\nA = \"1\"\n\n[mcp_servers.\"quoted name\"]\ncommand = \"y\"\n\n[plugins.\"p@m\".mcp_servers.y.tools.js]\napproval_mode = \"approve\"\n"), 0o600)
 	ws := repo(t)
 	putFiles(t, ws, map[string]string{".git/HEAD": "ref: refs/heads/main\n", ".codex/config.toml": "mcp_servers.from_repo.command = \"sh\"\n"})
 	r, err := Open(context.Background(), Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", CodexPath: os.Args[0],
@@ -222,17 +223,22 @@ func TestCodexOwnMCPServersOff(t *testing.T) {
 			t.Fatal(err)
 		}
 		var cfg struct {
-			MCP map[string]map[string]any `json:"mcp_servers"`
+			MCP      map[string]map[string]any `json:"mcp_servers"`
+			Features map[string]any            `json:"features"`
 		}
 		json.Unmarshal([]byte(env["CODEX_CONFIG"]), &cfg)
 		out := map[string]any{}
 		for n, v := range cfg.MCP {
 			out[n] = v["enabled"]
 		}
+		// Its plugins, which bring servers of their own, go with them.
+		if p, ok := cfg.Features["plugins"]; ok {
+			out["(plugins)"] = p
+		}
 		return out
 	}
 	got := off()
-	for _, n := range []string{"playwright", "node_repl", "quoted name", "from_repo"} {
+	for _, n := range []string{"playwright", "node_repl", "quoted name", "from_repo", "(plugins)"} {
 		if got[n] != false {
 			t.Errorf("%s is not off: %v", n, got)
 		}
@@ -241,6 +247,11 @@ func TestCodexOwnMCPServersOff(t *testing.T) {
 	os.WriteFile(filepath.Join(cfgDir, "kairocode", ConfigFile), []byte(`{"agents": {"ownMCP": true}}`), 0o600)
 	if got := off(); len(got) != 1 || got["from_repo"] != false {
 		t.Errorf("with ownMCP, the project's alone is off: %v", got)
+	}
+	// Plugins on (the user's own), a project's plugin server is not read.
+	os.WriteFile(filepath.Join(ws, ".codex", "config.toml"), []byte("[plugins.\"p@m\".mcp_servers.y]\n"), 0o600)
+	if _, _, _, err := r.acpArgv(workflows.EngineCodex, ws, nil, ""); err == nil {
+		t.Fatal("a project's plugin server, plugins on: codex would start")
 	}
 	os.WriteFile(filepath.Join(ws, ".codex", "config.toml"), []byte("mcp_servers = { x = { command = \"sh\" } }\n"), 0o600)
 	if _, _, _, err := r.acpArgv(workflows.EngineCodex, ws, nil, ""); err == nil {
@@ -257,7 +268,7 @@ func TestCodexMCPNamesStrict(t *testing.T) {
 	read := func(text string) ([]string, error) {
 		path := filepath.Join(dir, "config.toml")
 		os.WriteFile(path, []byte(text), 0o600)
-		return codexMCPNames(path)
+		return codexMCPNames(path, false)
 	}
 	for text, want := range map[string]string{
 		"[mcp_servers.a]\ncommand = \"x\"\n[mcp_servers.b.env]\nK = \"v\"": "a,b",
@@ -281,6 +292,7 @@ func TestCodexMCPNamesStrict(t *testing.T) {
 		"mcp_servers = { g = { command = \"x\", env = { T = \"kc-test-token-4471\" } } }",
 		"[[mcp_servers.x]]",
 		"[profiles.p.mcp_servers.y]",
+		"[plugins.\"p@m\".mcp_servers.y.tools.js]",
 	} {
 		_, err := read(text)
 		if err == nil {
@@ -288,6 +300,16 @@ func TestCodexMCPNamesStrict(t *testing.T) {
 		} else if strings.Contains(err.Error(), "kc-test-token") {
 			t.Errorf("the error shows the line: %v", err)
 		}
+	}
+	// With codex's plugins off, a plugin's tables name no server that runs.
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte("[plugins.\"p@m\".mcp_servers.y.tools.js]\napproval_mode = \"approve\"\n[mcp_servers.a]"), 0o600)
+	if got, err := codexMCPNames(path, true); err != nil || strings.Join(got, ",") != "a" {
+		t.Errorf("plugins off: %v %v", got, err)
+	}
+	os.WriteFile(path, []byte("[profiles.p.mcp_servers.y]"), 0o600)
+	if _, err := codexMCPNames(path, true); err == nil {
+		t.Error("plugins off: a profile's server was read")
 	}
 }
 
