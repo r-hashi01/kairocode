@@ -79,6 +79,13 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		if agent.Hooks, err = decideHooks(ctx, in, agent); err != nil {
 			return TurnOutput{}, err
 		}
+		// The hooks the daemon runs when a person is needed (ADR 0034)
+		// are asked about here: their runs never ask.
+		if hasHook(agent, HookApprovalRequested) {
+			if err := askHooks(ctx, in, agent, HookApprovalRequested); err != nil {
+				return TurnOutput{}, err
+			}
+		}
 	}
 	var ext map[string]ExtRef
 	if len(agent.External) > 0 && !in.Dry {

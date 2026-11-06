@@ -11,6 +11,9 @@ type FlowCall struct {
 	// Draft: the flow's draft, not its published script, run as a try
 	// (/flow <name> --draft, ADR 0030).
 	Draft bool `json:"draft,omitempty"`
+	// Request: of an approval.requested hook's flow, the request it tells
+	// of (ADR 0034), its input["request"].
+	Request *ApprovalRequest `json:"request,omitempty"`
 }
 
 // FlowInput is a flow's run, in the turn that runs it.

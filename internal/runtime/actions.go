@@ -38,6 +38,7 @@ func (r *Runtime) observe(o kairo.Observation) {
 		r.cfg.Observe(o)
 	}
 	r.ev.observe(o)
+	r.notifyObserve(o)
 	if o.Kind != kairo.ObsRunStarted && o.Kind != kairo.ObsRunSettled {
 		return
 	}
@@ -196,7 +197,7 @@ func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolIn
 	}
 	defer root.Close()
 	env := tools.Env{Root: root, Dir: in.Dir,
-		Jobs: jobEnv{m: r.jobs, session: sessionOf(t.RunID), dir: in.Dir, key: t.IdempotencyKey}}
+		Jobs: jobEnv{m: r.jobs, session: ownerSession(t.RunID), dir: in.Dir, key: t.IdempotencyKey}}
 	if d.Name == tools.FetchTool.Name || d.Name == tools.HTTPTool.Name {
 		if env.Net, err = userNet(); err != nil {
 			return r.toolResult(t, in.Call, tools.Result{Output: err.Error(), IsError: true})

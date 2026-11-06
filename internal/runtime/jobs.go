@@ -615,7 +615,7 @@ func (r *Runtime) jobWatch(t *kairo.TaskContext, in workflows.JobWatchInput) (wo
 		out, err := r.toolResult(t, in.Call.Call, tools.Result{Output: "invalid input: want {id}", IsError: true})
 		return workflows.JobWatchOutput{Done: true, Result: out}, err
 	}
-	session := sessionOf(in.Waiter)
+	session := ownerSession(in.Waiter)
 	signal, ended, err := r.jobs.watch(session, a.ID, in.Waiter, in.Call.Call)
 	if err != nil {
 		out, err := r.toolResult(t, in.Call.Call, tools.Result{Output: err.Error(), IsError: true})
@@ -642,7 +642,7 @@ func (r *Runtime) jobResult(t *kairo.TaskContext, in workflows.JobResultInput) (
 		// This wait is over: the command's end is not for it now.
 		r.jobs.unwatch(in.ID, in.Waiter, in.Signal)
 	}
-	return r.jobResultOf(t, sessionOf(in.Waiter), in.ID, in.Call.Call, in.TimedOut)
+	return r.jobResultOf(t, ownerSession(in.Waiter), in.ID, in.Call.Call, in.TimedOut)
 }
 
 func (r *Runtime) jobResultOf(ctx context.Context, session, id, call string, timedOut bool) (workflows.ToolOutput, error) {

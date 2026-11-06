@@ -114,6 +114,9 @@ type item struct {
 	chunk   *kairo.Chunk
 	from    *tokens // the stream a chunk came from
 	join    *watcher
+	// notify: obs is of a notify run's (ADR 0034): it tells nothing of the
+	// session's own, but what waits in it may have changed.
+	notify bool
 }
 
 func newEvents(r *Runtime) *events {
@@ -235,7 +238,10 @@ func (e *events) observe(o kairo.Observation) {
 	if o.Kind != kairo.ObsRunStarted && o.Kind != kairo.ObsRunSettled {
 		return
 	}
-	s := sessionOf(o.RunID)
+	s, notify := sessionOf(o.RunID), inNotify(o.RunID)
+	if notify {
+		s = ownerSession(o.RunID)
+	}
 	if s == "" {
 		return
 	}
@@ -243,7 +249,7 @@ func (e *events) observe(o kairo.Observation) {
 	watched := e.watchers[s] != nil
 	e.mu.Unlock()
 	if watched {
-		e.push(item{session: s, obs: &o})
+		e.push(item{session: s, obs: &o, notify: notify})
 	}
 }
 
@@ -325,6 +331,10 @@ func (e *events) make(it item) {
 				e.keepSaid(it.session, turn, it.chunk.RunID, string(it.chunk.Data))
 				e.emit(it.session, Event{Type: EventToken, Turn: turn, Text: string(it.chunk.Data)})
 			}
+		}
+	case it.obs != nil && it.notify:
+		if it.obs.Kind == kairo.ObsRunSettled || strings.HasPrefix(it.obs.Plan, "kairo.wait/") {
+			e.refresh(it.session)
 		}
 	case it.obs != nil:
 		e.observed(it.session, *it.obs)

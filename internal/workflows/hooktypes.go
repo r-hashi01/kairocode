@@ -18,6 +18,9 @@ const (
 	// PreToolUse): one that blocks stops the call (ADR 0018).
 	HookTurnStart  = "turn.start"
 	HookToolBefore = "tool.before"
+	// HookApprovalRequested runs when a person is needed (an approval, a
+	// review, a question), apart from the turn, in a notify run (ADR 0034).
+	HookApprovalRequested = "approval.requested"
 	// HookTool is the name a hook goes by in the permission rules: a
 	// project's hook is asked about before it first runs.
 	HookTool = "hook"

@@ -20,6 +20,30 @@ func sessionOf(run string) string {
 	return parts[0] + "/" + parts[1]
 }
 
+// ownerSession is the session a run is for: the one it is in, or, for a
+// run under a notify run (n/<id>/..., ADR 0034), the session it tells of.
+func ownerSession(run string) string {
+	if id, ok := strings.CutPrefix(run, "n/"); ok {
+		id, _, _ = strings.Cut(id, "/")
+		if id == "" {
+			return ""
+		}
+		return SessionID(id)
+	}
+	return sessionOf(run)
+}
+
+// inNotify reports whether run is a notify run or under one (ADR 0034).
+func inNotify(run string) bool { return strings.HasPrefix(run, "n/") }
+
+// notifyID is the kairo id of the notify run of the request key in session
+// (ADR 0034; AGENTS.md, invariant 8): made from them alone, so starting it
+// again finds the same run.
+func notifyID(session, key string) string {
+	h := sha256.Sum256([]byte(key))
+	return "n/" + strings.TrimPrefix(session, "s/") + "/" + hex.EncodeToString(h[:])[:24]
+}
+
 // turnOf is the turn a run is in, the session's child.
 func turnOf(run string) string {
 	parts := strings.SplitN(run, "/", 4)

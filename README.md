@@ -84,7 +84,7 @@ kairocode usage -session <session>   # the tokens the model calls used
 - A large paste (over 10 lines or 1,000 characters) is folded in the input as `[Pasted text #1 +42 lines]` and sent in full.
 - Messages typed during a turn are sent when it ends.
 - Long commands (tests, builds, servers) can run in the background: the model reads their output or waits for them later. They keep running when the daemon is replaced.
-- Notifications: when the terminal is not focused and KairoCode waits for an approval or a question, or a turn ends, it tells you with a terminal notification (iTerm2, WezTerm, Ghostty, kitty) or the bell. Set `"notify"` in `~/.config/kairocode/kairocode.json` to `"unfocused"` (default), `"always"` or `"never"`.
+- Notifications: when the terminal is not focused and KairoCode waits for an approval or a question, or a turn ends, it tells you with a terminal notification (iTerm2, WezTerm, Ghostty, kitty) or the bell. Set `"notify"` in `~/.config/kairocode/kairocode.json` to `"unfocused"` (default), `"always"` or `"never"`. To hear of them away from the machine (in Slack, say), bind a flow to `approval.requested`: [docs/notify.md](docs/notify.md).
 - If a session stops on a storage error, a new session goes on from its last finished turn (the old session's record is kept).
 
 ### From an editor (ACP)
@@ -137,7 +137,7 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 |---|---|---|
 | `permission` | Rules per tool (above) | Yours, the project's |
 | `sandbox.loopback` | The local-only sandbox: `allow` (default), `ask` or `deny` | Yours (a project can only make it stricter) |
-| `hooks` | Flows run at points such as the end of a turn | Yours, the project's |
+| `hooks` | Flows run at points such as the end of a turn, or when a person is needed (`approval.requested`, [docs/notify.md](docs/notify.md)) | Yours, the project's |
 | `mcp`, `tools` | MCP servers, and your own tools written as commands | Yours, the project's |
 | `lsp` | Language servers that check the files written (`false` turns them off) | Yours, the project's |
 | `agents.claudeHooks` | Claude Code's hooks: `ask` (default) or `off` | Yours (a project can only turn them `off`) |

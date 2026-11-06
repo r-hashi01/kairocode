@@ -70,6 +70,10 @@ func TestMain(m *testing.M) {
 		crashCancelChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_NOTIFY_CHILD") == "1" {
+		crashNotifyChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_HOOK_CHILD") == "1" {
 		crashHookChild()
 		return

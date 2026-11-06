@@ -175,6 +175,13 @@ func (r *flowRun) run(source string) (FlowOutput, error) {
 	}
 	input := starlark.NewDict(1)
 	_ = input.SetKey(starlark.String("args"), starlark.String(r.in.Call.Args))
+	if q := r.in.Call.Request; q != nil {
+		req := starlark.NewDict(9)
+		for _, f := range q.fields() {
+			_ = req.SetKey(starlark.String(f[0]), starlark.String(f[1]))
+		}
+		_ = input.SetKey(starlark.String("request"), req)
+	}
 	v, err := starlark.Call(thread, main, starlark.Tuple{input}, nil)
 	if out, failed := r.ended(err); failed {
 		return out, r.stop
