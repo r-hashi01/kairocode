@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
@@ -62,7 +63,12 @@ func (r *Runtime) TurnRun(ctx context.Context, session string, n int) (kairo.Run
 // WaitTurn waits for turn n of a session to finish and returns its result.
 // It waits on runs starting and settling in this process, not on a timer
 // (kairo#8: a turn another process starts is noticed only once found).
-func (r *Runtime) WaitTurn(ctx context.Context, session string, n int) (workflows.TurnOutput, error) {
+func (r *Runtime) WaitTurn(ctx context.Context, session string, n int) (out workflows.TurnOutput, err error) {
+	defer func() {
+		// Closing (a new build takes over, ADR 0019), its store may fail
+		// under the wait: the wait was cut, not the turn.
+		err = r.cut(err)
+	}()
 	for {
 		changed := r.changes()
 		run, ok, err := r.TurnRun(ctx, session, n)
@@ -91,7 +97,18 @@ func (r *Runtime) WaitTurn(ctx context.Context, session string, n int) (workflow
 func (r *Runtime) Reply(ctx context.Context, hash string) (string, error) {
 	m, err := r.Store.Message(ctx, hash)
 	if err != nil {
-		return "", err
+		return "", r.cut(err) // read after a wait: cut as the wait is
 	}
 	return m.Text(), nil
+}
+
+// cut is err as a wait's: while the runtime closes (a new build takes
+// over, ADR 0019), its store may fail under the wait, which was cut, not
+// the turn; the next daemon answers it. A turn the user stopped is an
+// answer still.
+func (r *Runtime) cut(err error) error {
+	if err == nil || !r.closing() || errors.Is(err, ErrClosing) || errors.Is(err, kairo.ErrCancelled) {
+		return err
+	}
+	return fmt.Errorf("%w (%v)", ErrClosing, err)
 }

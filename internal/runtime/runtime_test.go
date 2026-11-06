@@ -223,6 +223,30 @@ func TestWaitTurnBeforeItStarts(t *testing.T) {
 	}
 }
 
+// A wait the runtime's closing cuts (a new build taking over, ADR 0019),
+// and the reply read after it, say so, whatever the store said as it
+// closed: the server tells the client to wait again, there.
+func TestWaitTurnCutByClosing(t *testing.T) {
+	t.Parallel()
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, err := r.CreateSession(ctx, "w", workflows.SessionInput{Dir: repo(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, 0); !errors.Is(err, ErrClosing) {
+		t.Fatalf("waited with %v", err)
+	}
+	// The reply, read once the wait ends, is cut the same way.
+	if _, err := r.Reply(ctx, "0123"); !errors.Is(err, ErrClosing) {
+		t.Fatalf("reply read with %v", err)
+	}
+}
+
 // A reply cut off with tool calls in it (here, a refusal) runs none of them;
 // each is answered "not run", so the conversation the next turn sends is
 // still well formed.
