@@ -135,6 +135,9 @@ def main(input):
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("its TMPDIR is still there: %v", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waitAllTold(t, ctx, r)
 }
 
 // sandbox.loopback is kept as the turn started, with the rules (invariant

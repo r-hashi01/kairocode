@@ -32,6 +32,40 @@ def main(input):
     return id + "\n" + seen.output + "\n---\n" + w.output
 `
 
+// stopJob stops a command of session in the background and waits until
+// its end is told. Until then its runner and r write in its folder, which
+// t.TempDir's cleanup removes; and a kill before the runner wrote its pid
+// stops nothing.
+func stopJob(t *testing.T, r *Runtime, session, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waitUntil(t, ctx, "the runner", func() bool { return fileThere(r.jobs.path(id, jobFilePID)) })
+	if err := (jobEnv{m: r.jobs, session: session}).Kill(id); err != nil {
+		t.Fatal(err)
+	}
+	waitTold(t, ctx, r, id)
+}
+
+// waitTold waits until a command's end is told: the last r writes in its
+// folder.
+func waitTold(t *testing.T, ctx context.Context, r *Runtime, id string) {
+	t.Helper()
+	waitUntil(t, ctx, "its end told", func() bool { return fileThere(r.jobs.path(id, jobFileNotified)) })
+}
+
+// waitAllTold waits until the end of every command of r is told: one
+// ended, and waited for, may still be told when the test ends.
+func waitAllTold(t *testing.T, ctx context.Context, r *Runtime) {
+	t.Helper()
+	entries, _ := os.ReadDir(r.jobs.dir)
+	for _, e := range entries {
+		if e.IsDir() {
+			waitTold(t, ctx, r, e.Name())
+		}
+	}
+}
+
 // jobFolder waits for the one command in the background of r to be
 // waited for, and gives its folder.
 func waitedJob(t *testing.T, r *Runtime) string {
@@ -164,6 +198,7 @@ def main(input):
 	if !strings.Contains(conv, "[KairoCode] The command in the background "+id+" ended (exit 0)") || !strings.Contains(conv, "I read it") {
 		t.Fatalf("not told:\n%s", conv)
 	}
+	waitAllTold(t, ctx, r)
 }
 
 // A command runs out of its time, or is stopped; a session has at most
@@ -181,6 +216,7 @@ func TestBackgroundTimeoutKillAndLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, ctx, "the timeout", func() bool { v, _ := env("").View(id, 0); return !v.Running })
+	waitTold(t, ctx, r, id)
 	if v, _ := env("").View(id, 0); !strings.HasPrefix(v.Status, "timed out") {
 		t.Fatalf("timed out: %+v", v)
 	}
@@ -203,13 +239,7 @@ func TestBackgroundTimeoutKillAndLimit(t *testing.T) {
 		t.Fatal("more than the most at once")
 	}
 	for _, id := range ids {
-		waitUntil(t, ctx, "a runner", func() bool { return fileThere(r.jobs.path(id, jobFilePID)) })
-		if err := env("").Kill(id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, id := range ids {
-		waitUntil(t, ctx, "the stop", func() bool { v, _ := env("").View(id, 0); return !v.Running })
+		stopJob(t, r, "s/limits", id)
 		if v, _ := env("").View(id, 0); v.Status != jobStatusStop {
 			t.Fatalf("stopped: %+v", v)
 		}
@@ -334,6 +364,7 @@ def main(input):
 	waitUntil(t, ctx, "the session told", func() bool {
 		return strings.Contains(strings.Join(conversationOf(t, r, s, true), "\n"), "[KairoCode] The command in the background "+id+" ended (exit 0)")
 	})
+	waitAllTold(t, ctx, r)
 }
 
 // Two waits for one command in one run (calls at once) each have a signal
@@ -347,7 +378,7 @@ func TestBackgroundTwoWaitsInARun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Kill(id)
+	defer stopJob(t, r, "s/two", id)
 	a, _, err := r.jobs.watch("s/two", id, "s/two/turn", "call_a")
 	if err != nil {
 		t.Fatal(err)
@@ -432,6 +463,7 @@ func TestAwaitingWhileWaiting(t *testing.T) {
 			t.Fatalf("%s: %s", c.flow, text)
 		}
 		waitUntil(t, ctx, "nothing awaited", func() bool { return !r.Awaiting(ctx) })
+		waitAllTold(t, ctx, r)
 	}
 }
 
