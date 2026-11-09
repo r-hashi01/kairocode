@@ -113,6 +113,8 @@ type Runtime struct {
 	// worktreeMu: one worktree is made at a time, so two asked for at once
 	// with no name do not take the same free one (ADR 0037).
 	worktreeMu sync.Mutex
+	// rates are the providers' rate limits (ADR 0040).
+	rates *rateLimiter
 
 	approveMu sync.Mutex // serializes answers (Approve)
 
@@ -224,6 +226,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger),
 		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}
 	r.ev = newEvents(r)
+	r.rates = newRateLimiter()
 	r.ext.logf = r.logf
 	r.bgCtx, r.bgCancel = context.WithCancel(context.Background())
 	r.jobs = newJobs(r)

@@ -1,6 +1,6 @@
 # 0040 Rate limits per provider: requests and tokens a minute, and the waits a 429 asks for
 
-- Status: Proposed
+- Status: Accepted (2026-11-09)
 - Date: 2026-11-09
 - Related: requirements FR-27 (rate limits), ADR 0024 (decision 6, replaced with the rest of it by 0039, which left rate limits out), 0039 (the ledger), 0035 (OpenAI-compatible providers), 0008 (one daemon), kairo's ADR 0059 (`Limit`, `Rate`), kairo#20, invariants 2, 4, 6 and 7, M11
 
@@ -75,6 +75,34 @@ The kairo side: [kairo#20](https://github.com/r-hashi01/kairo/issues/20) asks fo
   - `TestRateLimitProjectCannotLoosen`.
   - `TestRateLimitCancelled`: a waiting call ends when its turn is cancelled.
   - The adapters: `Retry-After` in seconds and as a date, for both.
+
+## Implementation (2026-11-09)
+
+- `internal/runtime/ratelimit.go`:
+  - `rateLimiter` keeps one window for each provider: the starts and the replies' tokens of the last minute, and the pause a 429 set.
+  - A call takes the provider's gate (a channel of one), waits there until the window lets it start, and gives the gate up once it has started. Calls waiting at the gate are served in the order they came.
+  - The clock and the wait are the limiter's own, so its tests move the clock instead of waiting.
+- `metered` (ADR 0039) goes through `rateLimiter.complete`, and so do `model`, compaction and `decide`.
+  - The settings are read at each call, from the session's folder (the run's). A run with no session, such as a notify run's flow, has the user's settings alone.
+  - Only an answered call's tokens are counted, and they are what the ledger records too.
+- **Changed from the decision: how long a call waits.**
+  - A call waits **5 minutes in all**, whatever it waits for: its turn at the gate, the windows, or a pause another call's 429 set. The decision bounded only the 429s' waits; the durability review found that a single `Retry-After` of an hour (a daily quota) held the gate, and every call to the provider behind it, until the action's timeout of an hour.
+  - A 429 that asks for more than what is left fails the call at once, with the provider's message. The provider is still held back for as long as it asked, and the next calls fail at once too, saying for how long ("lab's rate limit asks to wait 1h0m0s, past the 5m0s a call waits: try again later"). This is as fast as before this decision.
+  - A call waiting at the gate behind others says so ("other calls first"). Every wait says, however it ends, that it no longer waits (a cancelled one too).
+- **Changed from the decision: Anthropic's 529 ("overloaded") is waited for as a 429 is.** With the SDK's own retries turned off, a 529 would otherwise fail after kairo's quick tries, where the SDK used to ask again.
+- **Changed from the decision: other failures are tried again differently.** Decision 3 said 5xx and a stream cut short were unchanged. With the SDK's retries off (it asked twice, 0.5 s and 1 s apart, for 408, 409, 5xx and lost connections), they had only kairo's three tries 200 ms apart. The model actions (`model`, `history.compact`, `flow.decide`) now try five times, a second apart and doubling (about 15 seconds in all), for every retryable failure. The SDK's `x-should-retry` header is no longer read.
+- **The provider's name:** `anthropic` for the `api` engine, the name after `oai:` for an OpenAI-compatible provider.
+- **What is shown:**
+  - A wait of a second or more is sent as a `waiting` event of the session. Over ACP it goes as the notice `_kairocode/waiting`, which other clients ignore, and the terminal UI's status line shows it until the call starts or the turn ends.
+  - `/usage` lists the providers with limits set in the folder's settings, or with 429s today, and how many 429s each met today.
+  - The count of 429s is the daemon's, so it starts again when the daemon does.
+  - The event is the session's, not the call's: with agents of one session waiting side by side, one call's end of waiting clears what the status line says of another's until that one says again.
+- `// kairo#20:` marks where kairo's support would replace this (the head of `ratelimit.go`).
+- **Tests:**
+  - `TestRateLimitRequests`, `TestRateLimitTokens`, `TestRateLimit429` (including the pause for another call, and giving up after `rateTries`), `TestRateLimitLongWaitFailsAtOnce` (an hour's `Retry-After`, for the call and the next), `TestRateLimitCancelled`, `TestRateLimitCancelledSaysSo`, `TestRateLimitProjectCannotLoosen`: on the limiter's clock (the cancelled ones on the real one).
+  - `TestRateLimit429Turn`: a turn on a fake OpenAI-compatible server that answers 429 with `Retry-After: 1`; the call is asked again after a second, and `/usage` counts it.
+  - `TestRetryAfter`, `TestRateLimitErrors`: both adapters; the Anthropic SDK asks once.
+  - The terminal UI's `TestRateLimitWaitShown`.
 
 ## Alternatives considered
 

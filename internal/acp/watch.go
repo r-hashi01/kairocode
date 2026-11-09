@@ -202,6 +202,10 @@ func (a *agent) event(session string, ev api.Event) {
 		if ev.Flow != nil {
 			a.update(session, flowPlan(ev.Flow))
 		}
+	case api.EventWaiting:
+		if err := a.c.Notify(WaitingNotice, map[string]any{"sessionId": session, "text": ev.Text}); err != nil {
+			a.o.Logger.Warn("acp: "+WaitingNotice, "err", err)
+		}
 	case api.EventApprovalResolved, api.EventReviewResolved, api.EventQuestionResolved:
 		a.mu.Lock()
 		if cancel := a.asks[ev.Key]; cancel != nil {

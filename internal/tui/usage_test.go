@@ -28,3 +28,17 @@ func TestUsageWarning(t *testing.T) {
 		t.Fatalf("status line:\n%s", v)
 	}
 }
+
+// A call waiting for a provider's rate limit is said on the status line
+// until it no longer waits (ADR 0040).
+func TestRateLimitWaitShown(t *testing.T) {
+	d, _ := start(t, Options{})
+	d.send(updateMsg{Kind: acp.WaitingNotice, Text: "waiting for anthropic's rate limit (12s)"})
+	if v := d.view(); !strings.Contains(v, "waiting for anthropic's rate limit (12s)") {
+		t.Fatalf("status line:\n%s", v)
+	}
+	d.send(updateMsg{Kind: acp.WaitingNotice})
+	if v := d.view(); strings.Contains(v, "rate limit") {
+		t.Fatalf("still said:\n%s", v)
+	}
+}

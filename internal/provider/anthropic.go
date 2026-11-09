@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -30,7 +31,11 @@ type Anthropic struct {
 	MaxTokens int64
 }
 
+// The SDK does not ask again itself: a 429 or 529 is waited for in the
+// daemon, for every call to the API (ADR 0040), and other failures are
+// tried again by kairo.
 func NewAnthropic(opts ...option.RequestOption) *Anthropic {
+	opts = append([]option.RequestOption{option.WithMaxRetries(0)}, opts...)
 	return &Anthropic{client: anthropic.NewClient(opts...), Effort: "high", MaxTokens: 16000}
 }
 
@@ -89,6 +94,12 @@ func (a *Anthropic) Complete(ctx context.Context, r Request) (Response, error) {
 		var apierr *anthropic.Error
 		if errors.As(err, &apierr) {
 			switch apierr.StatusCode {
+			case 429, 529: // too many requests, overloaded
+				var after time.Duration
+				if apierr.Response != nil {
+					after = retryAfter(apierr.Response.Header, time.Now())
+				}
+				return Response{}, &RateLimitError{Err: err, After: after}
 			case 400, 401, 403, 404, 413, 422:
 				// Asking again gets the same answer.
 				if strings.Contains(err.Error(), "prompt is too long") || apierr.StatusCode == 413 {
