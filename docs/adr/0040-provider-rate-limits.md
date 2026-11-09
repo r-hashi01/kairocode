@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-11-09
-- Related: requirements FR-27 (rate limits), ADR 0024 (decision 6, replaced with the rest of it by 0039, which left rate limits out), 0039 (the ledger), 0035 (OpenAI-compatible providers), 0008 (one daemon), kairo's ADR 0059 (`Limit`, `Rate`), invariants 2, 4, 6 and 7, M11
+- Related: requirements FR-27 (rate limits), ADR 0024 (decision 6, replaced with the rest of it by 0039, which left rate limits out), 0039 (the ledger), 0035 (OpenAI-compatible providers), 0008 (one daemon), kairo's ADR 0059 (`Limit`, `Rate`), kairo#20, invariants 2, 4, 6 and 7, M11
 
 ## Context
 
@@ -61,7 +61,7 @@ Where this shows in the implementation:
   - the live event while waiting.
 - `internal/api` and `internal/tui`: the event and the status line; `/usage`'s rows.
 
-The kairo side: an issue is filed on r-hashi01/kairo for a step's destination given when it is called (not when its action is declared), a limit of tokens, and a failure that says when to try again. When kairo has them, the waits move there, and the code here carries `// kairo#N:` comments until then.
+The kairo side: [kairo#20](https://github.com/r-hashi01/kairo/issues/20) asks for a step's destination given when it is called (not when its action is declared), a limit of tokens, and a failure that says when to try again. When kairo has them, the waits move there; the code here carries `// kairo#20:` comments until then.
 
 ## Consequences
 
