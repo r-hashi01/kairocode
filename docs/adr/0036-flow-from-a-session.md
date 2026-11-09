@@ -1,6 +1,6 @@
 # 0036 Make a flow from a session that went well
 
-- Status: Proposed
+- Status: Accepted (2026-11-09)
 - Date: 2026-11-09
 - Related: ADR 0003 (flows), ADR 0017 (try), ADR 0023 (viewing records), ADR 0030 (drafts and publishing), invariant 5, `docs/milestones.md` M9 and "Future work" (the user's idea, 2026-10-22)
 
@@ -42,6 +42,15 @@ Where this shows in the implementation: `internal/runtime/flownew.go` (`NewFlowF
   - The record is cut to the limits, and keeps the first request and the last turn.
   - `--from-session=<id>` of another folder's session is refused.
   - No secret in the message (the record's rule, checked with a session that read an environment variable's name).
+
+## Implementation (2026-11-09)
+
+- `internal/runtime/flownew.go`: `NewFlow` takes the option (no function of its own, so the server, the CLI and ACP needed no change); `flowFromSession` reads the record before the turn is signalled; `fitTurns` cuts it. The record's first lines (session, folder, usage) are outside the 60,000.
+- `internal/runtime/log.go`: the widths are a parameter (`logLines` for `kairocode log`, as before; `flowSource`, 2,000 for results, replies and arguments). JSON in a log line no longer escapes `&`, `<` and `>` (`&&` was `\u0026\u0026`), in `kairocode log` too.
+- A session that is not there, of another folder, or with no turns is `ErrNoFlowSource` (400, and by name over the daemon's socket); other errors come back as they are.
+- `kairocode run "/flow new --from-session"` starts a new session, which has done nothing: there only `=<id>` is of use.
+- The terminal UI and editors show the option in `/flow`'s hint and description (`internal/acp/commands.go`); the TUI had nothing else to change.
+- Tests: `TestFlowFromSession` (the request, the command with its arguments, the approval's answer, the reply and the user's words in the message; not the turn it starts; a variable's name and not its value; another folder's or an unknown session refused; a draft, not published), `TestFitTurns`.
 
 ## Alternatives considered
 

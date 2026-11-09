@@ -31,6 +31,7 @@ var wireErrors = []struct {
 	{"no_flow", api.ErrNoFlow},
 	{"no_flow_name", api.ErrNoFlowName},
 	{"no_flow_request", api.ErrNoFlowRequest},
+	{"no_flow_source", api.ErrNoFlowSource},
 	{"no_flow_run", api.ErrNoFlowRun},
 	{"bad_image", api.ErrBadImage},
 	{"closing", api.ErrClosing},

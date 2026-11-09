@@ -44,5 +44,5 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0033](0033-draw-the-inline-area-as-codex-does.md) | Drawing the bottom area of the terminal UI ourselves, the same way Codex does | Accepted (2026-10-28) |
 | [0034](0034-notify-approval-requests-outside.md) | Telling of approval requests outside the machine: an `approval.requested` hook, run by the daemon as a flow | Accepted (2026-11-06) |
 | [0035](0035-openai-compatible-providers.md) | OpenAI-compatible APIs as providers, local models among them | Accepted (2026-11-09) |
-| [0036](0036-flow-from-a-session.md) | Make a flow from a session that went well | Proposed |
-| [0037](0037-sessions-in-worktrees.md) | Sessions side by side in git worktrees, and a screen listing them | Proposed |
+| [0036](0036-flow-from-a-session.md) | Make a flow from a session that went well | Accepted (2026-11-09) |
+| [0037](0037-sessions-in-worktrees.md) | Sessions side by side in git worktrees, and a screen listing them | Accepted (2026-11-09) |

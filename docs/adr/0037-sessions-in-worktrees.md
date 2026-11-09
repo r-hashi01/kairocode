@@ -1,6 +1,6 @@
 # 0037 Sessions side by side in git worktrees, and a screen listing them
 
-- Status: Proposed
+- Status: Accepted (2026-11-09)
 - Date: 2026-11-09
 - Related: ADR 0005 (sandbox), ADR 0008 (one daemon per data directory), ADR 0010 (terminal UI, trust), ADR 0028 (background commands), invariants 2 and 8, `docs/milestones.md` M9
 

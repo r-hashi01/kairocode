@@ -88,7 +88,7 @@ func (r *Runtime) flowRunOf(ctx context.Context, k kairo.RunInfo, whole bool) (F
 		return FlowRun{}, err
 	}
 	f.View = v
-	if f.Steps, err = r.logRuns(ctx, k.RunID); err != nil {
+	if f.Steps, err = r.logRuns(ctx, k.RunID, logLines); err != nil {
 		return FlowRun{}, err
 	}
 	return f, nil

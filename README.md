@@ -128,7 +128,7 @@ def main(input):
 ```
 
 - What a flow can call: `agent` (a subagent), `parallel`, `tool`, `ask` (ask a person), `decide` (a typed decision), `phase`.
-- Run one with `/flow <name> <args>`. `/flow new <description>` has one written from your words; you check its chart and try it before it is saved.
+- Run one with `/flow <name> <args>`. `/flow new <description>` has one written from your words; you check its chart and try it before it is saved. `/flow new --from-session [what to make of it]` has one written from what this session did (the record: what was asked, the tools called, the approvals), to do it again; `--from-session=<id>` takes another session of the folder.
 - In the terminal UI, `/flow` alone opens the list of flows. Pick one to see how it is used and its chart, then run it, change it on its chart (`e`), or look at its past runs (`r`). The last row, "make a new flow", starts `/flow new`.
 - `kairocode flow graph <name>` draws a flow, `kairocode flow show -follow <session>` shows one as it runs, and `kairocode flow runs` lists past runs.
 - If it crashes midway, the `agent` and `tool` calls that finished are not run again.

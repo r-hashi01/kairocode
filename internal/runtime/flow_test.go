@@ -1394,3 +1394,106 @@ def main(input):
 		t.Fatalf("the command ran again: %q", got)
 	}
 }
+
+// TestFlowFromSession: /flow new --from-session (ADR 0036) gives the
+// model the session's record: what was asked, the tool calls with their
+// arguments, how an approval was answered, and the user's words; not the
+// turn it starts. It writes a draft, as /flow new does. Only a session of
+// the folder that has done something is taken.
+func TestFlowFromSession(t *testing.T) {
+	t.Setenv("KC_RELEASE_TOKEN", "kc-secret-0042")
+	ws := repo(t)
+	putFiles(t, ws, map[string]string{ConfigFile: `{"permission": {"bash": "ask"}}`})
+	draft, _ := json.Marshal(map[string]string{"name": "release", "source": "DESCRIPTION = \"Release\"\ndef main(input):\n    return \"done\"\n"})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"test -n \"$KC_RELEASE_TOKEN\" && echo tagging v1.2.0"}`)}}}, {Text: "Tagged."},
+		{Tools: []provider.FakeTool{{Name: "flow_write", Input: draft}}}, {Text: "Made release."},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "from", workflows.SessionInput{Dir: ws})
+	if _, err := r.NewFlow(ctx, s, "--from-session"); !errors.Is(err, ErrNoFlowSource) {
+		t.Fatalf("a session that did nothing: %v", err)
+	}
+	n, err := r.Send(ctx, s, "tag the release v1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p []Pending
+	waitUntil(t, ctx, "bash's approval", func() bool {
+		p, _ = r.Pending(ctx, s)
+		return len(p) == 1
+	})
+	if err := r.Approve(ctx, p[0].Key, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+
+	other, _ := r.CreateSession(ctx, "elsewhere", workflows.SessionInput{Dir: repo(t)})
+	for _, bad := range []string{"--from-session=" + other, "--from-session=s/nosuch"} {
+		if _, err := r.NewFlow(ctx, s, bad); !errors.Is(err, ErrNoFlowSource) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	// Another session of the folder, by its id: its record.
+	fresh, _ := r.CreateSession(ctx, "fresh", workflows.SessionInput{Dir: ws})
+	if req, err := r.flowFromSession(ctx, fresh, s, ""); err != nil || !strings.Contains(req, "tag the release v1.2.0") {
+		t.Fatalf("from %s: %v\n%s", s, err, req)
+	}
+	n, err = r.NewFlow(ctx, s, "--from-session take the version as an argument")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	var asked string
+	for _, m := range conversationOf(t, r, s, true) {
+		if strings.Contains(m, "Make a flow that repeats") {
+			asked = m
+		}
+	}
+	for _, want := range []string{"tag the release v1.2.0", `{"command":"test -n \"$KC_RELEASE_TOKEN\" && echo tagging v1.2.0"}`, "allowed",
+		"Tagged.", "What the user wants of it: take the version as an argument", "becomes ARGS", "flow_write"} {
+		if !strings.Contains(asked, want) {
+			t.Errorf("no %q in what was asked:\n%s", want, asked)
+		}
+	}
+	if strings.Contains(asked, "Made release.") {
+		t.Errorf("the turn it starts is in its record:\n%s", asked)
+	}
+	// The command named a variable, whose value the record never held.
+	if !strings.Contains(asked, "$KC_RELEASE_TOKEN") || strings.Contains(asked, "kc-secret-0042") {
+		t.Errorf("the variable's name, not its value:\n%s", asked)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".kairocode", "workflows", "drafts", "release.star")); err != nil {
+		t.Fatalf("no draft: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".kairocode", "workflows", "release.star")); err == nil {
+		t.Fatal("the draft was published")
+	}
+}
+
+// A long record keeps its first and last turns, and says how many in the
+// middle were left out.
+func TestFitTurns(t *testing.T) {
+	var turns []string
+	for i := range 10 {
+		turns = append(turns, fmt.Sprintf("turn %d ", i)+strings.Repeat("x", 100))
+	}
+	got := fitTurns(turns, 450)
+	if len(got) != 5 || got[0] != turns[0] || got[1] != turns[1] || got[2] != "[6 turns in the middle left out]\n" ||
+		got[3] != turns[8] || got[4] != turns[9] {
+		t.Fatalf("got %q", got)
+	}
+	if got := fitTurns(turns[:3], 10_000); !slices.Equal(got, turns[:3]) {
+		t.Fatalf("cut what fits: %q", got)
+	}
+	long := []string{strings.Repeat("a", 500), strings.Repeat("b", 500)}
+	got = fitTurns(long, 400)
+	if len(got) != 2 || !strings.HasPrefix(got[0], "aaa") || len([]rune(got[1])) > 201 {
+		t.Fatalf("first and last cut: %d %d", len(got[0]), len(got[1]))
+	}
+}

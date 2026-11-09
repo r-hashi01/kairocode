@@ -115,7 +115,7 @@ func (s *Server) newFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, err := s.rt.NewFlow(r.Context(), sessionOf(r), in.Request)
-	if errors.Is(err, api.ErrNoFlowRequest) {
+	if errors.Is(err, api.ErrNoFlowRequest) || errors.Is(err, api.ErrNoFlowSource) {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}

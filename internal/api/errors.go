@@ -23,6 +23,10 @@ var ErrNoFlowName = errors.New("/flow needs a flow's name: /flow <name> [what to
 // ErrNoFlowRequest: /flow new was given nothing to make a flow of.
 var ErrNoFlowRequest = errors.New("/flow new needs what the flow is to do: /flow new <what it does>")
 
+// ErrNoFlowSource: /flow new --from-session named no session of the
+// folder, or one with nothing done yet (ADR 0036).
+var ErrNoFlowSource = errors.New("/flow new --from-session takes a session of this folder that has done something (kairocode sessions lists them)")
+
 // ErrNoFlowRun: no flow's run of that id, running or kept.
 var ErrNoFlowRun = errors.New("no flow run of that id (kept runs: kairocode flow runs)")
 

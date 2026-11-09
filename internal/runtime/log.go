@@ -25,8 +25,24 @@ type LogEntry = api.LogEntry
 // logText is how much of a message or result a log line shows.
 const logText = 400
 
+// logWidth is how much of a message or result (text) and of a tool's
+// arguments (args) a log line shows.
+type logWidth struct{ text, args int }
+
+// logLines is the width of kairocode log and /log; flowSource, of the
+// record a flow is made from (ADR 0036), where a command matters whole.
+var (
+	logLines   = logWidth{text: logText, args: 200}
+	flowSource = logWidth{text: 2000, args: 2000}
+)
+
 // Log is session's record.
 func (r *Runtime) Log(ctx context.Context, session string) (SessionLog, error) {
+	return r.log(ctx, session, logLines)
+}
+
+// log is session's record, its lines w wide.
+func (r *Runtime) log(ctx context.Context, session string, w logWidth) (SessionLog, error) {
 	info, err := r.K.Get(ctx, session)
 	if err != nil {
 		return SessionLog{}, err
@@ -55,7 +71,7 @@ func (r *Runtime) Log(ctx context.Context, session string) (SessionLog, error) {
 	}
 	slices.SortFunc(turns, func(a, b turn) int { return a.n - b.n })
 	for _, t := range turns {
-		e, err := r.logTurn(ctx, t.info)
+		e, err := r.logTurn(ctx, t.info, w)
 		if err != nil {
 			return SessionLog{}, err
 		}
@@ -68,7 +84,7 @@ func (r *Runtime) Log(ctx context.Context, session string) (SessionLog, error) {
 }
 
 // logTurn is a turn's entry: what was asked, its runs, its reply.
-func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo) (LogEntry, error) {
+func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo, w logWidth) (LogEntry, error) {
 	var tin workflows.TurnInput
 	_ = json.Unmarshal(input(k), &tin)
 	e := LogEntry{At: k.Created, Kind: "turn", Name: fmt.Sprintf("turn %d", tin.N), Status: k.Status}
@@ -89,7 +105,7 @@ func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo) (LogEntry, error
 	default:
 		e.Text = r.messageText(ctx, tin.Message)
 	}
-	runs, err := r.logRuns(ctx, k.RunID)
+	runs, err := r.logRuns(ctx, k.RunID, w)
 	if err != nil {
 		return LogEntry{}, err
 	}
@@ -103,8 +119,8 @@ func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo) (LogEntry, error
 		if err != nil {
 			continue // removed (kairo#4)
 		}
-		me := r.logRun(ctx, info)
-		if me.Runs, err = r.logRuns(ctx, id); err != nil {
+		me := r.logRun(ctx, info, w)
+		if me.Runs, err = r.logRuns(ctx, id, w); err != nil {
 			return LogEntry{}, err
 		}
 		runs = append(runs, me)
@@ -123,7 +139,7 @@ func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo) (LogEntry, error
 }
 
 // logRuns are run's children, oldest first, each with its own.
-func (r *Runtime) logRuns(ctx context.Context, run string) ([]LogEntry, error) {
+func (r *Runtime) logRuns(ctx context.Context, run string, w logWidth) ([]LogEntry, error) {
 	kids, err := r.K.Children(ctx, run)
 	if err != nil {
 		return nil, err
@@ -131,9 +147,9 @@ func (r *Runtime) logRuns(ctx context.Context, run string) ([]LogEntry, error) {
 	slices.SortStableFunc(kids, func(a, b kairo.RunInfo) int { return a.Created.Compare(b.Created) })
 	var out []LogEntry
 	for _, k := range kids {
-		e := r.logRun(ctx, k)
+		e := r.logRun(ctx, k, w)
 		if k.Workflow != "" {
-			if e.Runs, err = r.logRuns(ctx, k.RunID); err != nil {
+			if e.Runs, err = r.logRuns(ctx, k.RunID, w); err != nil {
 				return nil, err
 			}
 		}
@@ -143,7 +159,7 @@ func (r *Runtime) logRuns(ctx context.Context, run string) ([]LogEntry, error) {
 }
 
 // logRun describes one run by its plan.
-func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo) LogEntry {
+func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo, w logWidth) LogEntry {
 	e := LogEntry{At: k.Created, Status: k.Status, Kind: "step", Name: k.Plan}
 	if k.Finished() {
 		e.End = k.Updated
@@ -161,16 +177,16 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo) LogEntry {
 		}
 	case isWait:
 		e.Kind, e.Name = "wait", wait
-		var w struct {
+		var got struct {
 			Payload  json.RawMessage `json:"payload"`
 			TimedOut bool            `json:"timed_out"`
 		}
-		if json.Unmarshal(k.Output, &w) == nil && len(w.Payload) > 0 {
+		if json.Unmarshal(k.Output, &got) == nil && len(got.Payload) > 0 {
 			var a workflows.Approval
 			switch {
-			case w.TimedOut:
+			case got.TimedOut:
 				e.Text = "timed out"
-			case strings.HasPrefix(wait, workflows.SignalApprovePrefix) && json.Unmarshal(w.Payload, &a) == nil:
+			case strings.HasPrefix(wait, workflows.SignalApprovePrefix) && json.Unmarshal(got.Payload, &a) == nil:
 				e.Text = "declined"
 				if a.OK {
 					e.Text = "allowed"
@@ -179,7 +195,7 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo) LogEntry {
 					e.Text += ": " + clip(a.Reason, 200)
 				}
 			default:
-				e.Text = clip(compactJSON(w.Payload), logText)
+				e.Text = clip(compactJSON(got.Payload), w.text)
 			}
 		}
 	case call == workflows.ActModel:
@@ -189,7 +205,7 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo) LogEntry {
 		e.Kind, e.Name = "model", in.Model
 		if runOutput(k.Output, &out) == nil {
 			e.Usage = &out.Usage
-			e.Text = clip(r.messageText(ctx, out.Message), logText)
+			e.Text = clip(r.messageText(ctx, out.Message), w.text)
 			var names []string
 			for _, c := range out.Calls {
 				names = append(names, c.Name)
@@ -225,10 +241,10 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo) LogEntry {
 		_ = json.Unmarshal(input(k), &in)
 		e.Kind, e.Name = "tool", strings.TrimPrefix(call, workflows.ActToolPrefix)
 		if args, err := r.toolArgs(ctx, in); err == nil && len(args) > 0 {
-			e.Text = clip(compactJSON(args), 200)
+			e.Text = clip(compactJSON(args), w.args)
 		}
 		if runOutput(k.Output, &out) == nil && out.Message != "" {
-			e.Text += " → " + clip(r.messageText(ctx, out.Message), logText)
+			e.Text += " → " + clip(r.messageText(ctx, out.Message), w.text)
 			if out.IsError {
 				e.Status += " (error)"
 			}
@@ -237,7 +253,7 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo) LogEntry {
 		e.Name = call
 	}
 	if k.Status == "failed" && k.Error != "" {
-		e.Text = strings.TrimSpace(e.Text + " " + clip(k.Error, logText))
+		e.Text = strings.TrimSpace(e.Text + " " + clip(k.Error, w.text))
 	}
 	return e
 }
@@ -279,6 +295,9 @@ func compactJSON(v any) string {
 			v = x
 		}
 	}
-	b, _ := json.Marshal(v)
-	return string(b)
+	var b strings.Builder
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false) // a command's && as it is
+	_ = e.Encode(v)
+	return strings.TrimSuffix(b.String(), "\n")
 }

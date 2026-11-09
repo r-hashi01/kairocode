@@ -20,7 +20,7 @@ var builtinCommands = []map[string]any{
 	{"name": "compact", "description": "Summarize the conversation and go on from the summary (the earlier messages are kept)"},
 	{"name": "fork", "description": "Start another session from a turn of this one (the last, unless named); --files puts the files back as they were after it", "input": map[string]any{"hint": "[turn] [--files]"},
 		"_meta": options(CommandOption{Name: "--files", Description: "put the files back as they were after the turn"})},
-	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them; /flow new, a new one; /flow runs, the runs to look back at)", "input": map[string]any{"hint": "<name> [what to give it] | new <what it does> | runs | <name> --help"},
+	{"name": "flow", "description": "Run a flow of .kairocode/workflows (/flow alone lists them; /flow new, a new one; /flow new --from-session, one that repeats this session; /flow runs, the runs to look back at)", "input": map[string]any{"hint": "<name> [what to give it] | new <what it does> | new --from-session [what to make of it] | runs | <name> --help"},
 		"_meta": options(
 			CommandOption{Name: "new", Hint: "<what it does>", Description: "have a new flow written: a draft, drawn, then tried"},
 			CommandOption{Name: "runs", Description: "the flows' runs, to look back at"})},
@@ -210,7 +210,7 @@ func (a *agent) listFlows(ctx context.Context, session string) (any, error) {
 	}
 	text := "There are no flows yet: they are .kairocode/workflows/<name>.star. /flow new <what it does> has one written (a draft, drawn, then tried)."
 	if len(fs) > 0 {
-		lines := []string{"Flows here. /flow <name> [what to give it] runs one; /flow <name> --help says what it takes and does; /flow runs, the runs to look back at; /flow new <what it does>, a new one:"}
+		lines := []string{"Flows here. /flow <name> [what to give it] runs one; /flow <name> --help says what it takes and does; /flow runs, the runs to look back at; /flow new <what it does>, a new one; /flow new --from-session, one that repeats this session:"}
 		for _, f := range fs {
 			name := f.Name
 			if f.Args != "" {

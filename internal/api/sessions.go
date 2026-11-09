@@ -58,6 +58,17 @@ func (l SessionLog) Text() string {
 	return b.String()
 }
 
+// Head is the record's first lines, without its turns; TurnText, one
+// turn's lines.
+func (l SessionLog) Head() string {
+	return SessionLog{Session: l.Session, Dir: l.Dir, Engine: l.Engine, From: l.From, Usage: l.Usage}.Text()
+}
+
+// TurnText is turn t's lines, as Text writes them.
+func (l SessionLog) TurnText(t LogEntry) string {
+	return l.entriesText([]LogEntry{t})
+}
+
 // Settings are a session's provider and model: those its next turn runs
 // with. Model "" is the provider's default.
 type Settings struct {

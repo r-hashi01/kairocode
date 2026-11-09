@@ -191,7 +191,7 @@ Status: done (2026-11-09). Checking by hand remains: the OpenAI-compatible adapt
 
 Status: not started
 
-- [ ] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR).
+- [x] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR). (2026-11-09, ADR 0036: `/flow new --from-session[=<id>] [words]` gives the model the session's record, cut to size, and it writes a draft as `/flow new` does. `TestFlowFromSession`, `TestFitTurns`.)
 - [ ] Sessions run side by side in worktrees, and a screen listing them (needs an ADR).
 
 Left for after M6 to M9: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside, the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
