@@ -54,6 +54,10 @@ func TestMain(m *testing.M) {
 		crashChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_OAI_CHILD") == "1" {
+		crashOAIChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_JOB_CHILD") == "1" {
 		crashJobChild()
 		return

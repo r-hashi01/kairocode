@@ -41,7 +41,7 @@ func engineOf(id string) (string, bool) {
 	if id == workflows.EngineACP {
 		return "", false
 	}
-	if strings.HasPrefix(id, workflows.EngineACP) {
+	if strings.HasPrefix(id, workflows.EngineACP) || strings.HasPrefix(id, workflows.EngineOAI) && id != workflows.EngineOAI {
 		return id, true
 	}
 	if a, ok := agentAliases[id]; ok && a != codexAgent && a != copilotAgent {
@@ -122,6 +122,7 @@ func (r *Runtime) providers(ctx context.Context) []ProviderInfo {
 		{ID: workflows.EngineClaudeCode, Name: "Claude Code", Kind: "cli", Available: claudeErr == nil,
 			Description: "your claude command, on your Claude subscription"},
 	}
+	out = append(out, oaiInfos()...) // OpenAI-compatible APIs (ADR 0035)
 	list, err := r.agents.List(ctx)
 	if err != nil {
 		r.logf("the ACP registry: %v", err)
@@ -235,6 +236,9 @@ func (r *Runtime) Models(ctx context.Context, id string) ([]string, error) {
 		return out, nil
 	case workflows.EngineClaudeCode:
 		return r.cliModels(ctx, engine), nil
+	}
+	if strings.HasPrefix(engine, workflows.EngineOAI) {
+		return r.oaiModels(ctx, engine)
 	}
 	switch registryAgent(engine) {
 	case codexAgent:

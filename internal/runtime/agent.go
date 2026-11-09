@@ -55,6 +55,11 @@ func (r *Runtime) engineFor(engine, model string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	if strings.HasPrefix(engine, workflows.EngineOAI) {
+		if model, err = oaiModel(engine, model); err != nil {
+			return "", "", err
+		}
+	}
 	return engine, model, nil
 }
 
@@ -245,6 +250,11 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	}
 	if alias && engine != workflows.EngineAPI && engine != workflows.EngineClaudeCode {
 		model = "" // Claude Code's name of a Claude model: another engine's own
+		if strings.HasPrefix(engine, workflows.EngineOAI) {
+			if model, err = oaiModel(engine, ""); err != nil { // its provider's own
+				return workflows.Agent{}, err
+			}
+		}
 	}
 	var b strings.Builder
 	if def.Prompt != "" {
@@ -368,10 +378,16 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		return workflows.Agent{}, fmt.Errorf("the agent %q: workflow %q is not a flow's name", in.Agent, def.Workflow)
 	}
 	ctxTokens := 0 // a CLI engine's agent compacts its own (ADR 0020)
-	if engine == workflows.EngineAPI {
+	switch {
+	case engine == workflows.EngineAPI:
 		if ctxTokens, err = modelContext(model); err != nil {
 			return workflows.Agent{}, err
 		}
+	case strings.HasPrefix(engine, workflows.EngineOAI):
+		if ctxTokens, err = oaiContext(engine, model); err != nil {
+			return workflows.Agent{}, err
+		}
+		r.warnProjectProviders(in.Dir)
 	}
 	// The MCP servers and custom tools (ADR 0022), for every engine: a CLI
 	// engine is given them over KairoCode's MCP server, with its own tools.

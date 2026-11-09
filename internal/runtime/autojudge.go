@@ -59,7 +59,14 @@ func (r *Runtime) judge(t *kairo.TaskContext, in workflows.PermissionInput, rule
 	if err != nil {
 		return workflows.PermissionOutput{}, err
 	}
-	d, err := r.decideBy(t, in.Call.Dir, judgeModel, prompt, schema)
+	var d workflows.DecideOutput
+	if in.Policy.JudgeEngine != "" {
+		// The session's own OpenAI-compatible API judges: what a session
+		// on a local model does is not sent elsewhere (ADR 0035).
+		d, err = r.apiDecide(t, in.Policy.JudgeEngine, in.Policy.JudgeModel, prompt, schema)
+	} else {
+		d, err = r.decideBy(t, in.Call.Dir, judgeModel, prompt, schema)
+	}
 	if err != nil {
 		if t.Err() != nil {
 			return workflows.PermissionOutput{}, t.Err()

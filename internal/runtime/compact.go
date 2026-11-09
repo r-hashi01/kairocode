@@ -61,9 +61,13 @@ func (r *Runtime) historyCompact(t *kairo.TaskContext, in workflows.CompactInput
 	if ms, err = r.withImages(t, ms); err != nil {
 		return workflows.CompactOutput{}, err
 	}
+	p, err := r.providerFor(in.Engine)
+	if err != nil {
+		return workflows.CompactOutput{}, err
+	}
 	var resp provider.Response
 	for {
-		resp, err = r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: provider.CompactSystem,
+		resp, err = p.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: provider.CompactSystem,
 			Tools: specs, NoTools: true, Messages: withAsk(ms)})
 		if !errors.Is(err, provider.ErrContextTooLong) {
 			break

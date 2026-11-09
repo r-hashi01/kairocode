@@ -24,7 +24,7 @@ var builtinCommands = []map[string]any{
 		"_meta": options(
 			CommandOption{Name: "new", Hint: "<what it does>", Description: "have a new flow written: a draft, drawn, then tried"},
 			CommandOption{Name: "runs", Description: "the flows' runs, to look back at"})},
-	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
+	{"name": "provider", "description": "Switch who runs the model from the next turn: anthropic, claude-code, codex, copilot, oai:<name> (/provider alone lists them)", "input": map[string]any{"hint": "[provider]"}},
 	{"name": "model", "description": "Switch the model from the next turn (/model alone lists the provider's)", "input": map[string]any{"hint": "[model]"}},
 	{"name": "effort", "description": "Switch how hard the model thinks, where the provider has it (/effort alone lists them)", "input": map[string]any{"hint": "[effort]"}},
 	{"name": "login", "description": "Sign in to the provider (/login alone lists the ways)", "input": map[string]any{"hint": "[provider] [way]"}},

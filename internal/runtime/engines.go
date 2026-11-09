@@ -36,6 +36,9 @@ func factsOf(engine string) engineFacts {
 		return engineFacts{agent: codexAgent, turn: workflows.ActCodexTurn}
 	case engine == workflows.EngineCopilot:
 		return engineFacts{agent: copilotAgent, turn: workflows.ActCopilotTurn, dry: true}
+	case strings.HasPrefix(engine, workflows.EngineOAI) && engine != workflows.EngineOAI:
+		// An OpenAI-compatible API, in KairoCode's own loop (ADR 0035).
+		return engineFacts{dry: true, schema: true}
 	case strings.HasPrefix(engine, workflows.EngineACP) && engine != workflows.EngineACP:
 		agent := strings.TrimPrefix(engine, workflows.EngineACP)
 		return engineFacts{agent: agent, turn: workflows.ActACPTurn, dry: agent == copilotAgent}
@@ -71,6 +74,8 @@ func engineModel(engine, model string, hasProvider bool) (string, error) {
 		if model == "" {
 			model = provider.DefaultModel
 		}
+	case strings.HasPrefix(engine, workflows.EngineOAI) && engine != workflows.EngineOAI:
+		// Its model, if none is named, is its settings' (engineFor).
 	case factsOf(engine).turn == "":
 		return "", fmt.Errorf("unknown engine %q", engine)
 	}

@@ -221,7 +221,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 	defer func() { *turnp = turn }()
 	refused := 0 // calls auto mode's judge refused (ADR 0016)
 	compact := func() error {
-		c, err := kairo.Call[CompactOutput](ctx, ActHistoryCompact, CompactInput{Model: agent.Model, Effort: agent.Effort, Tools: agent.Tools,
+		c, err := kairo.Call[CompactOutput](ctx, ActHistoryCompact, CompactInput{Engine: apiEngine(agent.Engine), Model: agent.Model, Effort: agent.Effort, Tools: agent.Tools,
 			History: in.History, Turn: turn})
 		if err != nil {
 			return err
@@ -243,7 +243,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 		}
 		out.Steps++
 		reply, err := kairo.Call[ModelReply](ctx, ActModel, ModelInput{
-			Model: agent.Model, Effort: agent.Effort, System: agent.System, Tools: agent.Tools,
+			Engine: apiEngine(agent.Engine), Model: agent.Model, Effort: agent.Effort, System: agent.System, Tools: agent.Tools,
 			History: in.History, Turn: turn,
 		})
 		if err != nil {
@@ -307,6 +307,9 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback}
 				if in.Mode == ModeAuto && refused < MaxAutoRefusals {
 					policy.Auto, policy.Request = true, in.Message
+					if e := apiEngine(agent.Engine); e != "" {
+						policy.JudgeEngine, policy.JudgeModel = e, agent.Model
+					}
 				}
 				g, err := gateTool(ctx, policy, c.Name, slices.Contains(agent.Planned, c.Name), inputs[i], nil, &tryEnv{in: *in})
 				if err != nil {
@@ -416,7 +419,7 @@ func compactTurn(ctx *kairo.Context, in TurnInput, agent Agent) (TurnOutput, err
 	case in.History == "":
 		text = "There is nothing to compact yet."
 	default:
-		c, err := kairo.Call[CompactOutput](ctx, ActHistoryCompact, CompactInput{Model: agent.Model, Effort: agent.Effort, Tools: agent.Tools,
+		c, err := kairo.Call[CompactOutput](ctx, ActHistoryCompact, CompactInput{Engine: apiEngine(agent.Engine), Model: agent.Model, Effort: agent.Effort, Tools: agent.Tools,
 			History: in.History})
 		if err != nil {
 			return TurnOutput{}, err

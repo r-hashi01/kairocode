@@ -191,7 +191,19 @@ const (
 	// EngineACP, before an agent's id in ACP's registry, is that agent,
 	// installed from the registry (ADR 0015): acp:gemini.
 	EngineACP = "acp:"
+	// EngineOAI, before a provider's name in the user's settings, is that
+	// OpenAI-compatible API, in KairoCode's own loop (ADR 0035): oai:ollama.
+	EngineOAI = "oai:"
 )
+
+// apiEngine is the engine a model call names: an OpenAI-compatible API's;
+// "" for the Claude API, so that its calls keep the ids they had.
+func apiEngine(engine string) string {
+	if strings.HasPrefix(engine, EngineOAI) {
+		return engine
+	}
+	return ""
+}
 
 // CLIEngine reports whether engine is one of the user's CLIs or agents: it
 // runs the model loop itself, and KairoCode's tools reach it over MCP or
@@ -531,6 +543,9 @@ type DeniedInput struct {
 // ModelInput names everything a model call sees by hash (design 2.2,
 // invariant 5): no message text is recorded with the call.
 type ModelInput struct {
+	// Engine is the OpenAI-compatible API to ask (ADR 0035); "": the Claude
+	// API's, and out of the JSON, so earlier calls keep their ids.
+	Engine  string   `json:"engine,omitempty"`
 	Model   string   `json:"model"`
 	Effort  string   `json:"effort,omitempty"`
 	System  string   `json:"system"`
@@ -555,6 +570,7 @@ const StopContext = "context"
 // calls name them). CompactOutput is the conversation that starts from its
 // summary, and what the summary used.
 type CompactInput struct {
+	Engine  string   `json:"engine,omitempty"` // as ModelInput's
 	Model   string   `json:"model"`
 	Effort  string   `json:"effort,omitempty"`
 	Tools   string   `json:"tools"`
