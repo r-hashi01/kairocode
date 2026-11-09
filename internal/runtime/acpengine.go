@@ -409,6 +409,7 @@ func (r *Runtime) acpTurn(engine string) func(*kairo.TaskContext, workflows.Clau
 		if res.StopReason != "" && res.StopReason != "end_turn" && res.StopReason != "cancelled" {
 			reply += "\n[the agent stopped: " + res.StopReason + "]"
 		}
+		r.meter(t, engine, in.Model, usage, nil) // the ledger of usage (ADR 0039)
 		return r.finishCLITurn(t, mt, reply, 1, usage)
 	}
 }

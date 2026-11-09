@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	kairo "github.com/r-hashi01/kairo/sdk/go"
+
 	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -98,12 +100,13 @@ func (r *Runtime) warnProjectProviders(dir string) {
 // providerFor is the adapter a model call of engine is made with: the
 // Claude API's, or an OpenAI-compatible API's, with its key read here,
 // in the action (invariant 6).
-func (r *Runtime) providerFor(engine string) (provider.Provider, error) {
+// Its calls are added to the ledger of usage, as t's (ADR 0039).
+func (r *Runtime) providerFor(t *kairo.TaskContext, engine string) (provider.Provider, error) {
 	if !strings.HasPrefix(engine, workflows.EngineOAI) {
 		if r.cfg.Provider == nil {
 			return nil, &provider.PermanentError{Err: errNoAPIProvider}
 		}
-		return r.cfg.Provider, nil
+		return metered{Provider: r.cfg.Provider, r: r, t: t, engine: workflows.EngineAPI}, nil
 	}
 	_, p, err := oaiNamed(engine)
 	if err != nil {
@@ -113,7 +116,7 @@ func (r *Runtime) providerFor(engine string) (provider.Provider, error) {
 	if err != nil {
 		return nil, &provider.PermanentError{Err: err}
 	}
-	return &provider.OpenAI{BaseURL: p.BaseURL, Key: key}, nil
+	return metered{Provider: &provider.OpenAI{BaseURL: p.BaseURL, Key: key}, r: r, t: t, engine: engine}, nil
 }
 
 // oaiKey is p's key, from the environment variable it names: sent over

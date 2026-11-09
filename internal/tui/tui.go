@@ -78,8 +78,10 @@ type Options struct {
 	Dir, Session string
 	// Version, Engine and Model are shown in the header and status line.
 	Version, Engine, Model string
-	// Usage is the tokens the session's model calls used, if known.
-	Usage func(ctx context.Context, session string) (int64, error)
+	// Usage is what has been used in the session, today and this week,
+	// against the limits (ADR 0039), if known: the status line shows the
+	// session's, and a limit nearly reached is warned of.
+	Usage func(ctx context.Context, session string) (api.UsageNow, error)
 	// Resume: the sessions of Dir are offered to take up first (kairo
 	// -resume); esc starts a new one.
 	Resume bool
@@ -177,7 +179,7 @@ type (
 		files   []string
 		err     error
 	}
-	usageMsg   int64
+	usageMsg   api.UsageNow
 	printedMsg struct{}
 )
 
@@ -285,6 +287,9 @@ type model struct {
 	cmds    []acp.Command
 	compSel int
 	tokens  int64
+	cost    float64 // the session's, if known
+	// warned: the last warning of a limit nearly reached, not said again.
+	warned string
 	// edit: a flow being changed on its chart (/flow edit).
 	edit *flowEdit
 	// config: the session's settings (provider, model; ADR 0014); pick: one
@@ -875,7 +880,21 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return tea.Batch(cmds...)
 	case usageMsg:
-		m.tokens = int64(msg)
+		u := api.UsageNow(msg)
+		m.tokens = u.Tokens.Input + u.Tokens.Output
+		m.cost = 0
+		for _, w := range u.Windows {
+			if w.Name == "session" {
+				m.cost = w.Cost
+			}
+		}
+		// A limit nearly reached is said once, as Claude Code does (ADR 0039).
+		if w := u.Warning(); w != m.warned {
+			m.warned = w
+			if w != "" {
+				m.print(warn.Render("  ⎿  " + w))
+			}
+		}
 		return nil
 	case spinner.TickMsg:
 		if !m.running {
@@ -1361,11 +1380,11 @@ func (m *model) usage() tea.Cmd {
 	}
 	ctx, f, s := m.ctx, m.o.Usage, m.session
 	return func() tea.Msg {
-		n, err := f(ctx, s)
+		u, err := f(ctx, s)
 		if err != nil {
 			return nil
 		}
-		return usageMsg(n)
+		return usageMsg(u)
 	}
 }
 
@@ -1837,6 +1856,9 @@ func (m *model) status(w int) string {
 	}
 	if m.tokens > 0 {
 		right = append(right, faint.Render(fmt.Sprintf("%d tokens", m.tokens)))
+	}
+	if m.cost >= 0.005 {
+		right = append(right, faint.Render(fmt.Sprintf("$%.2f", m.cost)))
 	}
 	if m.session != "" {
 		right = append(right, faint.Render("session "+short(m.session)))

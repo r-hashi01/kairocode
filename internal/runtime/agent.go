@@ -354,10 +354,7 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 			planned = append(planned, d.Name)
 		}
 	}
-	maxSteps := r.cfg.MaxSteps
-	if def.Steps > 0 {
-		maxSteps = def.Steps
-	}
+	maxSteps := turnSteps(def.Steps, r.cfg.MaxSteps, in.Dir)
 	toolsHash, err := r.Store.PutJSON(t, store.KindTools, specs)
 	if err != nil {
 		return workflows.Agent{}, err
@@ -395,7 +392,14 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if err != nil {
 		return workflows.Agent{}, err
 	}
+	// The limits, and what had been spent against them (ADR 0039): kept
+	// for the turn, as its rules are.
+	limits, err := r.turnLimits(t, in.Dir, engine, model)
+	if err != nil {
+		return workflows.Agent{}, err
+	}
 	return workflows.Agent{
+		Limits:      limits,
 		Context:     ctxTokens,
 		External:    external,
 		Hooks:       hooks,

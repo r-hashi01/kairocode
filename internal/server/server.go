@@ -40,6 +40,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /sessions/{id}/history", s.history)
 	s.mux.HandleFunc("GET /images/{hash}", s.image)
 	s.mux.HandleFunc("GET /sessions/{id}/usage", s.usage)
+	s.mux.HandleFunc("GET /usage", s.usageNow)
 	s.mux.HandleFunc("GET /sessions/{id}/commands", s.commands)
 	s.mux.HandleFunc("GET /sessions/{id}/skills", s.skills)
 	s.mux.HandleFunc("GET /sessions/{id}/mcp", s.mcpList)

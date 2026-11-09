@@ -1,6 +1,6 @@
 # 0039 Usage and limits: what has been used, shown as Claude Code and Codex show it, and limits that stop a turn
 
-- Status: Proposed
+- Status: Accepted (2026-11-09)
 - Date: 2026-11-09
 - Related: requirements FR-26 (limits), design section 5 ("budget decisions are made from recorded values") and section 9, ADR 0024 (replaced by this one), 0020 (the turn's version), 0007 and 0014 (CLI engines), invariants 2, 5 and 6, M10
 
@@ -113,6 +113,47 @@ Where this shows in the implementation:
   - `TestPrices`: the table, an override from the settings, Claude Code's reported cost, and an unknown model that does not count towards `cost` and is named in `/usage`.
   - `TestUsageNow`: the rows of `/usage` (session, day, week), reset times, and windows at the boundaries (midnight, Monday).
   - The terminal UI's `/usage` screen and the warning line.
+
+## Implementation (2026-11-09)
+
+- **The ledger:**
+  - The `model`, compaction and `decide` actions reach the API through `providerFor`, which now wraps the provider (`metered`): each call that answers adds its row.
+  - Claude Code's turns and decisions add a row with the cost they report (`total_cost_usd`), and codex's, copilot's and ACP agents' turns add a row with their tokens.
+  - A row that cannot be written is logged, not the call's failure: the call was paid for, and failing it would make it again.
+  - The row's session is the run's (`ownerSession`), and the folder is not kept: `/usage` reads it from the session.
+- **Prices:**
+  - The table has Anthropic's models only, from Anthropic's published prices. OpenAI's are not in it: a model on an OpenAI-compatible API costs what `models.<name>.price` says, or nothing on this machine, or is not known.
+  - A project's `models.<name>.price` is not read.
+- **What `agent.load` records:** it records `Agent.Limits` with the turn's limits, its model's price, and what had been spent, read from the ledger. The session is read from the run's ID: a new field in `agent.load`'s input would have changed its call's ID in turns under way.
+  - With no limit set but steps, `Limits` is nil and the turn checks nothing.
+  - `limits.turn.steps` sets `MaxSteps` for an agent that sets none, and caps one that does.
+- **Changed from the decision: the turn's version is not raised.** The turn branches only on `Agent.Limits`, recorded by `agent.load`, and it is empty in every turn from before. Such a turn makes the same calls it always made, and a turn under way keeps the `agent.load` it recorded. This is how `Agent.Context` (ADR 0020) and `Agent.Loopback` (ADR 0031) were added. A stopped turn's reply is a `flow.put` call, made only in turns that have limits.
+- **`turn.time`:** it reads `ctx.Now()` only when it is set.
+  - A step's calls being decided count as waiting: approvals, questions, and the checks around them.
+  - The tools' run counts.
+  - A subagent's own waits count for its parent.
+- **What a turn does not see:**
+  - A subagent's spending is in the ledger, and its parent sees it at its next turn.
+  - Turns running side by side each read the ledger at their start, so together they can go past a window's limit by up to one turn each.
+  - A CLI engine's turn is checked only before it starts.
+  - Not every model call is preceded by a check. Not checked: compacting after a reply that was too long for the context, `decide` calls (auto mode's judge, hooks' decisions), and a flow's own turn (its agents' turns are checked). What they use is in the ledger, and the next check counts it.
+  - Claude Code reports a cost under a subscription (Pro, Max) too, where it is a figure and not a charge. It is counted towards `cost` limits as reported.
+- **Clients:**
+  - ACP's `stopReason` for a limit is `max_turn_requests`, as for steps, and the reply says which limit.
+  - `/usage` is a command of the ACP agent (the terminal UI and editors alike).
+  - The terminal UI's status line shows the session's cost, and it warns once of a limit past `warn`, after a turn (a new warning is said again).
+  - `GET /usage?session=`; `kairocode usage` without `-session` prints `/usage`, and with it, the session's rows and then its turns as before (`-json` keeps the turns' form).
+- **Tests:**
+  - `TestUsageLedger`.
+  - `TestLimitSessionTokens`: the next turn, and another session.
+  - `TestLimitDayCost`: two sessions; a project's price and looser limit not taken; the warning.
+  - `TestLimitTurnTimeNotWaiting`: real time (a two-second wait for an approval, a two-second command), skipped with `-short`. The runtime's tests do not run on `kairotest`'s clock; the limit is checked against the recorded `ctx.Now`, so a slow machine only makes the command count more.
+  - `TestLimitsProjectCannotLoosen`: steps too.
+  - `TestLimitsRecordedAtTurnStart`: a limit raised while the turn waits does not change where it stops (invariant 2).
+  - `TestPrices`: the table, dated ids, the user's price, a local server, Claude Code's cost, a model not known, and `/usage`'s text.
+  - `TestWindows`.
+  - The terminal UI's `TestUsageWarning`.
+  - No crash test was added: where a turn stops is computed from recorded values only, which `TestLimitsRecordedAtTurnStart` checks.
 
 ## Alternatives considered
 

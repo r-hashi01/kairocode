@@ -59,6 +59,8 @@ type Backend interface {
 	RemoveWorktree(ctx context.Context, dir string, force bool) (api.WorktreeRemoved, error)
 	// Log is the session's record (ADR 0023).
 	Log(ctx context.Context, session string) (api.SessionLog, error)
+	// UsageNow is what has been used against the limits (ADR 0039).
+	UsageNow(ctx context.Context, session string) (api.UsageNow, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
 	Cancel(ctx context.Context, session string) (int, error)
 	Flows(ctx context.Context, session string) ([]api.FlowInfo, error)
@@ -272,6 +274,15 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 			text = l.Text()
 		}
 		return a.say(p.SessionID, text), nil
+	case name == "/usage":
+		// Without a turn: what has been used against the limits (ADR 0039).
+		text := ""
+		if u, err := a.b.UsageNow(ctx, p.SessionID); err != nil {
+			text = "What has been used could not be read: " + err.Error()
+		} else {
+			text = u.Text()
+		}
+		return a.say(p.SessionID, text), nil
 	case name == "/mcp":
 		// Without a turn: the MCP servers and custom tools (ADR 0022).
 		return a.say(p.SessionID, a.mcpText(ctx, p.SessionID)), nil
@@ -348,7 +359,7 @@ func stopReason(stopped string) string {
 	switch stopped {
 	case "":
 		return "end_turn"
-	case "max_steps":
+	case "max_steps", "limit": // a limit of the turn's, or of its use (ADR 0039): the reply says which
 		return "max_turn_requests"
 	case "max_tokens", "refusal":
 		return stopped

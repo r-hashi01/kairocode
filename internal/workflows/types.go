@@ -500,6 +500,9 @@ type Agent struct {
 	// place of the model loop.
 	Hooks    []Hook `json:"hooks,omitempty"`
 	Workflow string `json:"workflow,omitempty"`
+	// Limits are the turn's limits and what had been spent against them
+	// (ADR 0039); nil: none are checked (a turn from before them, too).
+	Limits *Limits `json:"limits,omitempty"`
 }
 
 // Kinds of a decision (decide()).

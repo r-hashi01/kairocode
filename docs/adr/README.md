@@ -47,4 +47,4 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0036](0036-flow-from-a-session.md) | Make a flow from a session that went well | Accepted (2026-11-09) |
 | [0037](0037-sessions-in-worktrees.md) | Sessions side by side in git worktrees, and a screen listing them | Accepted (2026-11-09) |
 | [0038](0038-answer-requests-from-outside.md) | Answering requests from outside the machine: the notify flow reads the answer and gives it | Rejected |
-| [0039](0039-usage-and-limits.md) | Usage and limits: what has been used, shown as Claude Code and Codex show it, and limits that stop a turn | Proposed |
+| [0039](0039-usage-and-limits.md) | Usage and limits: what has been used, shown as Claude Code and Codex show it, and limits that stop a turn | Accepted (2026-11-09) |

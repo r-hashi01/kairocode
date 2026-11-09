@@ -101,6 +101,9 @@ func (l *local) Log(ctx context.Context, s string) (api.SessionLog, error) {
 func (l *local) Sessions(ctx context.Context, dir string, limit int) ([]api.SessionInfo, error) {
 	return l.r.Sessions(ctx, dir, limit)
 }
+func (l *local) UsageNow(ctx context.Context, session string) (api.UsageNow, error) {
+	return l.r.UsageNow(ctx, session)
+}
 func (l *local) RepoSessions(ctx context.Context, dir string) ([]api.SessionInfo, error) {
 	return l.r.RepoSessions(ctx, dir)
 }

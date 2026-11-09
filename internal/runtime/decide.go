@@ -144,7 +144,7 @@ func (r *Runtime) flowDecide(t *kairo.TaskContext, in workflows.DecideInput) (wo
 }
 
 func (r *Runtime) apiDecide(t *kairo.TaskContext, engine, model, prompt string, schema json.RawMessage) (workflows.DecideOutput, error) {
-	p, err := r.providerFor(engine)
+	p, err := r.providerFor(t, engine)
 	if err != nil {
 		return workflows.DecideOutput{}, err
 	}
