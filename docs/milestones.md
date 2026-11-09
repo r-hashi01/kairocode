@@ -201,7 +201,13 @@ Status: done (2026-11-09; ADR 0039; chosen by the user). Checking by hand remain
 - [x] A person sees what they have used, in this session, today and this week, against their limits, as Claude Code's `/usage` and Codex's `/status` show it (`/usage`, `kairocode usage`). (2026-11-09: `TestPrices`, `TestUsageLedger`, `TestUsageWarning`.)
 - [x] Limits on a turn (steps, time), a session, a day and a week (tokens, cost) stop a turn before its next model call, from recorded values only, and say which limit and until when (ADR 0039, replacing ADR 0024). (2026-11-09: `TestLimitSessionTokens`, `TestLimitDayCost`, `TestLimitTurnTimeNotWaiting`, `TestLimitsProjectCannotLoosen`, `TestLimitsRecordedAtTurnStart`.)
 
-Left for after M6 to M10: rate limits per provider (FR-27; not in ADR 0039), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside (rejected for now, ADR 0038), the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
+## M11 Rate limits per provider
+
+Status: in progress (ADR 0040 proposed, 2026-11-09; chosen by the user)
+
+- [ ] Calls to one provider, from every session, agent and flow of the daemon, stay within its requests and tokens a minute (`rateLimits`), and a 429 makes them wait as long as the provider asks, instead of failing after three quick tries (FR-27, ADR 0040).
+
+Left for after M6 to M11: a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside (rejected for now, ADR 0038), the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 
 ## Future work not assigned to a milestone
 
