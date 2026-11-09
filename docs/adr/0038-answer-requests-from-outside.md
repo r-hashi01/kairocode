@@ -1,8 +1,10 @@
 # 0038 Answering requests from outside the machine: the notify flow reads the answer and gives it
 
-- Status: Proposed
+- Status: Rejected
 - Date: 2026-11-09
 - Related: ADR 0034 (telling of requests outside), 0003 (flows), 0013 (`fetch`, `http.auth`), 0016 (auto mode), 0008 (the daemon), invariants 2, 4, 6 and 7, M10
+
+Rejected by the user on 2026-11-09, before any of it was built. ADR 0034 already tells a person away from the machine, and the turn waits in kairo without loss until they come back; permission rules, auto mode or `kairocode approve` over ssh cover most of the rest. Against that, this would add an exception to invariant 7, a new version of the `notify` workflow, a second place hook scripts are looked for, and hand the power to approve to an outside service, for answers that still arrive up to the asking interval late. The record stays for its reasoning: if answering from outside is taken up again, answering must stay with the user's own flows (decision 2), or a cloned repository could approve everything.
 
 ## Context
 

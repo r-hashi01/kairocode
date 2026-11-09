@@ -196,11 +196,9 @@ Status: done (2026-11-09). Checking by hand remains: worktrees in the terminal U
 
 ## M10 Answer from outside the machine
 
-Status: in progress (ADR 0038 proposed, 2026-11-09; chosen by the user)
+Status: dropped (2026-11-09). ADR 0038 was written and rejected by the user: what ADR 0034 already does (telling, with the turn waiting in kairo) is enough, and answering from outside costs more than it gives. The next milestone is not chosen yet.
 
-- [ ] A person away from the machine approves, denies or answers a request from where they were told of it (Slack), and the turn goes on (ADR 0038: the `notify` flow reads the answer and gives it; only the user's own flows may answer).
-
-Left for after M6 to M10: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside, the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
+Left for after M6 to M10: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside (rejected for now, ADR 0038), the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 
 ## Future work not assigned to a milestone
 
