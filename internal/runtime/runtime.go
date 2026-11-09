@@ -110,6 +110,9 @@ type Runtime struct {
 	auth           auths
 
 	sendMu sync.Mutex
+	// worktreeMu: one worktree is made at a time, so two asked for at once
+	// with no name do not take the same free one (ADR 0037).
+	worktreeMu sync.Mutex
 
 	approveMu sync.Mutex // serializes answers (Approve)
 

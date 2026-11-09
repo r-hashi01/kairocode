@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -660,5 +661,51 @@ func TestRunFlowHelp(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(data, "server.json")); err == nil {
 		t.Fatal("a daemon was started for --help")
+	}
+}
+
+// run -worktree (ADR 0037): the session works in a new worktree on
+// kairo/<name>, not in the folder; sessions -repo lists it under its
+// worktree, with how it differs.
+func TestRunInAWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	os.MkdirAll(ws, 0o755)
+	os.WriteFile(filepath.Join(ws, "kairocode.json"), []byte(`{"permission": {"write": "allow"}}`), 0o644)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"},
+		{"-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "first"}} {
+		if out, err := exec.Command("git", append([]string{"-C", ws}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	t.Setenv("KAIROCODE_PROVIDER", "fake")
+	t.Setenv("KAIROCODE_FAKE", fakeScript(t, dir,
+		provider.FakeReply{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hi\n"}`)}}},
+		provider.FakeReply{Text: "wrote it"},
+	))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	data := dataDir(t)
+	if code := Main(ctx, []string{"run", "-dir", ws, "-data", data, "-worktree=fix", "write", "a", "note"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "ϟ Worktree fix, on kairo/fix: ") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(ws, "notes.txt")); err == nil {
+		t.Fatal("written in the folder, not the worktree")
+	}
+	var out bytes.Buffer
+	if code := Main(ctx, []string{"sessions", "-dir", ws, "-data", data, "-repo"}, &out, &out); code != 0 {
+		t.Fatalf("sessions -repo: %s", out.String())
+	}
+	for _, want := range []string{"fix (kairo/fix) · 1 untracked", "closed", "write a note"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no %q in\n%s", want, out.String())
+		}
 	}
 }

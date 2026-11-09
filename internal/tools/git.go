@@ -6,13 +6,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/r-hashi01/kairocode/internal/gitdir"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 )
 
-// git runs git in the working directory: in the sandbox with .git writable,
-// or, for a push the user approved, outside it.
+// git runs git in the working directory: in the sandbox with .git writable
+// (in a linked worktree, its repository's common git directory too: ADR
+// 0037), or, for a push the user approved, outside it.
 func git(ctx context.Context, env Env, mode sandbox.Mode, extraEnv []string, args ...string) (string, error) {
-	cmd, err := sandbox.Command(ctx, sandbox.Policy{Mode: mode, Root: env.Dir, AllowGit: true}, "", append([]string{"git"}, args...)...)
+	p := sandbox.Policy{Mode: mode, Root: env.Dir, AllowGit: true}
+	if common, ok := gitdir.Linked(env.Dir); ok {
+		p.Writable = []string{common}
+	}
+	cmd, err := sandbox.Command(ctx, p, "", append([]string{"git"}, args...)...)
 	if err != nil {
 		return "", err
 	}

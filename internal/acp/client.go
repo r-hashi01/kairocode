@@ -144,6 +144,36 @@ func (cl *Client) FlowRuns(ctx context.Context, dir, flow, only string, n int) (
 	return out.Runs, err
 }
 
+// RepoSessions are the sessions of cwd's repository, across its worktrees
+// (only KairoCode's agent has this; ADR 0037).
+func (cl *Client) RepoSessions(ctx context.Context, cwd string) ([]api.SessionInfo, error) {
+	var out struct {
+		Sessions []api.SessionInfo `json:"sessions"`
+	}
+	err := cl.c.Call(ctx, RepoSessionsRPC, map[string]any{"cwd": cwd}, &out)
+	return out.Sessions, err
+}
+
+// MakeWorktree makes a worktree of cwd's repository for a session; name
+// "" takes the first free.
+func (cl *Client) MakeWorktree(ctx context.Context, cwd, name string) (api.Worktree, error) {
+	var out api.Worktree
+	err := cl.c.Call(ctx, MakeWorktreeRPC, map[string]any{"cwd": cwd, "name": name}, &out)
+	return out, err
+}
+
+// RemoveWorktree removes a worktree made for sessions; force drops what is
+// not committed.
+func (cl *Client) RemoveWorktree(ctx context.Context, cwd string, force bool) (api.WorktreeRemoved, error) {
+	var out api.WorktreeRemoved
+	err := cl.c.Call(ctx, RemoveWorktreeRPC, map[string]any{"cwd": cwd, "force": force}, &out)
+	var re *jsonrpc.Error
+	if errors.As(err, &re) && re.Code == CodeWorktreeChanged {
+		return out, api.ErrWorktreeChanged
+	}
+	return out, err
+}
+
 // FlowRun is a flow's run, with its chart and steps.
 func (cl *Client) FlowRun(ctx context.Context, id string) (api.FlowRun, error) {
 	var f api.FlowRun

@@ -304,10 +304,65 @@ func (s *Server) sessionLog(w http.ResponseWriter, r *http.Request) {
 // first, at most ?limit=.
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	list, err := s.rt.Sessions(r.Context(), r.URL.Query().Get("dir"), limit)
+	var list []api.SessionInfo
+	var err error
+	if repo := r.URL.Query().Get("repo"); repo != "" { // across its worktrees (ADR 0037)
+		list, err = s.rt.RepoSessions(r.Context(), repo)
+	} else {
+		list, err = s.rt.Sessions(r.Context(), r.URL.Query().Get("dir"), limit)
+	}
+	if errors.Is(err, api.ErrNotARepository) {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// makeWorktree makes a worktree for a session (ADR 0037): {"dir", "name"}.
+func (s *Server) makeWorktree(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Dir  string `json:"dir"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "name": "..."}`))
+		return
+	}
+	wt, err := s.rt.MakeWorktree(r.Context(), in.Dir, in.Name)
+	if errors.Is(err, api.ErrNotARepository) || errors.Is(err, api.ErrWorktreeName) {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, wt)
+}
+
+// removeWorktree removes a worktree made for sessions: {"dir", "force"}.
+func (s *Server) removeWorktree(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Dir   string `json:"dir"`
+		Force bool   `json:"force"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "force": false}`))
+		return
+	}
+	out, err := s.rt.RemoveWorktree(r.Context(), in.Dir, in.Force)
+	switch {
+	case errors.Is(err, api.ErrNotOurWorktree):
+		fail(w, http.StatusBadRequest, err)
+	case errors.Is(err, api.ErrWorktreeBusy) || errors.Is(err, api.ErrWorktreeChanged):
+		fail(w, http.StatusConflict, err)
+	case err != nil:
+		fail(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, http.StatusOK, out)
+	}
 }

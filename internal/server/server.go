@@ -26,6 +26,8 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("POST /sessions", s.createSession)
 	s.mux.HandleFunc("GET /sessions", s.listSessions)
+	s.mux.HandleFunc("POST /worktrees", s.makeWorktree)
+	s.mux.HandleFunc("POST /worktrees/remove", s.removeWorktree)
 	s.mux.HandleFunc("POST /sessions/{id}/messages", s.sendMessage)
 	s.mux.HandleFunc("GET /sessions/{id}/turns", s.lastTurn)
 	s.mux.HandleFunc("GET /sessions/{id}/turns/{n}", s.getTurn)
@@ -99,8 +101,8 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func Fail(w http.ResponseWriter, code int, err error) { fail(w, code, err) }
 
 func fail(w http.ResponseWriter, code int, err error) {
-	if errors.Is(err, api.ErrSessionFailed) {
-		code = http.StatusGone // it takes no more (ADR 0021)
+	if errors.Is(err, api.ErrSessionFailed) || errors.Is(err, api.ErrFolderGone) {
+		code = http.StatusGone // it takes no more (ADR 0021, 0037)
 	}
 	body := map[string]string{"error": err.Error()}
 	if c := ErrorCode(err); c != "" { // the client gives back the same error

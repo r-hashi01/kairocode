@@ -124,3 +124,55 @@ func TestGitPushTwicePushesOnce(t *testing.T) {
 		t.Fatalf("remote at %s, want %s", got, want)
 	}
 }
+
+// In a linked worktree (ADR 0037), the git tools commit inside the
+// sandbox, writing the repository's common git directory; bash cannot
+// write it.
+func TestGitCommitInWorktree(t *testing.T) {
+	needGit(t)
+	// The repository must be outside the directories every command may
+	// write (the temporary ones): TMPDIR is moved beside it, and where the
+	// temporary directory is under /tmp (Linux), it is made here, in the
+	// package's folder, under a name go's tools pass over.
+	base, _ := filepath.EvalSymlinks(t.TempDir())
+	if strings.HasPrefix(base, "/tmp/") || strings.HasPrefix(base, "/private/tmp/") || strings.HasPrefix(base, "/var/tmp/") {
+		d, err := os.MkdirTemp(".", ".worktree-test-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(d) })
+		if base, err = filepath.Abs(d); err != nil {
+			t.Fatal(err)
+		}
+		base, _ = filepath.EvalSymlinks(base)
+	}
+	tmp := filepath.Join(base, "tmp")
+	os.Mkdir(tmp, 0o755)
+	t.Setenv("TMPDIR", tmp)
+	main := filepath.Join(base, "main")
+	os.Mkdir(main, 0o755)
+	sh(t, main, "git", "init", "-q", "-b", "main")
+	sh(t, main, "git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "first")
+	wt := filepath.Join(base, "wt")
+	sh(t, main, "git", "worktree", "add", "-q", "-b", "kairo/1", wt)
+	sh(t, wt, "git", "config", "user.name", "Test")
+	sh(t, wt, "git", "config", "user.email", "test@example.com")
+	os.WriteFile(filepath.Join(wt, "c.txt"), []byte("in the worktree\n"), 0o644)
+	e := env(t, wt)
+	p := plan(t, GitCommitTool, e, map[string]any{"message": "from the worktree"})
+	if p.Fail != nil {
+		t.Fatal(p.Fail.Output)
+	}
+	if r := GitCommitTool.Apply(context.Background(), e, p.Data); r.IsError || r.Unknown {
+		t.Fatalf("commit: %+v", r)
+	}
+	if msg := sh(t, main, "git", "log", "-1", "--format=%s", "kairo/1"); msg != "from the worktree" {
+		t.Fatalf("the branch's last commit %q", msg)
+	}
+	planted := filepath.Join(main, ".git", "planted")
+	if r := run(t, BashTool, wt, map[string]any{"command": "touch " + planted}); !r.IsError {
+		if _, err := os.Stat(planted); err == nil {
+			t.Fatalf("bash wrote the common git directory: %+v", r)
+		}
+	}
+}

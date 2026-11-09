@@ -23,6 +23,19 @@ var ErrNoFlowName = errors.New("/flow needs a flow's name: /flow <name> [what to
 // ErrNoFlowRequest: /flow new was given nothing to make a flow of.
 var ErrNoFlowRequest = errors.New("/flow new needs what the flow is to do: /flow new <what it does>")
 
+// ErrNotARepository, ErrWorktreeName, ErrNotOurWorktree, ErrWorktreeBusy,
+// ErrWorktreeChanged: making or removing a worktree (ADR 0037).
+var (
+	ErrNotARepository  = errors.New("not in a git repository with a commit")
+	ErrWorktreeName    = errors.New("a worktree's name is lowercase letters, digits, . _ and -, up to 40")
+	ErrNotOurWorktree  = errors.New("not a worktree KairoCode made")
+	ErrWorktreeBusy    = errors.New("a session in the worktree is working or has commands running")
+	ErrWorktreeChanged = errors.New("the worktree has changes not committed")
+)
+
+// ErrFolderGone: the session's folder was removed (ADR 0037).
+var ErrFolderGone = errors.New("the session's folder was removed: it takes no more turns")
+
 // ErrNoFlowSource: /flow new --from-session named no session of the
 // folder, or one with nothing done yet (ADR 0036).
 var ErrNoFlowSource = errors.New("/flow new --from-session takes a session of this folder that has done something (kairocode sessions lists them)")

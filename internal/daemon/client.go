@@ -714,6 +714,30 @@ func (c *Client) Sessions(ctx context.Context, dir string, limit int) ([]api.Ses
 	return out, err
 }
 
+// RepoSessions lists the sessions of dir's repository, across its
+// worktrees (ADR 0037).
+func (c *Client) RepoSessions(ctx context.Context, dir string) ([]api.SessionInfo, error) {
+	var out []api.SessionInfo
+	err := c.do(ctx, "GET", "/sessions?repo="+url.QueryEscape(dir), nil, &out)
+	return out, err
+}
+
+// MakeWorktree makes a worktree of dir's repository for a session (ADR
+// 0037); name "" takes the first free.
+func (c *Client) MakeWorktree(ctx context.Context, dir, name string) (api.Worktree, error) {
+	var out api.Worktree
+	err := c.do(ctx, "POST", "/worktrees", map[string]any{"dir": dir, "name": name}, &out)
+	return out, err
+}
+
+// RemoveWorktree removes a worktree made for sessions; force drops what
+// is not committed.
+func (c *Client) RemoveWorktree(ctx context.Context, dir string, force bool) (api.WorktreeRemoved, error) {
+	var out api.WorktreeRemoved
+	err := c.do(ctx, "POST", "/worktrees/remove", map[string]any{"dir": dir, "force": force}, &out)
+	return out, err
+}
+
 // Plugins lists the session's plugins and their state (ADR 0025).
 func (c *Client) Plugins(ctx context.Context, session string) ([]api.PluginInfo, error) {
 	var out []api.PluginInfo

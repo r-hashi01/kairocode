@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,11 +39,16 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	pickOne := fs.Bool("resume", false, "choose a session of this folder to take up (in the terminal UI; else as -continue)")
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (/provider switches it)")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (/model switches it)")
+	var wt worktreeFlag
+	fs.Var(&wt, "worktree", "start the session in a new git worktree of this folder's repository, on a branch kairo/<name> (-worktree=<name>; alone, the first free name)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("chat takes no arguments, only flags: %q", fs.Args())
+	}
+	if wt.set && (*session != "" || *cont || *pickOne) {
+		return errors.New("-worktree starts a new session: not with -session, -continue or -resume")
 	}
 	abs, err := filepath.Abs(*dir)
 	if err != nil {
@@ -104,6 +110,11 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 		}
+		if wt.set {
+			if abs, err = intoWorktree(ctx, c, abs, wt.name, out); err != nil {
+				return err
+			}
+		}
 		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Resume: *pickOne && s == "", Version: buildVersion(), Engine: *prov, Model: *model,
 			Usage: func(ctx context.Context, s string) (int64, error) {
 				u, err := c.Usage(ctx, s)
@@ -119,11 +130,50 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return err
 	}
-	return lineChat(ctx, fromAgentR, toAgentW, stdout, *data, abs, s, trusted)
+	var into func(string) (string, error)
+	if wt.set {
+		into = func(dir string) (string, error) { return intoWorktree(ctx, c, dir, wt.name, stdout) }
+	}
+	return lineChat(ctx, fromAgentR, toAgentW, stdout, *data, abs, s, trusted, into)
+}
+
+// worktreeFlag is -worktree: alone, the first free name; -worktree=<name>,
+// that one (ADR 0037).
+type worktreeFlag struct {
+	set  bool
+	name string
+}
+
+func (f *worktreeFlag) String() string   { return f.name }
+func (f *worktreeFlag) IsBoolFlag() bool { return true }
+func (f *worktreeFlag) Set(v string) error {
+	switch v {
+	case "true":
+		f.set, f.name = true, ""
+	case "false":
+		f.set, f.name = false, ""
+	default:
+		f.set, f.name = true, v
+	}
+	return nil
+}
+
+// intoWorktree has the daemon make a worktree of dir's repository, says
+// where, and is its folder.
+func intoWorktree(ctx context.Context, c *daemon.Client, dir, name string, out io.Writer) (string, error) {
+	wt, err := c.MakeWorktree(ctx, dir, name)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(out, "ϟ Worktree %s, on %s: %s\n", wt.Name, wt.Branch, wt.Dir)
+	if wt.Uncommitted {
+		fmt.Fprintf(out, "  What is not committed in %s is not in it.\n", dir)
+	}
+	return wt.Dir, nil
 }
 
 // lineChat is the chat a line at a time, on what is not a terminal.
-func lineChat(ctx context.Context, fromAgent io.Reader, toAgent io.Writer, stdout io.Writer, data, abs, s string, trusted bool) error {
+func lineChat(ctx context.Context, fromAgent io.Reader, toAgent io.Writer, stdout io.Writer, data, abs, s string, trusted bool, into func(string) (string, error)) error {
 	t := &term{out: stdout, input: make(chan string)}
 	go t.read(ctx, stdin)
 	if !trusted {
@@ -146,6 +196,12 @@ func lineChat(ctx context.Context, fromAgent io.Reader, toAgent io.Writer, stdou
 			return nil
 		}
 		if err := trust.Trust(data, abs); err != nil {
+			return err
+		}
+	}
+	if into != nil {
+		var err error
+		if abs, err = into(abs); err != nil {
 			return err
 		}
 	}
@@ -434,6 +490,7 @@ func listSessions(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	dir := fs.String("dir", ".", "working directory")
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	all := fs.Bool("all", false, "the sessions of every folder")
+	repo := fs.Bool("repo", false, "the sessions of this folder's repository, across its worktrees (ADR 0037)")
 	asJSON := fs.Bool("json", false, "as JSON")
 	limit := fs.Int("n", 20, "at most this many (0: all)")
 	if err := fs.Parse(args); err != nil {
@@ -451,6 +508,9 @@ func listSessions(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	defer c.Close()
+	if *repo {
+		return listRepoSessions(ctx, c, abs, *asJSON, stdout)
+	}
 	list, err := c.Sessions(ctx, abs, *limit)
 	if err != nil {
 		return err
@@ -473,5 +533,34 @@ func listSessions(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 	}
 	fmt.Fprintln(stdout, "kairo -session <id> takes one up; kairo -continue, the last; kairo -resume, one chosen.")
+	return nil
+}
+
+// listRepoSessions lists the sessions of dir's repository, by worktree.
+func listRepoSessions(ctx context.Context, c *daemon.Client, dir string, asJSON bool, stdout io.Writer) error {
+	list, err := c.RepoSessions(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return json.NewEncoder(stdout).Encode(list)
+	}
+	if len(list) == 0 {
+		fmt.Fprintln(stdout, "No session in this repository yet.")
+		return nil
+	}
+	place := ""
+	for _, s := range list {
+		if p := s.Place(); p != place {
+			place = p
+			line := p
+			if s.Tree != nil {
+				line += " · " + s.Tree.String()
+			}
+			fmt.Fprintln(stdout, line)
+		}
+		fmt.Fprintf(stdout, "  %s  %s  %s  %s\n", strings.TrimPrefix(s.ID, "s/"), s.Updated.Local().Format("2006-01-02 15:04"), s.State(), s.Title)
+	}
+	fmt.Fprintln(stdout, "kairo -session <id> takes one up; kairo -worktree starts one in a new worktree.")
 	return nil
 }

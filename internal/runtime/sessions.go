@@ -99,6 +99,9 @@ func (r *Runtime) sessionTurns(ctx context.Context, si *SessionInfo, mcpTurns ma
 			continue
 		}
 		si.Turns++
+		if !t.Finished() {
+			si.Working = true
+		}
 		if !t.Finished() || mcpTurns[t.RunID] {
 			p, err := r.pendingIn(ctx, t, t.RunID)
 			if err != nil {

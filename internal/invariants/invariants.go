@@ -264,6 +264,7 @@ var commandStarters = []string{"internal/sandbox/", "internal/agents/", "interna
 	"internal/secrets/secrets.go",     // the key store's commands, security and secret-tool (ADR 0025)
 	"internal/cli/plugin.go",          // the browser, for a plugin's OAuth (ADR 0025)
 	"internal/plugins/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
+	"internal/runtime/worktree.go",    // git, to make, list and remove worktrees for sessions, the user's own command (ADR 0037)
 	"scripts/envcheck/",               // check.sh's look at whether a sandbox can be started here
 	"internal/runtime/jobs.go",        // the runner of a command in the background: this binary (ADR 0028)
 	"internal/clipboard/clipboard.go"} // osascript, wl-paste or xclip, to read the clipboard's image (ADR 0026)

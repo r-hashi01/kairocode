@@ -52,6 +52,11 @@ type Backend interface {
 	MCP(ctx context.Context, session string) ([]api.MCPInfo, error)
 	Plugins(ctx context.Context, session string) ([]api.PluginInfo, error)
 	Sessions(ctx context.Context, dir string, limit int) ([]api.SessionInfo, error)
+	// RepoSessions, MakeWorktree and RemoveWorktree: sessions side by side
+	// in a repository's worktrees (ADR 0037).
+	RepoSessions(ctx context.Context, dir string) ([]api.SessionInfo, error)
+	MakeWorktree(ctx context.Context, dir, name string) (api.Worktree, error)
+	RemoveWorktree(ctx context.Context, dir string, force bool) (api.WorktreeRemoved, error)
 	// Log is the session's record (ADR 0023).
 	Log(ctx context.Context, session string) (api.SessionLog, error)
 	RunCommand(ctx context.Context, session, name, args string) (int, error)
@@ -122,9 +127,20 @@ const (
 	// from its last finished turn, the working files as they are
 	// ({"sessionId"} → {"sessionId", "turn"}). ADR 0021.
 	GoOnRPC = "_kairocode/go_on"
+	// RepoSessionsRPC lists the sessions of a folder's repository across
+	// its worktrees ({"cwd"} → {"sessions": [api.SessionInfo]});
+	// MakeWorktreeRPC makes a worktree for a session ({"cwd", "name"} →
+	// api.Worktree); RemoveWorktreeRPC removes one ({"cwd", "force"} →
+	// api.WorktreeRemoved). ADR 0037.
+	RepoSessionsRPC   = "_kairocode/repo_sessions"
+	MakeWorktreeRPC   = "_kairocode/make_worktree"
+	RemoveWorktreeRPC = "_kairocode/remove_worktree"
 	// CodeSessionFailed answers a prompt to a session that failed and
 	// takes no more (ADR 0021).
 	CodeSessionFailed = -32010
+	// CodeWorktreeChanged answers removing a worktree with changes not
+	// committed, without force: the client asks first (ADR 0037).
+	CodeWorktreeChanged = -32011
 )
 
 // Options are the agent's settings.

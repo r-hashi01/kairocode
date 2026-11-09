@@ -124,6 +124,9 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 	if err := r.failed(ctx, session); err != nil {
 		return 0, err
 	}
+	if err := r.folderGone(ctx, session); err != nil {
+		return 0, err
+	}
 	n, err := r.sent(ctx, session)
 	if err != nil {
 		return 0, err

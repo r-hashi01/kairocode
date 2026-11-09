@@ -35,6 +35,12 @@ var wireErrors = []struct {
 	{"no_flow_run", api.ErrNoFlowRun},
 	{"bad_image", api.ErrBadImage},
 	{"closing", api.ErrClosing},
+	{"not_a_repository", api.ErrNotARepository},
+	{"worktree_name", api.ErrWorktreeName},
+	{"not_our_worktree", api.ErrNotOurWorktree},
+	{"worktree_busy", api.ErrWorktreeBusy},
+	{"worktree_changed", api.ErrWorktreeChanged},
+	{"folder_gone", api.ErrFolderGone},
 }
 
 // ErrorCode is err's code on the wire ("" for an error a client does not

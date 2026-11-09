@@ -80,6 +80,8 @@ kairocode approve [-deny] <key>      # answer an approval (from any terminal)
 kairocode answer <key> <answer>      # answer a flow's question
 kairocode log <session>              # the session's record: turns, model input and output, tools, waits, usage
 kairocode sessions                   # the sessions of this folder
+kairo -worktree[=name]               # a session in a new git worktree, on a branch kairo/<name> (run takes -worktree too)
+kairocode sessions -repo             # the repository's sessions across its worktrees: what each does, how each differs
 kairocode fork [-files] <session> [turn]   # go on from a past turn, as another session
 kairocode plugin install <name>      # install a plugin (MCP servers and skills); connect gives it credentials
 kairocode usage -session <session>   # the tokens the model calls used
@@ -97,6 +99,8 @@ kairocode usage -session <session>   # the tokens the model calls used
 - `/flow`: flows (see below)
 - `/plugin`, `/skills`, `/mcp`: plugins, skills, MCP servers
 - `/log`, `/resume`, `/review`
+- `/new`: another session in this terminal; `/new --worktree [name]`, in a new git worktree on `kairo/<name>`, so sessions work side by side without seeing each other's changes. Worktrees live in the data directory (`worktrees/`), not in the repository; files git does not track (`.env`, installed dependencies) are not in a new one.
+- `/sessions`: the repository's sessions across its worktrees: whether each is working or waits for you, and how its worktree differs. Enter takes one up; `d` removes a worktree whose sessions rest (its branch is kept if not merged).
 - Type a space after a command's name to see what it takes (`/plugin install <name>`, `/flow new`, your flows' names, `/model`'s models, ...). Tab or ↑↓ picks one; Enter sends what you typed.
 - Shift+Tab switches the approval mode: manual, auto, plan. The input's `>` takes the mode's color.
 - Esc stops the current turn. Ctrl-C twice leaves.

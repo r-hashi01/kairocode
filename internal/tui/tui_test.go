@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -43,6 +44,7 @@ func (d *driver) run(cmd tea.Cmd) {
 	msg := cmd()
 	switch v := msg.(type) {
 	case nil, spinner.TickMsg: // the spinner turns on its own clock: not here
+	case repoTick: // nor /sessions' reading again
 	case tea.QuitMsg:
 		d.quit = true
 	case tea.BatchMsg:
@@ -138,12 +140,37 @@ type fakeAgent struct {
 	runs     []api.FlowRun
 	failed   bool     // the session failed: the next prompt is refused (ADR 0021)
 	goneOn   []string // the sessions gone on from
+	repo     []api.SessionInfo
+	made     []string // worktrees made: cwd name
+	removed  []string // worktrees removed
+	changed  bool     // the worktree has changes: removing asks
+	cwds     []string // the folders sessions were started and loaded in
 }
 
 func (a *fakeAgent) GoOn(ctx context.Context, session string) (string, int, error) {
 	a.goneOn = append(a.goneOn, session)
 	a.failed = false
 	return "s/forked0123456789", 3, nil
+}
+
+func (a *fakeAgent) RepoSessions(ctx context.Context, cwd string) ([]api.SessionInfo, error) {
+	return a.repo, nil
+}
+
+func (a *fakeAgent) MakeWorktree(ctx context.Context, cwd, name string) (api.Worktree, error) {
+	if name == "" {
+		name = "1"
+	}
+	a.made = append(a.made, cwd+" "+name)
+	return api.Worktree{Dir: "/data/worktrees/repo-0000/" + name, Name: name, Branch: "kairo/" + name}, nil
+}
+
+func (a *fakeAgent) RemoveWorktree(ctx context.Context, cwd string, force bool) (api.WorktreeRemoved, error) {
+	if a.changed && !force {
+		return api.WorktreeRemoved{}, api.ErrWorktreeChanged
+	}
+	a.removed = append(a.removed, fmt.Sprintf("%s force=%v", cwd, force))
+	return api.WorktreeRemoved{Branch: "kairo/1", BranchKept: true}, nil
 }
 
 func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
@@ -227,6 +254,7 @@ func (a *fakeAgent) Cancel(session string) error {
 }
 
 func (a *fakeAgent) NewSession(ctx context.Context, cwd string) (string, error) {
+	a.cwds = append(a.cwds, cwd)
 	a.sessions++
 	return "s/0123456789abcdef", nil
 }
@@ -236,6 +264,7 @@ func (a *fakeAgent) ListSessions(ctx context.Context, cwd string) ([]acp.Session
 }
 
 func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error {
+	a.cwds = append(a.cwds, cwd)
 	a.loaded = session
 	return nil
 }
@@ -1687,5 +1716,64 @@ func TestOnATerminalTheInputStaysDown(t *testing.T) {
 	}
 	if !slices.IsSorted(said) {
 		t.Fatalf("out of order: %q", said)
+	}
+}
+
+func init() { repoEvery = time.Millisecond } // its tick is not followed here
+
+// /sessions (ADR 0037) lists the repository's sessions by worktree, with
+// what each does and how its worktree differs; Enter takes one up in its
+// folder; d removes a worktree, asking again when it has changes; /new
+// --worktree starts a session in a new worktree, which becomes the
+// screen's folder.
+func TestRepoSessions(t *testing.T) {
+	d, a := start(t, Options{Dir: "/repo"})
+	up := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	a.repo = []api.SessionInfo{
+		{ID: "s/0123456789abcdef", Dir: "/repo", Title: "this one", Branch: "main", Updated: up},
+		{ID: "s/aaaa", Dir: "/wt/1", Title: "fix the login bug", Worktree: "1", Branch: "kairo/1", Waiting: 1, Updated: up,
+			Tree: &api.TreeDiff{Files: 2, Added: 10, Removed: 3, Ahead: 1}},
+		{ID: "s/bbbb", Dir: "/wt/2", Title: "add a flag", Worktree: "2", Branch: "kairo/2", Working: true, Updated: up, Tree: &api.TreeDiff{}},
+	}
+	typed(d, "/sessions")
+	v := d.view()
+	for _, want := range []string{"main (main)", "1 (kairo/1) · 2 files +10 -3, 1 commit ahead", "waits for you (1)", "fix the login bug",
+		"2 (kairo/2) · no changes", "working", "this one"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("no %q in\n%s", want, v)
+		}
+	}
+	d.send(key("down"))
+	a.changed = true
+	d.send(key("d"))
+	if v := d.view(); len(a.removed) != 0 || !strings.Contains(v, "d again drops them") {
+		t.Fatalf("removed without asking: %q\n%s", a.removed, v)
+	}
+	d.send(key("d"))
+	if len(a.removed) != 1 || a.removed[0] != "/wt/1 force=true" || !strings.Contains(d.view(), "kairo/1 kept: it is not merged") {
+		t.Fatalf("removed %q\n%s", a.removed, d.view())
+	}
+	d.send(key("down"))
+	d.send(key("enter"))
+	if d.m.repo != nil || a.loaded != "s/bbbb" || d.m.o.Dir != "/wt/2" || a.cwds[len(a.cwds)-1] != "/wt/2" {
+		t.Fatalf("taken up %q in %q (%q)", a.loaded, d.m.o.Dir, a.cwds)
+	}
+
+	typed(d, "/new --worktree fix")
+	if len(a.made) != 1 || a.made[0] != "/wt/2 fix" || d.m.o.Dir != "/data/worktrees/repo-0000/fix" || a.cwds[len(a.cwds)-1] != d.m.o.Dir {
+		t.Fatalf("made %q, in %q (%q)", a.made, d.m.o.Dir, a.cwds)
+	}
+	if out := d.view() + d.out(); !strings.Contains(out, "in worktree fix, on kairo/fix") {
+		t.Fatalf("not said\n%s", out)
+	}
+	for _, c := range []struct {
+		text     string
+		worktree bool
+		name     string
+		ok       bool
+	}{{"/new", false, "", true}, {"/new --worktree", true, "", true}, {"/new --worktree=x", true, "x", true}, {"/new later", false, "", false}} {
+		if w, n, ok := newSessionCommand(c.text); w != c.worktree || n != c.name || ok != c.ok {
+			t.Errorf("%s: %v %q %v", c.text, w, n, ok)
+		}
 	}
 }
