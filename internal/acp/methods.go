@@ -27,6 +27,9 @@ var handlers = map[string]func(a *agent, ctx context.Context, params json.RawMes
 	PluginsRPC:                  (*agent).pluginsView,
 	FlowRunsRPC:                 (*agent).flowRuns,
 	GoOnRPC:                     (*agent).goOn,
+	RepoSessionsRPC:             (*agent).repoSessions,
+	MakeWorktreeRPC:             (*agent).makeWorktree,
+	RemoveWorktreeRPC:           (*agent).removeWorktree,
 	FlowRunRPC:                  (*agent).flowRun,
 	PluginRPC:                   (*agent).pluginCommand,
 	ModelsMethod:                (*agent).models,
@@ -328,4 +331,58 @@ func (a *agent) cancel(ctx context.Context, params json.RawMessage) (any, error)
 		}
 	}()
 	return nil, nil
+}
+
+// repoSessions lists the sessions of cwd's repository, across its
+// worktrees (ADR 0037).
+func (a *agent) repoSessions(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		Cwd string `json:"cwd"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, invalid(err)
+	}
+	list, err := a.b.RepoSessions(ctx, p.Cwd)
+	if err != nil {
+		return nil, invalid(err)
+	}
+	if list == nil {
+		list = []api.SessionInfo{}
+	}
+	return map[string]any{"sessions": list}, nil
+}
+
+// makeWorktree makes a worktree of cwd's repository for a session.
+func (a *agent) makeWorktree(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		Cwd  string `json:"cwd"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, invalid(err)
+	}
+	wt, err := a.b.MakeWorktree(ctx, p.Cwd, p.Name)
+	if err != nil {
+		return nil, invalid(err)
+	}
+	return wt, nil
+}
+
+// removeWorktree removes a worktree made for sessions.
+func (a *agent) removeWorktree(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		Cwd   string `json:"cwd"`
+		Force bool   `json:"force"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, invalid(err)
+	}
+	out, err := a.b.RemoveWorktree(ctx, p.Cwd, p.Force)
+	if errors.Is(err, api.ErrWorktreeChanged) {
+		return nil, &rpcError{Code: CodeWorktreeChanged, Message: err.Error()}
+	}
+	if err != nil {
+		return nil, invalid(err)
+	}
+	return out, nil
 }

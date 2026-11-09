@@ -7,6 +7,7 @@ package trust
 import (
 	"encoding/json"
 	"errors"
+	"github.com/r-hashi01/kairocode/internal/gitdir"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,9 +56,16 @@ func Trusted(data, dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// A worktree of a trusted repository is trusted (ADR 0037).
+	in := []string{d}
+	if m := gitdir.Main(d); m != d {
+		in = append(in, m)
+	}
 	for _, t := range l.Trusted {
-		if rel, err := filepath.Rel(t, d); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true, nil
+		for _, d := range in {
+			if rel, err := filepath.Rel(t, d); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

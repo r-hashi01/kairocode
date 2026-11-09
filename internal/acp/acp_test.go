@@ -101,6 +101,15 @@ func (l *local) Log(ctx context.Context, s string) (api.SessionLog, error) {
 func (l *local) Sessions(ctx context.Context, dir string, limit int) ([]api.SessionInfo, error) {
 	return l.r.Sessions(ctx, dir, limit)
 }
+func (l *local) RepoSessions(ctx context.Context, dir string) ([]api.SessionInfo, error) {
+	return l.r.RepoSessions(ctx, dir)
+}
+func (l *local) MakeWorktree(ctx context.Context, dir, name string) (api.Worktree, error) {
+	return l.r.MakeWorktree(ctx, dir, name)
+}
+func (l *local) RemoveWorktree(ctx context.Context, dir string, force bool) (api.WorktreeRemoved, error) {
+	return l.r.RemoveWorktree(ctx, dir, force)
+}
 func (l *local) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
 	return l.r.FlowRuns(ctx, dir, flow, only, n)
 }

@@ -43,6 +43,7 @@ KairoCode is a coding agent built on kairo (a durable workflow runtime). It is t
 | `internal/clipboard` | The OS commands that read clipboard images (ADR 0026), and saving pasted images. Runs only when the user presses a key | Does I/O here |
 | `internal/tui/screen` | Draws the bottom area of the terminal and writes the conversation above it (ADR 0033. The same mechanism as Codex). Raw mode and terminal settings | Terminal input and output only |
 | `internal/lsp` | Language server diagnostic errors for written files (ADR 0009). Servers start inside the sandbox, are kept inside the daemon, and are stopped when unused | Does I/O here |
+| `internal/gitdir` | A linked git worktree's repository, from the files git leaves (ADR 0037). Used by the git tools' sandbox and by trust | Only reads files |
 | `internal/config` | Where settings live (the user's `$XDG_CONFIG_HOME/kairocode` and the project's `kairocode.json`) and reading them (layered: the user's, then the project's). What each section means is up to the reader | Only reads settings files |
 | `internal/locale` | The reader's language (`KAIROCODE_LANG`, the user's `kairocode.json`, the locale) and replacing the wording of flow reviews (field names and scripts are not replaced) | Only reads environment variables and the user's settings |
 | `internal/trust` | The list of trusted folders (ADR 0010. `trust.json` in the data directory). Only clients read and write it | Does I/O here |

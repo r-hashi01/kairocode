@@ -35,9 +35,9 @@ import (
 )
 
 const usage = `usage:
-  kairocode [chat] [-dir DIR] [-data DIR] [-session ID | -continue | -resume]   talk with it in the terminal (kairo is the same)
-  kairocode sessions [-dir DIR] [-all] [-n N] [-json]   the sessions of a folder, the latest used first
-  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] "<request>"   answer one request, then exit
+  kairocode [chat] [-dir DIR] [-data DIR] [-session ID | -continue | -resume | -worktree[=NAME]]   talk with it in the terminal (kairo is the same; -worktree: in a new git worktree)
+  kairocode sessions [-dir DIR] [-all | -repo] [-n N] [-json]   the sessions of a folder, the latest used first (-repo: of its repository, across its worktrees)
+  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] [-worktree[=NAME]] "<request>"   answer one request, then exit
                                                      (-detach: stop when it waits for a person, exit 3)
   kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
   kairocode fork [-data DIR] [-files] <session> [turn]   start another session from a turn of one (the last, unless named)
@@ -315,6 +315,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3); go on with kairocode resume")
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (ADR 0014)")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (default: the provider's)")
+	var wt worktreeFlag
+	fs.Var(&wt, "worktree", "run in a new git worktree of this folder's repository, on a branch kairo/<name> (-worktree=<name>; alone, the first free name)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -341,6 +343,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer c.Close()
+	if wt.set {
+		if abs, err = intoWorktree(ctx, c, abs, wt.name, stderr); err != nil {
+			return err
+		}
+	}
 	// The session runs with this client's choice of engine and model, not
 	// whatever the daemon was started with.
 	s, err := c.CreateSession(ctx, workflows.SessionInput{

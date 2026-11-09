@@ -58,6 +58,17 @@ func (l SessionLog) Text() string {
 	return b.String()
 }
 
+// Head is the record's first lines, without its turns; TurnText, one
+// turn's lines.
+func (l SessionLog) Head() string {
+	return SessionLog{Session: l.Session, Dir: l.Dir, Engine: l.Engine, From: l.From, Usage: l.Usage}.Text()
+}
+
+// TurnText is turn t's lines, as Text writes them.
+func (l SessionLog) TurnText(t LogEntry) string {
+	return l.entriesText([]LogEntry{t})
+}
+
 // Settings are a session's provider and model: those its next turn runs
 // with. Model "" is the provider's default.
 type Settings struct {
@@ -94,6 +105,106 @@ type SessionInfo struct {
 	// ended (ADR 0028). What a client shows as going on.
 	Waiting int `json:"waiting,omitempty"`
 	Jobs    int `json:"jobs,omitempty"`
+	// Working: a turn of it is under way.
+	Working bool `json:"working,omitempty"`
+	// Of a repository's listing (ADR 0037): its folder's repository (the
+	// main checkout), the worktree's name ("" for the main checkout), its
+	// branch, and how it differs (Tree) from the main checkout's HEAD.
+	// Gone: its folder was removed; it takes no more turns.
+	Repo     string    `json:"repo,omitempty"`
+	Worktree string    `json:"worktree,omitempty"`
+	Branch   string    `json:"branch,omitempty"`
+	Tree     *TreeDiff `json:"tree,omitempty"`
+	Gone     bool      `json:"gone,omitempty"`
+}
+
+// TreeDiff is how a worktree differs from the main checkout's HEAD: files
+// changed and lines added and removed (what is not committed included),
+// files git does not track, and commits ahead.
+type TreeDiff struct {
+	Files     int `json:"files"`
+	Added     int `json:"added"`
+	Removed   int `json:"removed"`
+	Untracked int `json:"untracked"`
+	Ahead     int `json:"ahead"`
+}
+
+// State is what the session is doing, in words: gone, closed, working,
+// waiting for you, or idle; with its commands in the background.
+func (s SessionInfo) State() string {
+	var st string
+	switch {
+	case s.Gone:
+		return "folder removed"
+	case s.Closed:
+		return "closed"
+	case s.Waiting > 0:
+		st = fmt.Sprintf("waits for you (%d)", s.Waiting)
+	case s.Working:
+		st = "working"
+	default:
+		st = "idle"
+	}
+	if s.Jobs > 0 {
+		st += fmt.Sprintf(", %d in the background", s.Jobs)
+	}
+	return st
+}
+
+// Place is where a session of a repository's listing works: "main", or
+// its worktree's name; with its branch.
+func (s SessionInfo) Place() string {
+	p := "main"
+	if s.Worktree != "" {
+		p = s.Worktree
+	}
+	if s.Branch != "" {
+		p += " (" + s.Branch + ")"
+	}
+	return p
+}
+
+// String is the difference in short: "3 files +40 -2, 1 untracked, 2
+// commits ahead", or "no changes".
+func (t TreeDiff) String() string {
+	var parts []string
+	if t.Files > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s +%d -%d", t.Files, plural(t.Files, "file"), t.Added, t.Removed))
+	}
+	if t.Untracked > 0 {
+		parts = append(parts, fmt.Sprintf("%d untracked", t.Untracked))
+	}
+	if t.Ahead > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s ahead", t.Ahead, plural(t.Ahead, "commit")))
+	}
+	if len(parts) == 0 {
+		return "no changes"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
+}
+
+// Worktree is a worktree made for a session (ADR 0037): its folder, name
+// and branch. Uncommitted: the folder it was made from had changes, which
+// it does not have.
+type Worktree struct {
+	Dir         string `json:"dir"`
+	Name        string `json:"name"`
+	Branch      string `json:"branch"`
+	Uncommitted bool   `json:"uncommitted,omitempty"`
+}
+
+// WorktreeRemoved is what removing a worktree did: its branch deleted,
+// or kept because it is not merged.
+type WorktreeRemoved struct {
+	Branch     string `json:"branch"`
+	BranchKept bool   `json:"branchKept,omitempty"`
 }
 
 // SessionUsage is what a session's model calls used, as they recorded it.

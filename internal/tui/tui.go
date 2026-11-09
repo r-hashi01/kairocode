@@ -64,6 +64,11 @@ type Agent interface {
 	// GoOn goes on from a session that failed, in a new one forked from its
 	// last finished turn (ADR 0021).
 	GoOn(ctx context.Context, session string) (string, int, error)
+	// RepoSessions, MakeWorktree and RemoveWorktree are /sessions' and
+	// /new --worktree's (ADR 0037).
+	RepoSessions(ctx context.Context, cwd string) ([]api.SessionInfo, error)
+	MakeWorktree(ctx context.Context, cwd, name string) (api.Worktree, error)
+	RemoveWorktree(ctx context.Context, cwd string, force bool) (api.WorktreeRemoved, error)
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -290,6 +295,8 @@ type model struct {
 	// flows, /flow's.
 	plugins *browser
 	runs    *runsScreen
+	repo    *sessionsScreen
+	repoGen int
 	flows   *flowsScreen
 	// flowOpts: /flow's options, the folder's flows among them (nil: to
 	// read); compMoved, a completion was moved to (↑ ↓).
@@ -552,7 +559,7 @@ func (m *model) start() tea.Cmd {
 // not redrawn, and stays there. Leaving one puts the conversation back as
 // it was, and what was to be written above it is written then.
 func (m *model) full() bool {
-	if m.plugins != nil || m.runs != nil || m.flows != nil {
+	if m.plugins != nil || m.runs != nil || m.flows != nil || m.repo != nil {
 		return true
 	}
 	return len(m.asks) > 0 && m.asks[0].review != nil && !m.asks[0].instead
@@ -684,6 +691,18 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case loginMsg:
 		return m.loginWays(msg)
+	case repoSessionsMsg:
+		return m.repoSessions(msg)
+	case repoTick:
+		if s := m.repo; s != nil && s.gen == msg.gen {
+			gen := s.gen
+			return tea.Batch(m.readRepoSessions(), tea.Tick(repoEvery, func(time.Time) tea.Msg { return repoTick{gen: gen} }))
+		}
+		return nil
+	case removedMsg:
+		return m.removed(msg)
+	case newSessionMsg:
+		return m.startedNew(msg)
 	case flowRunsMsg:
 		if s := m.runs; s != nil {
 			if msg.err != nil {
@@ -1389,6 +1408,8 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.pluginsKey(key)
 	case m.runs != nil:
 		return m.runsKey(key)
+	case m.repo != nil:
+		return m.repoKey(key)
 	case m.flows != nil:
 		return m.flowsKey(key)
 	case m.pick != nil:
@@ -1501,6 +1522,12 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		if text == "/flow runs" { // the flows' runs, to look back at (ADR 0029)
 			return m.openFlowRuns()
 		}
+		if text == "/sessions" { // the repository's, across its worktrees (ADR 0037)
+			return m.openRepoSessions()
+		}
+		if worktree, name, ok := newSessionCommand(text); ok { // another session, maybe in a new worktree
+			return m.newSession(worktree, name)
+		}
 		if text == "/resume" { // another session of the folder
 			if m.running {
 				m.note = "a turn is under way: /resume when it ends (esc stops it)"
@@ -1557,7 +1584,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 func (m *model) commands() []acp.Command {
 	return append([]acp.Command{{Name: "help", Description: "What you can type"}, {Name: "exit", Description: "Leave (the session is kept: kairo -continue takes it up)"},
 		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"},
-		{Name: "resume", Description: "Take up another session of this folder"}}, m.cmds...)
+		{Name: "resume", Description: "Take up another session of this folder"},
+		{Name: "new", Description: "Start another session (--worktree [name]: in a new git worktree, on kairo/<name>)"},
+		{Name: "sessions", Description: "The repository's sessions across its worktrees: take one up, remove a worktree"}}, m.cmds...)
 }
 
 // completions are the commands that begin with what is typed, while a
@@ -1715,6 +1744,8 @@ func (m *model) View() tea.View {
 		b.WriteString(m.pluginsView(w))
 	case m.runs != nil:
 		b.WriteString(m.runsView(w))
+	case m.repo != nil:
+		b.WriteString(m.repoView(w))
 	case m.flows != nil:
 		b.WriteString(m.flowsView(w))
 	case m.pick != nil:

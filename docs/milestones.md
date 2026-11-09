@@ -2,7 +2,7 @@
 
 The milestones of design section 10, turned into acceptance-criteria tests. Work on a milestone with the `/milestone` skill. Write the acceptance criteria as tests before implementing (they fail at first). When they all pass, set that milestone's "Status" to "done (date)".
 
-Current stage: **M7 (show the strengths) is done (2026-11-06)**: the durability demo, with a flow and with Claude Code and codex as the engine, and approval requests told outside the machine (ADR 0034). M8 (close the gap at the entry points) is done (2026-11-09): `/init`, and OpenAI-compatible APIs as providers (ADR 0035). What is left of it is checking by hand: the adapter with OpenAI's own API, and pasting images on Linux (a real Ollama was checked). M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
+Current stage: **M9 (deepen what sets it apart) is done (2026-11-09)**: a flow made from a session (ADR 0036), and sessions side by side in git worktrees with `/sessions` (ADR 0037); checking the worktrees by hand in the terminal UI remains. M7 (show the strengths) is done (2026-11-06): the durability demo, with a flow and with Claude Code and codex as the engine, and approval requests told outside the machine (ADR 0034). M8 (close the gap at the entry points) is done (2026-11-09): `/init`, and OpenAI-compatible APIs as providers (ADR 0035). What is left of it is checking by hand: the adapter with OpenAI's own API, and pasting images on Linux (a real Ollama was checked). M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
 
 ## M0 Skeleton
 
@@ -189,10 +189,10 @@ Status: done (2026-11-09). Checking by hand remains: the OpenAI-compatible adapt
 
 ## M9 Deepen what sets it apart
 
-Status: not started
+Status: done (2026-11-09). Checking by hand remains: worktrees in the terminal UI with a real repository
 
-- [ ] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR).
-- [ ] Sessions run side by side in worktrees, and a screen listing them (needs an ADR).
+- [x] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR). (2026-11-09, ADR 0036: `/flow new --from-session[=<id>] [words]` gives the model the session's record, cut to size, and it writes a draft as `/flow new` does. `TestFlowFromSession`, `TestFitTurns`.)
+- [x] Sessions run side by side in worktrees, and a screen listing them (needs an ADR). (2026-11-09, ADR 0037: `kairo -worktree`, `kairocode run -worktree`, `/new --worktree`; `/sessions` and `kairocode sessions -repo`; the git tools write the repository's common git directory. `TestWorktreeSession`, `TestWorktreeMadeAgainAfterACrash`, `TestGitCommitInWorktree`, `TestRunInAWorktree`, `TestRepoSessions`, `TestLinked`.)
 
 Left for after M6 to M9: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside, the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 
