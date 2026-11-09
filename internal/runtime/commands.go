@@ -54,6 +54,9 @@ func (r *Runtime) Commands(ctx context.Context, session string) ([]opencode.Comm
 			cs[name] = opencode.Command{Name: name, Description: s.Description, Skill: true}
 		}
 	}
+	if _, taken := cs[initCommand.Name]; !taken {
+		cs[initCommand.Name] = initCommand
+	}
 	out := make([]opencode.Command, 0, len(cs))
 	for _, name := range slices.Sorted(func(yield func(string) bool) {
 		for n := range cs {
@@ -86,6 +89,15 @@ func (r *Runtime) RunCommand(ctx context.Context, session, name, args string) (i
 	}
 	c, ok := cs[name]
 	if !ok {
+		if name == initCommand.Name {
+			skills, err := opencode.Skills(opencode.SkillDirs(dir))
+			if err != nil {
+				return 0, err
+			}
+			if _, skill := skills[name]; !skill {
+				return r.sendText(ctx, session, initText(args), "", "")
+			}
+		}
 		return r.runSkill(ctx, session, dir, name, args)
 	}
 	rules, err := loadRules(dir, nil)
@@ -105,11 +117,44 @@ func (r *Runtime) RunCommand(ctx context.Context, session, name, args string) (i
 	if err != nil {
 		return 0, fmt.Errorf("/%s: %w", name, err)
 	}
+	return r.sendText(ctx, session, text, c.Agent, c.Model)
+}
+
+// sendText sends text as the user's message, to agent and model if named.
+func (r *Runtime) sendText(ctx context.Context, session, text, agent, model string) (int, error) {
 	h, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: text}}})
 	if err != nil {
 		return 0, err
 	}
-	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h, Agent: c.Agent, Model: c.Model})
+	return r.signal(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h, Agent: agent, Model: model})
+}
+
+// initCommand is KairoCode's own /init (M8): it has the model read the
+// repository and write a draft AGENTS.md. A project's command or skill of
+// the name is run in its place.
+var initCommand = opencode.Command{Name: "init", Hint: "[what to look at most]",
+	Description: "Read the repository and write a draft AGENTS.md for coding agents (or improve the one there)"}
+
+// initText is /init's message to the model; args, what the user adds.
+func initText(args string) string {
+	text := `Read this repository and write AGENTS.md at its root: the instructions a coding agent (you, another one, or a person new to it) needs to work here well. It is a draft for the user to read and change.
+
+First look, without guessing:
+- the README and other docs; the build and dependency files (go.mod, package.json, pyproject.toml, Cargo.toml, Makefile, …); the CI configuration; the layout of the source;
+- instructions written for other agents, to fold in what holds: AGENTS.md, CLAUDE.md, .cursor/rules or .cursorrules, .github/copilot-instructions.md, .windsurfrules.
+
+Then write, briefly, and only what you found:
+- what the project is, in a sentence or two;
+- the commands to build, test (all, and a single test), lint and format, as they are run here;
+- the layout: the main directories and what is in each, and the boundaries between them that are not obvious;
+- the conventions the code follows that a newcomer would get wrong;
+- what to watch out for (generated files, slow or flaky tests, setup it needs).
+
+Leave out what anyone can see from a file listing, general advice for good code, and anything you did not find in the repository. If AGENTS.md is there already, improve it: keep what is right and the user's own wording, fix what is out of date, and add what is missing. When you are done, say in a few lines what you wrote and what you were unsure of.`
+	if args = strings.TrimSpace(args); args != "" {
+		text += "\n\nThe user adds: " + args
+	}
+	return text
 }
 
 // runSkill runs skill name as /name: a turn whose message is the skill's

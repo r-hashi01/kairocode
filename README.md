@@ -72,6 +72,7 @@ kairocode usage -session <session>   # the tokens the model calls used
 - `/help`, `/model`, `/provider`, `/effort`, `/login`
 - `/undo`, `/redo`: put the working files back as they were before the last turn, and back again (the record is kept)
 - `/compact`: summarize the conversation and go on from the summary (also done on its own near the context limit)
+- `/init`: read the repository and write a draft `AGENTS.md` (or improve the one there); `kairocode run /init` does it too
 - `/fork`: go on from a past turn, as another session
 - `/flow`: flows (see below)
 - `/plugin`, `/skills`, `/mcp`: plugins, skills, MCP servers

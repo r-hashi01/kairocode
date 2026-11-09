@@ -356,6 +356,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			}
 			return c.RunFlow(ctx, s, name, strings.TrimSpace(args))
 		}
+		if args, ok := strings.CutPrefix(strings.TrimSpace(request), "/init"); ok && (args == "" || strings.ContainsAny(args[:1], " \t\n")) {
+			return c.RunCommand(ctx, s, "init", strings.TrimSpace(args)) // a draft AGENTS.md (M8)
+		}
 		return c.Send(ctx, s, request)
 	})
 }

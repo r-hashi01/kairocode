@@ -2,7 +2,7 @@
 
 The milestones of design section 10, turned into acceptance-criteria tests. Work on a milestone with the `/milestone` skill. Write the acceptance criteria as tests before implementing (they fail at first). When they all pass, set that milestone's "Status" to "done (date)".
 
-Current stage: **M7 (show the strengths) is done (2026-11-06)**: the durability demo, with a flow and with Claude Code and codex as the engine, and approval requests told outside the machine (ADR 0034). M8 (close the gap at the entry points) is next. M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
+Current stage: **M7 (show the strengths) is done (2026-11-06)**: the durability demo, with a flow and with Claude Code and codex as the engine, and approval requests told outside the machine (ADR 0034). M8 (close the gap at the entry points) is in progress: `/init` is done (2026-11-09); the adapter for OpenAI-compatible APIs waits for ADR 0035's approval. M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
 
 ## M0 Skeleton
 
@@ -180,12 +180,12 @@ Status: done (2026-11-06)
 
 ## M8 Close the gap at the entry points
 
-Status: not started
+Status: in progress
 
 - [ ] An adapter for OpenAI-compatible APIs (including local models). Written with the standard library's HTTP (ADR 0014's addendum or a new ADR).
 - [x] Image input (ADR 0026). From files (`@<path>`, files dropped on the terminal), ACP and the API (2026-10-27).
 - [x] Pasting clipboard images into the TUI (ADR 0026's addendum, 2026-10-28). On Linux, checking by hand remains.
-- [ ] `/init`: read the repository and make a draft AGENTS.md.
+- [x] `/init`: read the repository and make a draft AGENTS.md. (2026-11-09: KairoCode's own command, in the terminal UI, editors and `kairocode run /init`; the model reads the docs, build files, CI and other agents' instructions, and writes AGENTS.md, or improves the one there. A project's command or skill named `init` comes before it. `TestInitCommand`.)
 
 ## M9 Deepen what sets it apart
 
