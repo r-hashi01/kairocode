@@ -27,6 +27,15 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 // turn may take.
 const modelTimeout = time.Hour
 
+// modelRetry is how a model call that failed retryably (a 5xx, a
+// connection lost, a stream cut short) is tried again: five tries, a
+// second apart and doubling, about 15 seconds in all. The Anthropic SDK
+// no longer asks again itself (ADR 0040), and kairo's default (three
+// tries, 200 ms apart) would give a busy server under a second.
+var modelRetry = []kairo.ActionOption{kairo.Timeout(modelTimeout), kairo.MaxAttempts(modelAttempts), kairo.Backoff(time.Second)}
+
+const modelAttempts = 5
+
 func (r *Runtime) declare() {
 	switch v := r.cfg.onlyVersion; v {
 	case workflows.SessionVersion6:
@@ -87,7 +96,7 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
 	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,
 		func(*kairo.TaskContext, workflows.FlowAskInput) (bool, error) { return true, nil }) // recorded: Pending reads it
-	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, kairo.Timeout(modelTimeout))
+	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, modelRetry...)
 	kairo.Action(r.K, workflows.ActHookTrust, kairo.Unprotected, r.hookTrustAction) // a record, written once
 	kairo.Action(r.K, workflows.ActHookCheck, kairo.Unprotected, r.hookCheckAction)
 	kairo.Action(r.K, workflows.ActHookDecide, kairo.Unprotected, r.hookDecideAction) // a record, written once
@@ -116,13 +125,13 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActMCPGrant, kairo.Unprotected, r.mcpGrant)
 
 	kairo.Action(r.K, workflows.ActAgentLoad, kairo.Unprotected, r.agentLoad)
-	kairo.Action(r.K, workflows.ActModel, kairo.Unprotected, r.model, kairo.Timeout(modelTimeout))
+	kairo.Action(r.K, workflows.ActModel, kairo.Unprotected, r.model, modelRetry...)
 	kairo.Action(r.K, workflows.ActHistoryExtend, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.HistoryExtendInput) (string, error) {
 			return r.Store.Extend(t, in.Prev, in.Messages)
 		})
 	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
-	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, kairo.Timeout(modelTimeout))
+	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, modelRetry...)
 	// External tools (ADR 0022): listed as the turn starts (a server that
 	// lists its tools again lists the same, as far as KairoCode can tell);
 	// run by their declared effect: read, or real (invariant 3).

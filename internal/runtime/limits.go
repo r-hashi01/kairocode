@@ -3,7 +3,6 @@ package runtime
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"net/url"
 	"slices"
 	"strings"
@@ -307,15 +306,10 @@ func turnSteps(agentSteps, daemonSteps int, dir string) int {
 func (r *Runtime) UsageNow(ctx context.Context, session string) (UsageNow, error) {
 	dir := ""
 	if session != "" {
-		info, err := r.K.Get(ctx, session)
-		if err != nil {
+		var err error
+		if dir, err = r.sessionDir(ctx, session); err != nil {
 			return UsageNow{}, err
 		}
-		var in workflows.SessionInput
-		if err := json.Unmarshal(input(info), &in); err != nil {
-			return UsageNow{}, err
-		}
-		dir = in.Dir
 	}
 	set, _, _ := readLimits(dir)
 	now := time.Now()
@@ -324,7 +318,8 @@ func (r *Runtime) UsageNow(ctx context.Context, session string) (UsageNow, error
 	if err != nil {
 		return UsageNow{}, err
 	}
-	out := UsageNow{Session: session, Tokens: s.sessionUsage, Unpriced: s.unpriced, OwnPlans: s.cliEngines, Warn: set.Warn}
+	out := UsageNow{Session: session, Tokens: s.sessionUsage, Unpriced: s.unpriced, OwnPlans: s.cliEngines, Warn: set.Warn,
+		Rates: r.rateUsage(dir)}
 	if session != "" {
 		out.Windows = append(out.Windows, api.UsageWindow{Name: workflows.BudgetSession, Tokens: s.session.tokens, Cost: s.session.cost,
 			TokenLimit: set.Session.Tokens, CostLimit: set.Session.Cost})
@@ -358,7 +353,8 @@ func (r *Runtime) meter(t *kairo.TaskContext, engine, model string, u msg.Usage,
 	}
 }
 
-// metered is a provider whose calls are added to the ledger.
+// metered is a provider whose calls keep to the provider's rate limits
+// (ADR 0040) and are added to the ledger.
 type metered struct {
 	provider.Provider
 	r      *Runtime
@@ -367,9 +363,21 @@ type metered struct {
 }
 
 func (m metered) Complete(ctx context.Context, req provider.Request) (provider.Response, error) {
-	resp, err := m.Provider.Complete(ctx, req)
+	session := ownerSession(m.t.RunID)
+	dir, _ := m.r.sessionDir(ctx, session) // none (a notify run's, say): the user's limits alone
+	p := rateProvider(m.engine)
+	resp, err := m.r.rates.complete(ctx, p, readRateLimits(dir, p), func(text string) { m.r.waiting(session, text) },
+		func() (provider.Response, error) { return m.Provider.Complete(ctx, req) })
 	if err == nil {
 		m.r.meter(m.t, m.engine, req.Model, resp.Usage, nil)
 	}
 	return resp, err
+}
+
+// waiting tells those who watch session what its call waits for ("" when
+// it no longer waits): live, not recorded.
+func (r *Runtime) waiting(session, text string) {
+	if session != "" {
+		r.ev.emit(session, Event{Type: EventWaiting, Text: text})
+	}
 }

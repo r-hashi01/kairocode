@@ -52,6 +52,9 @@ const (
 	EventQuestionResolved  = "question.resolved"
 	// A flow ran on (ADR 0003): Flow is its chart and its calls' states.
 	EventFlow = "flow"
+	// A call of the session waits (for a provider's rate limit, ADR 0040):
+	// Text says for what, "" once it no longer waits.
+	EventWaiting = "waiting"
 )
 
 // Event is something that happened in a session, told to those who watch

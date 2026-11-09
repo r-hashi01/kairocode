@@ -172,6 +172,7 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `models.<name>.price` | A model's price in US dollars per million tokens (`input`, `output`, `cache_read`, `cache_write`), for a model KairoCode does not know or to correct one | Yours |
 | `limits` | Limits that stop a turn before its next model call: `turn.steps` (50), `turn.time` (`"30m"`; waits for you not counted), and `tokens` or `cost` (US dollars) for `session`, `day` (from 00:00) and `week` (from Monday); `warn` (0.8) is when you are warned. See below | Yours, the project's (the smaller of each) |
 | `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |
+| `rateLimits` | Requests (`rpm`) and tokens (`tpm`) a minute, by provider: `anthropic`, or an OpenAI-compatible provider's name. Calls of every session wait their turn, and a 429 holds them back as long as it asks | Yours, the project's (the smaller of each) |
 | `flowHistory` | How many flow runs to keep (`keep`) and for how many days (`days`) | Yours |
 | `notify`, `language` | How to notify, and the language shown | Yours |
 
@@ -182,6 +183,8 @@ Every model call is counted in the daemon's ledger, with what it cost: Claude mo
 ```json
 {"limits": {"session": {"cost": 5}, "day": {"cost": 20}, "week": {"cost": 100}, "turn": {"time": "30m"}}}
 ```
+
+Rate limits keep the calls of every session, agent and flow to one provider within its requests and tokens a minute: `{"rateLimits": {"anthropic": {"rpm": 50, "tpm": 30000}}}`. A call that would go past them waits its turn, and a 429 ("too many requests", or Anthropic's "overloaded") holds every call to that provider back for as long as it asks, and the call is asked again (up to 5 times; a call waits 5 minutes at most, and one that would wait longer, for a daily quota say, fails at once with the provider's message). The status line says so while a call waits; `/usage` shows the limits and how often today a provider said to wait.
 
 A turn that reaches one stops before its next model call and says which limit, and when it resets; the next turn stops at once while it stays reached. A turn keeps the limits it started with. A model whose cost is not known does not count towards a cost limit (`/usage` names it). The limits of a CLI engine's own plan (a Claude subscription, ChatGPT for codex) are not KairoCode's to see: their own `/usage` or `/status` shows them.
 

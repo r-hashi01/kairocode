@@ -108,7 +108,7 @@ func (f *flaky) Complete(ctx context.Context, r provider.Request) (provider.Resp
 // the turn's number tells the two apart.
 func TestWorkflowIDs(t *testing.T) {
 	t.Parallel()
-	fake := &flaky{n: 3, p: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}}}} // 3 = kairo's attempts
+	fake := &flaky{n: modelAttempts, p: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "a"}}}} // every attempt of the model action
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -300,7 +300,7 @@ func TestPermanentProviderErrorsAreNotRetried(t *testing.T) {
 		calls int
 	}{
 		{&provider.PermanentError{Err: errors.New("400 bad request")}, 1},
-		{errors.New("503 overloaded"), 3},
+		{errors.New("503 overloaded"), modelAttempts}, // tried again, a second apart and doubling (ADR 0040)
 	} {
 		p := &counting{err: tc.err}
 		r := open(t, filepath.Join(t.TempDir(), "k.db"), p)

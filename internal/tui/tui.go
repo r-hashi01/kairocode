@@ -288,6 +288,8 @@ type model struct {
 	compSel int
 	tokens  int64
 	cost    float64 // the session's, if known
+	// waiting: what a call of the turn waits for (a rate limit), if it does.
+	waiting string
 	// warned: the last warning of a limit nearly reached, not said again.
 	warned string
 	// edit: a flow being changed on its chart (/flow edit).
@@ -835,6 +837,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.running, m.began = true, time.Now()
 		return m.send(api.FailedNote+"\n\n"+msg.text, msg.files)
 	case turnDoneMsg:
+		m.waiting = ""
 		if errors.Is(msg.err, api.ErrSessionFailed) && m.ctx.Err() == nil && msg.text != "" {
 			// It took nothing: the message goes on in a new session.
 			m.flushLive()
@@ -939,6 +942,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 // take shows an ACP update.
 func (m *model) take(u acp.Update) {
 	switch u.Kind {
+	case acp.WaitingNotice:
+		// A call waits for a provider's rate limit (ADR 0040): said on the
+		// status line while it does.
+		m.waiting = u.Text
 	case "agent_message_chunk":
 		if m.flow != nil { // what a flow's agent writes: shown in its box too
 			m.flowText = tail(m.flowText+u.Text, 400)
@@ -1853,6 +1860,9 @@ func (m *model) status(w int) string {
 	}
 	if n := len(m.asks); n > 0 {
 		right = append(right, warn.Render(fmt.Sprintf("%d waiting for you", n)))
+	}
+	if m.waiting != "" {
+		right = append(right, warn.Render(m.waiting))
 	}
 	if m.tokens > 0 {
 		right = append(right, faint.Render(fmt.Sprintf("%d tokens", m.tokens)))

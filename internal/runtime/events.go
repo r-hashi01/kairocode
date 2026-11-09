@@ -31,6 +31,7 @@ const (
 	EventQuestionRequested = api.EventQuestionRequested
 	EventQuestionResolved  = api.EventQuestionResolved
 	EventFlow              = api.EventFlow
+	EventWaiting           = api.EventWaiting
 )
 
 type Event = api.Event

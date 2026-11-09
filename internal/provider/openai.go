@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -74,8 +75,8 @@ var OpenAIClient = &http.Client{CheckRedirect: func(req *http.Request, via []*ht
 	return nil
 }}
 
-// openAIStatus is the error of a reply that is not a success: asked again
-// for 408, 409, 429 and 5xx, else permanent; a request longer than the
+// openAIStatus is the error of a reply that is not a success: a
+// RateLimitError for 429, asked again for 408, 409 and 5xx, else permanent; a request longer than the
 // model's context is ErrContextTooLong (ADR 0020).
 func openAIStatus(resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -91,7 +92,10 @@ func openAIStatus(resp *http.Response) error {
 	}
 	err := fmt.Errorf("%s: %s", resp.Status, text)
 	switch {
-	case resp.StatusCode == 408 || resp.StatusCode == 409 || resp.StatusCode == 429 || resp.StatusCode >= 500:
+	case resp.StatusCode == 429:
+		// Waited for as the reply asks, for every call to the provider (ADR 0040).
+		return &RateLimitError{Err: err, After: retryAfter(resp.Header, time.Now())}
+	case resp.StatusCode == 408 || resp.StatusCode == 409 || resp.StatusCode >= 500:
 		return err
 	case contextTooLong(text) || fmt.Sprint(e.Error.Code) == "context_length_exceeded":
 		return &PermanentError{Err: fmt.Errorf("%w: %v", ErrContextTooLong, err)}

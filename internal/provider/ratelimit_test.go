@@ -1,0 +1,69 @@
+package provider
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/r-hashi01/kairocode/internal/msg"
+)
+
+// The wait a reply asks for: retry-after-ms, Retry-After in seconds or as
+// a date, nothing.
+func TestRetryAfter(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		header http.Header
+		want   time.Duration
+	}{
+		{http.Header{"Retry-After-Ms": {"1500"}, "Retry-After": {"9"}}, 1500 * time.Millisecond},
+		{http.Header{"Retry-After": {"2"}}, 2 * time.Second},
+		{http.Header{"Retry-After": {now.Add(30 * time.Second).Format(http.TimeFormat)}}, 30 * time.Second},
+		{http.Header{"Retry-After": {now.Add(-time.Minute).Format(http.TimeFormat)}}, 0},
+		{http.Header{}, 0},
+	} {
+		if got := retryAfter(c.header, now); got != c.want {
+			t.Errorf("%v: %v, want %v", c.header, got, c.want)
+		}
+	}
+}
+
+// Both adapters give a 429 (and Anthropic's 529) as a RateLimitError with
+// the wait it asks for (ADR 0040), and the Anthropic SDK does not ask
+// again itself.
+func TestRateLimitErrors(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "3")
+		w.Header().Set("Content-Type", "application/json")
+		status := http.StatusTooManyRequests
+		if r.URL.Path == "/v1/messages" && calls > 1 {
+			status = 529
+		}
+		w.WriteHeader(status)
+		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`))
+	}))
+	defer srv.Close()
+	req := Request{Model: "m", Messages: []msg.Message{{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: "hi"}}}}}
+	var limited *RateLimitError
+	_, err := (&OpenAI{BaseURL: srv.URL + "/v1/"}).Complete(t.Context(), req)
+	if !errors.As(err, &limited) || limited.After != 3*time.Second {
+		t.Fatalf("OpenAI-compatible: %v", err)
+	}
+	a := NewAnthropic(option.WithBaseURL(srv.URL), option.WithAPIKey("test-key"))
+	for _, status := range []string{"429", "529"} {
+		before := calls
+		_, err = a.Complete(t.Context(), req)
+		if !errors.As(err, &limited) || limited.After != 3*time.Second {
+			t.Fatalf("Anthropic %s: %v", status, err)
+		}
+		if calls-before != 1 {
+			t.Fatalf("Anthropic %s: the SDK asked %d times", status, calls-before)
+		}
+	}
+}

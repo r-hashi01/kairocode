@@ -137,6 +137,10 @@ const (
 	RepoSessionsRPC   = "_kairocode/repo_sessions"
 	MakeWorktreeRPC   = "_kairocode/make_worktree"
 	RemoveWorktreeRPC = "_kairocode/remove_worktree"
+	// WaitingNotice tells KairoCode's terminal what a call of the session
+	// waits for ({"sessionId", "text"}; "" once it no longer waits): a
+	// provider's rate limit (ADR 0040). Other clients ignore it.
+	WaitingNotice = "_kairocode/waiting"
 	// CodeSessionFailed answers a prompt to a session that failed and
 	// takes no more (ADR 0021).
 	CodeSessionFailed = -32010

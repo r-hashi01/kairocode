@@ -31,7 +31,8 @@ type Client struct {
 type Update struct {
 	Session string
 	// Kind is ACP's sessionUpdate: agent_message_chunk, user_message_chunk,
-	// tool_call, tool_call_update, available_commands_update, ...
+	// tool_call, tool_call_update, available_commands_update, ...; or
+	// WaitingNotice (Text: what a call waits for, "" no more).
 	Kind string
 	// Text: a message chunk's text, or a tool call's output.
 	Text string
@@ -366,6 +367,18 @@ func (cl *Client) handler(h ClientHandler) handler {
 			}
 			if h.Update != nil {
 				h.Update(up)
+			}
+			return nil, nil
+		case WaitingNotice:
+			var p struct {
+				SessionID string `json:"sessionId"`
+				Text      string `json:"text"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, invalid(err)
+			}
+			if h.Update != nil {
+				h.Update(Update{Session: p.SessionID, Kind: WaitingNotice, Text: p.Text})
 			}
 			return nil, nil
 		case "session/request_permission":

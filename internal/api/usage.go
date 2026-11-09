@@ -27,6 +27,18 @@ type UsageNow struct {
 	OwnPlans []string `json:"own_plans,omitempty"`
 	// Warn is the share of a limit past which the user is warned.
 	Warn float64 `json:"warn"`
+	// Rates are the providers' rate limits set, and those met today (ADR
+	// 0040), by provider.
+	Rates []RateUsage `json:"rates,omitempty"`
+}
+
+// RateUsage is a provider's rate limits, and how often today its calls
+// were told to wait (429).
+type RateUsage struct {
+	Provider string `json:"provider"`
+	RPM      int64  `json:"rpm,omitempty"`
+	TPM      int64  `json:"tpm,omitempty"`
+	Limited  int    `json:"limited,omitempty"`
 }
 
 // UsageWindow is one row: what was used in it, and its limits.
@@ -149,6 +161,25 @@ func (u UsageNow) Lines() []string {
 	if len(u.Unpriced) > 0 {
 		out = append(out, "The cost of "+strings.Join(u.Unpriced, ", ")+" is not known, and not counted towards a cost limit: "+
 			"set models.<name>.price in your kairocode.json.")
+	}
+	for _, r := range u.Rates {
+		var set []string
+		if r.RPM > 0 {
+			set = append(set, fmt.Sprintf("%d requests", r.RPM))
+		}
+		if r.TPM > 0 {
+			set = append(set, Count(r.TPM)+" tokens")
+		}
+		line := "Rate limit of " + r.Provider + ": "
+		if len(set) > 0 {
+			line += strings.Join(set, " and ") + " a minute"
+		} else {
+			line += "none set"
+		}
+		if r.Limited > 0 {
+			line += fmt.Sprintf("; told to wait %d times today", r.Limited)
+		}
+		out = append(out, line)
 	}
 	for _, e := range u.OwnPlans {
 		out = append(out, e+": the limits of its own plan are shown by its own /usage or /status.")
