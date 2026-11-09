@@ -130,7 +130,7 @@ func (r *Runtime) flowDecide(t *kairo.TaskContext, in workflows.DecideInput) (wo
 	case engine == workflows.EngineClaudeCode:
 		out, err = r.claudeDecide(t, in.Dir, prompt, model, schema)
 	default:
-		out, err = r.apiDecide(t, model, prompt, schema)
+		out, err = r.apiDecide(t, engine, model, prompt, schema)
 	}
 	if err != nil {
 		return workflows.DecideOutput{}, err
@@ -143,8 +143,12 @@ func (r *Runtime) flowDecide(t *kairo.TaskContext, in workflows.DecideInput) (wo
 	return out, nil
 }
 
-func (r *Runtime) apiDecide(t *kairo.TaskContext, model, prompt string, schema json.RawMessage) (workflows.DecideOutput, error) {
-	resp, err := r.cfg.Provider.Complete(t, provider.Request{
+func (r *Runtime) apiDecide(t *kairo.TaskContext, engine, model, prompt string, schema json.RawMessage) (workflows.DecideOutput, error) {
+	p, err := r.providerFor(engine)
+	if err != nil {
+		return workflows.DecideOutput{}, err
+	}
+	resp, err := p.Complete(t, provider.Request{
 		Model: model, System: decideSystem, Force: "decide",
 		Tools:    []provider.ToolSpec{{Name: "decide", Description: "Give the decision.", Schema: schema}},
 		Messages: []msg.Message{{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: prompt}}}},
@@ -180,7 +184,7 @@ func (r *Runtime) decideBy(t *kairo.TaskContext, dir, apiModel, prompt string, s
 	if r.cfg.Provider == nil {
 		return r.claudeDecide(t, dir, prompt, "", schema)
 	}
-	out, apiErr := r.apiDecide(t, apiModel, prompt, schema)
+	out, apiErr := r.apiDecide(t, workflows.EngineAPI, apiModel, prompt, schema)
 	if apiErr == nil || t.Err() != nil {
 		return out, apiErr
 	}

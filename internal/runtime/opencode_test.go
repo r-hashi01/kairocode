@@ -155,7 +155,7 @@ func TestOpencodeCommand(t *testing.T) {
 	defer cancel()
 	s, _ := r.CreateSession(ctx, "cmd", workflows.SessionInput{Dir: ws})
 	cs, err := r.Commands(ctx, s)
-	if err != nil || len(cs) != 2 || cs[0].Name != "explain" || cs[1].Description != "Review a file" {
+	if err != nil || len(cs) != 3 || cs[0].Name != "explain" || cs[1].Name != "init" || cs[2].Description != "Review a file" {
 		t.Fatalf("commands %+v %v", cs, err)
 	}
 	n, err := r.RunCommand(ctx, s, "review", "main.go")
@@ -187,6 +187,69 @@ func TestOpencodeCommand(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, "marked")); err == nil {
 		t.Fatal("the denied command ran")
+	}
+}
+
+// /init is KairoCode's own: the model is asked for a draft AGENTS.md, with
+// what the user adds. A project's command or skill of the name comes
+// before it (M8).
+func TestInitCommand(t *testing.T) {
+	t.Parallel()
+	ws := repo(t)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "written"}, {Text: "theirs"}, {Text: "skill"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "init", workflows.SessionInput{Dir: ws})
+	cs, err := r.Commands(ctx, s)
+	if err != nil || len(cs) != 1 || cs[0].Name != "init" || cs[0].Skill {
+		t.Fatalf("commands %+v %v", cs, err)
+	}
+	first := func(n int) string {
+		t.Helper()
+		if _, err := r.WaitTurn(ctx, s, n); err != nil {
+			t.Fatal(err)
+		}
+		conv := conversation(t, r, s)
+		return conv[len(conv)-2] // the turn's message, before its reply
+	}
+	n, err := r.RunCommand(ctx, s, "init", "the build most")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := first(n); !strings.Contains(m, "write AGENTS.md at its root") || !strings.Contains(m, "If AGENTS.md is there already, improve it") ||
+		!strings.HasSuffix(m, "The user adds: the build most") {
+		t.Fatalf("the message %q", m)
+	}
+	putFiles(t, ws, map[string]string{".opencode/commands/init.md": "Our own init $ARGUMENTS\n"})
+	if n, err = r.RunCommand(ctx, s, "init", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if m := first(n); !strings.Contains(m, "Our own init x") {
+		t.Fatalf("a project's command: %q", m)
+	}
+	listed := func() opencode.Command {
+		t.Helper()
+		cs, err := r.Commands(ctx, s)
+		if err != nil || len(cs) != 1 {
+			t.Fatalf("commands %+v %v", cs, err)
+		}
+		return cs[0]
+	}
+	if c := listed(); c.Description == initCommand.Description || c.Skill {
+		t.Fatalf("listed in the project's command's place: %+v", c)
+	}
+	if err := os.Remove(filepath.Join(ws, ".opencode/commands/init.md")); err != nil {
+		t.Fatal(err)
+	}
+	putFiles(t, ws, map[string]string{".kairocode/skills/init/SKILL.md": "---\nname: init\ndescription: Ours\n---\nSet it up our way.\n"})
+	if n, err = r.RunCommand(ctx, s, "init", ""); err != nil {
+		t.Fatal(err)
+	}
+	if m := first(n); !strings.Contains(m, "The user runs the skill init") {
+		t.Fatalf("a project's skill: %q", m)
+	}
+	if c := listed(); !c.Skill || c.Description != "Ours" {
+		t.Fatalf("listed in the project's skill's place: %+v", c)
 	}
 }
 

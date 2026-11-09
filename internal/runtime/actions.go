@@ -257,11 +257,15 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	}
 	// The text streams to those who watch the session (live output, not a
 	// record: the message is recorded once it is whole).
-	resp, err := r.cfg.Provider.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: system, Tools: specs, Messages: ms,
+	p, err := r.providerFor(in.Engine)
+	if err != nil {
+		return workflows.ModelReply{}, err
+	}
+	resp, err := p.Complete(t, provider.Request{Model: in.Model, Effort: in.Effort, System: system, Tools: specs, Messages: ms,
 		OnText: func(text string) { t.Emit([]byte(text)) }})
-	if errors.Is(err, provider.ErrNoCredentials) {
+	if in.Engine == "" && errors.Is(err, provider.ErrNoCredentials) {
 		r.authSeen(ProviderAnthropic, AuthNeeded, nil)
-	} else if err == nil {
+	} else if in.Engine == "" && err == nil {
 		r.authSeen(ProviderAnthropic, AuthSignedIn, nil)
 	}
 	if errors.Is(err, provider.ErrContextTooLong) {

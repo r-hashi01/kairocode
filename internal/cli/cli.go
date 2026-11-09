@@ -71,6 +71,8 @@ turn on (ADR 0014):
   claude-code           your own Claude Code, signed in with your plan (ADR 0007)
   codex                 your own Codex CLI
   copilot               your own GitHub Copilot CLI
+  oai:<name>            an OpenAI-compatible API (oai:openai, oai:ollama, or one in
+                        "providers" of your own kairocode.json; ADR 0035)
 KAIROCODE_CLAUDE, KAIROCODE_CODEX and KAIROCODE_COPILOT name their commands.
 The daemon takes them from the environment it starts in, and
 KAIROCODE_PROVIDER=fake with KAIROCODE_FAKE=<script.json> to script the API
@@ -355,6 +357,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 				return c.NewFlow(ctx, s, args)
 			}
 			return c.RunFlow(ctx, s, name, strings.TrimSpace(args))
+		}
+		if args, ok := strings.CutPrefix(strings.TrimSpace(request), "/init"); ok && (args == "" || strings.ContainsAny(args[:1], " \t\n")) {
+			return c.RunCommand(ctx, s, "init", strings.TrimSpace(args)) // a draft AGENTS.md (M8)
 		}
 		return c.Send(ctx, s, request)
 	})

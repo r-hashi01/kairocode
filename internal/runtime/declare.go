@@ -21,6 +21,12 @@ func effect(e tools.Effect) (kairo.Effect, []kairo.ActionOption) {
 	}
 }
 
+// modelTimeout is how long one model call may take: a local model on a
+// machine with no GPU reads KairoCode's instructions (over 10,000 tokens)
+// for many minutes the first time (ADR 0035), as long as a CLI engine's
+// turn may take.
+const modelTimeout = time.Hour
+
 func (r *Runtime) declare() {
 	switch v := r.cfg.onlyVersion; v {
 	case workflows.SessionVersion6:
@@ -81,7 +87,7 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActFlowText, kairo.Unprotected, r.flowText)
 	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,
 		func(*kairo.TaskContext, workflows.FlowAskInput) (bool, error) { return true, nil }) // recorded: Pending reads it
-	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, kairo.Timeout(10*time.Minute))
+	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, kairo.Timeout(modelTimeout))
 	kairo.Action(r.K, workflows.ActHookTrust, kairo.Unprotected, r.hookTrustAction) // a record, written once
 	kairo.Action(r.K, workflows.ActHookCheck, kairo.Unprotected, r.hookCheckAction)
 	kairo.Action(r.K, workflows.ActHookDecide, kairo.Unprotected, r.hookDecideAction) // a record, written once
@@ -110,13 +116,13 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActMCPGrant, kairo.Unprotected, r.mcpGrant)
 
 	kairo.Action(r.K, workflows.ActAgentLoad, kairo.Unprotected, r.agentLoad)
-	kairo.Action(r.K, workflows.ActModel, kairo.Unprotected, r.model, kairo.Timeout(10*time.Minute))
+	kairo.Action(r.K, workflows.ActModel, kairo.Unprotected, r.model, kairo.Timeout(modelTimeout))
 	kairo.Action(r.K, workflows.ActHistoryExtend, kairo.Unprotected,
 		func(t *kairo.TaskContext, in workflows.HistoryExtendInput) (string, error) {
 			return r.Store.Extend(t, in.Prev, in.Messages)
 		})
 	kairo.Action(r.K, workflows.ActHistoryCancelled, kairo.Unprotected, r.historyCancelled)
-	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, kairo.Timeout(10*time.Minute))
+	kairo.Action(r.K, workflows.ActHistoryCompact, kairo.Unprotected, r.historyCompact, kairo.Timeout(modelTimeout))
 	// External tools (ADR 0022): listed as the turn starts (a server that
 	// lists its tools again lists the same, as far as KairoCode can tell);
 	// run by their declared effect: read, or real (invariant 3).

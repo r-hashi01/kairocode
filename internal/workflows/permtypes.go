@@ -12,6 +12,11 @@ type Policy struct {
 	// against.
 	Auto    bool   `json:"auto,omitempty"`
 	Request string `json:"request,omitempty"`
+	// JudgeEngine and JudgeModel: the OpenAI-compatible API, and its model,
+	// that judges in auto mode (ADR 0035): a session on one keeps what it
+	// sends there. Empty: the Claude API's judge, as before.
+	JudgeEngine string `json:"judge_engine,omitempty"`
+	JudgeModel  string `json:"judge_model,omitempty"`
 	// Dry: in a try of a flow (ADR 0017), a call that does more than read
 	// is not made.
 	Dry bool `json:"dry,omitempty"`

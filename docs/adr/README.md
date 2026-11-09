@@ -43,3 +43,4 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0032](0032-terminal-notifications.md) | Terminal notifications: telling a user who is not looking at the screen when a human is needed and when a turn ends | Accepted (2026-10-28) |
 | [0033](0033-draw-the-inline-area-as-codex-does.md) | Drawing the bottom area of the terminal UI ourselves, the same way Codex does | Accepted (2026-10-28) |
 | [0034](0034-notify-approval-requests-outside.md) | Telling of approval requests outside the machine: an `approval.requested` hook, run by the daemon as a flow | Accepted (2026-11-06) |
+| [0035](0035-openai-compatible-providers.md) | OpenAI-compatible APIs as providers, local models among them | Accepted (2026-11-09) |

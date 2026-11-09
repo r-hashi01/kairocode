@@ -45,8 +45,28 @@ Pick an engine for the model.
 | `claude-code` | Your own Claude Code (signed in with your subscription) | `/provider`, or `KAIROCODE_ENGINE=claude-code` |
 | `codex` | Your own Codex CLI | Same |
 | `copilot` | Your own GitHub Copilot CLI | Same |
+| `oai:<name>` | An OpenAI-compatible API, run in KairoCode's own loop: `oai:openai` (`OPENAI_API_KEY`), `oai:ollama` (a local Ollama), or one you name (below) | Same |
 
 `/provider` in the chat can also install an agent from the ACP registry and use it. Choose the model with `/model` (or `KAIROCODE_MODEL`).
+
+### Local models and other OpenAI-compatible APIs
+
+Any server that speaks OpenAI's Chat Completions API can run the model: OpenAI, Ollama, LM Studio, llama.cpp's server, vLLM, OpenRouter and others. Name it in your own `~/.config/kairocode/kairocode.json`:
+
+```json
+{"providers": {
+  "lmstudio": {"baseURL": "http://localhost:1234/v1", "model": "qwen3-coder-30b"},
+  "lab": {"baseURL": "https://llm.example.com/v1", "keyEnv": "LAB_API_KEY",
+          "models": {"qwen3-coder": {"context": 262144}}}
+}}
+```
+
+- `/provider oai:lmstudio` (or `-provider oai:lmstudio`) switches to it; `/model` lists what the server has.
+- `keyEnv` names the environment variable the key is in, where the daemon starts. The key is sent over https only, or to this machine, and is kept out of the record.
+- A model's `context` (128,000 tokens unless given) is when the conversation is summarized.
+- Only your own settings name providers: a project's `kairocode.json` cannot choose where the conversation is sent.
+- Ollama serves its OpenAI-compatible API with a small context (a few thousand tokens), and cuts a longer request short without an error. KairoCode's instructions and tools alone are over 10,000 tokens: start Ollama with `OLLAMA_CONTEXT_LENGTH=32768` (or more), and give the model the same `context` in your settings.
+- How well the model calls tools is its own: pick one made for tool use. Its tool calls are KairoCode's tools, with the same permissions, sandbox and record ([ADR 0035](docs/adr/0035-openai-compatible-providers.md)).
 
 ## Usage
 
@@ -72,6 +92,7 @@ kairocode usage -session <session>   # the tokens the model calls used
 - `/help`, `/model`, `/provider`, `/effort`, `/login`
 - `/undo`, `/redo`: put the working files back as they were before the last turn, and back again (the record is kept)
 - `/compact`: summarize the conversation and go on from the summary (also done on its own near the context limit)
+- `/init`: read the repository and write a draft `AGENTS.md` (or improve the one there); `kairocode run /init` does it too
 - `/fork`: go on from a past turn, as another session
 - `/flow`: flows (see below)
 - `/plugin`, `/skills`, `/mcp`: plugins, skills, MCP servers
@@ -143,6 +164,7 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `agents.claudeHooks` | Claude Code's hooks: `ask` (default) or `off` | Yours (a project can only turn them `off`) |
 | `http` | Credentials for the `http` and `fetch` tools (`auth`), and whether local addresses are allowed (`allowPrivate`) | Yours |
 | `models.<name>.context` | A model's context length (when summarizing starts) | Yours |
+| `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |
 | `flowHistory` | How many flow runs to keep (`keep`) and for how many days (`days`) | Yours |
 | `notify`, `language` | How to notify, and the language shown | Yours |
 
