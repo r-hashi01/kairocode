@@ -65,6 +65,7 @@ Any server that speaks OpenAI's Chat Completions API can run the model: OpenAI, 
 - `keyEnv` names the environment variable the key is in, where the daemon starts. The key is sent over https only, or to this machine, and is kept out of the record.
 - A model's `context` (128,000 tokens unless given) is when the conversation is summarized.
 - Only your own settings name providers: a project's `kairocode.json` cannot choose where the conversation is sent.
+- Ollama serves its OpenAI-compatible API with a small context (a few thousand tokens), and cuts a longer request short without an error. KairoCode's instructions and tools alone are over 10,000 tokens: start Ollama with `OLLAMA_CONTEXT_LENGTH=32768` (or more), and give the model the same `context` in your settings.
 - How well the model calls tools is its own: pick one made for tool use. Its tool calls are KairoCode's tools, with the same permissions, sandbox and record ([ADR 0035](docs/adr/0035-openai-compatible-providers.md)).
 
 ## Usage

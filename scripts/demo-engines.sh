@@ -10,6 +10,8 @@
 #   scripts/demo-engines.sh claude-code
 #   scripts/demo-engines.sh codex      codex-acp on PATH, KAIROCODE_CODEX,
 #                                      or as /provider installed it
+#   DEMO_MODEL=qwen2.5:3b scripts/demo-engines.sh oai:ollama
+#                                      an OpenAI-compatible API (ADR 0035)
 set -euo pipefail
 
 engine=${1:-}
@@ -23,7 +25,8 @@ codex)
     export KAIROCODE_CODEX
   fi
   ;;
-*) echo "usage: $0 claude-code|codex" >&2; exit 2 ;;
+oai:*) [[ -n ${DEMO_MODEL:-} ]] || { echo "name the model: DEMO_MODEL=<model> $0 $engine" >&2; exit 2; } ;;
+*) echo "usage: $0 claude-code|codex|oai:<name>" >&2; exit 2 ;;
 esac
 
 TMPDIR=${TMPDIR:-/tmp}
@@ -63,7 +66,7 @@ request="${request%,}. Do nothing else. When all five are done, reply \"released
 say "1. Ask $engine to run five steps; each writes a line to ledger.txt"
 echo "$request" | fold -s -w 76 | sed 's/^/    /'
 : > "$work/run.out"
-"$kc" run -dir "$project" -data "$data" -provider "$engine" -detach "$request" > "$work/run.out" 2>&1 &
+"$kc" run -dir "$project" -data "$data" -provider "$engine" ${DEMO_MODEL:+-model "$DEMO_MODEL"} -detach "$request" > "$work/run.out" 2>&1 &
 run=$!
 until grep -qx tag "$project/ledger.txt" 2>/dev/null; do
   caught_up
@@ -80,7 +83,10 @@ kill -9 "$pid" # before anything else: "tag" takes 2s
 caught_up
 say "2. In the middle of \"tag\": kill -9 the daemon (pid $pid)"
 ledger
-say "3. The client starts the daemon again. The turn resumes $engine, which calls \"tag\" again"
+case $engine in
+oai:*) say "3. The client starts the daemon again. The turn resumes in KairoCode's own loop, where \"tag\" is the recorded call" ;;
+*) say "3. The client starts the daemon again. The turn resumes $engine, which calls \"tag\" again" ;;
+esac
 while kill -0 "$run" 2>/dev/null; do caught_up; sleep 0.05; done
 set +e
 wait "$run"
