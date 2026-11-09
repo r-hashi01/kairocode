@@ -257,7 +257,7 @@ func (r *Runtime) model(t *kairo.TaskContext, in workflows.ModelInput) (workflow
 	}
 	// The text streams to those who watch the session (live output, not a
 	// record: the message is recorded once it is whole).
-	p, err := r.providerFor(in.Engine)
+	p, err := r.providerFor(t, in.Engine)
 	if err != nil {
 		return workflows.ModelReply{}, err
 	}

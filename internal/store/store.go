@@ -112,6 +112,25 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			session TEXT NOT NULL,
 			top TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS kc_kept_session ON kc_kept (session)`,
+		// The ledger of usage (ADR 0039): one row for each model call, by its
+		// step's attempt (a call made again is spent again). cost is what
+		// the engine reported (Claude Code), NULL if it reported none:
+		// prices are applied as it is read.
+		`CREATE TABLE IF NOT EXISTS kc_usage (
+			run TEXT NOT NULL,
+			attempt INTEGER NOT NULL,
+			session TEXT NOT NULL,
+			engine TEXT NOT NULL,
+			model TEXT NOT NULL,
+			at INTEGER NOT NULL,
+			input INTEGER NOT NULL,
+			output INTEGER NOT NULL,
+			cache_read INTEGER NOT NULL,
+			cache_write INTEGER NOT NULL,
+			cost REAL,
+			PRIMARY KEY (run, attempt))`,
+		`CREATE INDEX IF NOT EXISTS kc_usage_at ON kc_usage (at)`,
+		`CREATE INDEX IF NOT EXISTS kc_usage_session ON kc_usage (session)`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)

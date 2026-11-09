@@ -271,6 +271,21 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// usageNow is what has been used against the limits (ADR 0039): in the
+// session ?session= names (if any), today and this week.
+func (s *Server) usageNow(w http.ResponseWriter, r *http.Request) {
+	u, err := s.rt.UsageNow(r.Context(), r.URL.Query().Get("session"))
+	if errors.Is(err, kairo.ErrUnknownRun) {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
+}
+
 // usage is what the session's model calls recorded they used.
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	u, err := s.rt.Usage(r.Context(), sessionOf(r))

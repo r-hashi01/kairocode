@@ -183,10 +183,10 @@ func TestOpenAIKeyHTTPSOnly(t *testing.T) {
 		t.Errorf("no key: %v", err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if _, err := (&Runtime{}).providerFor("oai:nope"); err == nil {
+	if _, err := (&Runtime{}).providerFor(nil, "oai:nope"); err == nil {
 		t.Error("a provider not named was found")
 	}
-	if p, err := (&Runtime{}).providerFor("oai:ollama"); err != nil || p == nil {
+	if p, err := (&Runtime{}).providerFor(nil, "oai:ollama"); err != nil || p == nil {
 		t.Errorf("the built-in ollama: %v", err)
 	}
 }

@@ -116,10 +116,7 @@ func chat(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			}
 		}
 		ui := tui.New(ctx, in, out, tui.Options{Dir: abs, Session: s, Resume: *pickOne && s == "", Version: buildVersion(), Engine: *prov, Model: *model,
-			Usage: func(ctx context.Context, s string) (int64, error) {
-				u, err := c.Usage(ctx, s)
-				return u.Total.Input + u.Total.Output, err
-			}, Plugin: pluginArgv(*data, abs), Data: *data})
+			Usage: c.UsageNow, Plugin: pluginArgv(*data, abs), Data: *data})
 		cl := acp.Dial(ctx, fromAgentR, toAgentW, acp.ClientHandler{Update: ui.Update, Permission: ui.Permission})
 		if _, err := cl.Initialize(ctx); err != nil {
 			return err

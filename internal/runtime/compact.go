@@ -61,7 +61,7 @@ func (r *Runtime) historyCompact(t *kairo.TaskContext, in workflows.CompactInput
 	if ms, err = r.withImages(t, ms); err != nil {
 		return workflows.CompactOutput{}, err
 	}
-	p, err := r.providerFor(in.Engine)
+	p, err := r.providerFor(t, in.Engine)
 	if err != nil {
 		return workflows.CompactOutput{}, err
 	}

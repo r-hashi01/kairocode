@@ -32,7 +32,7 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0021](0021-fork-a-session.md) | Forking a session: continue from a past turn as a separate session | Accepted (2026-10-21) |
 | [0022](0022-mcp-servers-custom-tools-todo.md) | The user's MCP servers, custom tools, todo | Accepted (2026-10-21) |
 | [0023](0023-view-and-replay-records.md) | Viewing and replaying records | Accepted (2026-10-22) |
-| [0024](0024-limits-and-rate-limits.md) | Limits (tokens, cost, time) and per-provider rate limits | Proposed (on hold) |
+| [0024](0024-limits-and-rate-limits.md) | Limits (tokens, cost, time) and per-provider rate limits | Superseded by 0039 |
 | [0025](0025-plugins.md) | Plugins: bundles of connections to outside services and skills, `/plugin` and `/plugin connect` | Accepted (2026-10-26) |
 | [0026](0026-image-input.md) | Image input: an image part in messages, and how each engine receives it | Accepted (2026-10-27) |
 | [0027](0027-plugin-marketplaces.md) | Plugin marketplaces: a bundled catalog, and catalogs you can add | Accepted (2026-10-26) |
@@ -47,3 +47,4 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0036](0036-flow-from-a-session.md) | Make a flow from a session that went well | Accepted (2026-11-09) |
 | [0037](0037-sessions-in-worktrees.md) | Sessions side by side in git worktrees, and a screen listing them | Accepted (2026-11-09) |
 | [0038](0038-answer-requests-from-outside.md) | Answering requests from outside the machine: the notify flow reads the answer and gives it | Rejected |
+| [0039](0039-usage-and-limits.md) | Usage and limits: what has been used, shown as Claude Code and Codex show it, and limits that stop a turn | Accepted (2026-11-09) |

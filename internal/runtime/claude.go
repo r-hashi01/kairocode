@@ -136,7 +136,9 @@ type streamLine struct {
 	Result          string  `json:"result"`
 	IsError         bool    `json:"is_error"`
 	NumTurns        int     `json:"num_turns"`
-	Usage           struct {
+	// TotalCost is what Claude Code says the run cost, if it says.
+	TotalCost *float64 `json:"total_cost_usd"`
+	Usage     struct {
 		Input      int64 `json:"input_tokens"`
 		Output     int64 `json:"output_tokens"`
 		CacheRead  int64 `json:"cache_read_input_tokens"`
@@ -315,6 +317,9 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 	if result.IsError {
 		text = "[Claude Code ended the turn with an error: " + result.Subtype + "]\n" + text
 	}
+	usage := msg.Usage{Input: result.Usage.Input, Output: result.Usage.Output,
+		CacheRead: result.Usage.CacheRead, CacheWrite: result.Usage.CacheWrite}
+	r.meter(t, workflows.EngineClaudeCode, in.Model, usage, result.TotalCost) // the ledger of usage (ADR 0039)
 	h, err := r.Store.PutMessage(t, msg.Message{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.Text, Text: text}}})
 	if err != nil {
 		return workflows.ClaudeTurnOutput{}, kairo.Retryable(err)
@@ -323,8 +328,7 @@ func (r *Runtime) claudeTurn(t *kairo.TaskContext, in workflows.ClaudeTurnInput)
 		Asks:    mt.takeAsks(),
 		Message: h,
 		Turns:   result.NumTurns,
-		Usage: msg.Usage{Input: result.Usage.Input, Output: result.Usage.Output,
-			CacheRead: result.Usage.CacheRead, CacheWrite: result.Usage.CacheWrite},
+		Usage:   usage,
 	}, nil
 }
 
@@ -367,6 +371,7 @@ func (r *Runtime) claudeDecide(t *kairo.TaskContext, dir, prompt, model string, 
 		IsError          bool            `json:"is_error"`
 		Subtype          string          `json:"subtype"`
 		StructuredOutput json.RawMessage `json:"structured_output"`
+		TotalCost        *float64        `json:"total_cost_usd"`
 		Usage            struct {
 			Input      int64 `json:"input_tokens"`
 			Output     int64 `json:"output_tokens"`
@@ -385,6 +390,7 @@ func (r *Runtime) claudeDecide(t *kairo.TaskContext, dir, prompt, model string, 
 	}
 	out := workflows.DecideOutput{Usage: msg.Usage{Input: res.Usage.Input, Output: res.Usage.Output,
 		CacheRead: res.Usage.CacheRead, CacheWrite: res.Usage.CacheWrite}}
+	r.meter(t, workflows.EngineClaudeCode, model, out.Usage, res.TotalCost) // the ledger of usage (ADR 0039)
 	var v struct {
 		Value json.RawMessage `json:"value"`
 	}

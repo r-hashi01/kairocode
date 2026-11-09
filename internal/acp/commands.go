@@ -43,6 +43,7 @@ var builtinCommands = []map[string]any{
 			CommandOption{Name: "marketplace update", Hint: "<name>", Description: "update a marketplace"},
 			CommandOption{Name: "marketplace remove", Hint: "<name>", Description: "remove a marketplace"})},
 	{"name": "log", "description": "The session's record: each turn, model call, tool call and result, what waited, and what was used"},
+	{"name": "usage", "description": "What has been used in this session, today and this week, against the limits"},
 }
 
 // options is a command's _meta with the words it takes after its name,

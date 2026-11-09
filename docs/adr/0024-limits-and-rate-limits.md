@@ -1,6 +1,6 @@
 # 0024 Limits (tokens, cost, time) and per-provider rate limits
 
-- Status: Proposed (2026-10-22; on hold by the user's decision. To be revisited when circumstances arise such as KairoCode itself billing, or narrowing the models that can be used)
+- Status: Superseded by 0039
 - Date: 2026-10-21
 - Related: requirements FR-26 (limits) and FR-27 (rate limits), design section 5 ("budget decisions are made from recorded values") and section 9 (not offered by kairo), invariants 2 and 7
 

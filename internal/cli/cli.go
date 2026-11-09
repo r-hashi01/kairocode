@@ -53,7 +53,7 @@ const usage = `usage:
   kairocode flow show [-data DIR] <run>              one of them: its chart, and its steps with their times
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
-  kairocode usage [-data DIR] -session ID [-json]     the tokens a session's model calls used
+  kairocode usage [-data DIR] [-session ID] [-json]   what has been used today, this week (and in a session, turn by turn), against the limits
   kairocode acp [-data DIR]                          an ACP agent on stdin and stdout, for editors (ADR 0002)
   kairocode version                                  the version, its commit, Go and the platform
 
@@ -778,11 +778,8 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *session == "" {
-		return errors.New("usage needs -session <ID>")
-	}
 	s := *session
-	if !strings.HasPrefix(s, "s/") {
+	if s != "" && !strings.HasPrefix(s, "s/") {
 		s = runtime.SessionID(s)
 	}
 	c, err := connect(ctx, *data)
@@ -790,6 +787,20 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	defer c.Close()
+	// What has been used against the limits (ADR 0039), as /usage shows it.
+	now, err := c.UsageNow(ctx, s)
+	if err != nil {
+		return err
+	}
+	if s == "" {
+		if *asJSON {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(now)
+		}
+		_, err := fmt.Fprint(stdout, now.Text())
+		return err
+	}
 	u, err := c.Usage(ctx, s)
 	if err != nil {
 		return err
@@ -799,6 +810,7 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		enc.SetIndent("", "  ")
 		return enc.Encode(u)
 	}
+	fmt.Fprintln(stdout, now.Text())
 	line := func(name string, u msg.Usage) {
 		fmt.Fprintf(stdout, "%-8s in %d  out %d  cache read %d  cache write %d\n", name, u.Input, u.Output, u.CacheRead, u.CacheWrite)
 	}

@@ -153,6 +153,11 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		return runFlowTurn(ctx, in)
 	}
 	if CLIEngine(agent.Engine) {
+		if why := agent.Limits.reached(msg.Usage{}); why != "" {
+			// A CLI's turn is not stopped once under way: a limit reached
+			// before it stops it from starting (ADR 0039).
+			return limitedTurn(ctx, in, why)
+		}
 		return runClaudeTurn(ctx, in, agent, ext)
 	}
 	out := TurnOutput{}
@@ -160,8 +165,12 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	hookRounds := 0
 	// What compacting goes by, across the hook rounds: the last model
 	// call's input (the previous turn's, to begin with), and how many times
-	// this turn compacted (ADR 0020).
+	// this turn compacted (ADR 0020). And the turn's time against its
+	// limit (ADR 0039).
 	cs := compacting{last: in.LastInput}
+	if cs.clk, err = startClock(ctx, agent.Limits); err != nil {
+		return TurnOutput{}, err
+	}
 	for {
 		// The model loop, then the turn.end hooks: one that does not pass
 		// sends the model back to it (at most maxHookRounds times).
@@ -210,6 +219,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 type compacting struct {
 	last int64 // the last model call's input, as recorded
 	n    int   // times the turn compacted
+	clk  clock // the turn's time against its limit (ADR 0039)
 }
 
 // modelLoop is the turn's model loop: model, tools, model, ... until the
@@ -234,6 +244,21 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 	for {
 		if out.Steps == agent.MaxSteps {
 			out.Stopped = "max_steps"
+			break
+		}
+		// The limits are checked before each call (ADR 0039): with none,
+		// nothing is.
+		why := agent.Limits.reached(out.Usage)
+		if why == "" {
+			var err error
+			if why, err = cs.clk.over(ctx, agent.Limits); err != nil {
+				return err
+			}
+		}
+		if why != "" {
+			if err := stopAt(ctx, out, why); err != nil {
+				return err
+			}
 			break
 		}
 		if agent.Context > 0 && cs.n < maxCompactions && cs.last > int64(agent.Context)*8/10 {
@@ -278,6 +303,10 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 		inputs := make([]ToolInput, len(reply.Calls))
 		gates := make([]Gate, len(reply.Calls))
 		asked := make([]*ToolOutput, len(reply.Calls)) // ask_user's answers
+		// Approvals and questions wait for a person: not the turn's time.
+		if err := cs.clk.pause(ctx); err != nil {
+			return err
+		}
 		for i, c := range reply.Calls {
 			inputs[i] = ToolInput{Dir: in.Dir, Message: reply.Message, Call: c.ID, Step: out.Steps, Index: i, Ext: ext[c.Name].Def}
 			switch {
@@ -338,6 +367,9 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 				}
 				gates[i] = g
 			}
+		}
+		if err := cs.clk.resume(ctx); err != nil {
+			return err
 		}
 		results := make([]ToolOutput, len(reply.Calls))
 		calls := make([]func(*kairo.Context) error, len(reply.Calls))

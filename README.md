@@ -84,7 +84,7 @@ kairo -worktree[=name]               # a session in a new git worktree, on a bra
 kairocode sessions -repo             # the repository's sessions across its worktrees: what each does, how each differs
 kairocode fork [-files] <session> [turn]   # go on from a past turn, as another session
 kairocode plugin install <name>      # install a plugin (MCP servers and skills); connect gives it credentials
-kairocode usage -session <session>   # the tokens the model calls used
+kairocode usage [-session <session>]  # what was used today, this week (and in a session), against your limits
 ```
 
 `kairocode help` lists every command. One daemon runs the sessions of each data directory (`~/.local/share/kairocode` by default). Commands start it as needed, and it stops after 10 minutes without use.
@@ -99,6 +99,7 @@ kairocode usage -session <session>   # the tokens the model calls used
 - `/flow`: flows (see below)
 - `/plugin`, `/skills`, `/mcp`: plugins, skills, MCP servers
 - `/log`, `/resume`, `/review`
+- `/usage`: what has been used in this session, today and this week, against your limits: a bar and a percentage for each, and when it resets, as in Claude Code's `/usage` and Codex's `/status`. The status line shows the session's tokens and cost, and a limit 80% used is warned of once, after a turn.
 - `/new`: another session in this terminal; `/new --worktree [name]`, in a new git worktree on `kairo/<name>`, so sessions work side by side without seeing each other's changes. Worktrees live in the data directory (`worktrees/`), not in the repository; files git does not track (`.env`, installed dependencies) are not in a new one.
 - `/sessions`: the repository's sessions across its worktrees: whether each is working or waits for you, and how its worktree differs. Enter takes one up; `d` removes a worktree whose sessions rest (its branch is kept if not merged).
 - Type a space after a command's name to see what it takes (`/plugin install <name>`, `/flow new`, your flows' names, `/model`'s models, ...). Tab or ↑↓ picks one; Enter sends what you typed.
@@ -168,9 +169,21 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `agents.claudeHooks` | Claude Code's hooks: `ask` (default) or `off` | Yours (a project can only turn them `off`) |
 | `http` | Credentials for the `http` and `fetch` tools (`auth`), and whether local addresses are allowed (`allowPrivate`) | Yours |
 | `models.<name>.context` | A model's context length (when summarizing starts) | Yours |
+| `models.<name>.price` | A model's price in US dollars per million tokens (`input`, `output`, `cache_read`, `cache_write`), for a model KairoCode does not know or to correct one | Yours |
+| `limits` | Limits that stop a turn before its next model call: `turn.steps` (50), `turn.time` (`"30m"`; waits for you not counted), and `tokens` or `cost` (US dollars) for `session`, `day` (from 00:00) and `week` (from Monday); `warn` (0.8) is when you are warned. See below | Yours, the project's (the smaller of each) |
 | `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |
 | `flowHistory` | How many flow runs to keep (`keep`) and for how many days (`days`) | Yours |
 | `notify`, `language` | How to notify, and the language shown | Yours |
+
+## Usage and limits
+
+Every model call is counted in the daemon's ledger, with what it cost: Claude models at Anthropic's prices, local models at nothing, others at the price you set (`models.<name>.price`), and Claude Code at the cost it reports. `/usage` and `kairocode usage` show it. Limits are set in `kairocode.json`:
+
+```json
+{"limits": {"session": {"cost": 5}, "day": {"cost": 20}, "week": {"cost": 100}, "turn": {"time": "30m"}}}
+```
+
+A turn that reaches one stops before its next model call and says which limit, and when it resets; the next turn stops at once while it stays reached. A turn keeps the limits it started with. A model whose cost is not known does not count towards a cost limit (`/usage` names it). The limits of a CLI engine's own plan (a Claude subscription, ChatGPT for codex) are not KairoCode's to see: their own `/usage` or `/status` shows them.
 
 ## Development
 
