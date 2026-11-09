@@ -194,7 +194,13 @@ Status: done (2026-11-09). Checking by hand remains: worktrees in the terminal U
 - [x] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR). (2026-11-09, ADR 0036: `/flow new --from-session[=<id>] [words]` gives the model the session's record, cut to size, and it writes a draft as `/flow new` does. `TestFlowFromSession`, `TestFitTurns`.)
 - [x] Sessions run side by side in worktrees, and a screen listing them (needs an ADR). (2026-11-09, ADR 0037: `kairo -worktree`, `kairocode run -worktree`, `/new --worktree`; `/sessions` and `kairocode sessions -repo`; the git tools write the repository's common git directory. `TestWorktreeSession`, `TestWorktreeMadeAgainAfterACrash`, `TestGitCommitInWorktree`, `TestRunInAWorktree`, `TestRepoSessions`, `TestLinked`.)
 
-Left for after M6 to M9: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside, the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
+## M10 Answer from outside the machine
+
+Status: in progress (ADR 0038 proposed, 2026-11-09; chosen by the user)
+
+- [ ] A person away from the machine approves, denies or answers a request from where they were told of it (Slack), and the turn goes on (ADR 0038: the `notify` flow reads the answer and gives it; only the user's own flows may answer).
+
+Left for after M6 to M10: limits (tokens and money. ADR 0024, still on hold. Moved to after publishing by the user's decision on 2026-10-30), a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside, the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 
 ## Future work not assigned to a milestone
 
