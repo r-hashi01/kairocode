@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -90,7 +91,7 @@ func openAIStatus(resp *http.Response) error {
 	if json.Unmarshal(b, &e) == nil && e.Error.Message != "" {
 		text = e.Error.Message
 	}
-	err := fmt.Errorf("%s: %s", resp.Status, text)
+	err := fmt.Errorf("%s: %s", resp.Status, maskKeys(text))
 	switch {
 	case resp.StatusCode == 429:
 		// Waited for as the reply asks, for every call to the provider (ADR 0040).
@@ -287,7 +288,7 @@ func readOpenAIStream(body io.Reader, onText func(string)) (Response, error) {
 			// Some servers say a request's error in the stream: asked again
 			// only for what passes (too many requests, overloaded, a
 			// timeout), as for a reply's status.
-			switch m := c.Error.Message; {
+			switch m := maskKeys(c.Error.Message); {
 			case contextTooLong(m):
 				return Response{}, &PermanentError{Err: fmt.Errorf("%w: %s", ErrContextTooLong, m)}
 			case passing(m):
@@ -399,4 +400,21 @@ func objectSchema(raw json.RawMessage) (map[string]any, error) {
 		s["properties"] = map[string]any{}
 	}
 	return s, nil
+}
+
+// keyLike is a key as servers echo it back, masked or not: OpenAI's 401
+// says "Incorrect API key provided: sk-proj****…F0A". Masked, its middle
+// may be asterisks, dots or an ellipsis; and whatever word follows "API
+// key provided:" is taken as the key, whatever its shape.
+var (
+	keyLike     = regexp.MustCompile(`\b(sk|rk|pk)-[A-Za-z0-9_*.…\-]{8,}`)
+	keyProvided = regexp.MustCompile(`(?i)(api key provided:\s*)\S+`)
+)
+
+// maskKeys takes keys out of a server's message before it becomes an
+// error: an error is shown, logged and kept in the turn's record, and even
+// a masked key's ends are not for those (invariant 6).
+func maskKeys(text string) string {
+	text = keyProvided.ReplaceAllString(text, "${1}[a key]")
+	return keyLike.ReplaceAllString(text, "[a key]")
 }
