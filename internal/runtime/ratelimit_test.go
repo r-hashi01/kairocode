@@ -215,8 +215,8 @@ func TestRateLimitProjectCannotLoosen(t *testing.T) {
 	}
 }
 
-// A turn on an OpenAI-compatible API that answers 429 with Retry-After
-// waits as asked and goes on; /usage tells of it.
+// A turn on an OpenAI-compatible API that answers 429 for a minute's limit
+// used up waits as its message asks and goes on; /usage tells of it.
 func TestRateLimit429Turn(t *testing.T) {
 	var mu sync.Mutex
 	var at []time.Time
@@ -227,8 +227,9 @@ func TestRateLimit429Turn(t *testing.T) {
 		i := len(at)
 		mu.Unlock()
 		if i == 1 {
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, `{"error":{"message":"slow down"}}`, http.StatusTooManyRequests)
+			// As OpenAI says a minute's limit used up: the wait in the
+			// message, no Retry-After.
+			http.Error(w, `{"error":{"message":"Rate limit reached for gpt-4.1 on tokens per min (TPM): Limit 30000, Used 29500, Requested 900. Please try again in 1s.","type":"tokens","code":"rate_limit_exceeded"}}`, http.StatusTooManyRequests)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

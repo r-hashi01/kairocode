@@ -99,7 +99,11 @@ func openAIStatus(resp *http.Response) error {
 		return &PermanentError{Err: err}
 	case resp.StatusCode == 429:
 		// Waited for as the reply asks, for every call to the provider (ADR 0040).
-		return &RateLimitError{Err: err, After: retryAfter(resp.Header, time.Now())}
+		after := retryAfter(resp.Header, time.Now())
+		if after == 0 {
+			after = tryAgainIn(text)
+		}
+		return &RateLimitError{Err: err, After: after}
 	case resp.StatusCode == 408 || resp.StatusCode == 409 || resp.StatusCode >= 500:
 		return err
 	case contextTooLong(text) || fmt.Sprint(e.Error.Code) == "context_length_exceeded":
@@ -432,3 +436,20 @@ func neverPasses(text, code string) bool {
 	t := strings.ToLower(text)
 	return strings.Contains(t, "request too large") || code == "insufficient_quota" || strings.Contains(t, "exceeded your current quota")
 }
+
+// tryAgainIn is the wait a 429's message asks for, when its headers do
+// not: OpenAI's "Rate limit reached for … Please try again in 2.3s" (or
+// "in 120ms", "in 1m30s"); 0 if it does not say.
+func tryAgainIn(text string) time.Duration {
+	m := tryAgain.FindStringSubmatch(text)
+	if m == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(m[1])
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+var tryAgain = regexp.MustCompile(`(?i)try again in ((?:\d+(?:\.\d+)?(?:ms|s|m|h))+)`)
