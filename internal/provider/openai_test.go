@@ -63,7 +63,9 @@ func TestOpenAIAdapter(t *testing.T) {
 	var streamed []string
 	resp, err := o.Complete(context.Background(), Request{
 		Model: "qwen", System: "be brief", Effort: "high",
-		Tools: []ToolSpec{{Name: "read", Description: "Read a file", Schema: json.RawMessage(`{"type":"object"}`)}},
+		// As the built-in tools give theirs: properties alone, which
+		// OpenAI's own API refuses without "type": "object".
+		Tools: []ToolSpec{{Name: "read", Description: "Read a file", Schema: json.RawMessage(`{"properties":{"path":{"type":"string"}},"required":["path"]}`)}},
 		Messages: []msg.Message{
 			{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: "look"}, {Type: msg.Image, MediaType: "image/png", Data: []byte{1, 2}}}},
 			{Role: msg.Assistant, Parts: []msg.Part{{Type: msg.ToolUse, ID: "call_0", Name: "read", Input: json.RawMessage(`{"path":"b"}`)}}},
@@ -98,7 +100,7 @@ func TestOpenAIAdapter(t *testing.T) {
 		`"image_url":{"url":"data:image/png;base64,AQI="}`,
 		`{"content":null,"role":"assistant","tool_calls":[{"function":{"arguments":"{\"path\":\"b\"}","name":"read"},"id":"call_0","type":"function"}]}`,
 		`{"content":"[error] no such file","role":"tool","tool_call_id":"call_0"}`,
-		`"parameters":{"type":"object"}`,
+		`"parameters":{"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"}`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("no %s in the request %s", want, b)
@@ -200,5 +202,32 @@ func TestOpenAIStreamErrorsAndSlips(t *testing.T) {
 	same, _ := http.NewRequest("GET", "https://llm.example.com/v2/chat/completions", nil)
 	if err := OpenAIClient.CheckRedirect(same, []*http.Request{from}); err != nil {
 		t.Errorf("a redirect within https: %v", err)
+	}
+}
+
+// A schema with no type gets one; none (null) is an object with no
+// properties; one that is not an object is refused at once.
+func TestOpenAIObjectSchema(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"properties":{"a":{"type":"string"}}}`: `{"properties":{"a":{"type":"string"}},"type":"object"}`,
+		`{"type":"object","properties":{}}`:      `{"properties":{},"type":"object"}`,
+		`null`:                                   `{"properties":{},"type":"object"}`,
+	} {
+		s, err := objectSchema(json.RawMessage(raw))
+		b, _ := json.Marshal(s)
+		if err != nil || string(b) != want {
+			t.Errorf("%s: %s, %v", raw, b, err)
+		}
+	}
+	for _, raw := range []string{`true`, `[1]`, `3`, `{`} {
+		if _, err := objectSchema(json.RawMessage(raw)); err == nil {
+			t.Errorf("%s taken", raw)
+		}
+	}
+	_, err := (&OpenAI{BaseURL: "http://127.0.0.1:1/v1/"}).Complete(t.Context(), Request{Model: "m",
+		Tools: []ToolSpec{{Name: "bad", Schema: json.RawMessage(`[1]`)}}})
+	var permanent *PermanentError
+	if !errors.As(err, &permanent) {
+		t.Errorf("a bad schema: %v, want a permanent error", err)
 	}
 }
