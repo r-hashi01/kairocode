@@ -67,3 +67,48 @@ func TestRateLimitErrors(t *testing.T) {
 		}
 	}
 }
+
+// A 429 no wait makes pass (a request over the limit itself, no credit
+// left) fails at once, as the provider said it, instead of being waited
+// for (found with OpenAI's own API, 2026-11-11).
+func TestRateLimitThatNeverPasses(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"Request too large for gpt-4.1 on tokens per min (TPM): Limit 500000, Requested 610082.","type":"tokens"}}`,
+		`{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","code":"insufficient_quota"}}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(body))
+		}))
+		_, err := (&OpenAI{BaseURL: srv.URL + "/v1/"}).Complete(t.Context(), Request{Model: "m"})
+		srv.Close()
+		var permanent *PermanentError
+		var limited *RateLimitError
+		if !errors.As(err, &permanent) || errors.As(err, &limited) {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+}
+
+// OpenAI's 429 for a minute's limit used up passes after a wait, which
+// its message says when no header does: it is a RateLimitError with that
+// wait (the kind not met with the real API in the hand check).
+func TestRateLimitWaitInMessage(t *testing.T) {
+	for body, want := range map[string]time.Duration{
+		`{"error":{"message":"Rate limit reached for gpt-4.1 in organization org-x on tokens per min (TPM): Limit 30000, Used 29000, Requested 2000. Please try again in 2.3s.","type":"tokens","code":"rate_limit_exceeded"}}`: 2300 * time.Millisecond,
+		`{"error":{"message":"Rate limit reached for gpt-4.1 on requests per min (RPM): Limit 3. Please try again in 1m30s."}}`:                                                                                                 90 * time.Second,
+		`{"error":{"message":"Rate limit reached. Please try again in 120ms."}}`:                                                                                                                                                120 * time.Millisecond,
+		`{"error":{"message":"slow down"}}`: 0,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(body))
+		}))
+		_, err := (&OpenAI{BaseURL: srv.URL + "/v1/"}).Complete(t.Context(), Request{Model: "m"})
+		srv.Close()
+		var limited *RateLimitError
+		if !errors.As(err, &limited) || limited.After != want {
+			t.Errorf("%s: %v (after %v), want a wait of %v", body, err, limited, want)
+		}
+	}
+}

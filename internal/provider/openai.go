@@ -93,9 +93,17 @@ func openAIStatus(resp *http.Response) error {
 	}
 	err := fmt.Errorf("%s: %s", resp.Status, maskKeys(text))
 	switch {
+	case resp.StatusCode == 429 && neverPasses(text, fmt.Sprint(e.Error.Code)):
+		// A request larger than the limit itself, or no credit left: no
+		// wait makes it pass, so it fails at once.
+		return &PermanentError{Err: err}
 	case resp.StatusCode == 429:
 		// Waited for as the reply asks, for every call to the provider (ADR 0040).
-		return &RateLimitError{Err: err, After: retryAfter(resp.Header, time.Now())}
+		after := retryAfter(resp.Header, time.Now())
+		if after == 0 {
+			after = tryAgainIn(text)
+		}
+		return &RateLimitError{Err: err, After: after}
 	case resp.StatusCode == 408 || resp.StatusCode == 409 || resp.StatusCode >= 500:
 		return err
 	case contextTooLong(text) || fmt.Sprint(e.Error.Code) == "context_length_exceeded":
@@ -289,6 +297,8 @@ func readOpenAIStream(body io.Reader, onText func(string)) (Response, error) {
 			// only for what passes (too many requests, overloaded, a
 			// timeout), as for a reply's status.
 			switch m := maskKeys(c.Error.Message); {
+			case neverPasses(m, ""):
+				return Response{}, &PermanentError{Err: errors.New(m)}
 			case contextTooLong(m):
 				return Response{}, &PermanentError{Err: fmt.Errorf("%w: %s", ErrContextTooLong, m)}
 			case passing(m):
@@ -418,3 +428,28 @@ func maskKeys(text string) string {
 	text = keyProvided.ReplaceAllString(text, "${1}[a key]")
 	return keyLike.ReplaceAllString(text, "[a key]")
 }
+
+// neverPasses says whether a 429 is one no wait makes pass: OpenAI's
+// "Request too large ... on tokens per min" (one request over the limit of
+// a minute), and "You exceeded your current quota" (insufficient_quota).
+func neverPasses(text, code string) bool {
+	t := strings.ToLower(text)
+	return strings.Contains(t, "request too large") || code == "insufficient_quota" || strings.Contains(t, "exceeded your current quota")
+}
+
+// tryAgainIn is the wait a 429's message asks for, when its headers do
+// not: OpenAI's "Rate limit reached for … Please try again in 2.3s" (or
+// "in 120ms", "in 1m30s"); 0 if it does not say.
+func tryAgainIn(text string) time.Duration {
+	m := tryAgain.FindStringSubmatch(text)
+	if m == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(m[1])
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+var tryAgain = regexp.MustCompile(`(?i)try again in ((?:\d+(?:\.\d+)?(?:ms|s|m|h))+)`)
