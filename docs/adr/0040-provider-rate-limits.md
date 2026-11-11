@@ -104,6 +104,15 @@ The kairo side: [kairo#20](https://github.com/r-hashi01/kairo/issues/20) asks fo
   - `TestRetryAfter`, `TestRateLimitErrors`: both adapters; the Anthropic SDK asks once.
   - The terminal UI's `TestRateLimitWaitShown`.
 
+
+### Checked with OpenAI's own API (2026-11-11)
+
+A real 429 is hard to reach on a paid tier (hundreds of requests a minute), but one request larger than a model's tokens a minute is refused with one before it is processed, and not billed. With a project whose `AGENTS.md` made the request about 610,000 tokens, sent to `gpt-4.1` (500,000 tokens a minute, a context of a million):
+- Each call was refused with a 429 that set no `Retry-After`. The provider was held back 10 seconds and the call asked again, and the status line said "waiting for openai's rate limit (10s)". After 5 tries the call failed, and kairo tried the step again five times: 25 429s in about 6 minutes, which `/usage` counted. Then the turn failed with OpenAI's message.
+- **Fixed:** that 429 ("Request too large … on tokens per min") never passes, however long the wait; nor does "You exceeded your current quota" (`insufficient_quota`). The OpenAI-compatible adapter now makes them permanent errors, so the turn fails at once with the provider's message (2 seconds, checked again) instead of waiting (`TestRateLimitThatNeverPasses`).
+- These 429s are not counted by `/usage` (it counts the 429s that hold a provider back) and no longer hold back the provider's other calls for 10 seconds. An error of the same words inside the stream (after a 200) is taken the same way.
+- **Left for later:** on a low tier (tens of thousands of tokens a minute), a session whose history alone goes past the limit now fails at once, as it did after waiting before. Compacting the history (ADR 0020) might let it pass; taking "Request too large" as a context too long would start that, but its message would then speak of the context. To decide when it is met.
+
 ## Alternatives considered
 
 - **kairo's `Rate` and `Limit` on the `model` action.** One limit for every provider together, and no tokens: a fast local model would be held to a hosted provider's limit.

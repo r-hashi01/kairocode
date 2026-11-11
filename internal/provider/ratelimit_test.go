@@ -67,3 +67,25 @@ func TestRateLimitErrors(t *testing.T) {
 		}
 	}
 }
+
+// A 429 no wait makes pass (a request over the limit itself, no credit
+// left) fails at once, as the provider said it, instead of being waited
+// for (found with OpenAI's own API, 2026-11-11).
+func TestRateLimitThatNeverPasses(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"Request too large for gpt-4.1 on tokens per min (TPM): Limit 500000, Requested 610082.","type":"tokens"}}`,
+		`{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","code":"insufficient_quota"}}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(body))
+		}))
+		_, err := (&OpenAI{BaseURL: srv.URL + "/v1/"}).Complete(t.Context(), Request{Model: "m"})
+		srv.Close()
+		var permanent *PermanentError
+		var limited *RateLimitError
+		if !errors.As(err, &permanent) || errors.As(err, &limited) {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+}
