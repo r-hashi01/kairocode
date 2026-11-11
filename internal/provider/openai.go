@@ -142,11 +142,12 @@ func openAIRequest(r Request) ([]byte, error) {
 	if len(r.Tools) > 0 {
 		tools := make([]any, 0, len(r.Tools))
 		for _, t := range r.Tools {
-			if !json.Valid(t.Schema) {
-				return nil, fmt.Errorf("tool %s: its schema is not JSON", t.Name)
+			params, err := objectSchema(t.Schema)
+			if err != nil { // the same each time it is asked
+				return nil, &PermanentError{Err: fmt.Errorf("tool %s: its schema: %w", t.Name, err)}
 			}
 			tools = append(tools, map[string]any{"type": "function", "function": map[string]any{
-				"name": t.Name, "description": t.Description, "parameters": t.Schema}})
+				"name": t.Name, "description": t.Description, "parameters": params}})
 		}
 		req["tools"] = tools
 		switch {
@@ -374,4 +375,28 @@ func randomID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// objectSchema is a tool's schema as OpenAI's API takes it: an object's,
+// with "type" and "properties" even where the tool leaves them out (the
+// built-in tools give only their properties, as Anthropic's API needs no
+// more). OpenAI's own API refuses a schema without "type": "object";
+// servers that are more lenient take it as well.
+// A tool with no schema (null, as an MCP tool may have) takes no
+// arguments, as the Anthropic adapter takes it.
+func objectSchema(raw json.RawMessage) (map[string]any, error) {
+	var s map[string]any
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, errors.New("not a JSON object")
+	}
+	if s == nil {
+		s = map[string]any{}
+	}
+	if _, ok := s["type"]; !ok {
+		s["type"] = "object"
+	}
+	if _, ok := s["properties"]; !ok {
+		s["properties"] = map[string]any{}
+	}
+	return s, nil
 }

@@ -82,6 +82,11 @@ Where this shows in the implementation:
   - `TestOpenAIKeyHTTPSOnly`: no key over plain `http` except to loopback.
   - `TestProjectCannotNameProviders`: a project's `providers` are ignored.
 
+
+### Checked with OpenAI's own API (2026-11-11)
+
+With `gpt-5.4-mini`, OpenAI refused the first request that had tools: "Invalid schema for function 'read': schema must be a JSON Schema of 'type: "object"'". The built-in tools give only their `properties` and `required`, as Anthropic's API needs; Ollama took them as they were. The adapter now adds `"type": "object"` and `"properties"` where a schema leaves them out (`objectSchema`); the request test now uses such a schema, and fails without the fix. After it, a turn that read two files ran through.
+
 ## Alternatives considered
 
 - **The Responses API for `openai`, as ADR 0014 planned.** Only OpenAI speaks it, so a second adapter would still be needed for every other server. Chat Completions covers OpenAI as well.
