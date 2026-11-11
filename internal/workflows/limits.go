@@ -9,7 +9,8 @@ import (
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
 
-// StopLimit is why a turn stopped at one of its limits (ADR 0039).
+// StopLimit is why a turn stopped at one of its limits (ADR 0039);
+// api.StoppedLimit is the same.
 const StopLimit = "limit"
 
 // Limits are a turn's limits and what had been spent against them when
@@ -23,7 +24,8 @@ type Limits struct {
 	TurnTime int64    `json:"turn_time,omitempty"`
 	Budgets  []Budget `json:"budgets,omitempty"`
 	// Price is the turn's model's; nil: its cost is not known, and cost
-	// limits do not count it.
+	// limits do not count what the turn uses (what was spent before it,
+	// they do).
 	Price *Price `json:"price,omitempty"`
 }
 
@@ -82,10 +84,14 @@ func (l *Limits) reached(used msg.Usage) string {
 		if t := b.SpentTokens + Tokens(used); b.Tokens > 0 && t >= b.Tokens {
 			return fmt.Sprintf("Stopped at %s limit of %s tokens (%s used). %s", where, count(b.Tokens), count(t), after)
 		}
-		if l.Price == nil {
-			continue
+		// What was spent before the turn is known (a reported cost, too)
+		// even when the turn's model has no price: only the turn's own use
+		// is then not counted.
+		c := b.SpentCost
+		if l.Price != nil {
+			c += l.Price.Cost(used)
 		}
-		if c := b.SpentCost + l.Price.Cost(used); b.Cost > 0 && c >= b.Cost {
+		if b.Cost > 0 && c >= b.Cost {
 			return fmt.Sprintf("Stopped at %s limit of $%.2f ($%.2f used). %s", where, b.Cost, c, after)
 		}
 	}

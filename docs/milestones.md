@@ -2,7 +2,7 @@
 
 The milestones of design section 10, turned into acceptance-criteria tests. Work on a milestone with the `/milestone` skill. Write the acceptance criteria as tests before implementing (they fail at first). When they all pass, set that milestone's "Status" to "done (date)".
 
-Current stage: **M11 (rate limits per provider) is done (2026-11-09)**: the calls to each provider keep to its requests and tokens a minute, and wait as long as a 429 asks (ADR 0040). M10 (usage and limits) is done (2026-11-09): `/usage` shows what has been used in the session, today and this week against the limits, and limits stop a turn (ADR 0039); checking by hand with a real model remains. M9 (deepen what sets it apart) is done (2026-11-09): a flow made from a session (ADR 0036), and sessions side by side in git worktrees with `/sessions` (ADR 0037); checking the worktrees by hand in the terminal UI remains. M7 (show the strengths) is done (2026-11-06): the durability demo, with a flow and with Claude Code and codex as the engine, and approval requests told outside the machine (ADR 0034). M8 (close the gap at the entry points) is done (2026-11-09): `/init`, and OpenAI-compatible APIs as providers (ADR 0035). What is left of it is checking by hand: the adapter with OpenAI's own API, and pasting images on Linux (a real Ollama was checked). M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
+Current stage: **M12 (check by hand what was left) is in progress (2026-11-11)**: worktrees in the terminal UI and `/usage` with Claude Code are checked (two faults fixed); OpenAI's API, images on Linux and a real 429 need what this machine does not have. M11 (rate limits per provider) is done (2026-11-09): the calls to each provider keep to its requests and tokens a minute, and wait as long as a 429 asks (ADR 0040). M10 (usage and limits) is done (2026-11-09): `/usage` shows what has been used in the session, today and this week against the limits, and limits stop a turn (ADR 0039); checking by hand with a real model remains. M9 (deepen what sets it apart) is done (2026-11-09): a flow made from a session (ADR 0036), and sessions side by side in git worktrees with `/sessions` (ADR 0037); checking the worktrees by hand in the terminal UI remains. M7 (show the strengths) is done (2026-11-06): the durability demo, with a flow and with Claude Code and codex as the engine, and approval requests told outside the machine (ADR 0034). M8 (close the gap at the entry points) is done (2026-11-09): `/init`, and OpenAI-compatible APIs as providers (ADR 0035). What is left of it is checking by hand: the adapter with OpenAI's own API, and pasting images on Linux (a real Ollama was checked). M6 is done (2026-11-04, v0.1.0 published). M5 is done (2026-10-22). M3 is done too. What remains of M2 is dspchr (waiting for ADR 0004's approval) (checking by hand with the real `claude` and in Zed was done at M6's gate). What remains of M4 (PostgreSQL, suspend mode, starting from GitHub) is on hold together with ADR 0012.
 
 ## M0 Skeleton
 
@@ -189,14 +189,14 @@ Status: done (2026-11-09). Checking by hand remains: the OpenAI-compatible adapt
 
 ## M9 Deepen what sets it apart
 
-Status: done (2026-11-09). Checking by hand remains: worktrees in the terminal UI with a real repository
+Status: done (2026-11-09). Checked by hand (2026-11-11, M12): worktrees in the terminal UI
 
 - [x] Make a flow from a session that went well (the idea in "Future work" below. Needs an ADR). (2026-11-09, ADR 0036: `/flow new --from-session[=<id>] [words]` gives the model the session's record, cut to size, and it writes a draft as `/flow new` does. `TestFlowFromSession`, `TestFitTurns`.)
 - [x] Sessions run side by side in worktrees, and a screen listing them (needs an ADR). (2026-11-09, ADR 0037: `kairo -worktree`, `kairocode run -worktree`, `/new --worktree`; `/sessions` and `kairocode sessions -repo`; the git tools write the repository's common git directory. `TestWorktreeSession`, `TestWorktreeMadeAgainAfterACrash`, `TestGitCommitInWorktree`, `TestRunInAWorktree`, `TestRepoSessions`, `TestLinked`.)
 
 ## M10 Usage and limits
 
-Status: done (2026-11-09; ADR 0039; chosen by the user). Checking by hand remains: `/usage` and a limit with a real model. It took the place of answering from outside the machine, which was dropped the same day (ADR 0038, rejected): what ADR 0034 already does (telling, with the turn waiting in kairo) is enough.
+Status: done (2026-11-09; ADR 0039; chosen by the user). Checked by hand (2026-11-11, M12): `/usage` and a limit with Claude Code; two faults fixed. It took the place of answering from outside the machine, which was dropped the same day (ADR 0038, rejected): what ADR 0034 already does (telling, with the turn waiting in kairo) is enough.
 
 - [x] A person sees what they have used, in this session, today and this week, against their limits, as Claude Code's `/usage` and Codex's `/status` show it (`/usage`, `kairocode usage`). (2026-11-09: `TestPrices`, `TestUsageLedger`, `TestUsageWarning`.)
 - [x] Limits on a turn (steps, time), a session, a day and a week (tokens, cost) stop a turn before its next model call, from recorded values only, and say which limit and until when (ADR 0039, replacing ADR 0024). (2026-11-09: `TestLimitSessionTokens`, `TestLimitDayCost`, `TestLimitTurnTimeNotWaiting`, `TestLimitsProjectCannotLoosen`, `TestLimitsRecordedAtTurnStart`.)
@@ -207,7 +207,17 @@ Status: done (2026-11-09; ADR 0040; chosen by the user). Checking by hand remain
 
 - [x] Calls to one provider, from every session, agent and flow of the daemon, stay within its requests and tokens a minute (`rateLimits`), and a 429 makes them wait as long as the provider asks, instead of failing after three quick tries (FR-27, ADR 0040). (2026-11-09: `TestRateLimitRequests`, `TestRateLimitTokens`, `TestRateLimit429`, `TestRateLimit429Turn`, `TestRateLimitCancelled`, `TestRateLimitProjectCannotLoosen`, `TestRateLimitErrors`.)
 
-Left for after M6 to M11: a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside (rejected for now, ADR 0038), the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
+## M12 Check by hand what was left
+
+Status: in progress (2026-11-11; chosen by the user)
+
+- [x] Worktrees in the terminal UI (M9): `/new --worktree feat` made the worktree and its branch and moved the session there; `/sessions` listed both worktrees with the untracked file; Enter took up the main session; `d` asked again for a worktree with changes, then removed it and its branch; its session showed as "folder removed".
+- [x] `/usage` and a limit with a real model (M10), Claude Code as the engine: the status line and `/usage` showed the cost Claude Code reported; a session limit already passed did not stop the next turn (fixed: a cost limit counts what was spent even with no price), and the reason was not shown to ACP clients (fixed). `kairocode usage` now reads the folder's limits.
+- [ ] The OpenAI-compatible adapter with OpenAI's own API (M8): needs an OpenAI key.
+- [ ] Pasting images on Linux (M8): needs a Linux desktop (X11 or Wayland).
+- [ ] A provider's real 429s (M11): needs a provider whose limit can be reached.
+
+Left for after M6 to M12: a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside (rejected for now, ADR 0038), the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 
 ## Future work not assigned to a milestone
 

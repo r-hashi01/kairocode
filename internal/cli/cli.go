@@ -787,8 +787,10 @@ func showUsage(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	defer c.Close()
-	// What has been used against the limits (ADR 0039), as /usage shows it.
-	now, err := c.UsageNow(ctx, s)
+	// What has been used against the limits (ADR 0039), as /usage shows it:
+	// without a session, against this folder's limits.
+	wd, _ := os.Getwd()
+	now, err := c.UsageIn(ctx, s, wd)
 	if err != nil {
 		return err
 	}

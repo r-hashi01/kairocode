@@ -140,9 +140,12 @@ func (u UsageNow) Lines() []string {
 		}
 		out = append(out, line)
 	}
-	t := u.Tokens
-	out = append(out, "", fmt.Sprintf("This session's tokens: %s in · %s out · %s cache read · %s cache write",
-		Count(t.Input), Count(t.Output), Count(t.CacheRead), Count(t.CacheWrite)))
+	out = append(out, "")
+	if u.Session != "" {
+		t := u.Tokens
+		out = append(out, fmt.Sprintf("This session's tokens: %s in · %s out · %s cache read · %s cache write",
+			Count(t.Input), Count(t.Output), Count(t.CacheRead), Count(t.CacheWrite)))
+	}
 	if len(u.Today) > 0 {
 		out = append(out, "Today, by model:")
 		for _, m := range u.Today {

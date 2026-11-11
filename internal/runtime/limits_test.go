@@ -356,3 +356,22 @@ func TestLimitsRecordedAtTurnStart(t *testing.T) {
 		t.Fatalf("the next turn: %d model calls, stopped %q", got, out.Stopped)
 	}
 }
+
+// Without a session, /usage reads the limits of the folder it is asked
+// for (kairocode usage's), and says nothing of a session's tokens.
+func TestUsageInFolder(t *testing.T) {
+	ws := repo(t)
+	withSettings(t, ws, `{"limits": {"day": {"cost": 1.4}}}`, "")
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx := context.Background()
+	u, err := r.UsageIn(ctx, "", ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Windows) != 2 || u.Windows[0].CostLimit != 1.4 {
+		t.Fatalf("windows %+v", u.Windows)
+	}
+	if strings.Contains(u.Text(), "This session") {
+		t.Fatalf("a session's line with no session:\n%s", u.Text())
+	}
+}

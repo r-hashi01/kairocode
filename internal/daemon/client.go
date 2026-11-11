@@ -625,8 +625,13 @@ func (c *Client) History(ctx context.Context, session string) ([]msg.Message, er
 // UsageNow is what has been used against the limits (ADR 0039): in
 // session (if not ""), today and this week.
 func (c *Client) UsageNow(ctx context.Context, session string) (api.UsageNow, error) {
+	return c.UsageIn(ctx, session, "")
+}
+
+// UsageIn is UsageNow, against the limits of dir when session is "".
+func (c *Client) UsageIn(ctx context.Context, session, dir string) (api.UsageNow, error) {
 	var out api.UsageNow
-	err := c.do(ctx, "GET", "/usage?session="+url.QueryEscape(session), nil, &out)
+	err := c.do(ctx, "GET", "/usage?session="+url.QueryEscape(session)+"&dir="+url.QueryEscape(dir), nil, &out)
 	return out, err
 }
 

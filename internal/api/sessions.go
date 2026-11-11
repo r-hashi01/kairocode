@@ -89,6 +89,10 @@ const FailedNote = "[The session this one goes on from stopped on an error durin
 // told it (a turn's Stopped).
 const StoppedCancelled = "cancelled"
 
+// StoppedLimit is why a turn that reached one of its limits ended (ADR
+// 0039): its reply says which, and is not streamed.
+const StoppedLimit = "limit"
+
 // SessionInfo is a session as a list of them shows it (kairocode
 // sessions, /resume, ACP's session/list).
 type SessionInfo struct {

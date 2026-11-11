@@ -155,6 +155,16 @@ Where this shows in the implementation:
   - The terminal UI's `TestUsageWarning`.
   - No crash test was added: where a turn stops is computed from recorded values only, which `TestLimitsRecordedAtTurnStart` checks.
 
+### Checked by hand (2026-11-11)
+
+With Claude Code as the engine (its default model), in the terminal UI:
+- The status line showed the session's cost, and `/usage` showed the session, today and this week, the tokens by kind, and Claude Code's own plan's note.
+- A session limit of $1.00, with $1.20 spent, was warned of (145%).
+- Two faults were found and fixed:
+  - **The limit did not stop the next turn.** The default model has no price, and `reached` skipped cost limits without one, although what had been spent (Claude Code's reported cost) was known. Now what was spent counts against a cost limit with or without a price; only the turn's own use needs one (`TestLimitsReachedWithoutPrice`). A turn under way when this changed, with no price and already past its limit, stops on replay at its first check: what it had done drops out of the record (its effects on the files stay), calls still waiting are cancelled, and nothing runs again. The turn's version is not raised for it: the limits are in no release yet (only v0.1.0 is tagged), so only a database built from main since 2026-11-09, with a cost limit passed by a turn in flight, could hold one.
+  - **ACP clients were not told why the turn stopped.** The reply of a turn stopped at a limit is not streamed, so it is now sent as the reply of a turn stopped by a hook is (`api.StoppedLimit`).
+- `kairocode usage` without a session now reads the limits of the folder it runs in (`GET /usage?dir=`), and leaves out the session's line (`TestUsageInFolder`).
+
 ## Alternatives considered
 
 - **Add up windows from kairo's records** (as `Runtime.Usage` does for a session). Finished trees are deleted after 24 hours, so a week cannot be added up, and reading every session's runs at each turn's start is slow.
