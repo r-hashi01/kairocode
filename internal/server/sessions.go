@@ -272,9 +272,10 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 }
 
 // usageNow is what has been used against the limits (ADR 0039): in the
-// session ?session= names (if any), today and this week.
+// session ?session= names (if any), today and this week; without one,
+// against the limits of the folder ?dir= names.
 func (s *Server) usageNow(w http.ResponseWriter, r *http.Request) {
-	u, err := s.rt.UsageNow(r.Context(), r.URL.Query().Get("session"))
+	u, err := s.rt.UsageIn(r.Context(), r.URL.Query().Get("session"), r.URL.Query().Get("dir"))
 	if errors.Is(err, kairo.ErrUnknownRun) {
 		fail(w, http.StatusNotFound, err)
 		return

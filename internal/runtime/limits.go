@@ -304,7 +304,12 @@ func turnSteps(agentSteps, daemonSteps int, dir string) int {
 // week, against the limits of its folder (the user's alone, without one),
 // as /usage shows it.
 func (r *Runtime) UsageNow(ctx context.Context, session string) (UsageNow, error) {
-	dir := ""
+	return r.UsageIn(ctx, session, "")
+}
+
+// UsageIn is UsageNow, against the limits of dir when no session is named
+// (the folder kairocode usage runs in).
+func (r *Runtime) UsageIn(ctx context.Context, session, dir string) (UsageNow, error) {
 	if session != "" {
 		var err error
 		if dir, err = r.sessionDir(ctx, session); err != nil {

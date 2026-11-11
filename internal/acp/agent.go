@@ -352,7 +352,7 @@ func (a *agent) prompt(ctx context.Context, params json.RawMessage) (any, error)
 	if err := w.wait(ctx, n); err != nil {
 		return nil, err
 	}
-	if quiet || turn.Stopped == "hook" { // a hook stopped it before the model: why
+	if quiet || turn.Stopped == "hook" || turn.Stopped == api.StoppedLimit { // a hook or a limit stopped it: why
 		a.update(p.SessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": textBlock(turn.Reply)})
 	}
 	return map[string]any{"stopReason": stopReason(turn.Stopped)}, nil
@@ -363,7 +363,7 @@ func stopReason(stopped string) string {
 	switch stopped {
 	case "":
 		return "end_turn"
-	case "max_steps", "limit": // a limit of the turn's, or of its use (ADR 0039): the reply says which
+	case "max_steps", api.StoppedLimit: // a limit of the turn's, or of its use (ADR 0039): the reply says which
 		return "max_turn_requests"
 	case "max_tokens", "refusal":
 		return stopped
