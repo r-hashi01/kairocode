@@ -87,6 +87,8 @@ Where this shows in the implementation:
 
 With `gpt-5.4-mini`, OpenAI refused the first request that had tools: "Invalid schema for function 'read': schema must be a JSON Schema of 'type: "object"'". The built-in tools give only their `properties` and `required`, as Anthropic's API needs; Ollama took them as they were. The adapter now adds `"type": "object"` and `"properties"` where a schema leaves them out (`objectSchema`); the request test now uses such a schema, and fails without the fix. After it, a turn that read two files ran through.
 
+OpenAI's 401 for a wrong key says "Incorrect API key provided: sk-proj****…F0A": the key, masked, with its ends. That text became the call's error, which is shown, logged and kept in the turn's record. The adapter now replaces, in a server's message (a reply's status, or an error in the stream after a 200), whatever word follows "API key provided:" and anything shaped like a key (`sk-`, `rk-`, `pk-`, masked with asterisks, dots or an ellipsis, or not) with "[a key]" (`TestOpenAIErrorHasNoKey`, invariant 6). Keys of other shapes (`gsk_`, `xai-`) are caught only after "API key provided:"; the servers that use them are not known to echo them.
+
 ## Alternatives considered
 
 - **The Responses API for `openai`, as ADR 0014 planned.** Only OpenAI speaks it, so a second adapter would still be needed for every other server. Chat Completions covers OpenAI as well.

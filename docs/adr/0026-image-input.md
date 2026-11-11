@@ -77,6 +77,11 @@ The user wants to paste screenshots from the clipboard without saving them as fi
 - **Implementation (2026-10-28):** `internal/tui/clipboard.go`. If there is no image, Ctrl+V is passed to the input box and pastes text as before. In a TUI that does not know the data directory, Ctrl+V belongs to the input box. macOS's `osascript` was checked with a screenshot on the real clipboard (the PNG was read). Linux's `wl-paste` and `xclip` have not been checked by hand. Tests: `TestPasteImage`, `TestPasteNoImage`, `TestPasteWithNoDataDir`, `TestSavePasted`.
 - **Alternatives considered:** terminal image protocols (kitty, iTerm2) are for the terminal to display images, and do not send pastes. Go clipboard libraries either use cgo or call the same commands, so there is no reason to add a dependency.
 
+
+### Checked on Linux (2026-11-11)
+
+In a Debian container: on X11 (Xvfb, the PNG put on the clipboard with `xclip -selection clipboard -t image/png -i`) and on Wayland (headless sway with `WLR_BACKENDS=headless`, `wl-copy --type image/png`, and no `DISPLAY`, so only `wl-paste` could read it), Ctrl+V in the terminal UI put `[Image #1]` in the input, and the image reached the model with the message (an OpenAI-compatible provider answered the color of a red square). Headless weston has no seat, and `wl-copy` cannot run there.
+
 ## Alternatives considered
 
 - **Put images in the message body as base64:** storage is simple. But every read of the history reads the images, and the same image is stored many times. Hashing messages also becomes heavy.

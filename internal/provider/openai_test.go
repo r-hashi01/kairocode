@@ -231,3 +231,35 @@ func TestOpenAIObjectSchema(t *testing.T) {
 		t.Errorf("a bad schema: %v, want a permanent error", err)
 	}
 }
+
+// A key a server echoes back, masked or not, is not in the error: in a
+// reply's status, or in the stream after a 200.
+func TestOpenAIErrorHasNoKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"Incorrect API key provided: sk-proj****…F0A. See the docs.": "Incorrect API key provided: [a key] See the docs.",
+		"bad key sk-pro...F0A here":                                  "bad key [a key] here",
+		"Incorrect API key provided: gsk_abc123xyz.":                 "Incorrect API key provided: [a key]",
+		"task-12345678 failed, sk-abc too short":                     "task-12345678 failed, sk-abc too short",
+	} {
+		if got := maskKeys(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+	stream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"error\":{\"message\":\"Incorrect API key provided: sk-proj****F0A\"}}\n\n")
+	}))
+	defer stream.Close()
+	_, err := (&OpenAI{BaseURL: stream.URL + "/v1/"}).Complete(t.Context(), Request{Model: "m"})
+	if err == nil || strings.Contains(err.Error(), "F0A") {
+		t.Fatalf("in the stream: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"Incorrect API key provided: sk-proj********************F0A. You can find your API key at https://platform.openai.com/account/api-keys."}}`, http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	_, err = (&OpenAI{BaseURL: srv.URL + "/v1/"}).Complete(t.Context(), Request{Model: "m"})
+	if err == nil || strings.Contains(err.Error(), "sk-") || strings.Contains(err.Error(), "F0A") || !strings.Contains(err.Error(), "Incorrect API key provided: [a key]") {
+		t.Fatalf("error %v", err)
+	}
+}
