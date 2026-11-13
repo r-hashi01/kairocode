@@ -89,9 +89,16 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 	var applied, undone []done
 	var lastInput int64 // the last turn's last model call's input (ADR 0020)
 	for n := 0; ; n++ {
-		ev, err := kairo.WaitFor[SessionEvent](ctx, SignalMessage)
-		if err != nil {
-			return SessionOutput{Turns: n, Head: head}, err
+		var ev SessionEvent
+		if n == 0 && in.Item != nil && in.Item.Run != nil {
+			// A work item's first turn runs its line, as its input says
+			// (ADR 0043).
+			ev = SessionEvent{Kind: EventMessage, Message: in.Item.Request, Line: in.Item.Run}
+		} else {
+			var err error
+			if ev, err = kairo.WaitFor[SessionEvent](ctx, SignalMessage); err != nil {
+				return SessionOutput{Turns: n, Head: head}, err
+			}
 		}
 		if ev.Kind == EventClose {
 			return SessionOutput{Turns: n, Head: head}, nil

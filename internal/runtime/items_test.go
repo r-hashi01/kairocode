@@ -315,6 +315,13 @@ func TestItemCleanedUp(t *testing.T) {
 		}
 	}
 	gitT(t, ws, "merge", "-q", "--no-edit", one.Branch)
+	// Listing it changes nothing (the items tool reads it); taking does.
+	if items, _ := r.Items(ctx, s); items[0].State != api.ItemDone {
+		t.Fatalf("taken by a listing: %+v", items[0])
+	}
+	if err := r.TakeItems(ctx, s); err != nil {
+		t.Fatal(err)
+	}
 	items, err := r.Items(ctx, s)
 	if err != nil || items[0].State != api.ItemTaken || items[1].State != api.ItemDone {
 		t.Fatalf("items %+v %v", items, err)
@@ -369,6 +376,8 @@ func crashItemChild() {
 		afterItemWorktree = hold
 	case "session":
 		afterItemSession = hold
+	case "commit":
+		tools.AfterGitCommit = hold
 	}
 	s, err := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: os.Getenv("KC_DIR")})
 	if err != nil {
@@ -389,7 +398,7 @@ func TestCrashStartingItem(t *testing.T) {
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
-	for _, at := range []string{"worktree", "session"} {
+	for _, at := range []string{"worktree", "session", "commit"} {
 		t.Run(at, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
@@ -444,6 +453,63 @@ func TestCrashStartingItem(t *testing.T) {
 			if n := strings.Count(string(log), `You are at the station "build"`); n != 2 {
 				t.Fatalf("the agent was called %d times, want 2 (its two steps, once):\n%s", n, log)
 			}
+			// One commit on the branch, said as made: one cut off by the
+			// kill is found, not made again.
+			if n := gitT(t, ws, "rev-list", "--count", "main.."+it.Branch); n != "1" {
+				t.Fatalf("%s commits on the branch, want 1", n)
+			}
+			out, err := r.WaitTurn(ctx, it.ID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply, _ := r.Reply(ctx, out.Reply); !strings.Contains(reply, "Committed to the branch") {
+				t.Fatalf("reply %q", reply)
+			}
 		})
+	}
+}
+
+// Two items started at once (two line calls of one reply) take two names
+// and two worktrees; a name given that a worktree or a branch has is
+// refused; a line whose files are not committed is refused before
+// anything is made, as the item's worktree starts from HEAD.
+func TestItemsAtOnce(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Require(t)
+	ws := itemRepo(t, "")
+	dir := t.TempDir()
+	release := filepath.Join(dir, "release")
+	r := open(t, filepath.Join(dir, "k.db"), &provider.Fake{HoldAt: -1, HoldFile: filepath.Join(dir, "holding"), HoldOn: `You are at the station "build"`,
+		ReleaseFile: release, Script: []provider.FakeReply{{Text: "ok"}}, Replies: map[string]provider.FakeReply{`You are at the station "build"`: {Text: "built"}}})
+	defer os.WriteFile(release, nil, 0o600)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: ws})
+	type started struct {
+		it  api.Item
+		err error
+	}
+	got := make(chan started, 2)
+	for _, key := range []string{"a", "b"} {
+		go func() {
+			it, err := r.StartItem(ctx, s, key, tools.ItemSpec{Line: "quick", Request: "build " + key})
+			got <- started{it, err}
+		}()
+	}
+	one, two := <-got, <-got
+	if one.err != nil || two.err != nil || one.it.Name == two.it.Name || one.it.Dir == two.it.Dir {
+		t.Fatalf("at once: %+v %v; %+v %v", one.it, one.err, two.it, two.err)
+	}
+
+	gitT(t, ws, "branch", "kairo/taken")
+	if _, err := r.StartItem(ctx, s, "c", tools.ItemSpec{Line: "quick", Request: "x", Name: "taken"}); err == nil || !strings.Contains(err.Error(), "taken is taken") {
+		t.Fatalf("a name a branch has: %v", err)
+	}
+	putFiles(t, ws, map[string]string{".kairocode/lines/new.json": `{"stations": [{"name": "build", "agent": "build"}]}`})
+	if _, err := r.StartItem(ctx, s, "d", tools.ItemSpec{Line: "new", Request: "x"}); err == nil || !strings.Contains(err.Error(), "not committed") {
+		t.Fatalf("a line not committed: %v", err)
+	}
+	if items, _ := r.Items(ctx, s); len(items) != 2 {
+		t.Fatalf("items %+v", items)
 	}
 }

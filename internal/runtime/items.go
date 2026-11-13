@@ -17,6 +17,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/config"
 	"github.com/r-hashi01/kairocode/internal/lines"
+	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
@@ -45,9 +46,9 @@ var afterItemWorktree, afterItemSession func(id string)
 const kindItemTold = "item-told"
 
 var (
-	ErrItemsCap   = errors.New("too many items running")
-	ErrNotAnItem  = errors.New("no such item")
-	ErrItemsNoGit = errors.New("a line runs in a worktree: the conversation's folder is in no git repository with a commit")
+	ErrItemsCap   = api.ErrItemsCap
+	ErrNotAnItem  = api.ErrNotAnItem
+	ErrItemsNoGit = api.ErrItemsNoGit
 )
 
 // itemSessionName is the id of the session an item started by the call
@@ -192,9 +193,12 @@ func ItemsText(items []api.Item) string {
 }
 
 // StartItem sends spec's request down its line from conversation, for the
-// call key: its worktree, its session, its line's turn. Each step looks for
-// what it would make first, so a start made again (a crash between) makes
-// nothing twice.
+// call key: its worktree, then its session, whose first turn runs the line.
+// Each step looks for what it would make first, so a start made again (a
+// crash between) makes nothing twice. An error once the item is kept is
+// not settled (tools.ErrNotSettled): the call is made again with its key,
+// and finishes what it began. A line the worktree cannot run (its files not
+// committed) ends the item, failed and cleaned up: that is settled.
 func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec tools.ItemSpec) (api.Item, error) {
 	dir, err := r.sessionDir(ctx, conversation)
 	if err != nil {
@@ -212,55 +216,83 @@ func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec 
 			return api.Item{}, err
 		}
 	} else if err != nil {
-		return api.Item{}, err
+		return api.Item{}, notSettled(err)
+	}
+	if row.Ended != "" { // ended as it started (failed): said, not started again
+		return r.itemState(ctx, row), fmt.Errorf("the item %s %s", row.Name, row.Ended)
 	}
 	var line workflows.Line
 	if err := json.Unmarshal(row.Def, &line); err != nil {
 		return api.Item{}, err
 	}
 	if row.Dir == "" {
-		wt, err := r.MakeWorktree(ctx, dir, row.Name)
-		if err != nil {
-			return api.Item{}, err
-		}
-		base, _ := gitIn(ctx, dir, "symbolic-ref", "--short", "HEAD")
-		start, _ := gitIn(ctx, wt.Dir, "rev-parse", "HEAD")
-		if err := r.Store.SetItemWorktree(ctx, id, wt.Dir, wt.Branch, base, start); err != nil {
-			return api.Item{}, err
-		}
-		row.Dir, row.Branch, row.Base, row.Start = wt.Dir, wt.Branch, base, start
-		if afterItemWorktree != nil {
-			afterItemWorktree(id)
+		if row, err = r.itemWorktree(ctx, dir, row); err != nil {
+			return api.Item{}, notSettled(err)
 		}
 	}
 	if _, err := r.K.Get(ctx, id); errors.Is(err, kairo.ErrUnknownRun) {
+		// What the worktree has (HEAD's files) must run the line: else the
+		// item ends here, failed.
+		if err := checkLine(row.Dir, line); err != nil {
+			why := "the worktree, from HEAD, cannot run the line (commit what it uses first): " + err.Error()
+			if err := r.endItem(ctx, row, api.ItemFailed, true); err != nil {
+				return api.Item{}, notSettled(err)
+			}
+			return api.Item{}, errors.New(why)
+		}
 		var conv workflows.SessionInput
 		if info, err := r.K.Get(ctx, conversation); err == nil {
 			_ = json.Unmarshal(input(info), &conv)
 		}
+		request, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: row.Request}}})
+		if err != nil {
+			return api.Item{}, notSettled(err)
+		}
 		if _, err := r.CreateSession(ctx, name, workflows.SessionInput{Dir: row.Dir, Engine: conv.Engine, Model: conv.Model, Effort: conv.Effort,
-			Item: &workflows.ItemRef{Of: conversation, Line: row.Line}}); err != nil {
-			return api.Item{}, err
+			Item: &workflows.ItemRef{Of: conversation, Line: row.Line, Run: &line, Request: request}}); err != nil {
+			if _, gerr := r.K.Get(ctx, id); gerr != nil { // not made by another at once
+				return api.Item{}, notSettled(err)
+			}
 		}
 		if afterItemSession != nil {
 			afterItemSession(id)
 		}
 	} else if err != nil {
-		return api.Item{}, err
-	}
-	if n, err := r.sent(ctx, id); err != nil {
-		return api.Item{}, err
-	} else if n == 0 {
-		if _, err := r.RunLine(ctx, id, line, row.Request); err != nil {
-			return api.Item{}, fmt.Errorf("the item's worktree (from HEAD) cannot run the line: %w", err)
-		}
+		return api.Item{}, notSettled(err)
 	}
 	return r.itemState(ctx, row), nil
 }
 
+// notSettled marks err as a start not finished: the call is made again.
+func notSettled(err error) error { return fmt.Errorf("%w: %w", tools.ErrNotSettled, err) }
+
+// itemWorktree makes item row's worktree, under the name kept for it, and
+// notes it: one item at a time in this runtime (itemMu), so no two take
+// one name.
+func (r *Runtime) itemWorktree(ctx context.Context, dir string, row store.ItemRow) (store.ItemRow, error) {
+	r.itemMu.Lock()
+	defer r.itemMu.Unlock()
+	wt, err := r.MakeWorktree(ctx, dir, row.Name)
+	if err != nil {
+		return row, err
+	}
+	base, _ := gitIn(ctx, dir, "symbolic-ref", "--short", "HEAD")
+	start, _ := gitIn(ctx, wt.Dir, "rev-parse", "HEAD")
+	if err := r.Store.SetItemWorktree(ctx, row.ID, wt.Dir, wt.Branch, base, start); err != nil {
+		return row, err
+	}
+	row.Dir, row.Branch, row.Base, row.Start = wt.Dir, wt.Branch, base, start
+	if afterItemWorktree != nil {
+		afterItemWorktree(row.ID)
+	}
+	return row, nil
+}
+
 // newItem checks spec's line for the conversation's folder, and keeps the
 // item it starts, with the name its worktree is to have, before anything
-// is made: a start made again makes it under that name.
+// is made: a start made again makes it under that name. One item at a time
+// is kept in this runtime (itemMu): two starts at once (two calls of one
+// reply) take two names, and the cap counts each.
 func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id string, spec tools.ItemSpec) (store.ItemRow, error) {
 	var line workflows.Line
 	if spec.Line != "" {
@@ -275,6 +307,16 @@ func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id strin
 	if err := checkLine(dir, line); err != nil {
 		return store.ItemRow{}, err
 	}
+	// The worktree has HEAD's files: what the line uses must be there.
+	if st, _ := gitIn(ctx, dir, "status", "--porcelain", "--", ".kairocode", ".opencode", ConfigFile); st != "" {
+		return store.ItemRow{}, fmt.Errorf("the item's worktree starts from HEAD, and these are not committed: commit them first:\n%s", st)
+	}
+	def, err := json.Marshal(line)
+	if err != nil {
+		return store.ItemRow{}, err
+	}
+	r.itemMu.Lock()
+	defer r.itemMu.Unlock()
 	// The stop-gap of ADR 0043 until a queue: so many at once in a
 	// repository.
 	kept, err := r.Store.ItemsIn(ctx, main)
@@ -294,13 +336,17 @@ func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id strin
 	if err != nil {
 		return store.ItemRow{}, err
 	}
+	free := func(name string) bool {
+		_, err := os.Stat(filepath.Join(r.worktreesOf(main), name))
+		return !used[name] && errors.Is(err, os.ErrNotExist) && !branchExists(ctx, main, worktreeBranch+name)
+	}
 	name := spec.Name
 	if name != "" {
 		if !worktreeName.MatchString(name) {
 			return store.ItemRow{}, ErrWorktreeName
 		}
-		if used[name] {
-			return store.ItemRow{}, fmt.Errorf("an item named %s was sent before: name it otherwise", name)
+		if !free(name) {
+			return store.ItemRow{}, fmt.Errorf("%s is taken (an item, a worktree or the branch %s%s): name it otherwise", name, worktreeBranch, name)
 		}
 	} else {
 		base := line.Name
@@ -308,22 +354,17 @@ func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id strin
 			base = "item"
 		}
 		for n := 1; ; n++ {
-			name = fmt.Sprintf("%s-%d", base, n)
-			if _, err := os.Stat(filepath.Join(r.worktreesOf(main), name)); !used[name] && errors.Is(err, os.ErrNotExist) && !branchExists(ctx, main, worktreeBranch+name) {
+			if name = fmt.Sprintf("%s-%d", base, n); free(name) {
 				break
 			}
 		}
-	}
-	def, err := json.Marshal(line)
-	if err != nil {
-		return store.ItemRow{}, err
 	}
 	return r.Store.AddItem(ctx, store.ItemRow{ID: id, Of: conversation, Line: line.Name, Def: def, Request: spec.Request,
 		Name: name, Repo: main, Started: time.Now()})
 }
 
-// Items are the items conversation sent, the first first. Items whose
-// branch was merged are taken, and cleaned up, as they are listed.
+// Items are the items conversation sent, the first first, as they are: it
+// changes nothing (the items tool reads them).
 func (r *Runtime) Items(ctx context.Context, conversation string) ([]api.Item, error) {
 	rows, err := r.Store.ItemsOf(ctx, conversation)
 	if err != nil {
@@ -331,18 +372,47 @@ func (r *Runtime) Items(ctx context.Context, conversation string) ([]api.Item, e
 	}
 	out := make([]api.Item, 0, len(rows))
 	for _, row := range rows {
-		it := r.itemState(ctx, row)
-		if row.Ended == "" && it.State != api.ItemRunning && it.State != api.ItemWaiting && r.merged(ctx, row) {
-			if err := r.endItem(ctx, row, api.ItemTaken, false); err == nil {
-				row.Ended = api.ItemTaken
-				it = r.itemState(ctx, row)
-			} else {
-				r.logf("cleaning up the item %s, taken: %v", row.Name, err)
-			}
-		}
-		out = append(out, it)
+		out = append(out, r.itemState(ctx, row))
 	}
 	return out, nil
+}
+
+// TakeItems cleans up conversation's items whose branch was merged: taken
+// (ADR 0043). /items and kairocode items do it as they list, and the
+// daemon as it starts (TakeAllItems).
+func (r *Runtime) TakeItems(ctx context.Context, conversation string) error {
+	rows, err := r.Store.ItemsOf(ctx, conversation)
+	if err != nil {
+		return err
+	}
+	return r.takeItems(ctx, rows)
+}
+
+// TakeAllItems cleans up every item whose branch was merged.
+func (r *Runtime) TakeAllItems(ctx context.Context) error {
+	rows, err := r.Store.ItemsKept(ctx)
+	if err != nil {
+		return err
+	}
+	return r.takeItems(ctx, rows)
+}
+
+func (r *Runtime) takeItems(ctx context.Context, rows []store.ItemRow) error {
+	var errs []error
+	for _, row := range rows {
+		if row.Ended != "" {
+			continue
+		}
+		if s := r.itemState(ctx, row).State; s == api.ItemRunning || s == api.ItemWaiting || !r.merged(ctx, row) {
+			continue
+		}
+		if err := r.endItem(ctx, row, api.ItemTaken, false); err != nil {
+			err = fmt.Errorf("cleaning up the item %s, taken: %w", row.Name, err)
+			r.logf("%v", err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // itemState is what an item is doing, from its line's turn.
@@ -448,6 +518,10 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
+		// Once KairoCode is on a kairo with SignalID (kairo's ADR 0071;
+		// the update waits, docs/milestones.md), it makes this once. Until
+		// then a process stopped between sending and keeping it as told
+		// sends it again, once (ADR 0043, implementation).
 		if _, err := r.Send(ctx, row.Of, text); err != nil {
 			return fmt.Errorf("telling %s of the item %s: %w", row.Of, row.Name, err)
 		}
@@ -499,8 +573,9 @@ func (r *Runtime) merged(ctx context.Context, row store.ItemRow) bool {
 // finds nothing to commit, and makes no second one. Not an item's session
 // (a line run elsewhere), it commits nothing.
 func (r *Runtime) lineCommitAction(t *kairo.TaskContext, in workflows.LineCommitInput) (workflows.LineCommitOutput, error) {
-	if _, err := r.Store.Item(t, in.Session); errors.Is(err, store.ErrNoItem) {
-		return workflows.LineCommitOutput{}, nil
+	row, err := r.Store.Item(t, in.Session)
+	if errors.Is(err, store.ErrNoItem) || err == nil && sameDir(row.Dir) != sameDir(in.Dir) {
+		return workflows.LineCommitOutput{}, nil // not an item's worktree: nothing committed
 	} else if err != nil {
 		return workflows.LineCommitOutput{}, err
 	}
@@ -514,6 +589,13 @@ func (r *Runtime) lineCommitAction(t *kairo.TaskContext, in workflows.LineCommit
 	p := tools.GitCommitTool.Plan(t, env, args)
 	if p.Fail != nil {
 		if strings.HasPrefix(p.Fail.Output, "nothing to commit") {
+			// Committed before a crash cut this off: HEAD is that commit.
+			if head, err := gitIn(t, in.Dir, "rev-parse", "HEAD"); err == nil && head != row.Start {
+				if subject, _ := gitIn(t, in.Dir, "log", "-1", "--format=%s"); subject == in.Message {
+					short, _ := gitIn(t, in.Dir, "rev-parse", "--short", "HEAD")
+					return workflows.LineCommitOutput{Commit: short, Note: "Committed to the branch: " + short + "."}, nil
+				}
+			}
 			return workflows.LineCommitOutput{Note: "Nothing left to commit on the branch: the stations committed their work, or changed nothing."}, nil
 		}
 		return workflows.LineCommitOutput{Note: "Not committed: " + p.Fail.Output}, nil
@@ -575,4 +657,42 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// StartNamedItem starts an item down the standard line the person named
+// (/line, kairocode line): nothing is asked, the person chose it. call
+// names the request, so the same one made again starts no second item.
+func (r *Runtime) StartNamedItem(ctx context.Context, conversation, call string, spec tools.ItemSpec) (api.Item, error) {
+	if spec.Line == "" || len(spec.Stations) > 0 {
+		return api.Item{}, errors.New("name a standard line: /line <name> <request>")
+	}
+	return r.StartItem(ctx, conversation, "person:"+call, spec)
+}
+
+// KeepLine writes the line item ran as the project's line name (/line
+// keep): a new file in the conversation's folder, for the person to
+// review and commit.
+func (r *Runtime) KeepLine(ctx context.Context, conversation, item, name string) (string, error) {
+	rows, err := r.Store.ItemsOf(ctx, conversation)
+	if err != nil {
+		return "", err
+	}
+	for _, row := range rows {
+		if row.ID != item && row.Name != item {
+			continue
+		}
+		var line workflows.Line
+		if err := json.Unmarshal(row.Def, &line); err != nil {
+			return "", err
+		}
+		dir, err := r.sessionDir(ctx, conversation)
+		if err != nil {
+			return "", err
+		}
+		if err := lines.Write(dir, name, line); err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, lines.Path(name)), nil
+	}
+	return "", ErrNotAnItem
 }

@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
 	"github.com/r-hashi01/kairocode/internal/server"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -857,4 +860,52 @@ func (c *Client) RunCommand(ctx context.Context, session, name, args string) (in
 	}
 	err := c.do(ctx, "POST", sessionPath(session)+"/commands", map[string]string{"name": name, "arguments": args}, &out)
 	return out.Turn, err
+}
+
+// Items are the work items the session sent down lines (ADR 0043).
+func (c *Client) Items(ctx context.Context, session string) ([]api.Item, error) {
+	var out []api.Item
+	err := c.do(ctx, "GET", sessionPath(session)+"/items", nil, &out)
+	return out, err
+}
+
+// StartItem starts an item down the standard line the person named
+// (/line). The request carries a name of its own, so sent again (the
+// daemon not reached the first time) it starts no second item.
+func (c *Client) StartItem(ctx context.Context, session string, spec tools.ItemSpec) (api.Item, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return api.Item{}, err
+	}
+	in := struct {
+		tools.ItemSpec
+		Call string `json:"call"`
+	}{spec, hex.EncodeToString(b)}
+	var out api.Item
+	err := c.do(ctx, "POST", sessionPath(session)+"/items", in, &out)
+	return out, err
+}
+
+// DropItem drops one of the session's items: cleaned up, its worktree
+// removed (with changes not committed, only if force).
+func (c *Client) DropItem(ctx context.Context, session, item string, force bool) error {
+	return c.do(ctx, "POST", sessionPath(session)+"/items/drop", map[string]any{"item": item, "force": force}, nil)
+}
+
+// KeepLine writes the line an item ran as the project's line name: the
+// file's path.
+func (c *Client) KeepLine(ctx context.Context, session, item, name string) (string, error) {
+	var out struct {
+		Path string `json:"path"`
+	}
+	err := c.do(ctx, "POST", sessionPath(session)+"/items/keep", map[string]string{"item": item, "name": name}, &out)
+	return out.Path, err
+}
+
+// PendingAll is what waits in the session and in its work items, each of
+// those naming its item (ADR 0043).
+func (c *Client) PendingAll(ctx context.Context, session string) ([]api.Pending, error) {
+	var out []api.Pending
+	err := c.do(ctx, "GET", sessionPath(session)+"/approvals?items=1", nil, &out)
+	return out, err
 }

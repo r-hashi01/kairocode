@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -81,11 +82,21 @@ func applyLine(ctx context.Context, env Env, data json.RawMessage) Result {
 		return failed("line: items are sent from a conversation, not from here")
 	}
 	out, err := env.Items.Start(ctx, in)
+	if errors.Is(err, ErrNotSettled) {
+		// Begun and not finished: the call is made again, with its key, and
+		// finishes it (invariant 4).
+		return Result{Output: "line: " + err.Error(), Unknown: true}
+	}
 	if err != nil {
 		return failed("line: %v", err)
 	}
 	return Result{Output: out}
 }
+
+// ErrNotSettled: a start of an item began and did not finish (its record
+// kept, its worktree or session perhaps made). Not a failure to give the
+// model: the call is made again, and finishes what it began.
+var ErrNotSettled = errors.New("the item's start is not finished")
 
 // ItemsTool lists the conversation's work items (ADR 0043): each one's
 // line, station, state, cost and branch.

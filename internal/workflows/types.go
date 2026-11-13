@@ -258,11 +258,16 @@ type SessionInput struct {
 	Item *ItemRef `json:"item,omitempty"`
 }
 
-// ItemRef is the conversation a work item came from, and its line's name
-// ("" for one put together on the spot).
+// ItemRef is the conversation a work item came from, its line's name (""
+// for one put together on the spot), and what its first turn runs: Run,
+// the line as it started, Request, the hash of its request. The session
+// runs it before it waits for anything: no signal starts it, so none can
+// start it twice.
 type ItemRef struct {
-	Of   string `json:"of"`
-	Line string `json:"line,omitempty"`
+	Of      string `json:"of"`
+	Line    string `json:"line,omitempty"`
+	Run     *Line  `json:"run,omitempty"`
+	Request string `json:"request,omitempty"`
 }
 
 // ForkRef is the turn a session was forked from.

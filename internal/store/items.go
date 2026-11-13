@@ -80,6 +80,11 @@ func (s *Store) ItemsIn(ctx context.Context, repo string) ([]ItemRow, error) {
 	return s.items(ctx, `repo = ? AND ended = ''`, repo)
 }
 
+// ItemsKept is every item not taken or dropped.
+func (s *Store) ItemsKept(ctx context.Context) ([]ItemRow, error) {
+	return s.items(ctx, `ended = ''`)
+}
+
 // ItemNames is the names the items of repository repo took, ended or not.
 func (s *Store) ItemNames(ctx context.Context, repo string) (map[string]bool, error) {
 	rows, err := s.items(ctx, `repo = ?`, repo)

@@ -145,6 +145,11 @@ type fakeAgent struct {
 	removed  []string // worktrees removed
 	changed  bool     // the worktree has changes: removing asks
 	cwds     []string // the folders sessions were started and loaded in
+	// items and itemWaits are /items'; lines, dropped and answered what
+	// /line and /items asked for (ADR 0043).
+	items                    []api.Item
+	itemWaits                []api.Pending
+	lines, dropped, answered []string
 }
 
 func (a *fakeAgent) GoOn(ctx context.Context, session string) (string, int, error) {
@@ -171,6 +176,29 @@ func (a *fakeAgent) RemoveWorktree(ctx context.Context, cwd string, force bool) 
 	}
 	a.removed = append(a.removed, fmt.Sprintf("%s force=%v", cwd, force))
 	return api.WorktreeRemoved{Branch: "kairo/1", BranchKept: true}, nil
+}
+
+func (a *fakeAgent) Items(ctx context.Context, session string) ([]api.Item, []api.Pending, error) {
+	return a.items, a.itemWaits, nil
+}
+
+func (a *fakeAgent) Line(ctx context.Context, session, line, request string) (api.Item, error) {
+	a.lines = append(a.lines, line+": "+request)
+	return api.Item{Name: line + "-1", Line: line, Stations: []string{"build"}, Branch: "kairo/" + line + "-1"}, nil
+}
+
+func (a *fakeAgent) DropItem(ctx context.Context, session, item string, force bool) error {
+	a.dropped = append(a.dropped, fmt.Sprintf("%s force=%v", item, force))
+	return nil
+}
+
+func (a *fakeAgent) KeepLine(ctx context.Context, session, item, name string) (string, error) {
+	return "/repo/.kairocode/lines/" + name + ".json", nil
+}
+
+func (a *fakeAgent) ItemAnswer(ctx context.Context, key string, ok bool, option string) error {
+	a.answered = append(a.answered, fmt.Sprintf("%s ok=%v %s", key, ok, option))
+	return nil
 }
 
 func (a *fakeAgent) FlowRuns(ctx context.Context, dir, flow, only string, n int) ([]api.FlowRun, error) {
@@ -1775,5 +1803,50 @@ func TestRepoSessions(t *testing.T) {
 		if w, n, ok := newSessionCommand(c.text); w != c.worktree || n != c.name || ok != c.ok {
 			t.Errorf("%s: %v %q %v", c.text, w, n, ok)
 		}
+	}
+}
+
+// /items lists the work items and what they wait for, numbered; the
+// person answers them by number, and drops an item; /line sends a request
+// down a standard line, and /line keep keeps the line an item ran (ADR
+// 0043).
+func TestItems(t *testing.T) {
+	d, a := start(t, Options{Dir: "/repo"})
+	a.items = []api.Item{
+		{Name: "ship-1", Line: "ship", State: api.ItemWaiting, Branch: "kairo/ship-1"},
+		{Name: "item-1", State: api.ItemStopped, Station: "build", Why: "checks", Branch: "kairo/item-1", Stale: true},
+	}
+	a.itemWaits = []api.Pending{
+		{Key: "k1", Item: "ship-1", Tool: "bash", Subject: "go test ./..."},
+		{Key: "k2", Item: "ship-1", Kind: api.KindQuestion, Subject: "The project's check", Options: []string{"Run it", "Do not run it"}},
+	}
+	typed(d, "/items")
+	out := d.view() + d.out()
+	for _, want := range []string{"ship-1  ship  waiting", "item-1  (on the spot)  stopped at build (checks)", "/items drop item-1",
+		"[1] ship-1 waits: bash go test ./...  — /items yes 1", "[2] ship-1 asks: The project's check  — /items answer 2 <Run it | Do not run it>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	typed(d, "/items yes 1")
+	typed(d, "/items answer 2 Run it")
+	typed(d, "/items yes 2") // a question is answered with its option
+	if len(a.answered) != 2 || a.answered[0] != "k1 ok=true " || a.answered[1] != "k2 ok=false Run it" {
+		t.Fatalf("answered %q", a.answered)
+	}
+	if out := d.view() + d.out(); !strings.Contains(out, "a question: /items answer 2") {
+		t.Fatalf("not said\n%s", out)
+	}
+	typed(d, "/items drop item-1 --force")
+	if len(a.dropped) != 1 || a.dropped[0] != "item-1 force=true" {
+		t.Fatalf("dropped %q", a.dropped)
+	}
+	typed(d, "/line ship make the login work")
+	if len(a.lines) != 1 || a.lines[0] != "ship: make the login work" {
+		t.Fatalf("lines %q", a.lines)
+	}
+	typed(d, "/line keep item-1 quick")
+	if out := d.view() + d.out(); !strings.Contains(out, "item ship-1 on the line ship (build)") || !strings.Contains(out, "kept as /repo/.kairocode/lines/quick.json") {
+		t.Fatalf("not said\n%s", out)
 	}
 }

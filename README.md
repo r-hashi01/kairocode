@@ -157,6 +157,36 @@ Declare the commands that tell whether work is done, in `kairocode.json`. Work t
 - `protect`: files the gated work may not change (`*` crosses `/`). `edit` and `write` refuse them, and a change by any other means fails the gate. Protect only what the check reads: a check that writes a file it protects fails its own gate.
 - Each check's run and verdict are in the record (`kairocode log`), and `kairocode flow stats` shows how often each flow's gates passed at once, after rounds, or not at all.
 
+## Lines and work items: work behind the conversation
+
+A line is a row of stations a request goes down, from the request to a change ready to merge (ADR 0043, `docs/factory.md`). Declare the project's lines in `.kairocode/lines/<name>.json`:
+
+```json
+{
+  "description": "From a request to a branch ready to merge, its tests passing",
+  "stations": [
+    {"name": "plan",   "agent": "plan",  "prompt": "Write the plan: files to change, tests to add."},
+    {"name": "build",  "agent": "build", "checks": ["test"], "rounds": 3},
+    {"name": "review", "flow": "review"},
+    {"name": "verify", "checks": ["test", "lint"]}
+  ]
+}
+```
+
+- **Stations.** Each station has one machine and the gate at its exit:
+  - an `agent` (with a `prompt`), given the request and what the stations before it left;
+  - a `flow` of the project's (with `args`, else the request);
+  - neither, so the station is its `checks` alone.
+
+  An agent whose checks fail is sent back, up to `rounds` times, as in a flow. A flow whose checks fail stops the line there.
+- **Starting an item.** In the conversation, KairoCode sends a request down a line with the tool `line`. It names a standard line and says why, or proposes one put together on the spot, which you are always asked about (`"lines": {"onTheSpot": "deny"}` refuses those). You can name one yourself: `/line <name> <request>`, or `kairocode line <name> "<request>"`.
+- **Each item runs in its own worktree**, on the branch `kairo/<line>-<n>`, as a session of its own, behind the conversation. When every station passes, its work is committed to that branch, ready to merge.
+- **Told back.** The conversation is told when an item ends or waits for you.
+  - `/items` (or `kairocode items <session>`) lists the items: their line, station, state, branch and cost.
+  - `/items` also lists what the items wait for. Answer by number with `/items yes 1` or `/items answer 2 <option>`, or use `kairocode approvals <session>`.
+  - At most 4 items run at once in a repository.
+- **Cleaning up.** Merge an item's branch and it is cleaned up (its worktree removed, its session closed); `/items drop <item>` drops one. `/line keep <item> <name>` keeps a line put together on the spot as `.kairocode/lines/<name>.json`, for you to review and commit.
+
 ## Permissions and the sandbox
 
 Write rules per tool in `kairocode.json` (yours in `~/.config/kairocode/kairocode.json`, the project's at the repository's root). The format is opencode's; a later rule wins.
@@ -190,6 +220,7 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `models.<name>.context` | A model's context length (when summarizing starts) | Yours |
 | `models.<name>.price` | A model's price in US dollars per million tokens (`input`, `output`, `cache_read`, `cache_write`), for a model KairoCode does not know or to correct one | Yours |
 | `checks` | Commands that decide when work is done, the checks a plain turn must pass (`turn`) and how often they send it back (`rounds`, 3). See [Checks](#checks-who-decides-the-work-is-done) | Yours, the project's (a project's check is asked about first) |
+| `lines.onTheSpot` | Whether KairoCode may put a line together on the spot: `ask` (default; always asked) or `deny`. See [Lines](#lines-and-work-items-work-behind-the-conversation) | Yours, the project's (the stricter) |
 | `limits` | Limits that stop a turn before its next model call: `turn.steps` (50), `turn.time` (`"30m"`; waits for you not counted), and `tokens` or `cost` (US dollars) for `session`, `day` (from 00:00) and `week` (from Monday); `warn` (0.8) is when you are warned. See below | Yours, the project's (the smaller of each) |
 | `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |
 | `rateLimits` | Requests (`rpm`) and tokens (`tpm`) a minute, by provider: `anthropic`, or an OpenAI-compatible provider's name. Calls of every session wait their turn, and a 429 holds them back as long as it asks | Yours, the project's (the smaller of each) |

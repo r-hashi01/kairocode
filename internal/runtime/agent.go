@@ -354,6 +354,12 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 			if in.Sub || r.isItem(t, ownerSession(t.RunID)) {
 				continue
 			}
+			// A CLI engine makes a call again after it is cut off as a new
+			// run, with a new key: line, which starts no second item only
+			// for one key, is not given there.
+			if d.Name == tools.LineTool.Name && workflows.CLIEngine(engine) {
+				continue
+			}
 			if d.Name == tools.LineTool.Name {
 				d.Description += standardLines(in.Dir)
 			}

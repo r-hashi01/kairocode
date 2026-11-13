@@ -62,7 +62,7 @@ func runLineTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			}
 			fo, err := kairo.Child[FlowOutput](ctx, Flow, FlowInput{
 				Session: in.Session, N: in.N, Dir: in.Dir, Agent: in.Agent, Engine: in.Engine, Model: in.Model,
-				Call: FlowCall{Name: st.Flow, Args: args},
+				Call: FlowCall{Name: st.Flow, Args: args}, At: at,
 			})
 			var failed *kairo.WorkflowError
 			switch {
