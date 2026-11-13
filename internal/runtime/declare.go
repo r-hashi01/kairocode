@@ -53,6 +53,10 @@ func (r *Runtime) declare() {
 	default:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
+		// Turn version 5 and session version 7 finish with the same
+		// functions: no line (ADR 0043).
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion5), kairo.Draining())
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion7), kairo.Draining())
 		// Turn version 4 finishes with the same function: no gate (ADR
 		// 0042).
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion4), kairo.Draining())
@@ -110,6 +114,7 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActHookNote, kairo.Unprotected, r.hookNoteAction)
 	// A gate's checks (ADR 0042): a check observes, so one cut off runs
 	// again (idempotent, invariant 3) rather than ask a person.
+	kairo.Action(r.K, workflows.ActLineCommit, kairo.Real, r.lineCommitAction, kairo.IdempotentRetry())
 	kairo.Action(r.K, workflows.ActCheckRun, kairo.Real, r.checkRunAction, kairo.IdempotentRetry(), kairo.Timeout(maxCheckTimeout+time.Minute))
 	kairo.Action(r.K, workflows.ActCheckProtect, kairo.Unprotected, r.checkProtectAction)
 	kairo.Action(r.K, workflows.ActCheckModes, kairo.Unprotected, r.checkModesAction)

@@ -131,6 +131,28 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			PRIMARY KEY (run, attempt))`,
 		`CREATE INDEX IF NOT EXISTS kc_usage_at ON kc_usage (at)`,
 		`CREATE INDEX IF NOT EXISTS kc_usage_session ON kc_usage (session)`,
+		// The work items conversations sent down lines (ADR 0043): each a
+		// session (id) of its own in a worktree, of the conversation of.
+		// def is the line as it started (JSON); repo is the main checkout
+		// of the conversation's repository; base and start, the branch and
+		// commit its worktree started from; ended is "" while the item is
+		// kept, then "taken" or "dropped".
+		`CREATE TABLE IF NOT EXISTS kc_item (
+			id TEXT PRIMARY KEY,
+			of TEXT NOT NULL,
+			line TEXT NOT NULL,
+			def BLOB NOT NULL,
+			request TEXT NOT NULL,
+			name TEXT NOT NULL,
+			repo TEXT NOT NULL,
+			dir TEXT NOT NULL DEFAULT '',
+			branch TEXT NOT NULL DEFAULT '',
+			base TEXT NOT NULL DEFAULT '',
+			start TEXT NOT NULL DEFAULT '',
+			started INTEGER NOT NULL,
+			ended TEXT NOT NULL DEFAULT '')`,
+		`CREATE INDEX IF NOT EXISTS kc_item_of ON kc_item (of)`,
+		`CREATE INDEX IF NOT EXISTS kc_item_repo ON kc_item (repo)`,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return nil, fmt.Errorf("store: %w", err)

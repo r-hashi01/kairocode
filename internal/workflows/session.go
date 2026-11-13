@@ -128,6 +128,7 @@ func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, sett
 			tin.Model = ev.Model
 		}
 		tin.Flow = ev.Flow
+		tin.Line = ev.Line
 		tin.Compact = ev.Kind == EventCompact
 		switch ev.Kind {
 		case EventUndo:

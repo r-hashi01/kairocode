@@ -44,6 +44,9 @@ type Fake struct {
 	// Replies answers, in place of the script, a request whose first user
 	// message has the key in its text (a subagent given that prompt).
 	Replies map[string]FakeReply `json:"replies,omitempty"`
+	// Steps answers so too, with a script of its own: the request's n-th
+	// reply in its conversation is the n-th (the last, past its end).
+	Steps map[string][]FakeReply `json:"steps,omitempty"`
 	// Summary is what it answers a request to summarize the conversation
 	// (ADR 0020); CallLog has "summary" for it.
 	Summary string `json:"summary,omitempty"`
@@ -164,6 +167,14 @@ func (f *Fake) Complete(ctx context.Context, r Request) (Response, error) {
 		for _, key := range slices.Sorted(maps.Keys(f.Replies)) {
 			if strings.Contains(first, key) {
 				s, found = f.Replies[key], true
+				break
+			}
+		}
+	}
+	if first := firstUserText(r.Messages); !found && first != "" {
+		for _, key := range slices.Sorted(maps.Keys(f.Steps)) {
+			if seq := f.Steps[key]; strings.Contains(first, key) && len(seq) > 0 {
+				s, found = seq[min(i, len(seq)-1)], true
 				break
 			}
 		}

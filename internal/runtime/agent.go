@@ -348,6 +348,16 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		if d.Name == tools.TaskTool.Name && (in.Sub || readOnly || workflows.CLIEngine(engine)) {
 			continue
 		}
+		// Work items (ADR 0043) are sent from a conversation: not from a
+		// flow's or a line's agent, nor from an item's own session.
+		if d.Name == tools.LineTool.Name || d.Name == tools.ItemsTool.Name {
+			if in.Sub || r.isItem(t, ownerSession(t.RunID)) {
+				continue
+			}
+			if d.Name == tools.LineTool.Name {
+				d.Description += standardLines(in.Dir)
+			}
+		}
 		specs = append(specs, provider.ToolSpec{Name: d.Name, Description: d.Description, Schema: d.Schema})
 		names = append(names, d.Name)
 		if d.Plan != nil {

@@ -29,9 +29,12 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		return TurnOutput{}, err
 	}
 	var out TurnOutput
-	if in.Flow != nil {
+	switch {
+	case in.Line != nil:
+		out, err = runLineTurn(ctx, in)
+	case in.Flow != nil:
 		out, err = runFlowTurn(ctx, in)
-	} else {
+	default:
 		out, err = RunTurnV3(ctx, in)
 	}
 	if err != nil {

@@ -75,6 +75,11 @@ func (r *Runtime) notifyObserve(o kairo.Observation) {
 	if s := sessionOf(o.RunID); request && s != "" {
 		r.notes.queue(s)
 	}
+	// A session's turn ended: if it is a work item's line, its
+	// conversation is told (ADR 0043).
+	if o.Kind == kairo.ObsRunSettled && o.Workflow == workflows.Turn && strings.Count(o.RunID, "/") == 2 && strings.HasPrefix(o.RunID, "s/") {
+		r.notes.queue(sessionOf(o.RunID))
+	}
 	if o.Kind == kairo.ObsRunSettled && o.Workflow == workflows.Notify && o.Status != "blocked" {
 		run := o.RunID
 		r.background(func(ctx context.Context) { r.notifySettled(ctx, run) })
@@ -146,6 +151,11 @@ func (r *Runtime) notifySession(ctx context.Context, session string) error {
 		if err := r.notifyRequest(ctx, session, p); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	// A work item's conversation is told what waits in it, and of its
+	// line's end (ADR 0043).
+	if err := r.tellItem(ctx, session); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

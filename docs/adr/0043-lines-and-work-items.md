@@ -1,6 +1,6 @@
 # 0043 Lines and work items: lines declared in the project or put together on the spot, and items sent down them from the conversation
 
-- Status: Proposed
+- Status: Accepted (2026-11-13)
 - Date: 2026-11-13
 - Related: `docs/factory.md` (step 2 of "The way there"; settles its section 6), ADR 0003 (flows), 0028 (telling a session what ended), 0036 (a flow from a session), 0037 (sessions in worktrees), 0039 (limits), 0042 (checks and gates); invariants 2, 3, 4, 7 and 8
 

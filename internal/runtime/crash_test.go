@@ -62,6 +62,14 @@ func TestMain(m *testing.M) {
 		crashJobChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_ITEM_CHILD") != "" {
+		crashItemChild()
+		return
+	}
+	if os.Getenv("KC_CRASH_LINE_CHILD") == "1" {
+		crashLineChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_FLOW_CHILD") == "1" {
 		crashFlowChild()
 		return
