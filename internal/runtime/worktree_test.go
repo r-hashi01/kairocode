@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/provider"
+	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -220,5 +221,128 @@ func TestWorktreeMadeAgainAfterACrash(t *testing.T) {
 	}
 	if b, _ := gitIn(ctx, a.Dir, "symbolic-ref", "--short", "HEAD"); b != "kairo/a" {
 		t.Fatalf("on %q", b)
+	}
+}
+
+// The worktrees of a repository share its snapshot store and its checks'
+// build cache, not one each (ADR 0037's addendum): an item a line sends to
+// a worktree of its own (ADR 0043) makes no new copy of them. Snapshots a
+// worktree took into a store of its own before are still read from it.
+func TestWorktreesShareStores(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Require(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	ws := gitRepo(t)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	wt, err := r.MakeWorktree(ctx, ws, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.snapshotStore(wt.Dir) != r.snapshotStore(ws) || r.snapshotStore(ws) != r.folderStore(ws) {
+		t.Fatalf("stores: worktree %s, main %s", r.snapshotStore(wt.Dir), r.snapshotStore(ws))
+	}
+	c1, err1 := r.checkCache(wt.Dir)
+	c2, err2 := r.checkCache(ws)
+	if err1 != nil || err2 != nil || c1 != c2 {
+		t.Fatalf("check caches %s %v, %s %v", c1, err1, c2, err2)
+	}
+
+	// A snapshot the worktree took into its own store, as before.
+	old := r.folderStore(wt.Dir)
+	gitIn := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	gitIn("", "init", "-q", "--bare", old)
+	blob := gitIn("taken before the stores were shared\n", "--git-dir="+old, "hash-object", "-w", "--stdin")
+	store, index, err := r.openStore(ctx, wt.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeIndex(index)
+	gitIn("", "--git-dir="+store, "cat-file", "-e", blob)
+	// Opened again, the old store is named once.
+	if _, index, err = r.openStore(ctx, wt.Dir); err != nil {
+		t.Fatal(err)
+	}
+	removeIndex(index)
+	if b, _ := os.ReadFile(filepath.Join(store, "objects", "info", "alternates")); strings.Count(string(b), old) != 1 {
+		t.Fatalf("alternates:\n%s", b)
+	}
+
+	// A snapshot in the shared store, then the worktree's link to its
+	// repository cut by hand: the worktree has a store of its own again,
+	// and still reads what it took into the shared one.
+	if err := os.WriteFile(filepath.Join(wt.Dir, "notes.txt"), []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.snapshot(ctx, wt.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(ws, ".git", "worktrees", wt.Name)); err != nil {
+		t.Fatal(err)
+	}
+	cut, index, err := r.openStore(ctx, wt.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeIndex(index)
+	if cut == store {
+		t.Fatal("the store is the repository's with the link cut")
+	}
+	gitIn("", "--git-dir="+cut, "cat-file", "-e", tree)
+	if _, err := r.snapshot(ctx, wt.Dir); err != nil {
+		t.Fatalf("a snapshot with the link cut: %v", err)
+	}
+	// Each store the worktree used is named directly, however many it has
+	// had: git follows no more than 5 steps from one store to another.
+	b, err := os.ReadFile(r.folderStore(wt.Dir) + ".store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used := strings.Fields(string(b)); len(used) != 2 || used[0] != store || used[1] != cut {
+		t.Fatalf("the stores used: %q", used)
+	}
+}
+
+// A main checkout named through a link has the store its worktrees name,
+// links resolved, and still reads what it took before under the link's
+// name.
+func TestSnapshotStoreThroughALink(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Require(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	ws := gitRepo(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(ws, link); err != nil {
+		t.Fatal(err)
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	wt, err := r.MakeWorktree(ctx, ws, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.snapshotStore(link) != r.snapshotStore(wt.Dir) {
+		t.Fatalf("through a link %s, its worktree %s", r.snapshotStore(link), r.snapshotStore(wt.Dir))
+	}
+	c1, _ := r.checkCache(link)
+	c2, _ := r.checkCache(wt.Dir)
+	if c1 != c2 {
+		t.Fatalf("check caches: through a link %s, its worktree %s", c1, c2)
 	}
 }

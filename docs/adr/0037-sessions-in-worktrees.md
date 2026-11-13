@@ -66,3 +66,17 @@ Where this shows in the implementation: `internal/runtime/worktree.go` (making, 
 - **Copies or clones instead of worktrees.** Independent, but slow for big repositories, and branches made in a clone are not in the main repository until pushed.
 - **Sessions side by side in one folder, with locks on files.** No setup, but builds and tests still see each other's changes, and the changes mix in one diff.
 - **Making the worktree as a step of the session workflow.** It would be recorded and resumed, but the session's folder must be known before the session starts (its tools, settings and trust depend on it), and a worktree is easy to take up again by its path.
+
+## Addendum (2026-11-13; approved by the user)
+
+The worktrees of a repository share what KairoCode keeps per folder, rather than each having its own copy. Each item a line sends (ADR 0043) gets a worktree of its own, so a copy each would grow with every item.
+
+- **Snapshots** (undo and redo) go into the store of the repository's main checkout, not one store per worktree. The key is the main checkout's path with links resolved (`storeKey`), the same whether a folder names the checkout through a link or a worktree names it. A main checkout opened by its real path keeps the store it always had. One opened through a link (macOS's `/var` for `/private/var`, a linked home) gets the store of the real path, and still reads its old one (below).
+- **No recorded tree is lost when a folder's store changes.**
+  - Which store a worktree has depends on git's files outside it, the link to its repository. A person can move or remove them: moving the main checkout, removing `.git/worktrees/<name>`.
+  - So each folder notes the stores it has used (`<its own store>.store`, a line each). Its current store names in its `objects/info/alternates` each of them, and the store the folder had of its own before the sharing. Each is named directly, not through another store, because git follows no more than 5 such steps.
+  - The trees its turns recorded can then still be undone to, whichever store it has now.
+- **A check's build cache** (ADR 0042) is the repository's, keyed the same way. What that means for a gate is in ADR 0042's "Checked by hand".
+- `TestWorktreesShareStores` (shared; a store of its own from before still read; the link cut by hand, the trees still read), `TestSnapshotStoreThroughALink`.
+
+Measured at the time: one repository's snapshot store was 99MB, and one folder's check cache 85MB after two runs. How long snapshots, records and messages are kept is left to an ADR of its own.
