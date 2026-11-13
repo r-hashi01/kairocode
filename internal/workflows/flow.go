@@ -110,6 +110,10 @@ type flowRun struct {
 	policy *Agent
 	ext    map[string]ExtRef
 	phase  string
+	// checks: the checks declared, loaded at the first check(); gates,
+	// how many check() made (ADR 0042).
+	checks *Checks
+	gates  int
 
 	maxAgents int
 	maxTokens int64
@@ -272,6 +276,7 @@ func (r *flowRun) builtins() starlark.StringDict {
 		"ask":      starlark.NewBuiltin("ask", r.ask),
 		"decide":   starlark.NewBuiltin("decide", r.decide),
 		"phase":    starlark.NewBuiltin("phase", r.setPhase),
+		"check":    starlark.NewBuiltin("check", r.check),
 	}
 }
 
@@ -408,18 +413,29 @@ func (r *flowRun) decide(thread *starlark.Thread, b *starlark.Builtin, args star
 type agentSpec struct {
 	agent, prompt, model string
 	at                   string // where in the script
+	// checks gate the agent's work (ADR 0042), rounds times at most.
+	checks []string
+	rounds int
 }
 
-// content is what the agent is to do, for flow.step.
+// content is what the agent is to do, for flow.step. Checks are in it
+// only when named, so a call without them is recorded as before.
 func (s agentSpec) content() map[string]string {
-	return map[string]string{"agent": s.agent, "prompt": s.prompt, "model": s.model, "at": s.at}
+	c := map[string]string{"agent": s.agent, "prompt": s.prompt, "model": s.model, "at": s.at}
+	if len(s.checks) > 0 {
+		c["checks"] = strings.Join(s.checks, ",")
+		c["rounds"] = fmt.Sprint(s.rounds)
+	}
+	return c
 }
 
-// agentDone is how one agent ended.
+// agentDone is how one agent ended, and its gate's verdicts.
 type agentDone struct {
 	ok           bool
 	output, fail string
 	usage        msg.Usage
+	checks       []CheckVerdict
+	gated        bool // the flow named checks for it
 }
 
 // countAgents takes n agents from the limit.
@@ -453,7 +469,7 @@ func (r *flowRun) runAgent(ctx *kairo.Context, s agentSpec) (agentDone, error) {
 	}
 	out, err := kairo.Child[TurnOutput](ctx, Turn, TurnInput{
 		Session: r.in.Session, N: r.in.N, Dir: r.in.Dir, Agent: s.agent, Engine: r.in.Engine, Model: model, Message: prompt, Sub: true, At: s.at,
-		Dry: r.in.Dry,
+		Dry: r.in.Dry, Checks: s.checks, Rounds: s.rounds,
 	})
 	var failed *kairo.WorkflowError
 	if errors.As(err, &failed) {
@@ -466,18 +482,32 @@ func (r *flowRun) runAgent(ctx *kairo.Context, s agentSpec) (agentDone, error) {
 	if err != nil {
 		return agentDone{}, err
 	}
-	return agentDone{ok: out.Stopped == "", output: text, fail: out.Stopped, usage: out.Usage}, nil
+	return agentDone{ok: out.Stopped == "", output: text, fail: out.Stopped, usage: out.Usage, checks: out.Checks, gated: len(s.checks) > 0}, nil
 }
 
-// agent(agent, prompt, model=None, schema=None): one agent; its reply.
-// With schema ({"name": "string" | "number" | "bool" | "list" | "dict"}),
-// its value is the reply as a dict of those fields, typed (decided by the
-// model as decide does, from the reply).
+// agent(agent, prompt, model=None, schema=None, checks=None, rounds=0):
+// one agent; its reply. With schema ({"name": "string" | "number" | "bool"
+// | "list" | "dict"}), its value is the reply as a dict of those fields,
+// typed (decided by the model as decide does, from the reply). With checks
+// (names declared in kairocode.json, ADR 0042), its work is done only when
+// they pass: it is sent back up to rounds times, then .ok is False and
+// .error "checks"; .checks has each check's verdict.
 func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var s agentSpec
 	var schema *starlark.Dict
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "agent", &s.agent, "prompt", &s.prompt, "model?", &s.model, "schema?", &schema); err != nil {
+	var checks *starlark.List
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "agent", &s.agent, "prompt", &s.prompt, "model?", &s.model, "schema?", &schema,
+		"checks?", &checks, "rounds?", &s.rounds); err != nil {
 		return nil, err
+	}
+	if checks != nil {
+		var err error
+		if s.checks, err = stringList(b.Name(), "checks", checks); err != nil {
+			return nil, err
+		}
+	}
+	if s.rounds < 0 {
+		return nil, fmt.Errorf("agent: rounds is %d, not 0 or more", s.rounds)
 	}
 	var fields map[string]string
 	if schema != nil {
@@ -512,7 +542,7 @@ func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starl
 		return nil, err
 	}
 	if fields == nil || !d.ok {
-		return outcome(d.ok, d.output, d.fail), nil
+		return agentValue(d, d.ok, d.fail, starlark.None), nil
 	}
 	// Typed: the reply's fields, decided from it (design 6.3: never read
 	// out of prose by KairoCode itself).
@@ -530,13 +560,35 @@ func (r *flowRun) agent(thread *starlark.Thread, b *starlark.Builtin, args starl
 		return nil, err
 	}
 	if !out.OK {
-		return valued(false, d.output, out.Error, starlark.None), nil
+		return agentValue(d, false, out.Error, starlark.None), nil
 	}
 	var v any
 	if err := json.Unmarshal(out.Value, &v); err != nil {
-		return valued(false, d.output, err.Error(), starlark.None), nil
+		return agentValue(d, false, err.Error(), starlark.None), nil
 	}
-	return valued(true, d.output, "", fromGo(v)), nil
+	return agentValue(d, true, "", fromGo(v)), nil
+}
+
+// agentValue is an agent's outcome, with its gate's verdicts if the flow
+// named checks for it (.checks: a dict for each, with name, passed, exit
+// and note). An agent with none has the outcome it always had.
+func agentValue(d agentDone, ok bool, errText string, value starlark.Value) starlark.Value {
+	if !d.gated {
+		return valued(ok, d.output, errText, value)
+	}
+	checks := make([]starlark.Value, len(d.checks))
+	for i, v := range d.checks {
+		c := starlark.NewDict(4)
+		_ = c.SetKey(starlark.String("name"), starlark.String(v.Name))
+		_ = c.SetKey(starlark.String("passed"), starlark.Bool(v.Passed))
+		_ = c.SetKey(starlark.String("exit"), starlark.MakeInt(v.Exit))
+		_ = c.SetKey(starlark.String("note"), starlark.String(v.Note))
+		checks[i] = c
+	}
+	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
+		"ok": starlark.Bool(ok), "output": starlark.String(d.output), "error": starlark.String(errText), "value": value,
+		"checks": starlark.NewList(checks),
+	})
 }
 
 // fromGo is a JSON value as Starlark has it. A whole number is an int
@@ -607,6 +659,23 @@ func (r *flowRun) parallel(thread *starlark.Thread, b *starlark.Builtin, args st
 		if specs[i].model, err = get("model", false); err != nil {
 			return nil, err
 		}
+		if v, found, _ := d.Get(starlark.String("checks")); found {
+			if specs[i].checks, err = stringList(b.Name(), fmt.Sprintf("item %d: checks", i), v); err != nil {
+				return nil, err
+			}
+		}
+		if v, found, _ := d.Get(starlark.String("rounds")); found {
+			bad := fmt.Errorf("parallel: item %d: rounds must be a number, 0 or more", i)
+			n, ok := v.(starlark.Int)
+			if !ok {
+				return nil, bad
+			}
+			r, exact := n.Int64()
+			if !exact || r < 0 {
+				return nil, bad
+			}
+			specs[i].rounds = int(r)
+		}
 	}
 	if err := r.countAgents(len(specs)); err != nil {
 		return nil, err
@@ -638,7 +707,7 @@ func (r *flowRun) parallel(thread *starlark.Thread, b *starlark.Builtin, args st
 	var used msg.Usage
 	for i, d := range done {
 		used.Add(d.usage)
-		out[i] = outcome(d.ok, d.output, d.fail)
+		out[i] = agentValue(d, d.ok, d.fail, starlark.None)
 	}
 	if err := r.spend(used); err != nil {
 		return nil, err
@@ -726,6 +795,61 @@ func (r *flowRun) tool(thread *starlark.Thread, b *starlark.Builtin, args starla
 		return outcome(false, text, firstLine(text)), nil
 	}
 	return outcome(true, text, ""), nil
+}
+
+// check(name): runs a check declared in kairocode.json (ADR 0042) as a
+// step of its own. .ok says whether it passed; .output is the end of its
+// output; .error says why not. In a try (ADR 0017) it is not run, and
+// passes.
+func (r *flowRun) check(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &name); err != nil {
+		return nil, err
+	}
+	at := r.at(thread)
+	if err := r.step("check", map[string]string{"name": name, "at": at}); err != nil {
+		return nil, err
+	}
+	if r.in.Dry {
+		return outcome(true, "a try: the check was not run", ""), nil
+	}
+	if r.checks == nil {
+		a, err := kairo.Call[Agent](r.ctx, ActAgentLoad, AgentLoadInput{Dir: r.in.Dir, Agent: r.in.Agent, Engine: r.in.Engine, Model: r.in.Model})
+		if err != nil {
+			return nil, r.fail(err)
+		}
+		r.checks = &Checks{}
+		if a.Checks != nil {
+			r.checks = a.Checks
+		}
+	}
+	r.gates++
+	// No agent's work is in this step: what a check protects is guarded
+	// for the agents it gates (agent(checks=)).
+	g, err := newGate(r.ctx, r.in.Dir, fmt.Sprintf("flow%d", r.gates), r.checks, []string{name}, 0, false)
+	if err != nil {
+		return outcome(false, "", err.Error()), nil
+	}
+	g.at = at
+	res, err := g.run(r.ctx)
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	v := res.verdicts[0]
+	text := ""
+	if v.Output != "" {
+		if text, err = kairo.Call[string](r.ctx, ActFlowText, v.Output); err != nil {
+			return nil, r.fail(err)
+		}
+	}
+	if v.Passed {
+		return outcome(true, text, ""), nil
+	}
+	why := v.Note
+	if why == "" {
+		why = fmt.Sprintf("exit %d", v.Exit)
+	}
+	return outcome(false, text, why), nil
 }
 
 // phase(name): names the part of the flow the calls after it belong to.

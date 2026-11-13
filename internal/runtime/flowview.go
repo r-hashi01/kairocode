@@ -124,6 +124,16 @@ func (r *Runtime) FlowView(ctx context.Context, flow kairo.RunInfo, chart *flowc
 			key, primary = a.In.At, true
 			byCall[a.In.ID] = key
 			continue // its wait tells how it is
+		case k.Plan == "kairo.call/"+workflows.ActCheckRun: // a flow's check()
+			var c struct {
+				In workflows.CheckRunInput `json:"in"`
+			}
+			_ = json.Unmarshal(k.Input, &c)
+			key, primary = c.In.At, true
+			var out workflows.CheckRunOutput
+			if json.Unmarshal(k.Output, &out) == nil && k.Status == "completed" && out.Exit != 0 {
+				failed = true
+			}
 		case k.Plan == "kairo.call/"+workflows.ActFlowDecide:
 			var d struct {
 				In workflows.DecideInput `json:"in"`

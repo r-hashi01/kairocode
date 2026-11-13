@@ -22,6 +22,8 @@ func Label(n Node) string {
 		return "ask"
 	case Decide:
 		return join("decide", n.Title)
+	case Gate:
+		return join("check", n.Title)
 	case Parallel:
 		return join("parallel", n.Cond)
 	case If:

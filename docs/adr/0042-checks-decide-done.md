@@ -75,3 +75,41 @@ kairo's workflows are what make a gate worth having here:
 - **Gates only in flows, none for a plain turn.** Most work is done in plain turns, and will stay so for small work. The same gate applies there.
 - **Let the model run the tests and say they passed.** That is what a turn does today. The point is that the decision is not the model's.
 - **Unlimited rounds until the checks pass.** A gate that cannot fail can loop on a check the agent cannot fix. Rounds and the turn's limits bound it, and the result says it stopped.
+
+## Implementation (2026-11-13, M13)
+
+Where it differs from the decision above, or settles what it left open:
+
+- **The flow's outcome says `.error == "checks"`**, not `.fail`: a flow's outcomes already carry `.ok`, `.output`, `.error` and `.value`. An agent's outcome now also has `.checks`, a dict for each check (`name`, `passed`, `exit`, `note`).
+- **The versions were raised as decided** (decision 5):
+  - The turn goes to version 5 and the flow to version 4.
+  - The old versions drain with the same functions. Their runs have no gate: the gate's calls are made only when a recorded value asks for them (`Agent.Checks`, `TurnInput.Checks`, or a recorded script calling `check()`), so a run from before makes the calls it always made.
+  - The new versions keep a process from before the gates from driving a gated run (a team's shared store, a rolling update, a downgrade). That process would skip the gate and take the work as done.
+  - `Policy.Protect`, `TurnOutput.Checks` and `TurnOutput.CheckRounds` are left out of the JSON when empty, so the inputs of turns without a gate keep their ids.
+- **An agent's outcome changes only when the flow named checks for it**: it gets `.checks`. An ungated agent's outcome has the four fields it always had, so a script that prints a whole outcome makes the same prompt as before.
+- **A check the user said not to run** is not run. The work is not done: it stops with `checks`, and is not sent back, since no round could pass it.
+- **A check's name that is not declared fails the turn** (or makes `check()` return `.ok == False`), naming it. The work could not be checked as it asked.
+- **In a try of a flow** (ADR 0017), gates do not run: the try's agents write nothing to check. `check()` returns `.ok == True` with "a try: the check was not run".
+- **A script's own `def check()`** (from before `check` was a primitive) shadows the primitive. Starlark already does this, and the chart does the same.
+- **The reply of work that did not pass ends with `[Not done: the checks that decide it did not pass: …]`**, so both the person and the next turn's model know.
+- **Each check run is shown as a call of the tool `check`** (`tool.start`, `tool.end`, `api.CheckTool`), so every client shows it with no change. `kairocode log` lists each run as `check <name>`, with how it ended.
+- **A check runs in a process group of its own**, killed whole at its timeout or when the turn stops. Otherwise a test binary that `go test` started would outlive it, holding its output open.
+  - Cut off, `check.run` returns `kairo.Unknown`, which `IdempotentRetry` runs again without asking anyone.
+  - On macOS, a check left running by a killed process is not stopped: Linux has the kernel stop it, as it does for claude.
+- **`check()` as a step protects nothing**: no agent's work is in it. `protect` guards the work of the agents a check gates.
+  - A check that itself writes the files it protects (golden files, say) fails its own gate. Protect only what the check reads.
+- **`protect` globs match as the permission rules do**: `*` crosses `/`, so `*_test.go` is every test file. `edit` and `write` refuse a protected file. The hash of the protected files is taken when the gated work starts and again at each gate (`check.protect`; `.git` is not looked in).
+- **`flow stats` shows each gate's yield**: passed at once, passed after rounds, stopped. A gate is identified by the agent or `check`, where it is in the script, and its checks.
+- **Tests**, for the plain turn:
+  - `TestChecksTurn`: sent back, then passing; the project's check is asked about once.
+  - `TestChecksRoundsSpent`: stops with `checks`; the reply says so; the log shows each run.
+  - `TestChecksNoneNamed`, `TestChecksDeclined`, `TestChecksNotDeclared`.
+  - `TestChecksProtect`: a write is refused, and a `bash` write fails the gate.
+  - `TestChecksOnClaudeCode`: a CLI engine is sent back too.
+- **Tests**, for flows and reading the settings:
+  - `TestFlowChecks`: `agent(checks=)` passing after a round and stopped, `check()` passing and failing, and the gates' yield in `flow stats`.
+  - `TestReadChecks`, `TestProtects`.
+- **The crash test**, `TestCrashDuringCheck`. It is killed while a check runs in the gate's second round. On resume:
+  - the check runs again, and no one is asked whether it ran;
+  - the model is not called again (the fake provider's call log);
+  - the round reached is kept: the work passes with one round spent, not sent back again.

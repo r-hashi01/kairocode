@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ const (
 	EventQuestionResolved  = api.EventQuestionResolved
 	EventFlow              = api.EventFlow
 	EventWaiting           = api.EventWaiting
+	CheckTool              = api.CheckTool
 )
 
 type Event = api.Event
@@ -602,6 +604,8 @@ func (e *events) observed(session string, o kairo.Observation) {
 		}
 		e.flows[session][o.RunID] = ""
 		e.mu.Unlock()
+	case o.Action == workflows.ActCheckRun:
+		e.checkRun(session, o.RunID, started)
 	case !started && o.Action == workflows.ActModel:
 		e.modelReply(session, o.RunID)
 	case !started && (strings.HasPrefix(o.Action, workflows.ActToolPrefix) || o.Action == workflows.ActFileApply) &&
@@ -832,6 +836,37 @@ func (e *events) toolEnd(session, run, action string) {
 			e.emit(session, Event{Type: EventToolEnd, Turn: turnOf(run), Call: p.ToolUseID, Tool: tool, Output: p.Text, IsError: p.IsError})
 		}
 	}
+}
+
+// checkRun: a check of a gate (ADR 0042) starts or ends, told as a call
+// of the tool "check", so every client shows it as it shows a call.
+func (e *events) checkRun(session, run string, started bool) {
+	info, err := e.r.K.Get(e.ctx, run)
+	if err != nil {
+		return
+	}
+	var in workflows.CheckRunInput
+	if json.Unmarshal(input(info), &in) != nil {
+		return
+	}
+	if started {
+		args, _ := json.Marshal(map[string]string{"name": in.Check.Name, "command": in.Check.Command})
+		e.emit(session, Event{Type: EventToolStart, Turn: turnOf(run), Call: run, Tool: CheckTool, Input: args})
+		return
+	}
+	ev := Event{Type: EventToolEnd, Turn: turnOf(run), Call: run, Tool: CheckTool}
+	var out workflows.CheckRunOutput
+	switch {
+	case info.Status != "completed" || json.Unmarshal(info.Output, &out) != nil:
+		ev.IsError, ev.Output = true, in.Check.Name+": "+info.Status
+	case out.Exit == 0:
+		ev.Output = in.Check.Name + ": passed"
+	case out.Exit < 0:
+		ev.IsError, ev.Output = true, in.Check.Name+": ran too long\n"+out.Tail
+	default:
+		ev.IsError, ev.Output = true, fmt.Sprintf("%s: exit %d\n%s", in.Check.Name, out.Exit, out.Tail)
+	}
+	e.emit(session, ev)
 }
 
 // mcpCall: a tool call Claude Code made (ADR 0007) starts or ends.

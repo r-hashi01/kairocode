@@ -152,13 +152,19 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 		in.Flow = &FlowCall{Name: agent.Workflow, Args: args}
 		return runFlowTurn(ctx, in)
 	}
+	// The checks the work must pass before it is taken as done (ADR 0042).
+	// With none named, nothing is called.
+	g, err := newGate(ctx, in.Dir, "turn", agent.Checks, gateNames(in, agent), in.Rounds, true)
+	if err != nil {
+		return TurnOutput{}, err
+	}
 	if CLIEngine(agent.Engine) {
 		if why := agent.Limits.reached(msg.Usage{}); why != "" {
 			// A CLI's turn is not stopped once under way: a limit reached
 			// before it stops it from starting (ADR 0039).
 			return limitedTurn(ctx, in, why)
 		}
-		return runClaudeTurn(ctx, in, agent, ext)
+		return runClaudeTurn(ctx, in, agent, ext, g)
 	}
 	out := TurnOutput{}
 	turn := []string{in.Message}
@@ -174,7 +180,7 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	for {
 		// The model loop, then the turn.end hooks: one that does not pass
 		// sends the model back to it (at most maxHookRounds times).
-		if err := modelLoop(ctx, &in, agent, ext, &out, &turn, &cs); err != nil {
+		if err := modelLoop(ctx, &in, agent, ext, &out, &turn, &cs, g); err != nil {
 			return TurnOutput{}, err
 		}
 		if out.Stopped == StopContext && out.Reply == "" {
@@ -182,6 +188,41 @@ func RunTurnV3(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 			if out.Reply, err = kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "assistant",
 				Text: "The conversation is longer than the model's context, and could not be made shorter: start a new session, or /compact."}); err != nil {
 				return TurnOutput{}, err
+			}
+		}
+		if out.Stopped == "" && g != nil {
+			// The gate (ADR 0042): checks that do not pass send the model
+			// back, until its rounds are spent; then the turn stops. Asking
+			// about a project's check waits for a person: not the turn's
+			// time.
+			if g.modes == nil {
+				if err := cs.clk.pause(ctx); err != nil {
+					return TurnOutput{}, err
+				}
+				if err := g.decide(ctx); err != nil {
+					return TurnOutput{}, err
+				}
+				if err := cs.clk.resume(ctx); err != nil {
+					return TurnOutput{}, err
+				}
+			}
+			note, err := passGate(ctx, g, &out)
+			if err != nil {
+				return TurnOutput{}, err
+			}
+			if out.Stopped == StopChecks {
+				if err := notDone(ctx, &out); err != nil {
+					return TurnOutput{}, err
+				}
+				turn[len(turn)-1] = out.Reply // the model's last reply, so told
+			}
+			if note != "" {
+				h, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: "user", Text: note})
+				if err != nil {
+					return TurnOutput{}, err
+				}
+				turn = append(turn, h)
+				continue
 			}
 		}
 		if out.Stopped != "" || in.Sub || hookRounds == maxHookRounds {
@@ -226,7 +267,7 @@ type compacting struct {
 // model asks for no tools, or the turn stops. Near the model's context, the
 // conversation is compacted first (ADR 0020): in.History then starts from
 // the summary, and the turn so far is in it.
-func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]ExtRef, out *TurnOutput, turnp *[]string, cs *compacting) error {
+func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]ExtRef, out *TurnOutput, turnp *[]string, cs *compacting, g *gate) error {
 	turn := *turnp
 	defer func() { *turnp = turn }()
 	refused := 0 // calls auto mode's judge refused (ADR 0016)
@@ -333,7 +374,7 @@ func modelLoop(ctx *kairo.Context, in *TurnInput, agent Agent, ext map[string]Ex
 						continue
 					}
 				}
-				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback}
+				policy := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback, Protect: g.protected()}
 				if in.Mode == ModeAuto && refused < MaxAutoRefusals {
 					policy.Auto, policy.Request = true, in.Message
 					if e := apiEngine(agent.Engine); e != "" {

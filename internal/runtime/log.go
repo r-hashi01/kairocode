@@ -249,6 +249,24 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo, w logWidth) LogEn
 				e.Status += " (error)"
 			}
 		}
+	case call == workflows.ActCheckRun: // a gate's check (ADR 0042)
+		var in workflows.CheckRunInput
+		var out workflows.CheckRunOutput
+		_ = json.Unmarshal(input(k), &in)
+		e.Kind, e.Name = "check", in.Check.Name
+		e.Text = clip(in.Check.Command, w.args)
+		if runOutput(k.Output, &out) == nil {
+			switch {
+			case out.Exit == 0:
+				e.Text += " → passed"
+			case out.Exit < 0:
+				e.Text += " → ran too long"
+				e.Status += " (error)"
+			default:
+				e.Text += fmt.Sprintf(" → exit %d: %s", out.Exit, clip(strings.TrimSpace(out.Tail), w.text))
+				e.Status += " (error)"
+			}
+		}
 	default:
 		e.Name = call
 	}

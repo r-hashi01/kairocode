@@ -17,7 +17,12 @@ const (
 	Session        = "session"
 	SessionVersion = "7"
 	Turn           = "turn"
-	TurnVersion    = "4"
+	TurnVersion    = "5"
+	// TurnVersion4 is the version before a turn could be gated by checks
+	// (ADR 0042). Its runs finish with the same function: they have no
+	// gate. The version keeps a process without gates from driving a turn
+	// that has one.
+	TurnVersion4 = "4"
 	// SessionVersion6 is the version before a session read back how each
 	// turn's run was recorded (kairo#3). Its runs finish with
 	// RunSessionV6.
@@ -45,7 +50,10 @@ const (
 	// Flow runs a flow (ADR 0003): a Starlark script of
 	// .kairocode/workflows, recorded when it starts.
 	Flow        = "flow"
-	FlowVersion = "3"
+	FlowVersion = "4"
+	// FlowVersion3 is the version before check() and agent(checks=) (ADR
+	// 0042). Its runs finish with RunFlow: their scripts call neither.
+	FlowVersion3 = "3"
 	// FlowVersion2 is the version before a flow recorded each call's place
 	// and content (flow.step) to find a run that goes another way. Its runs
 	// finish with RunFlowV2.
@@ -98,6 +106,14 @@ const (
 	ActHookDecide  = "hook.decide"
 	ActHookCommand = "hook.command"
 	ActHookNote    = "hook.note"
+	// A gate's checks (ADR 0042): check.run runs one, and runs again where
+	// it was cut off (it observes); check.protect hashes the files checks
+	// protect; check.modes and check.decide are how a project's checks may
+	// run, as the user said.
+	ActCheckRun     = "check.run"
+	ActCheckProtect = "check.protect"
+	ActCheckModes   = "check.modes"
+	ActCheckDecide  = "check.decide"
 	// ActTaskArgs reads a task call's arguments (the subagent and its
 	// prompt); ActTaskResult answers the call with the subagent's reply.
 	// Its name is a tool's, so its end is told as the call's.
@@ -348,6 +364,11 @@ type TurnInput struct {
 	// Dry: an agent of a try of a flow (ADR 0017): its tools that do more
 	// than read are not called.
 	Dry bool `json:"dry,omitempty"`
+	// Checks: for a flow's agent, the checks its work must pass, as the
+	// flow named them (agent(checks=), ADR 0042); Rounds, how often they
+	// may send it back (0: the settings').
+	Checks []string `json:"checks,omitempty"`
+	Rounds int      `json:"rounds,omitempty"`
 }
 
 // TaskArgs are a task call's: the subagent, and what it is to do.
@@ -450,6 +471,11 @@ type TurnOutput struct {
 	Restored bool   `json:"restored,omitempty"`
 	Skipped  bool   `json:"skipped,omitempty"`
 	Prior    string `json:"prior,omitempty"`
+	// Checks are the verdicts of the turn's gate as it last ran (ADR
+	// 0042); none: the turn had no gate, and was not checked.
+	Checks []CheckVerdict `json:"checks,omitempty"`
+	// CheckRounds: how often the gate sent the work back.
+	CheckRounds int `json:"check_rounds,omitempty"`
 }
 
 type AgentLoadInput struct {
@@ -503,6 +529,9 @@ type Agent struct {
 	// Limits are the turn's limits and what had been spent against them
 	// (ADR 0039); nil: none are checked (a turn from before them, too).
 	Limits *Limits `json:"limits,omitempty"`
+	// Checks are the checks declared as the turn started (ADR 0042); nil:
+	// none, or a turn from before them.
+	Checks *Checks `json:"checks,omitempty"`
 }
 
 // Kinds of a decision (decide()).

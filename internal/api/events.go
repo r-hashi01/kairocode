@@ -57,6 +57,10 @@ const (
 	EventWaiting = "waiting"
 )
 
+// CheckTool is the tool a check of a gate (ADR 0042) is told as, in
+// tool.start and tool.end: its input names the check and its command.
+const CheckTool = "check"
+
 // Event is something that happened in a session, told to those who watch
 // it (issue #1). Events are not records: they are made from the records
 // and the runtime's observations as things happen, and carry nothing that

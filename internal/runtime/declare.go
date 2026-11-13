@@ -53,6 +53,9 @@ func (r *Runtime) declare() {
 	default:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
+		// Turn version 4 finishes with the same function: no gate (ADR
+		// 0042).
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion4), kairo.Draining())
 		// Version 6 finishes as it started: a turn is taken as its result
 		// said (kairo#3).
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(workflows.SessionVersion6), kairo.Draining())
@@ -78,6 +81,9 @@ func (r *Runtime) declare() {
 			run = r.cfg.flowFunc
 		}
 		kairo.Workflow(r.K, workflows.Flow, run, kairo.WorkflowVersion(workflows.FlowVersion))
+		// Version 3 finishes with the same function: its script has no
+		// gate (ADR 0042).
+		kairo.Workflow(r.K, workflows.Flow, run, kairo.WorkflowVersion(workflows.FlowVersion3), kairo.Draining())
 		// Versions 2 and 1 finish as they started: no flow.step, and in 1
 		// no At either.
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV2, kairo.WorkflowVersion(workflows.FlowVersion2), kairo.Draining())
@@ -102,6 +108,12 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActHookDecide, kairo.Unprotected, r.hookDecideAction) // a record, written once
 	kairo.Action(r.K, workflows.ActHookCommand, kairo.Real, r.hookCommandAction)      // a command: not run again unasked
 	kairo.Action(r.K, workflows.ActHookNote, kairo.Unprotected, r.hookNoteAction)
+	// A gate's checks (ADR 0042): a check observes, so one cut off runs
+	// again (idempotent, invariant 3) rather than ask a person.
+	kairo.Action(r.K, workflows.ActCheckRun, kairo.Real, r.checkRunAction, kairo.IdempotentRetry(), kairo.Timeout(maxCheckTimeout+time.Minute))
+	kairo.Action(r.K, workflows.ActCheckProtect, kairo.Unprotected, r.checkProtectAction)
+	kairo.Action(r.K, workflows.ActCheckModes, kairo.Unprotected, r.checkModesAction)
+	kairo.Action(r.K, workflows.ActCheckDecide, kairo.Unprotected, r.checkDecideAction) // a record, written once
 	kairo.Action(r.K, workflows.ActTaskArgs, kairo.Unprotected, r.taskArgs)
 	kairo.Action(r.K, workflows.ActAskUserArgs, kairo.Unprotected, r.askUserArgs)
 	kairo.Action(r.K, workflows.ActAskUserResult, kairo.Unprotected,

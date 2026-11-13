@@ -33,7 +33,7 @@ type SessionLog struct {
 type LogEntry struct {
 	At     time.Time  `json:"at"`
 	End    time.Time  `json:"end,omitzero"`
-	Kind   string     `json:"kind"` // turn, model, tool, permission, wait, workflow, step
+	Kind   string     `json:"kind"` // turn, model, tool, permission, check, wait, workflow, step
 	Name   string     `json:"name"`
 	Status string     `json:"status"`
 	Text   string     `json:"text,omitempty"`

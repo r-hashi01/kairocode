@@ -22,6 +22,9 @@ type Policy struct {
 	Dry bool `json:"dry,omitempty"`
 	// Loopback: the agent's, as recorded (Agent.Loopback).
 	Loopback string `json:"loopback,omitempty"`
+	// Protect: globs of paths the turn's gate protects (ADR 0042): its
+	// writing tools may not change them.
+	Protect []string `json:"protect,omitempty"`
 }
 
 type PermissionInput struct {

@@ -221,10 +221,11 @@ Status: done (2026-11-11; chosen by the user). Six faults were found and fixed.
 
 Status: in progress (2026-11-13; ADR 0042 accepted; chosen by the user). The first step toward KairoCode as a software factory you talk to (`docs/factory.md`): who decides that work is done moves from the model to gates, on a flow's agents and on a plain turn, with the verdict in the record. Lines, whose stations will carry the same gates, come next. Results other programs read (ADR 0041, proposed) come after. Updating to kairo's main (the fixes of kairo#2 to #7, with their workarounds removed) waits until the user's work on kairo settles.
 
-- [ ] A flow gates its agents: `agent(..., checks=)` passes work on only when the checks pass, sends the agent back up to `rounds`, and else returns `.fail == "checks"` with the verdicts for the flow to decide; `check()` runs a check as a step; `flow stats` shows each gate's yield (ADR 0042).
-- [ ] A plain turn with `checks.turn` ends done only when they pass, else `Stopped: "checks"`. No checks named: as today.
-- [ ] Killed while a check runs, the turn resumes by running the check again, not the model, and the rounds spent are kept (`TestCrashDuringCheck`).
-- [ ] Paths a check protects are not changed by the agent's writing tools, and a change to them by any means fails the gate.
+- [x] A flow gates its agents: `agent(..., checks=)` passes work on only when the checks pass, sends the agent back up to `rounds`, and else returns `.error == "checks"` with the verdicts for the flow to decide; `check()` runs a check as a step; `flow stats` shows each gate's yield (ADR 0042). (2026-11-13: `TestFlowChecks`.)
+- [x] A plain turn with `checks.turn` ends done only when they pass, else `Stopped: "checks"`. No checks named: as today. (2026-11-13: `TestChecksTurn`, `TestChecksRoundsSpent`, `TestChecksNoneNamed`, `TestChecksDeclined`, `TestChecksNotDeclared`, `TestChecksOnClaudeCode`.)
+- [x] Killed while a check runs, the turn resumes by running the check again, not the model, and no one is asked whether it ran; the rounds spent are rebuilt from the record (`TestCrashDuringCheck`, 2026-11-13).
+- [x] Paths a check protects are not changed by the agent's writing tools, and a change to them by any means fails the gate. (2026-11-13: `TestChecksProtect`, `TestProtects`.)
+- [ ] Checked by hand with a real model: a plain turn gated by this repository's tests, and a flow that gates an agent.
 
 Left for after M6 to M12: a VS Code extension, Windows, GitHub and serverless (ADR 0012), sharing sessions, answering approvals from outside (rejected for now, ADR 0038), the problem of check reports cutting in after an answer and pushing the answer away (the Stop hook. Put it in M6 if it is urgent).
 

@@ -90,6 +90,9 @@ func (r *Runtime) FlowStats(ctx context.Context, dir string) ([]FlowStat, error)
 					st.Running++
 					continue
 				}
+				if err := r.gateStats(ctx, st, k); err != nil {
+					return nil, err
+				}
 				// A finished run's result is there: Await does not wait.
 				out, err := kairo.Await[workflows.FlowOutput](ctx, r.K, k.RunID)
 				switch {
@@ -116,6 +119,60 @@ func (r *Runtime) FlowStats(ctx context.Context, dir string) ([]FlowStat, error)
 		out = append(out, *stats[name])
 	}
 	return out, nil
+}
+
+// gateStats counts how the work of a finished flow run's gates went (ADR
+// 0042): its gated agents' turns, and its check() calls.
+func (r *Runtime) gateStats(ctx context.Context, st *FlowStat, flow kairo.RunInfo) error {
+	kids, err := r.K.Children(ctx, flow.RunID)
+	if err != nil {
+		return err
+	}
+	gate := func(kind, at, checks string) *api.GateStat {
+		i := slices.IndexFunc(st.Gates, func(g api.GateStat) bool { return g.Kind == kind && g.At == at && g.Checks == checks })
+		if i < 0 {
+			st.Gates = append(st.Gates, api.GateStat{Kind: kind, At: at, Checks: checks})
+			i = len(st.Gates) - 1
+		}
+		return &st.Gates[i]
+	}
+	for _, k := range kids {
+		switch {
+		case k.Workflow == workflows.Turn && k.Status == "completed":
+			var in workflows.TurnInput
+			if json.Unmarshal(input(k), &in) != nil || len(in.Checks) == 0 {
+				continue
+			}
+			out, err := kairo.Await[workflows.TurnOutput](ctx, r.K, k.RunID) // finished: it does not wait
+			if err != nil || len(out.Checks) == 0 {
+				continue
+			}
+			g := gate("agent "+in.Agent, in.At, strings.Join(in.Checks, ", "))
+			switch {
+			case out.Stopped == workflows.StopChecks:
+				g.Stopped++
+			case out.CheckRounds == 0:
+				g.First++
+			default:
+				g.Later++
+			}
+		case k.Plan == "kairo.call/"+workflows.ActCheckRun && k.Status == "completed":
+			var c struct {
+				In workflows.CheckRunInput `json:"in"`
+			}
+			var out workflows.CheckRunOutput
+			if json.Unmarshal(k.Input, &c) != nil || c.In.At == "" || json.Unmarshal(k.Output, &out) != nil {
+				continue
+			}
+			g := gate("check", c.In.At, c.In.Check.Name)
+			if out.Exit == 0 {
+				g.First++
+			} else {
+				g.Stopped++
+			}
+		}
+	}
+	return nil
 }
 
 // FlowFrom puts how a flow ran in words: "command 2, hook 1".
