@@ -23,7 +23,7 @@ func open(t *testing.T, db string, p provider.Provider) *Runtime {
 	defer cancel()
 	// Never the real claude (invariant 9): a judge or a decision that
 	// falls back to Claude Code finds none.
-	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude"), JobRunner: jobRunner})
+	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude"), JobRunner: jobRunner, CacheDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -113,3 +113,17 @@ Where it differs from the decision above, or settles what it left open:
   - the check runs again, and no one is asked whether it ran;
   - the model is not called again (the fake provider's call log);
   - the round reached is kept: the work passes with one round spent, not sent back again.
+
+### Checked by hand (2026-11-13, M13; the changes below approved by the user)
+
+With OpenAI's `gpt-5.4-mini` (`oai:openai`), in a copy of this repository with a new package's test protected and `go test ./internal/slug/ ./internal/flowchart/` as the check:
+
+- **A plain turn** with `checks.turn`. The model wrote a first try and said it was done; the gate sent it back three times with the failing cases (punctuation, then accented letters), and the fourth check passed. With the rounds spent, the turn stops with `checks` and its reply says it is not done (seen before the fix below, where the check could not pass).
+- **A flow** gating an agent with `rounds = 1`, a second agent to rework it when `.error == "checks"`, then `check()`. The first agent was stopped by its gate, the rework passed at once, and `check()` passed. `flow stats` showed the three gates' yields, and `kairocode log` each check run with its output.
+
+Found on the way, and fixed:
+
+- **No `go test` check could pass on macOS.** The check's sandbox may not write the user's shared Go build cache (`~/Library/Caches/go-build`), as ADR 0031 decided, so `go test` failed before running any test. This departs from decision 1's "writes only in the project": each folder now has a build cache of its own, under `kairocode/checks/<hash of the folder>` in the user's cache directory (`Config.CacheDir`). The check may write it, and gets it as `GOCACHE` and `XDG_CACHE_HOME`. What a check puts there is used by later checks of that folder only, which run in the sandbox too; a command that names its own cache keeps it. (`TestChecksBuildCache`.)
+  - Not a wall: the cache is kept across a folder's checks, and the code a check runs (the agent's work, outside what `protect` names) may write it, so it could leave a result there that a later check takes from the cache. That is no weaker than ADR 0031's `.cache/go-build` in the repository, which `bash` writes too. A gate that must not trust it runs its command without the cache (`go test -count=1`).
+- **An escalation was asked where the rules deny `bash`.** The model, held by the gate, asked to run the tests outside the sandbox, and was asked about though `bash` was `deny`. Running outside the sandbox and `git_push` are asked whatever the rules allow (ADR 0005), but a rule that denies them now refuses them: a refusal is never loosened into a question (ADR 0005's addendum). (`TestEscalationDenied`.)
+- **The chart did not show an agent's gate.** A gated agent's box now says `agent build · checks test`, in a call and in a `parallel` spec, and gating an agent or taking its gate away marks its box changed in a review. (`TestGatedAgent`.)

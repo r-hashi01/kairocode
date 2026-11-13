@@ -51,6 +51,10 @@ type Config struct {
 	// URL (agents.RegistryURL for ACP's; "" reads none).
 	AgentsDir     string
 	AgentRegistry string
+	// CacheDir keeps the caches of what KairoCode runs in its sandbox for
+	// itself: a check's build cache, apart from the user's shared one
+	// (ADR 0042; default: kairocode in the user's cache directory).
+	CacheDir string
 	// ExtraTools are offered besides the built-in ones (tests).
 	ExtraTools []tools.Def
 	// JobRunner runs a command in the background, given its folder
@@ -222,6 +226,11 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 	if cfg.AgentsDir == "" {
 		cfg.AgentsDir = filepath.Join(filepath.Dir(cfg.DB), "agents")
+	}
+	if cfg.CacheDir == "" {
+		if c, err := os.UserCacheDir(); err == nil {
+			cfg.CacheDir = filepath.Join(c, "kairocode")
+		}
 	}
 	r := &Runtime{db: db, cfg: cfg, changed: make(chan struct{}), lsp: lsp.NewManager(cfg.Logger),
 		agents: agents.New(cfg.AgentsDir, cfg.AgentRegistry)}

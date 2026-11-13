@@ -127,3 +127,7 @@ On 2026-10-09 we looked into the source of `github.com/openai/codex` main (commi
 - **Call Codex's `codex sandbox` as an outside command:** no implementation is needed, but Codex has to be installed, and this CLI has no stability guarantee.
 - **Mainly use Landlock on Linux:** Codex also treats it as the old path. Isolation of the network and Unix sockets is not enough.
 - **Run inside a container (Docker and so on):** the isolation is strong, but it needs Docker and starts slower. It is too heavy for a tool used locally. Using KairoCode inside a container is supported with `sandbox: external`.
+
+## Addendum (2026-11-13, M13; approved by the user)
+
+"Always `ask`, whatever the rules" now reads "whatever the rules allow": where a rule denies `bash` (or `git_push`), an escalation, a `bash` call with no sandbox to run in, and a push are refused, not asked. A refusal is never loosened into a question. Found checking ADR 0042 by hand, where a model held by a gate asked to run the tests outside the sandbox with `bash` denied (ADR 0042, "Checked by hand"; `TestEscalationDenied`).

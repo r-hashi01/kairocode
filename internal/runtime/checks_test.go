@@ -105,6 +105,37 @@ func TestChecksTurn(t *testing.T) {
 	}
 }
 
+// A check runs go test: its build cache is the folder's own, which it may
+// write in the sandbox, not the user's shared one, which it may not
+// (found checking by hand, M13: every go test check failed on macOS).
+func TestChecksBuildCache(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Require(t)
+	ws := checksWorkspace(t, `{"cache": {"command": "printf %s \"$GOCACHE\" > where && mkdir -p \"$GOCACHE\" && touch \"$GOCACHE/probe\" \"$XDG_CACHE_HOME/probe\""}, "turn": ["cache"]}`)
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{{Text: "done"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "cache", workflows.SessionInput{Dir: ws})
+	n, err := r.Send(ctx, s, "make it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := waitAnsweringChecks(t, ctx, r, s, n, "Run it in KairoCode's sandbox")
+	if out.Stopped != "" || len(out.Checks) != 1 || !out.Checks[0].Passed {
+		t.Fatalf("stopped %q, checks %+v", out.Stopped, out.Checks)
+	}
+	where, err := os.ReadFile(filepath.Join(ws, "where"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(where), filepath.Join(r.cfg.CacheDir, "checks")+string(filepath.Separator)) {
+		t.Fatalf("GOCACHE %q, not under %s", where, r.cfg.CacheDir)
+	}
+	if _, err := os.Stat(filepath.Join(string(where), "probe")); err != nil {
+		t.Fatalf("the build cache was not written: %v", err)
+	}
+}
+
 // When the rounds are spent and a check still fails, the turn stops with
 // "checks", its verdicts and a reply that says it is not done.
 func TestChecksRoundsSpent(t *testing.T) {
