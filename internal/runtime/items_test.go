@@ -193,7 +193,7 @@ func TestItemWaitsInConversation(t *testing.T) {
 	if _, err := r.WaitTurn(ctx, s, 1); err != nil {
 		t.Fatal(err)
 	}
-	if conv := strings.Join(conversationOf(t, r, s, false), "\n"); !strings.Contains(conv, "[KairoCode] The item gated-1 (line gated) waits for the person") {
+	if conv := strings.Join(conversationOf(t, r, s, false), "\n"); !strings.Contains(conv, `[KairoCode] The item gated-1 (line gated) waits for the person: a question: The project's check "fixed"`) {
 		t.Fatalf("conversation:\n%s", conv)
 	}
 	if err := r.Answer(ctx, p[0].Key, "Run it in KairoCode's sandbox"); err != nil {

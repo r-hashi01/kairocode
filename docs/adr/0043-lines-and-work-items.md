@@ -206,6 +206,13 @@ Where it differs from the decision above, or settles what it left open:
 - **A project's check answered in a repository is answered for its worktrees** (the decision is kept by the repository's main checkout, as trust is, ADR 0037): an item's worktree is a new folder, and was asked again for each item. The check's command is in the key, so one changed is asked about again.
 - **Lines are read at the repository's top**, as the item's worktree has them, wherever in it the conversation is.
 - **A start cut off is finished.** The model's call is made again with its key. A person's `/line` is finished by the daemon as it starts (`FinishItems`), and the daemon's API tries it again at once.
+- **`items` passes without asking**, as `bash_output` does (ADR 0028): it only reads. Found checking by hand: a conversation told of an item looked at it, and was asked.
+- **`kairocode line` takes `-provider` and `-model`**, for the session it makes when no `-session` is named, as `run` does.
+- **Checked by hand (2026-11-13, `gpt-5.4-mini`):**
+  - items down the standard line `fix` (gated by `go test`) and down a line put together on the spot, both done with their commits;
+  - two items side by side from one conversation;
+  - the waits and the ends told to the conversation once each;
+  - a merged item taken and cleaned up.
 - **Not done in this step:** the status line's count of items running and waiting (the notices and `/items` say it).
 - **Tests:**
   - `TestLinesRead`, `TestLineWrite`;

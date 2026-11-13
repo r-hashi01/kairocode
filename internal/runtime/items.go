@@ -612,8 +612,12 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 		}
 		var errs []error
 		for _, x := range p {
-			text := fmt.Sprintf("[KairoCode] The item %s (line %s) waits for the person: %s %s. They answer it with /items, or kairocode approvals %s.",
-				row.Name, line, x.Tool, firstLine(x.Subject), row.Of)
+			what := strings.TrimSpace(x.Tool + " " + firstLine(x.Subject))
+			if x.Kind == api.KindQuestion {
+				what = "a question: " + strings.TrimRight(firstLine(x.Subject), ":.")
+			}
+			text := fmt.Sprintf("[KairoCode] The item %s (line %s) waits for the person: %s. They answer it with /items, or kairocode approvals %s.",
+				row.Name, line, what, row.Of)
 			errs = append(errs, tell("wait\x00"+x.Key, text))
 		}
 		return errors.Join(errs...)

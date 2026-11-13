@@ -179,7 +179,7 @@ A line is a row of stations a request goes down, from the request to a change re
   - neither, so the station is its `checks` alone.
 
   An agent whose checks fail is sent back, up to `rounds` times, as in a flow. A flow whose checks fail stops the line there.
-- **Starting an item.** In the conversation, KairoCode sends a request down a line with the tool `line`. It names a standard line and says why, or proposes one put together on the spot, which you are always asked about (`"lines": {"onTheSpot": "deny"}` refuses those). You can name one yourself: `/line <name> <request>`, or `kairocode line <name> "<request>"`.
+- **Starting an item.** In the conversation, KairoCode sends a request down a line with the tool `line`. It names a standard line and says why, or proposes one put together on the spot, which you are always asked about (`"lines": {"onTheSpot": "deny"}` refuses those). You can name one yourself: `/line <name> <request>`, or `kairocode line [-provider P -model M] <name> "<request>"`.
 - **Each item runs in its own worktree**, on the branch `kairo/<line>-<n>`, as a session of its own, behind the conversation. When every station passes, its work is committed to that branch, ready to merge.
 - **Told back.** The conversation is told when an item ends or waits for you.
   - `/items` (or `kairocode items <session>`) lists the items: their line, station, state, branch and cost.

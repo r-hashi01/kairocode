@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -27,6 +28,8 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	session := fs.String("session", "", "the conversation that sends it (default: a new session in the folder)")
 	name := fs.String("name", "", "the item's worktree and branch name (default: <line>-<n>)")
 	keep := fs.String("keep", "", "keep the line this item ran as .kairocode/lines/<name>.json")
+	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "with no -session: who runs the model, as run's")
+	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "with no -session: the model, as run's")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -55,7 +58,7 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		if err != nil {
 			return err
 		}
-		if s, err = c.CreateSession(ctx, workflows.SessionInput{Dir: abs}); err != nil {
+		if s, err = c.CreateSession(ctx, workflows.SessionInput{Dir: abs, Engine: *prov, Model: *model}); err != nil {
 			return err
 		}
 		fmt.Fprintf(stderr, "session %s (told of the item; kairocode items %s)\n", s, s)

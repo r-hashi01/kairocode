@@ -45,7 +45,7 @@ const usage = `usage:
   kairocode plugin [-dir DIR] [list|install N[@M]|update N|remove N|connect N|disconnect N]   plugins (ADR 0025, 0027)
   kairocode plugin marketplace [list|add SRC|update M|remove M]   the catalogs plugins are installed from
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person (its work items' too)
-  kairocode line [-dir DIR] [-data DIR] [-session ID] [-name N] <line> "<request>"   send a request down a standard line (ADR 0043)
+  kairocode line [-dir DIR] [-data DIR] [-session ID | -provider P -model M] [-name N] <line> "<request>"   send a request down a standard line (ADR 0043)
   kairocode line [-data DIR] -keep <item> -session ID <name>   keep the line an item ran as .kairocode/lines/<name>.json
   kairocode items [-data DIR] [-json] [-drop ITEM [-force]] <session>   the work items a session sent down lines
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one

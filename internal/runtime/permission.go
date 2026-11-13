@@ -52,6 +52,9 @@ var defaultRules = []permission.Rule{
 	// nothing (ADR 0028); stopping one is asked about.
 	{Tool: "bash_output", Action: permission.Allow},
 	{Tool: "bash_wait", Action: permission.Allow},
+	// Listing the conversation's work items changes nothing (ADR 0043);
+	// sending one (line) is asked about.
+	{Tool: "items", Action: permission.Allow},
 }
 
 // loadRules reads the permission rules for a working directory: the
