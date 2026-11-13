@@ -260,13 +260,19 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 		return workflows.PermissionOutput{Action: string(permission.Ask),
 			Rule: "the same call ran before an interruption; run it again?", Subject: subj}, true, nil
 	}
+	dec := permission.Decide(rules, in.Tool, subj)
+	if dec.Action == permission.Deny && (in.Tool == tools.GitPushTool.Name || in.Tool == tools.BashTool.Name) {
+		// The asks below are made whatever the rules allow, never where they
+		// refuse: a refusal is not loosened into a question (ADR 0005).
+		return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, false, nil
+	}
 	if in.Tool == tools.GitPushTool.Name {
 		// It reaches outside the machine and runs outside the sandbox: asked
-		// every time, whatever the rules say (ADR 0005).
+		// every time, whatever the rules allow (ADR 0005).
 		return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "pushes outside the machine", Subject: subj}, true, nil
 	}
 	if in.Tool == tools.BashTool.Name {
-		// Whatever the rules say (ADR 0005): running outside the sandbox
+		// Whatever the rules allow (ADR 0005): running outside the sandbox
 		// is asked every time, and so is every command where there is no
 		// sandbox to run it in.
 		if tools.Escalates(args) {
@@ -293,7 +299,6 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 			}
 		}
 	}
-	dec := permission.Decide(rules, in.Tool, subj)
 	return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, false, nil
 }
 

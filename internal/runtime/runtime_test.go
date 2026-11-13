@@ -23,7 +23,7 @@ func open(t *testing.T, db string, p provider.Provider) *Runtime {
 	defer cancel()
 	// Never the real claude (invariant 9): a judge or a decision that
 	// falls back to Claude Code finds none.
-	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude"), JobRunner: jobRunner})
+	r, err := Open(ctx, Config{DB: db, Provider: p, Owner: "test", ClaudePath: filepath.Join(t.TempDir(), "no-claude"), JobRunner: jobRunner, CacheDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +220,11 @@ func TestWaitTurnBeforeItStarts(t *testing.T) {
 	out, err := kairo.Await[workflows.SessionOutput](ctx, r.K, s)
 	if err != nil || out.Turns != 1 {
 		t.Fatalf("session ended with %+v, %v", out, err)
+	}
+	// Closed again (kairocode resume of a session run closed): nothing to
+	// do, and no error (found checking M13 by hand).
+	if err := r.CloseSession(ctx, s); err != nil {
+		t.Fatalf("closing a closed session: %v", err)
 	}
 }
 

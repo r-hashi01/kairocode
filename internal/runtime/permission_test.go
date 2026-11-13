@@ -218,6 +218,32 @@ func TestEscalationAlwaysAsks(t *testing.T) {
 	}
 }
 
+// An escalation is asked whatever the rules allow, never where they refuse:
+// with bash denied, it is refused, not asked (found checking by hand, M13).
+func TestEscalationDenied(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Require(t)
+	ws := workspaceWith(t, `{"bash": "deny"}`)
+	script := []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "bash", Input: json.RawMessage(`{"command":"echo out > escalated.txt","sandbox":"escalate","justification":"needs the network"}`)}}},
+		{Text: "done"},
+	}
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: script})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "esc", workflows.SessionInput{Dir: ws})
+	n, _ := r.Send(ctx, s, "go")
+	if _, err := r.WaitTurn(ctx, s, n); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := r.Pending(ctx, s); len(p) != 0 {
+		t.Fatalf("asked: %+v", p)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "escalated.txt")); err == nil {
+		t.Fatal("a denied escalation ran")
+	}
+}
+
 // A turn waits for approval for longer than kairo keeps finished runs
 // (KeepFinished, 24h by default); the process is stopped and started again
 // meanwhile. The calls the turn finished before it waited are not made

@@ -53,6 +53,9 @@ type Node struct {
 	// command, the question, the condition or the value, cut short.
 	Title string `json:"title,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// Checks: for an agent, the checks that gate it (ADR 0042), as
+	// written ("test, lint", or the code that names them).
+	Checks string `json:"checks,omitempty"`
 	// Code: Text is the script's code, not a string it gives.
 	Code bool `json:"code,omitempty"`
 	// Line and Col: where the call is (its opening parenthesis, where
@@ -414,7 +417,8 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 	switch fn {
 	case "agent":
 		text, code := b.argOf(x, 1, "prompt")
-		return at(Node{Kind: Agent, Title: b.arg(x, 0, "agent"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 1, "prompt")))})
+		return at(Node{Kind: Agent, Title: b.arg(x, 0, "agent"), Text: text, Code: code, Checks: b.checks(argExpr(x, -1, "checks")),
+			Edit: b.edit(x, literal(argExpr(x, 1, "prompt")))})
 	case "tool":
 		name := b.arg(x, 0, "")
 		text, code := "", false
@@ -511,6 +515,26 @@ func (b *builder) arg(x *syntax.CallExpr, place int, name string) string {
 	return ""
 }
 
+// checks are the names of the checks gating an agent: a list of strings
+// as "test, lint", else the code that gives them ("" with none).
+func (b *builder) checks(e syntax.Expr) string {
+	if e == nil {
+		return ""
+	}
+	if l, ok := e.(*syntax.ListExpr); ok {
+		names := make([]string, 0, len(l.List))
+		for _, el := range l.List {
+			lit := literal(el)
+			if lit == nil {
+				return b.value(e)
+			}
+			names = append(names, lit.Value.(string))
+		}
+		return strings.Join(names, ", ")
+	}
+	return b.value(e)
+}
+
 // value is a string literal's value, or an expression's source (code).
 func (b *builder) value(e syntax.Expr) string {
 	s, _ := b.valueOf(e)
@@ -565,6 +589,8 @@ func (b *builder) parallel(x *syntax.CallExpr) []Node {
 				case "prompt":
 					a.Text, a.Code = b.valueOf(entry.Value)
 					a.Edit = b.edit(x, literal(entry.Value))
+				case "checks":
+					a.Checks = b.checks(entry.Value)
 				}
 			}
 		} else {

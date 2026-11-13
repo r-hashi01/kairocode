@@ -114,3 +114,24 @@ f
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 }
+
+// A gated agent's box says which checks gate it, in a call and in a
+// parallel spec, and gating an agent marks its box changed (ADR 0042;
+// found checking by hand, M13: the gate was not seen on the chart).
+func TestGatedAgent(t *testing.T) {
+	before, _ := Build("f", []byte("def main(input):\n    agent(\"build\", \"fix it\")\n    parallel([{\"agent\": \"build\", \"prompt\": \"a\"}])\n"))
+	after, err := Build("f", []byte("def main(input):\n    agent(\"build\", \"fix it\", checks = [\"test\", \"lint\"], rounds = 2)\n    parallel([{\"agent\": \"build\", \"prompt\": \"a\", \"checks\": NAMES}])\n    check(\"test\")\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	Diff(before, after)
+	want := strings.TrimSpace(`
+f
+├─ ~ agent build · checks test, lint  "fix it"
+├─ parallel
+│  └─ ~ agent build · checks NAMES  "a"
+└─ + check test`)
+	if got := Tree(after, nil); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}

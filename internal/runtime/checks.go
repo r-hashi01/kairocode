@@ -143,9 +143,20 @@ func (r *Runtime) checkRunAction(t *kairo.TaskContext, in workflows.CheckRunInpu
 	}
 	defer done()
 	policy := sandbox.Policy{Mode: sandbox.WorkspaceWrite, Root: in.Dir, Loopback: true, SocketDir: dir}
+	cache, cacheErr := r.checkCache(in.Dir)
+	if cache != "" {
+		policy.Writable = []string{cache}
+	}
 	cmd, err := sandbox.Command(ctx, policy, in.Dir, "sh", "-c", in.Check.Command)
 	if err != nil {
 		return workflows.CheckRunOutput{}, err
+	}
+	if cache != "" {
+		// The build cache is the folder's own, not the user's shared one:
+		// what a check puts there is used by no build outside the sandbox
+		// (ADR 0031), and go test runs in it. A command that names its own
+		// cache keeps it.
+		cmd.Env = append(cmd.Env, "GOCACHE="+filepath.Join(cache, "go-build"), "XDG_CACHE_HOME="+cache)
 	}
 	// Its own process group, stopped whole at its timeout or when the
 	// turn stops: a test binary that go test started does not outlive it
@@ -160,6 +171,10 @@ func (r *Runtime) checkRunAction(t *kairo.TaskContext, in workflows.CheckRunInpu
 	}
 	cmd.WaitDelay = 5 * time.Second
 	var output bytes.Buffer
+	if cacheErr != nil {
+		// It runs without one, and a build that needs one says why.
+		fmt.Fprintf(&output, "[the check has no build cache of its own: %v]\n", cacheErr)
+	}
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
 		return workflows.CheckRunOutput{}, kairo.Retryable(err) // it did not start: nothing ran
@@ -192,6 +207,21 @@ func (r *Runtime) checkRunAction(t *kairo.TaskContext, in workflows.CheckRunInpu
 		return workflows.CheckRunOutput{}, kairo.Unknown(err) // it ran: run again
 	}
 	return out, nil
+}
+
+// checkCache is the folder's own cache directory for its checks, made if
+// need be; "" when there is none (the check runs without one), with why
+// when it could not be made.
+func (r *Runtime) checkCache(dir string) (string, error) {
+	if r.cfg.CacheDir == "" {
+		return "", errors.New("the user's cache directory is not known")
+	}
+	sum := sha256.Sum256([]byte(dir))
+	d := filepath.Join(r.cfg.CacheDir, "checks", hex.EncodeToString(sum[:12]))
+	if err := os.MkdirAll(d, 0o700); err != nil {
+		return "", err
+	}
+	return d, nil
 }
 
 // lastRunes is the last n characters of s, marked as cut where they are.

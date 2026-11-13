@@ -15,6 +15,9 @@ func Label(n Node) string {
 	}
 	switch n.Kind {
 	case Agent:
+		if n.Checks != "" { // gated (ADR 0042)
+			return join("agent", n.Title, "· checks", n.Checks)
+		}
 		return join("agent", n.Title)
 	case Tool:
 		return join("tool", n.Title)
@@ -191,7 +194,7 @@ func oneLine(s string) string {
 }
 
 func signature(n Node) string {
-	return strings.Join([]string{n.Kind, n.Title, n.Text, n.Cond}, "|")
+	return strings.Join([]string{n.Kind, n.Title, n.Text, n.Cond, n.Checks}, "|")
 }
 
 // walk calls f on each node, in order, inside branches and loops too.

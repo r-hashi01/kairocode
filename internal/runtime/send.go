@@ -235,6 +235,12 @@ func (r *Runtime) Cancel(ctx context.Context, session string) (int, error) {
 func (r *Runtime) CloseSession(ctx context.Context, session string) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
+	// Closed already (kairocode resume of a session run closed): nothing
+	// to do, and not kairo's "has finished" as an error. A session that
+	// failed says so.
+	if info, err := r.K.Get(ctx, session); err == nil && info.Finished() {
+		return r.failed(ctx, session)
+	}
 	if err := r.K.Signal(ctx, session, workflows.SignalMessage, workflows.SessionEvent{Kind: workflows.EventClose}); err != nil {
 		return err
 	}

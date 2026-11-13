@@ -261,10 +261,10 @@ func (r *Runtime) logRun(ctx context.Context, k kairo.RunInfo, w logWidth) LogEn
 				e.Text += " → passed"
 			case out.Exit < 0:
 				e.Text += " → ran too long"
-				e.Status += " (error)"
+				e.Status += " (did not pass)"
 			default:
 				e.Text += fmt.Sprintf(" → exit %d: %s", out.Exit, clip(strings.TrimSpace(out.Tail), w.text))
-				e.Status += " (error)"
+				e.Status += " (did not pass)" // the check ran: its verdict, not an error of the step
 			}
 		}
 	default:
