@@ -221,6 +221,11 @@ func TestWaitTurnBeforeItStarts(t *testing.T) {
 	if err != nil || out.Turns != 1 {
 		t.Fatalf("session ended with %+v, %v", out, err)
 	}
+	// Closed again (kairocode resume of a session run closed): nothing to
+	// do, and no error (found checking M13 by hand).
+	if err := r.CloseSession(ctx, s); err != nil {
+		t.Fatalf("closing a closed session: %v", err)
+	}
 }
 
 // A wait the runtime's closing cuts (a new build taking over, ADR 0019),

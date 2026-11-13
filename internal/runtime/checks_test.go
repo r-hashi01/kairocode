@@ -168,7 +168,8 @@ func TestChecksRoundsSpent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lt := l.Text(); strings.Count(lt, "exit 3: still failing") != 2 {
+	// A check that failed did not pass; the step itself did not fail.
+	if lt := l.Text(); strings.Count(lt, "exit 3: still failing") != 2 || strings.Count(lt, "completed (did not pass)") != 2 || strings.Contains(lt, "(error)") {
 		t.Fatalf("log:\n%s", lt)
 	}
 }

@@ -40,4 +40,9 @@ func TestSendToAFailedSession(t *testing.T) {
 			t.Fatalf("to a failed session: %v", err)
 		}
 	}
+	// Closing it says it failed too: not nothing to do, as for a session
+	// closed already.
+	if err := r.CloseSession(ctx, s); !errors.Is(err, ErrSessionFailed) {
+		t.Fatalf("closing a failed session: %v", err)
+	}
 }
