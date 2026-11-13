@@ -52,6 +52,9 @@ var defaultRules = []permission.Rule{
 	// nothing (ADR 0028); stopping one is asked about.
 	{Tool: "bash_output", Action: permission.Allow},
 	{Tool: "bash_wait", Action: permission.Allow},
+	// Listing the conversation's work items changes nothing (ADR 0043);
+	// sending one (line) is asked about.
+	{Tool: "items", Action: permission.Allow},
 }
 
 // loadRules reads the permission rules for a working directory: the
@@ -143,6 +146,14 @@ func subject(tool string, args json.RawMessage) string {
 		URL     string `json:"url"`
 	}
 	_ = json.Unmarshal(args, &in)
+	if tool == tools.LineTool.Name { // the line's name: "line": {"<name>": ...} (ADR 0043)
+		var l tools.ItemSpec
+		_ = json.Unmarshal(args, &l)
+		if l.Line == "" {
+			return onTheSpot
+		}
+		return l.Line
+	}
 	if tool == tools.FetchTool.Name || tool == tools.HTTPTool.Name {
 		return urlSubject(in.URL)
 	}
@@ -261,10 +272,26 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 			Rule: "the same call ran before an interruption; run it again?", Subject: subj}, true, nil
 	}
 	dec := permission.Decide(rules, in.Tool, subj)
-	if dec.Action == permission.Deny && (in.Tool == tools.GitPushTool.Name || in.Tool == tools.BashTool.Name) {
+	if dec.Action == permission.Deny && (in.Tool == tools.GitPushTool.Name || in.Tool == tools.BashTool.Name || in.Tool == tools.LineTool.Name) {
 		// The asks below are made whatever the rules allow, never where they
 		// refuse: a refusal is not loosened into a question (ADR 0005).
 		return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, false, nil
+	}
+	if in.Tool == tools.LineTool.Name {
+		// A line that cannot run here is refused before anyone is asked
+		// about it, saying why (ADR 0043).
+		if err := lineCanRun(t, in.Call.Dir, args); err != nil {
+			why := "the line cannot run here: " + err.Error()
+			return workflows.PermissionOutput{Action: string(permission.Deny), Rule: why, Reason: why, Subject: subj}, false, nil
+		}
+	}
+	if in.Tool == tools.LineTool.Name && subj == onTheSpot {
+		// A line put together on the spot (ADR 0043): asked every time,
+		// its stations shown, unless the settings refuse such lines.
+		if onTheSpotSetting(in.Call.Dir) == permission.Deny {
+			return workflows.PermissionOutput{Action: string(permission.Deny), Rule: `lines.onTheSpot is "deny"`, Subject: subj}, false, nil
+		}
+		return workflows.PermissionOutput{Action: string(permission.Ask), Rule: "puts a line together on the spot: " + stationsOf(args), Subject: subj}, true, nil
 	}
 	if in.Tool == tools.GitPushTool.Name {
 		// It reaches outside the machine and runs outside the sandbox: asked

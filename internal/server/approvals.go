@@ -14,6 +14,15 @@ func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
+	// ?items=1: its work items' too, each naming its item (ADR 0043).
+	if r.URL.Query().Get("items") != "" {
+		ip, err := s.rt.ItemsPending(r.Context(), sessionOf(r))
+		if err != nil {
+			fail(w, http.StatusInternalServerError, err)
+			return
+		}
+		p = append(p, ip...)
+	}
 	if p == nil {
 		p = []api.Pending{}
 	}

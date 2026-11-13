@@ -15,9 +15,15 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "7"
+	SessionVersion = "8"
 	Turn           = "turn"
-	TurnVersion    = "5"
+	TurnVersion    = "6"
+	// TurnVersion5 and SessionVersion7 are the versions before an item's
+	// line (ADR 0043). Their runs finish with the same functions: none of
+	// them has a line. The versions keep a process without lines from
+	// driving an item, as a plain turn.
+	TurnVersion5    = "5"
+	SessionVersion7 = "7"
 	// TurnVersion4 is the version before a turn could be gated by checks
 	// (ADR 0042). Its runs finish with the same function: they have no
 	// gate. The version keeps a process without gates from driving a turn
@@ -114,6 +120,9 @@ const (
 	ActCheckProtect = "check.protect"
 	ActCheckModes   = "check.modes"
 	ActCheckDecide  = "check.decide"
+	// ActLineCommit commits a work item's worktree once its line passed
+	// (ADR 0043): the change is on the item's branch, ready to merge.
+	ActLineCommit = "line.commit"
 	// ActTaskArgs reads a task call's arguments (the subagent and its
 	// prompt); ActTaskResult answers the call with the subagent's reply.
 	// Its name is a tool's, so its end is told as the call's.
@@ -244,6 +253,21 @@ type SessionInput struct {
 	// 0021) begins with that turn's conversation.
 	From    *ForkRef `json:"from,omitempty"`
 	History string   `json:"history,omitempty"`
+	// Item: the session is a work item's (ADR 0043), sent by a
+	// conversation down a line.
+	Item *ItemRef `json:"item,omitempty"`
+}
+
+// ItemRef is the conversation a work item came from, its line's name (""
+// for one put together on the spot), and what its first turn runs: Run,
+// the line as it started, Request, the hash of its request. The session
+// runs it before it waits for anything: no signal starts it, so none can
+// start it twice.
+type ItemRef struct {
+	Of      string `json:"of"`
+	Line    string `json:"line,omitempty"`
+	Run     *Line  `json:"run,omitempty"`
+	Request string `json:"request,omitempty"`
 }
 
 // ForkRef is the turn a session was forked from.
@@ -268,6 +292,9 @@ type SessionEvent struct {
 	Model string `json:"model,omitempty"`
 	// Flow, if set, makes the message's turn run that flow (/flow).
 	Flow *FlowCall `json:"flow,omitempty"`
+	// Line, if set, makes the message's turn run that line, the message
+	// its request: a work item's first (ADR 0043). Version 8 on.
+	Line *Line `json:"line,omitempty"`
 	// Switch, if set, changes the session's engine or model from this
 	// event's turn on (/provider, /model; ADR 0014). Version 6 on.
 	Switch *Switch `json:"switch,omitempty"`
@@ -355,6 +382,9 @@ type TurnInput struct {
 	Undo *UndoInput `json:"undo,omitempty"`
 	// Flow, if set, makes the turn run that flow (ADR 0003).
 	Flow *FlowCall `json:"flow,omitempty"`
+	// Line, if set, makes the turn run that line, Message its request: a
+	// work item's (ADR 0043).
+	Line *Line `json:"line,omitempty"`
 	// Sub: the turn is an agent of a flow. It starts with no history,
 	// takes no snapshots (the flow's turn does), and may be a subagent.
 	Sub bool `json:"sub,omitempty"`
@@ -476,6 +506,9 @@ type TurnOutput struct {
 	Checks []CheckVerdict `json:"checks,omitempty"`
 	// CheckRounds: how often the gate sent the work back.
 	CheckRounds int `json:"check_rounds,omitempty"`
+	// Line: of a line's turn, what each station it reached came to (ADR
+	// 0043).
+	Line []StationResult `json:"line,omitempty"`
 }
 
 type AgentLoadInput struct {

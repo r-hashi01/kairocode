@@ -1,6 +1,6 @@
 # 0043 Lines and work items: lines declared in the project or put together on the spot, and items sent down them from the conversation
 
-- Status: Proposed
+- Status: Accepted (2026-11-13)
 - Date: 2026-11-13
 - Related: `docs/factory.md` (step 2 of "The way there"; settles its section 6), ADR 0003 (flows), 0028 (telling a session what ended), 0036 (a flow from a session), 0037 (sessions in worktrees), 0039 (limits), 0042 (checks and gates); invariants 2, 3, 4, 7 and 8
 
@@ -178,3 +178,46 @@ Where this shows in the implementation:
 - **People at stations now** (a `person` station that waits for a review). It is step 3, with review stations, the paths that always need a person, and the queue. For now, a person is reached through the item's own approvals and through the conversation's notices.
 - **Telling the conversation without a turn** (a note shown by clients, added to the next turn's context). It costs no model call. But the conversation would say nothing until the person spoke, and a wait for the person would go unnoticed in an editor. ADR 0028 chose a message for the same reason.
 - **No cap until step 3.** A model that sends items in a loop could start many worktrees and spend much. A plain cap is cheap, and step 3 replaces it.
+
+## Implementation (2026-11-13, M14)
+
+Where it differs from the decision above, or settles what it left open:
+
+- **A line that passes commits its work to the item's branch** (`line.commit`). Decision 4 says the line ends at a change ready to merge, on the item's branch; the agents at the stations need not commit. So once every station passed, the line's turn commits the worktree's changes as `git_commit` does: plan then apply, compare and replace, so a commit done again after a crash makes no second one. The message is `<line>: <the request's first line>`. A line run outside an item's session commits nothing. "Taken" then means the branch has commits beyond the one its worktree started from, and they are in the branch it started from.
+- **The line tool is a planned write** (`Plan` and `Apply`), like every idempotent tool that acts: its plan checks the call, and its apply starts the item. The item's session id comes from the apply's idempotency key.
+- **A line in a flow's or a line's agent, and in an item's own session:** `line` and `items` are not given there. Items start items only through a person or a conversation.
+- **Where the item's line is checked.** It is checked twice. First against the conversation's folder, before anything is made. Then against the worktree, which has the files of `HEAD`. So a line or flow not yet committed fails there, saying so.
+- **Telling the conversation** hangs on the notifier of ADR 0034. It is woken by a session's request, and by a session's turn ending. For an item's session, it sends one message for each request the item waits for, and one for the line's end. Each is kept as told in the store (`item-told`), so a process that stops between sending and keeping sends it again, once.
+- **The person's `/line`** starts the item with a call name the client makes, so a request sent again (the daemon not reached the first time) starts no second item.
+- **The items' waits** are listed with the conversation's own by `kairocode approvals` (`?items=1` on the daemon's API). In the terminal UI, `/items` lists them, numbered: `/items yes|no <n>`, `/items answer <n> <option>`. An editor over ACP gets the notices; it answers in the item's session, or by `_kairocode/item_answer`.
+- **The item's first turn comes with its session's input** (`SessionInput.Item`: the conversation, the line's name, the line as it started and the request's hash), not by a signal: the session runs it before it waits for anything. A start made again finds the session there; no second line's turn can be sent. Decision 2's `Line: <hash of the recorded line>` is the line itself, recorded with the input.
+- **Starting is checked, then kept, then made, under one lock.**
+  - The line's files (`.kairocode`, `.opencode`, `kairocode.json`) must be committed, since the worktree starts from `HEAD`; else nothing is made.
+  - The cap, the item's name and its record are settled one item at a time (`itemMu`), so two `line` calls of one reply (run at once) take two names and two worktrees.
+  - A name given that an item, a worktree or a branch `kairo/<name>` has is refused.
+  - An error once the item is kept is not settled: the call is made again with its key and finishes it (invariant 4).
+  - A line the worktree still cannot run ends the item, `failed`, and cleans it up.
+- **Where the items are kept:** a table of their own, `kc_item`, not a kind of the content store. An item's session id comes from the starting call's idempotency key (its step's id, the same in every attempt).
+- **Only a person's listing takes items** (`/items`, `kairocode items`) and the daemon as it starts: the `items` tool only reads.
+- **`line` is not given to a CLI engine** (Claude Code, the ACP agents). It makes a call again, after it is cut off, as a new run, with a new key.
+- **Notices may come twice, in one window.** Decision 5 says a notice is sent once. That needs a signal kairo keeps once under a name (`SignalID`, kairo's ADR 0071), which the kairo KairoCode is built on (v0.4.1) does not have. Until KairoCode moves to it (the update waits for the user's work on kairo; `docs/milestones.md`, future work), a process stopped between sending a notice and keeping it as told sends it again, once.
+- **A flow station's run says where on the line it is** (`FlowInput.At`), as an agent station's does, so two stations running one flow with the same words are two children (invariant 8).
+- **A line that cannot run is refused before anyone is asked** (permission.check reads it, as the call's decision): a station naming a check not declared, an agent or flow not there. The `line` tool's description names the checks declared, which the model found no other way.
+- **A project's check answered in a repository is answered for its worktrees** (the decision is kept by the repository's main checkout, as trust is, ADR 0037): an item's worktree is a new folder, and was asked again for each item. The check's command is in the key, so one changed is asked about again.
+- **Lines are read at the repository's top**, as the item's worktree has them, wherever in it the conversation is.
+- **An item's session is made once.** That it was made is kept with the item. An item whose session's record kairo let go of since (closed, or failed, then `KeepFinished`) ends `closed`, its worktree left to the person; it is not made again, which would run its line twice (`TestItemNotMadeTwice`).
+- **A start cut off is finished.** The model's call is made again with its key. A person's `/line` is finished by the daemon as it starts (`FinishItems`), and the daemon's API tries it again at once.
+- **`items` passes without asking**, as `bash_output` does (ADR 0028): it only reads. Found checking by hand: a conversation told of an item looked at it, and was asked.
+- **`kairocode line` takes `-provider` and `-model`**, for the session it makes when no `-session` is named, as `run` does.
+- **Checked by hand (2026-11-13, `gpt-5.4-mini`):**
+  - items down the standard line `fix` (gated by `go test`) and down a line put together on the spot, both done with their commits;
+  - two items side by side from one conversation;
+  - the waits and the ends told to the conversation once each;
+  - a merged item taken and cleaned up.
+- **Not done in this step:** the status line's count of items running and waiting (the notices and `/items` say it).
+- **Tests:**
+  - `TestLinesRead`, `TestLineWrite`;
+  - `TestLineRun`, `TestCrashDuringLine`;
+  - `TestItemStart`, `TestItemWaitsInConversation`, `TestLineOnTheSpot`, `TestItemCap`, `TestItemCleanedUp`, `TestItemsAtOnce`, `TestItemNotMadeTwice`;
+  - `TestCrashStartingItem`: killed after the worktree is made, after the session is, and as the line's work is committed;
+  - `TestItems` (the terminal UI).

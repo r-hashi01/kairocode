@@ -270,5 +270,13 @@ func (r *Runtime) sent(ctx context.Context, session string) (int, error) {
 			n++
 		}
 	}
+	// A work item's first turn, its line, came with its input, not by a
+	// wait (ADR 0043).
+	if info, err := r.K.Get(ctx, session); err == nil {
+		var in workflows.SessionInput
+		if json.Unmarshal(input(info), &in) == nil && in.Item != nil && in.Item.Run != nil {
+			n++
+		}
+	}
 	return n, nil
 }

@@ -117,6 +117,9 @@ type Runtime struct {
 	// worktreeMu: one worktree is made at a time, so two asked for at once
 	// with no name do not take the same free one (ADR 0037).
 	worktreeMu sync.Mutex
+	// itemMu: one work item is named and given its worktree at a time, so
+	// two started at once take two names (ADR 0043).
+	itemMu sync.Mutex
 	// rates are the providers' rate limits (ADR 0040).
 	rates *rateLimiter
 
@@ -284,8 +287,16 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		return fail(err)
 	}
 	r.jobs.recover()
-	r.background(r.keepMissed) // the flows' runs a stopped process did not keep (ADR 0029)
-	r.background(r.notifyLoop) // telling of requests outside the machine (ADR 0034)
+	r.background(r.keepMissed)               // the flows' runs a stopped process did not keep (ADR 0029)
+	r.background(r.notifyLoop)               // telling of requests outside the machine (ADR 0034)
+	r.background(func(ctx context.Context) { // items whose branch was merged meanwhile (ADR 0043)
+		if err := r.FinishItems(ctx); err != nil && ctx.Err() == nil {
+			r.logf("the items not started: %v", err)
+		}
+		if err := r.TakeAllItems(ctx); err != nil && ctx.Err() == nil {
+			r.logf("the items taken: %v", err)
+		}
+	})
 	return r, nil
 }
 

@@ -31,6 +31,9 @@ type Pending struct {
 	// it ends.
 	Try    *TryTarget `json:"try,omitempty"`
 	Trying bool       `json:"trying,omitempty"`
+	// Item: listed with a conversation's own, a request of one of its
+	// work items (ADR 0043): the item's name.
+	Item string `json:"item,omitempty"`
 }
 
 // KindQuestion is a Pending that is a flow's question.

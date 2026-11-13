@@ -348,6 +348,22 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 		if d.Name == tools.TaskTool.Name && (in.Sub || readOnly || workflows.CLIEngine(engine)) {
 			continue
 		}
+		// Work items (ADR 0043) are sent from a conversation: not from a
+		// flow's or a line's agent, nor from an item's own session.
+		if d.Name == tools.LineTool.Name || d.Name == tools.ItemsTool.Name {
+			if in.Sub || r.isItem(t, ownerSession(t.RunID)) {
+				continue
+			}
+			// A CLI engine makes a call again after it is cut off as a new
+			// run, with a new key: line, which starts no second item only
+			// for one key, is not given there.
+			if d.Name == tools.LineTool.Name && workflows.CLIEngine(engine) {
+				continue
+			}
+			if d.Name == tools.LineTool.Name {
+				d.Description += standardLines(in.Dir)
+			}
+		}
 		specs = append(specs, provider.ToolSpec{Name: d.Name, Description: d.Description, Schema: d.Schema})
 		names = append(names, d.Name)
 		if d.Plan != nil {
