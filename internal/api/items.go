@@ -15,6 +15,7 @@ const (
 	ItemFailed  = "failed"
 	ItemTaken   = "taken"   // its branch merged, and it was cleaned up
 	ItemDropped = "dropped" // dropped by the person, and cleaned up
+	ItemClosed  = "closed"  // its session was closed (or its record let go of) with the item neither taken nor dropped
 )
 
 // Item is a work item a conversation sent down a line (ADR 0043): a

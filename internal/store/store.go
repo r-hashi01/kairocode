@@ -135,8 +135,9 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		// session (id) of its own in a worktree, of the conversation of.
 		// def is the line as it started (JSON); repo is the main checkout
 		// of the conversation's repository; base and start, the branch and
-		// commit its worktree started from; ended is "" while the item is
-		// kept, then "taken" or "dropped".
+		// commit its worktree started from; made, that its session was
+		// made (never made again); ended is "" while the item is kept, then
+		// "taken", "dropped", "failed" or "closed".
 		`CREATE TABLE IF NOT EXISTS kc_item (
 			id TEXT PRIMARY KEY,
 			of TEXT NOT NULL,
@@ -149,6 +150,7 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			branch TEXT NOT NULL DEFAULT '',
 			base TEXT NOT NULL DEFAULT '',
 			start TEXT NOT NULL DEFAULT '',
+			made INTEGER NOT NULL DEFAULT 0,
 			started INTEGER NOT NULL,
 			ended TEXT NOT NULL DEFAULT '')`,
 		`CREATE INDEX IF NOT EXISTS kc_item_of ON kc_item (of)`,

@@ -205,6 +205,7 @@ Where it differs from the decision above, or settles what it left open:
 - **A line that cannot run is refused before anyone is asked** (permission.check reads it, as the call's decision): a station naming a check not declared, an agent or flow not there. The `line` tool's description names the checks declared, which the model found no other way.
 - **A project's check answered in a repository is answered for its worktrees** (the decision is kept by the repository's main checkout, as trust is, ADR 0037): an item's worktree is a new folder, and was asked again for each item. The check's command is in the key, so one changed is asked about again.
 - **Lines are read at the repository's top**, as the item's worktree has them, wherever in it the conversation is.
+- **An item's session is made once.** That it was made is kept with the item. An item whose session's record kairo let go of since (closed, or failed, then `KeepFinished`) ends `closed`, its worktree left to the person; it is not made again, which would run its line twice (`TestItemNotMadeTwice`).
 - **A start cut off is finished.** The model's call is made again with its key. A person's `/line` is finished by the daemon as it starts (`FinishItems`), and the daemon's API tries it again at once.
 - **`items` passes without asking**, as `bash_output` does (ADR 0028): it only reads. Found checking by hand: a conversation told of an item looked at it, and was asked.
 - **`kairocode line` takes `-provider` and `-model`**, for the session it makes when no `-session` is named, as `run` does.
@@ -217,6 +218,6 @@ Where it differs from the decision above, or settles what it left open:
 - **Tests:**
   - `TestLinesRead`, `TestLineWrite`;
   - `TestLineRun`, `TestCrashDuringLine`;
-  - `TestItemStart`, `TestItemWaitsInConversation`, `TestLineOnTheSpot`, `TestItemCap`, `TestItemCleanedUp`, `TestItemsAtOnce`;
+  - `TestItemStart`, `TestItemWaitsInConversation`, `TestLineOnTheSpot`, `TestItemCap`, `TestItemCleanedUp`, `TestItemsAtOnce`, `TestItemNotMadeTwice`;
   - `TestCrashStartingItem`: killed after the worktree is made, after the session is, and as the line's work is committed;
   - `TestItems` (the terminal UI).

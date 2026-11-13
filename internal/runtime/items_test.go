@@ -14,6 +14,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
+	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
@@ -564,5 +565,39 @@ func TestItemsAtOnce(t *testing.T) {
 	waitItem(t, ctx, r, s, api.ItemDone)
 	if it, err := r.StartItem(ctx, s2, "e", tools.ItemSpec{Line: "quick", Request: "x"}); err != nil || it.State == api.ItemFailed {
 		t.Fatalf("from a subfolder: %+v %v", it, err)
+	}
+}
+
+// An item whose session was made, and whose record kairo let go of since
+// (its session closed, KeepFinished), is not made again as the daemon
+// starts: its line would run twice. It ends, closed (ADR 0043).
+func TestItemNotMadeTwice(t *testing.T) {
+	t.Parallel()
+	ws := itemRepo(t, "")
+	prompts := filepath.Join(t.TempDir(), "prompts")
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, PromptLog: prompts, Script: []provider.FakeReply{{Text: "ok"}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: ws})
+	def, _ := json.Marshal(workflows.Line{Name: "quick", Stations: []workflows.Station{{Name: "build", Agent: "build"}}})
+	row, err := r.Store.AddItem(ctx, store.ItemRow{ID: SessionID("gone"), Of: s, Line: "quick", Def: def, Request: "x", Name: "quick-1",
+		Repo: ws, Dir: ws, Branch: "kairo/quick-1", Started: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Store.SetItemMade(ctx, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.FinishItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.K.Get(ctx, row.ID); err == nil {
+		t.Fatal("the item's session was made again")
+	}
+	if items, _ := r.Items(ctx, s); len(items) != 1 || items[0].State != api.ItemClosed {
+		t.Fatalf("items %+v", items)
+	}
+	if b, _ := os.ReadFile(prompts); len(b) != 0 {
+		t.Fatalf("the model was called:\n%s", b)
 	}
 }

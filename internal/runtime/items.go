@@ -285,7 +285,18 @@ func (r *Runtime) finishItem(ctx context.Context, row store.ItemRow) (api.Item, 
 			return api.Item{}, notSettled(err)
 		}
 	}
-	if _, err := r.K.Get(ctx, row.ID); errors.Is(err, kairo.ErrUnknownRun) {
+	_, getErr := r.K.Get(ctx, row.ID)
+	if row.Made && errors.Is(getErr, kairo.ErrUnknownRun) {
+		// Made before, its record let go of since (a session closed or
+		// failed, KeepFinished): never made again, which would run its line
+		// twice. The item ends, closed; its worktree is left to the person.
+		if err := r.Store.EndItem(ctx, row.ID, api.ItemClosed); err != nil {
+			return api.Item{}, notSettled(err)
+		}
+		row.Ended = api.ItemClosed
+		return r.itemState(ctx, row), fmt.Errorf("the item %s %s", row.Name, row.Ended)
+	}
+	if !row.Made && errors.Is(getErr, kairo.ErrUnknownRun) {
 		// What the worktree has (HEAD's files) must run the line: else the
 		// item ends here, failed.
 		if err := checkLine(row.Dir, line); err != nil {
@@ -309,11 +320,19 @@ func (r *Runtime) finishItem(ctx context.Context, row store.ItemRow) (api.Item, 
 				return api.Item{}, notSettled(err)
 			}
 		}
+		getErr = nil // made now
+	}
+	if getErr != nil {
+		return api.Item{}, notSettled(getErr)
+	}
+	if !row.Made {
+		if err := r.Store.SetItemMade(ctx, row.ID); err != nil {
+			return api.Item{}, notSettled(err)
+		}
+		row.Made = true
 		if afterItemSession != nil {
 			afterItemSession(row.ID)
 		}
-	} else if err != nil {
-		return api.Item{}, notSettled(err)
 	}
 	return r.itemState(ctx, row), nil
 }
@@ -328,7 +347,10 @@ func (r *Runtime) FinishItems(ctx context.Context) error {
 	}
 	var errs []error
 	for _, row := range rows {
-		if _, err := r.K.Get(ctx, row.ID); !errors.Is(err, kairo.ErrUnknownRun) {
+		if row.Made { // its session was made: finished, whatever came of it since
+			if _, err := r.K.Get(ctx, row.ID); errors.Is(err, kairo.ErrUnknownRun) {
+				_, _ = r.finishItem(ctx, row) // ends it, closed
+			}
 			continue
 		}
 		if _, err := r.finishItem(ctx, row); err != nil {

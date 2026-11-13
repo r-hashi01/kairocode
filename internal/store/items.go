@@ -20,16 +20,17 @@ type ItemRow struct {
 	Branch  string
 	Base    string // the branch its worktree started from
 	Start   string // and the commit
+	Made    bool   // its session was made: never made again
 	Started time.Time
 	Ended   string // "" while kept; "taken" or "dropped"
 }
 
-const itemCols = `id, of, line, def, request, name, repo, dir, branch, base, start, started, ended`
+const itemCols = `id, of, line, def, request, name, repo, dir, branch, base, start, made, started, ended`
 
 func scanItem(sc interface{ Scan(...any) error }) (ItemRow, error) {
 	var r ItemRow
 	var at int64
-	err := sc.Scan(&r.ID, &r.Of, &r.Line, &r.Def, &r.Request, &r.Name, &r.Repo, &r.Dir, &r.Branch, &r.Base, &r.Start, &at, &r.Ended)
+	err := sc.Scan(&r.ID, &r.Of, &r.Line, &r.Def, &r.Request, &r.Name, &r.Repo, &r.Dir, &r.Branch, &r.Base, &r.Start, &r.Made, &at, &r.Ended)
 	r.Started = time.UnixMilli(at)
 	return r, err
 }
@@ -37,9 +38,9 @@ func scanItem(sc interface{ Scan(...any) error }) (ItemRow, error) {
 // AddItem keeps r as an item, unless one is kept under its id already:
 // the one kept, either way (a start made again finds the first).
 func (s *Store) AddItem(ctx context.Context, r ItemRow) (ItemRow, error) {
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO kc_item (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO kc_item (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
-		r.ID, r.Of, r.Line, r.Def, r.Request, r.Name, r.Repo, r.Dir, r.Branch, r.Base, r.Start, r.Started.UnixMilli(), r.Ended); err != nil {
+		r.ID, r.Of, r.Line, r.Def, r.Request, r.Name, r.Repo, r.Dir, r.Branch, r.Base, r.Start, r.Made, r.Started.UnixMilli(), r.Ended); err != nil {
 		return ItemRow{}, err
 	}
 	return s.Item(ctx, r.ID)
@@ -61,6 +62,12 @@ func (s *Store) Item(ctx context.Context, id string) (ItemRow, error) {
 // and commit it started from.
 func (s *Store) SetItemWorktree(ctx context.Context, id, dir, branch, base, start string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE kc_item SET dir = ?, branch = ?, base = ?, start = ? WHERE id = ?`, dir, branch, base, start, id)
+	return err
+}
+
+// SetItemMade notes that item id's session was made.
+func (s *Store) SetItemMade(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE kc_item SET made = 1 WHERE id = ?`, id)
 	return err
 }
 
