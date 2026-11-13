@@ -209,14 +209,14 @@ func (r *Runtime) checkRunAction(t *kairo.TaskContext, in workflows.CheckRunInpu
 	return out, nil
 }
 
-// checkCache is the folder's own cache directory for its checks, made if
-// need be; "" when there is none (the check runs without one), with why
-// when it could not be made.
+// checkCache is the cache directory of the checks of dir's repository
+// (its worktrees share it, ADR 0037), made if need be; "" when there is
+// none (the check runs without one), with why when it could not be made.
 func (r *Runtime) checkCache(dir string) (string, error) {
 	if r.cfg.CacheDir == "" {
 		return "", errors.New("the user's cache directory is not known")
 	}
-	sum := sha256.Sum256([]byte(dir))
+	sum := sha256.Sum256([]byte(storeKey(dir)))
 	d := filepath.Join(r.cfg.CacheDir, "checks", hex.EncodeToString(sum[:12]))
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		return "", err

@@ -12,11 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
+	"github.com/r-hashi01/kairocode/internal/gitdir"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
 	"github.com/r-hashi01/kairocode/internal/workflows"
@@ -32,10 +34,93 @@ import (
 // before its result is recorded: a crash test stops the process there.
 var afterRestore func()
 
-// snapshotStore is the bare repository that holds dir's snapshots.
+// snapshotStore is the bare repository that holds dir's snapshots: its
+// repository's, so the worktrees of one repository (ADR 0037) share their
+// objects, not a store each. A main checkout's is where it always was,
+// keyed by its path with links resolved, as its worktrees name it.
 func (r *Runtime) snapshotStore(dir string) string {
+	return r.folderStore(storeKey(dir))
+}
+
+// storeKey is the main checkout of dir's repository, links resolved: what the
+// worktrees of one repository share their stores by (ADR 0037's addendum).
+// A folder that is no linked worktree is its own.
+func storeKey(dir string) string {
+	main := gitdir.Main(dir)
+	if real, err := filepath.EvalSymlinks(main); err == nil {
+		main = real
+	}
+	return main
+}
+
+// folderStore is the store kept for dir alone, as each folder had one
+// before the worktrees of a repository shared theirs.
+func (r *Runtime) folderStore(dir string) string {
 	h := sha256.Sum256([]byte(dir))
 	return filepath.Join(filepath.Dir(r.cfg.DB), "snapshot", hex.EncodeToString(h[:12]))
+}
+
+// linkStores lets store read the snapshots dir took into another store:
+// the one it had of its own before the worktrees of a repository shared
+// theirs, and each it has used since. Which store is dir's depends on git's
+// files outside it (a worktree's link to its repository), which a person
+// can move or remove; the trees its turns recorded are still there to undo
+// to, whichever store dir has now. Git reads objects it does not have from
+// the stores its objects/info/alternates names; each is named there
+// itself, not through another (git follows no more than 5 such steps).
+func (r *Runtime) linkStores(dir, store string) error {
+	marker := r.folderStore(dir) + ".store" // the stores dir has used, a line each
+	b, _ := os.ReadFile(marker)
+	used := strings.Fields(string(b))
+	for _, other := range append([]string{r.folderStore(dir)}, used...) {
+		if other == store {
+			continue
+		}
+		if err := addAlternate(store, filepath.Join(other, "objects")); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(used, store) {
+		return nil
+	}
+	rnd := make([]byte, 4)
+	if _, err := rand.Read(rnd); err != nil {
+		return err
+	}
+	tmp := marker + ".tmp-" + hex.EncodeToString(rnd)
+	if err := os.WriteFile(tmp, []byte(strings.Join(append(used, store), "\n")+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, marker)
+}
+
+// addAlternate names objects in store's alternates, once, if it is there.
+func addAlternate(store, objects string) error {
+	if _, err := os.Stat(objects); err != nil {
+		return nil // no store there
+	}
+	alt := filepath.Join(store, "objects", "info", "alternates")
+	b, err := os.ReadFile(alt)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if line == objects {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(alt), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(alt, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(objects + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // snapGit runs git on dir's snapshots, in the sandbox, with the store and
@@ -87,7 +172,7 @@ func (r *Runtime) openStore(ctx context.Context, dir string) (store, index strin
 	}
 	index = filepath.Join(store, "index-"+hex.EncodeToString(b))
 	if _, err := os.Stat(filepath.Join(store, "config")); err == nil {
-		return store, index, nil
+		return store, index, r.linkStores(dir, store)
 	}
 	// Two sessions in one directory may make it at once.
 	lock, err := os.OpenFile(store+".lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -99,7 +184,7 @@ func (r *Runtime) openStore(ctx context.Context, dir string) (store, index strin
 		return "", "", err
 	}
 	if _, err := os.Stat(filepath.Join(store, "config")); err == nil {
-		return store, index, nil
+		return store, index, r.linkStores(dir, store)
 	}
 	if _, err := gitEnv(ctx, dir, store, nil, nil, "init", "--bare", "--quiet", store); err != nil {
 		return "", "", err
@@ -108,7 +193,7 @@ func (r *Runtime) openStore(ctx context.Context, dir string) (store, index strin
 	if _, err := gitEnv(ctx, dir, store, nil, nil, "--git-dir="+store, "config", "gc.auto", "0"); err != nil {
 		return "", "", err
 	}
-	return store, index, nil
+	return store, index, r.linkStores(dir, store)
 }
 
 func removeIndex(index string) {
