@@ -274,6 +274,14 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 		// refuse: a refusal is not loosened into a question (ADR 0005).
 		return workflows.PermissionOutput{Action: string(dec.Action), Rule: dec.Rule, Subject: subj}, false, nil
 	}
+	if in.Tool == tools.LineTool.Name {
+		// A line that cannot run here is refused before anyone is asked
+		// about it, saying why (ADR 0043).
+		if err := lineCanRun(t, in.Call.Dir, args); err != nil {
+			why := "the line cannot run here: " + err.Error()
+			return workflows.PermissionOutput{Action: string(permission.Deny), Rule: why, Reason: why, Subject: subj}, false, nil
+		}
+	}
 	if in.Tool == tools.LineTool.Name && subj == onTheSpot {
 		// A line put together on the spot (ADR 0043): asked every time,
 		// its stations shown, unless the settings refuse such lines.

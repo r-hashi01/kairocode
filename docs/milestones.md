@@ -243,6 +243,7 @@ Left for after M6 to M12: a VS Code extension, Windows, GitHub and serverless (A
 
 ## Future work not assigned to a milestone
 
+- **Update to kairo's main** (waits until the user's work on kairo settles, 2026-11-13): the fixes of kairo#2 to #7, with their workarounds removed, and `SignalID` (kairo's ADR 0071), with which a work item's notice to its conversation is sent once, not twice in a crash window (ADR 0043, implementation).
 - **How long what KairoCode keeps is kept** (the user's question, 2026-11-13): sessions left open keep their records for ever; messages (`kc_message`) are never removed; snapshot stores are never pruned (`gc.auto 0`). Measured then: 36MB of records and messages, 112MB of snapshots. Needs an ADR of its own: closing sessions long unused, removing messages nothing refers to (invariant 5 says they are never rewritten, not that they are kept for ever), and thinning old snapshots.
 - **Make a flow from a session's contents** (the user's idea, 2026-10-22): from the record of a session that went well (what was asked, the tools called, where approvals were given), write a flow (`.kairocode/workflows`) that can repeat the same procedure.
   - The material is the browsing record (`Runtime.Log`, `kairocode log -json`). We are thinking of having the model read it and write the flow with the same mechanism as `/flow new` (the review screen, try).

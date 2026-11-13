@@ -294,7 +294,10 @@ func checkDecisionOf(dir string, c workflows.Check, mode string) []byte {
 }
 
 // checkModesAction says how each check may run: the user's own always;
-// a project's as the user said in this folder, else ask.
+// a project's as the user said in this repository (its worktrees share
+// it, as trust does: an item's worktree is not asked again, ADR 0043), or
+// in this folder before that, else ask. The check's command is in the key:
+// one that changed is asked about again.
 func (r *Runtime) checkModesAction(t *kairo.TaskContext, in workflows.CheckModesInput) ([]string, error) {
 	out := make([]string, len(in.Checks))
 	for i, c := range in.Checks {
@@ -303,14 +306,17 @@ func (r *Runtime) checkModesAction(t *kairo.TaskContext, in workflows.CheckModes
 			continue
 		}
 		out[i] = workflows.CheckAsk
-		for _, mode := range []string{workflows.CheckRun, workflows.CheckNever} {
-			_, _, err := r.Store.Get(t, store.Hash(kindCheckDecision, checkDecisionOf(in.Dir, c, mode)))
-			if err == nil {
-				out[i] = mode
-				break
-			}
-			if !errors.Is(err, store.ErrNotFound) {
-				return nil, err
+	find:
+		for _, dir := range []string{storeKey(in.Dir), in.Dir} {
+			for _, mode := range []string{workflows.CheckRun, workflows.CheckNever} {
+				_, _, err := r.Store.Get(t, store.Hash(kindCheckDecision, checkDecisionOf(dir, c, mode)))
+				if err == nil {
+					out[i] = mode
+					break find
+				}
+				if !errors.Is(err, store.ErrNotFound) {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -319,7 +325,7 @@ func (r *Runtime) checkModesAction(t *kairo.TaskContext, in workflows.CheckModes
 
 // checkDecideAction keeps how the user said a project's check runs.
 func (r *Runtime) checkDecideAction(t *kairo.TaskContext, in workflows.CheckDecideInput) (bool, error) {
-	_, err := r.Store.Put(t, kindCheckDecision, checkDecisionOf(in.Dir, in.Check, in.Mode))
+	_, err := r.Store.Put(t, kindCheckDecision, checkDecisionOf(storeKey(in.Dir), in.Check, in.Mode))
 	return true, err
 }
 

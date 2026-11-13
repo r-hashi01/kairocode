@@ -174,7 +174,7 @@ func TestItemWaitsInConversation(t *testing.T) {
 	sandboxtest.Require(t)
 	ws := itemRepo(t, "")
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1,
-		Script: []provider.FakeReply{lineCall(`{"line": "gated", "request": "make the file fixed"}`), {Text: "Sent it."}, {Text: "Noted."}, {Text: "Noted again."}},
+		Script: []provider.FakeReply{lineCall(`{"line": "gated", "request": "make the file fixed"}`), {Text: "Sent it."}, {Text: "Noted."}, {Text: "Noted again."}, {Text: "Noted."}, {Text: "Noted."}},
 		Steps:  map[string][]provider.FakeReply{`You are at the station "build"`: {writeCall("fixed", "x"), {Text: "fixed"}}},
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -209,6 +209,26 @@ func TestItemWaitsInConversation(t *testing.T) {
 	if conv := strings.Join(conversationOf(t, r, s, false), "\n"); !strings.Contains(conv, "[KairoCode] The item gated-1 (line gated) is done") {
 		t.Fatalf("conversation:\n%s", conv)
 	}
+	// The check answered for the repository is not asked about again in
+	// another item's worktree.
+	two, err := r.StartItem(ctx, s, "again", tools.ItemSpec{Line: "gated", Request: "again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		items, _ := r.Items(ctx, s)
+		if len(items) == 2 && items[1].State == api.ItemWaiting {
+			t.Fatalf("asked again: %+v", items[1])
+		}
+		if len(items) == 2 && items[1].State == api.ItemDone {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("item %s: %+v", two.Name, items)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 // A line put together on the spot is asked about every time, its stations
@@ -236,6 +256,21 @@ func TestLineOnTheSpot(t *testing.T) {
 	}
 	if items, _ := r.Items(ctx, s); len(items) != 0 {
 		t.Fatalf("items %+v", items)
+	}
+
+	// A line that cannot run (a check not declared) is refused before
+	// anyone is asked, saying why.
+	ws3 := itemRepo(t, "")
+	r3 := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		lineCall(`{"stations": [{"name": "build", "agent": "build", "checks": ["gofmt"]}], "request": "make it"}`), {Text: "Not sent."}}})
+	s3, _ := r3.CreateSession(ctx, "conv3", workflows.SessionInput{Dir: ws3})
+	n, _ = r3.Send(ctx, s3, "go")
+	if _, err := r3.WaitTurn(ctx, s3, n); err != nil {
+		t.Fatal(err)
+	}
+	if conv := strings.Join(conversationOf(t, r3, s3, true), "\n"); !strings.Contains(conv, `the line cannot run here: the line, station \"build\": no check named \"gofmt\"`) &&
+		!strings.Contains(conv, `the line cannot run here: the line, station "build": no check named "gofmt"`) {
+		t.Fatalf("conversation:\n%s", conv)
 	}
 
 	ws2 := itemRepo(t, `{"permission": {"line": "allow"}, "lines": {"onTheSpot": "deny"}, "checks": {"fixed": {"command": "test -f fixed"}}}`)
@@ -372,7 +407,7 @@ func crashItemChild() {
 		select {}
 	}
 	switch os.Getenv("KC_CRASH_ITEM_CHILD") {
-	case "worktree":
+	case "worktree", "finish":
 		afterItemWorktree = hold
 	case "session":
 		afterItemSession = hold
@@ -398,7 +433,9 @@ func TestCrashStartingItem(t *testing.T) {
 	if testing.Short() {
 		t.Skip("crash test: starts and kills a process")
 	}
-	for _, at := range []string{"worktree", "session", "commit"} {
+	// finish: held as at worktree, and not started again: the daemon
+	// finishes it as it starts (a person's /line has no call made again).
+	for _, at := range []string{"worktree", "session", "commit", "finish"} {
 		t.Run(at, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
@@ -430,19 +467,23 @@ func TestCrashStartingItem(t *testing.T) {
 			}
 			defer r.Close()
 			s := SessionID("conv")
-			it, err := r.StartItem(ctx, s, "the-call", tools.ItemSpec{Line: "quick", Request: "write the notes"})
-			if err != nil {
-				t.Fatal(err)
+			if at != "finish" {
+				it, err := r.StartItem(ctx, s, "the-call", tools.ItemSpec{Line: "quick", Request: "write the notes"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if it.Name != "quick-1" {
+					t.Fatalf("item %+v", it)
+				}
 			}
-			if it.Name != "quick-1" {
+			if it := waitItem(t, ctx, r, s, api.ItemDone, api.ItemStopped, api.ItemFailed); it.State != api.ItemDone {
 				t.Fatalf("item %+v", it)
 			}
-			if it = waitItem(t, ctx, r, s, api.ItemDone, api.ItemStopped, api.ItemFailed); it.State != api.ItemDone {
-				t.Fatalf("item %+v", it)
-			}
-			if items, _ := r.Items(ctx, s); len(items) != 1 {
+			items, _ := r.Items(ctx, s)
+			if len(items) != 1 || items[0].Name != "quick-1" {
 				t.Fatalf("items %+v", items)
 			}
+			it := items[0]
 			if wts := strings.Count(gitT(t, ws, "worktree", "list", "--porcelain"), "worktree "); wts != 2 {
 				t.Fatalf("%d worktrees, want the main checkout and one", wts)
 			}
@@ -511,5 +552,17 @@ func TestItemsAtOnce(t *testing.T) {
 	}
 	if items, _ := r.Items(ctx, s); len(items) != 2 {
 		t.Fatalf("items %+v", items)
+	}
+	// A conversation in a subfolder sends items as one at the top does.
+	sub := filepath.Join(ws, "internal")
+	os.MkdirAll(sub, 0o755)
+	s2, _ := r.CreateSession(ctx, "sub", workflows.SessionInput{Dir: sub})
+	os.Remove(filepath.Join(ws, ".kairocode/lines/new.json"))
+	if os.WriteFile(release, nil, 0o600) != nil {
+		t.Fatal("release")
+	}
+	waitItem(t, ctx, r, s, api.ItemDone)
+	if it, err := r.StartItem(ctx, s2, "e", tools.ItemSpec{Line: "quick", Request: "x"}); err != nil || it.State == api.ItemFailed {
+		t.Fatalf("from a subfolder: %+v %v", it, err)
 	}
 }

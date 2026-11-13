@@ -38,6 +38,11 @@ func (s *Server) startItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := s.rt.StartNamedItem(r.Context(), sessionOf(r), in.Call, in.ItemSpec)
+	for try := 0; errors.Is(err, tools.ErrNotSettled) && try < 3 && r.Context().Err() == nil; try++ {
+		// Begun and not finished: finished now, with the same call (the
+		// daemon finishes it as it starts, else).
+		it, err = s.rt.StartNamedItem(r.Context(), sessionOf(r), in.Call, in.ItemSpec)
+	}
 	if err != nil {
 		code := http.StatusBadRequest
 		if errors.Is(err, api.ErrItemsCap) {

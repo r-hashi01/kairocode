@@ -200,8 +200,12 @@ Where it differs from the decision above, or settles what it left open:
 - **Where the items are kept:** a table of their own, `kc_item`, not a kind of the content store. An item's session id comes from the starting call's idempotency key (its step's id, the same in every attempt).
 - **Only a person's listing takes items** (`/items`, `kairocode items`) and the daemon as it starts: the `items` tool only reads.
 - **`line` is not given to a CLI engine** (Claude Code, the ACP agents). It makes a call again, after it is cut off, as a new run, with a new key.
-- **Notices may come twice, in one window.** Decision 5 says a notice is sent once. That needs a signal kairo keeps once under a name (`SignalID`, kairo's ADR 0071), which the kairo KairoCode is built on (v0.4.1) does not have. Until KairoCode moves to it (the update waits, `docs/milestones.md`), a process stopped between sending a notice and keeping it as told sends it again, once.
+- **Notices may come twice, in one window.** Decision 5 says a notice is sent once. That needs a signal kairo keeps once under a name (`SignalID`, kairo's ADR 0071), which the kairo KairoCode is built on (v0.4.1) does not have. Until KairoCode moves to it (the update waits for the user's work on kairo; `docs/milestones.md`, future work), a process stopped between sending a notice and keeping it as told sends it again, once.
 - **A flow station's run says where on the line it is** (`FlowInput.At`), as an agent station's does, so two stations running one flow with the same words are two children (invariant 8).
+- **A line that cannot run is refused before anyone is asked** (permission.check reads it, as the call's decision): a station naming a check not declared, an agent or flow not there. The `line` tool's description names the checks declared, which the model found no other way.
+- **A project's check answered in a repository is answered for its worktrees** (the decision is kept by the repository's main checkout, as trust is, ADR 0037): an item's worktree is a new folder, and was asked again for each item. The check's command is in the key, so one changed is asked about again.
+- **Lines are read at the repository's top**, as the item's worktree has them, wherever in it the conversation is.
+- **A start cut off is finished.** The model's call is made again with its key. A person's `/line` is finished by the daemon as it starts (`FinishItems`), and the daemon's API tries it again at once.
 - **Not done in this step:** the status line's count of items running and waiting (the notices and `/items` say it).
 - **Tests:**
   - `TestLinesRead`, `TestLineWrite`;

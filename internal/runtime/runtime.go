@@ -290,6 +290,9 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	r.background(r.keepMissed)               // the flows' runs a stopped process did not keep (ADR 0029)
 	r.background(r.notifyLoop)               // telling of requests outside the machine (ADR 0034)
 	r.background(func(ctx context.Context) { // items whose branch was merged meanwhile (ADR 0043)
+		if err := r.FinishItems(ctx); err != nil && ctx.Err() == nil {
+			r.logf("the items not started: %v", err)
+		}
 		if err := r.TakeAllItems(ctx); err != nil && ctx.Err() == nil {
 			r.logf("the items taken: %v", err)
 		}

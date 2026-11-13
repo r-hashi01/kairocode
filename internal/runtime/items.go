@@ -71,12 +71,23 @@ func (r *Runtime) isItem(ctx context.Context, session string) bool {
 // standardLines is what the line tool's description adds: the project's
 // lines, as they are when the turn starts (agent.load, invariant 2).
 func standardLines(dir string) string {
+	var b strings.Builder
+	// What a station's checks may name: the checks declared, by name.
+	if c, err := readChecks(dir); err == nil && c != nil && len(c.Defs) > 0 {
+		names := make([]string, len(c.Defs))
+		for i, d := range c.Defs {
+			names[i] = d.Name
+		}
+		fmt.Fprintf(&b, "\n\nA station's checks name checks declared in kairocode.json, and only those: %s.", strings.Join(names, ", "))
+	} else {
+		b.WriteString("\n\nNo checks are declared in kairocode.json: a station has no checks.")
+	}
 	all, err := lines.List(dir)
 	if err != nil || len(all) == 0 {
-		return "\n\nThe project has no standard lines (.kairocode/lines): put one together for the request, or do the work in this turn."
+		b.WriteString("\nThe project has no standard lines (.kairocode/lines): put one together for the request, or do the work in this turn.")
+		return b.String()
 	}
-	var b strings.Builder
-	b.WriteString("\n\nThe project's standard lines:")
+	b.WriteString("\nThe project's standard lines:")
 	for _, e := range all {
 		if e.Err != nil {
 			continue
@@ -84,6 +95,35 @@ func standardLines(dir string) string {
 		fmt.Fprintf(&b, "\n- %s: %s (%s)", e.Name, e.Line.Description, stationsText(e.Line.Stations))
 	}
 	return b.String()
+}
+
+// lineCanRun checks the line a line call names or puts together, for the
+// top folder of the repository the conversation's folder dir is in (as the
+// item's worktree has it).
+func lineCanRun(ctx context.Context, dir string, args json.RawMessage) error {
+	if _, top, err := repoOf(ctx, dir); err == nil {
+		dir = top
+	}
+	var in tools.ItemSpec
+	if err := json.Unmarshal(args, &in); err != nil {
+		return err
+	}
+	var line workflows.Line
+	switch {
+	case in.Line != "":
+		l, err := lines.Read(dir, in.Line)
+		if err != nil {
+			return err
+		}
+		line = l
+	case len(in.Stations) > 0:
+		if err := json.Unmarshal(in.Stations, &line.Stations); err != nil {
+			return fmt.Errorf("stations: %w", err)
+		}
+	default:
+		return nil // the tool says what is missing
+	}
+	return checkLine(dir, line)
 }
 
 // stationsText says a line's stations on one line.
@@ -181,7 +221,7 @@ func ItemsText(items []api.Item) string {
 			fmt.Fprintf(&b, " (%s)", firstLine(it.Why))
 		}
 		if it.Waiting > 0 {
-			fmt.Fprintf(&b, ", %d waiting for you", it.Waiting)
+			fmt.Fprintf(&b, " for you (%d)", it.Waiting)
 		}
 		fmt.Fprintf(&b, "  branch %s  tokens in %d out %d", it.Branch, it.Usage.Input, it.Usage.Output)
 		if it.Stale {
@@ -200,24 +240,35 @@ func ItemsText(items []api.Item) string {
 // and finishes what it began. A line the worktree cannot run (its files not
 // committed) ends the item, failed and cleaned up: that is settled.
 func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec tools.ItemSpec) (api.Item, error) {
+	name := itemSessionName(conversation, key)
+	id := SessionID(name)
+	row, err := r.Store.Item(ctx, id)
+	if err == nil { // kept before: finished from where it was
+		return r.finishItem(ctx, row)
+	} else if !errors.Is(err, store.ErrNoItem) {
+		return api.Item{}, notSettled(err)
+	}
 	dir, err := r.sessionDir(ctx, conversation)
 	if err != nil {
 		return api.Item{}, err
 	}
-	main, _, err := repoOf(ctx, dir)
+	main, top, err := repoOf(ctx, dir)
 	if err != nil {
 		return api.Item{}, ErrItemsNoGit
 	}
-	name := itemSessionName(conversation, key)
-	id := SessionID(name)
-	row, err := r.Store.Item(ctx, id)
-	if errors.Is(err, store.ErrNoItem) {
-		if row, err = r.newItem(ctx, conversation, dir, main, id, spec); err != nil {
-			return api.Item{}, err
-		}
-	} else if err != nil {
-		return api.Item{}, notSettled(err)
+	if row, err = r.newItem(ctx, conversation, top, main, id, spec); err != nil {
+		return api.Item{}, err
 	}
+	return r.finishItem(ctx, row)
+}
+
+// finishItem makes what item row has not got yet: its worktree, then its
+// session, whose first turn runs the line. Each step looks for what it
+// would make first, so done again (a crash between) it makes nothing
+// twice. An error is not settled (tools.ErrNotSettled): it is done again.
+// A line the worktree cannot run ends the item, failed and cleaned up:
+// that is settled.
+func (r *Runtime) finishItem(ctx context.Context, row store.ItemRow) (api.Item, error) {
 	if row.Ended != "" { // ended as it started (failed): said, not started again
 		return r.itemState(ctx, row), fmt.Errorf("the item %s %s", row.Name, row.Ended)
 	}
@@ -226,11 +277,15 @@ func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec 
 		return api.Item{}, err
 	}
 	if row.Dir == "" {
+		dir, err := r.sessionDir(ctx, row.Of)
+		if err != nil {
+			return api.Item{}, notSettled(err)
+		}
 		if row, err = r.itemWorktree(ctx, dir, row); err != nil {
 			return api.Item{}, notSettled(err)
 		}
 	}
-	if _, err := r.K.Get(ctx, id); errors.Is(err, kairo.ErrUnknownRun) {
+	if _, err := r.K.Get(ctx, row.ID); errors.Is(err, kairo.ErrUnknownRun) {
 		// What the worktree has (HEAD's files) must run the line: else the
 		// item ends here, failed.
 		if err := checkLine(row.Dir, line); err != nil {
@@ -241,26 +296,46 @@ func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec 
 			return api.Item{}, errors.New(why)
 		}
 		var conv workflows.SessionInput
-		if info, err := r.K.Get(ctx, conversation); err == nil {
+		if info, err := r.K.Get(ctx, row.Of); err == nil {
 			_ = json.Unmarshal(input(info), &conv)
 		}
 		request, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: row.Request}}})
 		if err != nil {
 			return api.Item{}, notSettled(err)
 		}
-		if _, err := r.CreateSession(ctx, name, workflows.SessionInput{Dir: row.Dir, Engine: conv.Engine, Model: conv.Model, Effort: conv.Effort,
-			Item: &workflows.ItemRef{Of: conversation, Line: row.Line, Run: &line, Request: request}}); err != nil {
-			if _, gerr := r.K.Get(ctx, id); gerr != nil { // not made by another at once
+		if _, err := r.CreateSession(ctx, strings.TrimPrefix(row.ID, "s/"), workflows.SessionInput{Dir: row.Dir, Engine: conv.Engine, Model: conv.Model, Effort: conv.Effort,
+			Item: &workflows.ItemRef{Of: row.Of, Line: row.Line, Run: &line, Request: request}}); err != nil {
+			if _, gerr := r.K.Get(ctx, row.ID); gerr != nil { // not made by another at once
 				return api.Item{}, notSettled(err)
 			}
 		}
 		if afterItemSession != nil {
-			afterItemSession(id)
+			afterItemSession(row.ID)
 		}
 	} else if err != nil {
 		return api.Item{}, notSettled(err)
 	}
 	return r.itemState(ctx, row), nil
+}
+
+// FinishItems finishes the starts of items a process stopped before
+// finishing: kept, with no session yet (a person's /line has no call made
+// again to finish it). The daemon does it as it starts.
+func (r *Runtime) FinishItems(ctx context.Context) error {
+	rows, err := r.Store.ItemsKept(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, row := range rows {
+		if _, err := r.K.Get(ctx, row.ID); !errors.Is(err, kairo.ErrUnknownRun) {
+			continue
+		}
+		if _, err := r.finishItem(ctx, row); err != nil {
+			errs = append(errs, fmt.Errorf("finishing the start of the item %s: %w", row.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // notSettled marks err as a start not finished: the call is made again.
@@ -288,7 +363,8 @@ func (r *Runtime) itemWorktree(ctx context.Context, dir string, row store.ItemRo
 	return row, nil
 }
 
-// newItem checks spec's line for the conversation's folder, and keeps the
+// newItem checks spec's line for the repository's top folder (as the
+// item's worktree has it, wherever in it the conversation is), and keeps the
 // item it starts, with the name its worktree is to have, before anything
 // is made: a start made again makes it under that name. One item at a time
 // is kept in this runtime (itemMu): two starts at once (two calls of one
@@ -519,7 +595,7 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 			return err
 		}
 		// Once KairoCode is on a kairo with SignalID (kairo's ADR 0071;
-		// the update waits, docs/milestones.md), it makes this once. Until
+		// the update waits: docs/milestones.md, future work), it makes this once. Until
 		// then a process stopped between sending and keeping it as told
 		// sends it again, once (ADR 0043, implementation).
 		if _, err := r.Send(ctx, row.Of, text); err != nil {
