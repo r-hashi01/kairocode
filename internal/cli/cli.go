@@ -1010,5 +1010,24 @@ func writeFlowStats(w io.Writer, stats []api.FlowStat) error {
 		}
 		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n", name, s.Runs, s.OK, s.Failed, s.Running, runtime.FlowFrom(s.From), last)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	// Each flow's gates (ADR 0042): how much of the work they checked
+	// passed at once, after being sent back, or not at all.
+	for _, s := range stats {
+		if len(s.Gates) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "\n%s: gates\n", s.Name)
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  GATE\tCHECKS\tAT\tPASSED AT ONCE\tPASSED LATER\tSTOPPED")
+		for _, g := range s.Gates {
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%d\t%d\t%d\n", g.Kind, g.Checks, g.At, g.First, g.Later, g.Stopped)
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

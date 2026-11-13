@@ -37,6 +37,7 @@ const (
 	Tool     = "tool"
 	Ask      = "ask"
 	Decide   = "decide"
+	Gate     = "check"    // a check as a step of its own (ADR 0042): Title
 	Parallel = "parallel" // agents at once: Branches, or Body for each of Over
 	If       = "if"       // Then, Else on Cond
 	Loop     = "loop"     // Body, while or for Cond
@@ -466,6 +467,12 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 	case "decide":
 		text, code := b.argOf(x, 0, "prompt")
 		return at(Node{Kind: Decide, Title: b.arg(x, 1, "type"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "prompt")))})
+	case "check":
+		// A script's own def check() (from before check() was a
+		// primitive, ADR 0042) is what it calls: it shadows the primitive.
+		if _, own := b.defs[fn]; !own {
+			return at(Node{Kind: Gate, Title: b.arg(x, 0, "name")})
+		}
 	case "phase":
 		b.phase = b.arg(x, 0, "name")
 		return []Node{{Kind: Phase, Text: b.phase}}

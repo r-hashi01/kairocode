@@ -13,7 +13,7 @@ import (
 
 // Primitives are the names a flow's script is given (internal/workflows'
 // flowRun.builtins): what it can call besides Starlark's own.
-var Primitives = []string{"agent", "parallel", "tool", "ask", "decide", "phase"}
+var Primitives = []string{"agent", "parallel", "tool", "ask", "decide", "phase", "check"}
 
 // Check looks at a flow's script without running it: does it parse, does
 // it name only what exists (Starlark's own, the primitives, its own

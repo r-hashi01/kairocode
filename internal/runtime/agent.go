@@ -398,7 +398,14 @@ func (r *Runtime) agentLoad(t *kairo.TaskContext, in workflows.AgentLoadInput) (
 	if err != nil {
 		return workflows.Agent{}, err
 	}
+	// The checks (ADR 0042), kept for the turn as its rules are: the work
+	// is gated by them as they were when it started.
+	checks, err := readChecks(in.Dir)
+	if err != nil {
+		return workflows.Agent{}, err
+	}
 	return workflows.Agent{
+		Checks:      checks,
 		Limits:      limits,
 		Context:     ctxTokens,
 		External:    external,

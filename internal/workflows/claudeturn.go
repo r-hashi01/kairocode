@@ -17,7 +17,7 @@ import (
 // waits for each answer here (the process may stop meanwhile), records it,
 // and resumes claude with the answers; the call made again then goes by
 // the recorded answer.
-func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string]ExtRef) (TurnOutput, error) {
+func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string]ExtRef, g *gate) (TurnOutput, error) {
 	out := TurnOutput{}
 	note := ""
 	// The Claude Code session is the KairoCode session's, so its turns
@@ -57,7 +57,7 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string
 			Note: note, Round: round, Epoch: in.Epoch, History: history, Engine: engine, Effort: agent.Effort,
 			Session: session, Turn: ctx.ID(), Dir: in.Dir, Model: agent.Model,
 			System: agent.System, Tools: agent.Names, Message: in.Message, Ext: ext,
-			Policy: autoPolicy(agent, in), Hooks: hooks,
+			Policy: autoPolicy(agent, in, g), Hooks: hooks,
 		})
 		if err != nil {
 			return TurnOutput{}, err
@@ -66,6 +66,25 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string
 		out.Steps += r.Turns
 		out.Reply = r.Message
 		if len(r.Asks) == 0 {
+			if g != nil {
+				// The gate (ADR 0042): checks that do not pass send the
+				// agent back, until its rounds are spent; then the turn
+				// stops.
+				n, err := passGate(ctx, g, &out)
+				if err != nil {
+					return TurnOutput{}, err
+				}
+				if out.Stopped != "" {
+					if err := notDone(ctx, &out); err != nil {
+						return TurnOutput{}, err
+					}
+					break
+				}
+				if n != "" {
+					note = n
+					continue
+				}
+			}
 			// The turn.end command hooks (Claude Code's Stop): one that
 			// does not pass sends the agent back (at most maxHookRounds).
 			if in.Sub || hookRounds == maxHookRounds || !hasCommandHook(agent.Hooks, HookTurnEnd) {
@@ -133,8 +152,8 @@ func runClaudeTurn(ctx *kairo.Context, in TurnInput, agent Agent, ext map[string
 
 // autoPolicy is a CLI engine's turn's policy: in auto mode, judged
 // against the turn's message (ADR 0016).
-func autoPolicy(agent Agent, in TurnInput) Policy {
-	p := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback}
+func autoPolicy(agent Agent, in TurnInput, g *gate) Policy {
+	p := Policy{Rules: agent.Permissions, ReadOnly: agent.ReadOnly, Dry: in.Dry, Loopback: agent.Loopback, Protect: g.protected()}
 	if in.Mode == ModeAuto {
 		p.Auto, p.Request = true, in.Message
 	}

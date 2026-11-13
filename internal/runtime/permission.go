@@ -245,6 +245,14 @@ func (r *Runtime) decide(t *kairo.TaskContext, in workflows.PermissionInput) (wo
 	if in.Policy.ReadOnly && d.Effect != tools.Read {
 		return workflows.PermissionOutput{Action: string(permission.Deny), Rule: "plan mode: only tools that read", Subject: subj}, false, nil
 	}
+	if len(in.Policy.Protect) > 0 && (in.Tool == tools.EditTool.Name || in.Tool == tools.WriteTool.Name) {
+		// A file a check of the turn's gate protects (ADR 0042): the work
+		// it gates may not change it.
+		if g, ok := protects(in.Call.Dir, subj, in.Policy.Protect); ok {
+			why := fmt.Sprintf("a check that decides whether the work is done protects this file (%q)", g)
+			return workflows.PermissionOutput{Action: string(permission.Deny), Rule: why, Reason: why, Subject: subj}, false, nil
+		}
+	}
 	if in.MCP != nil && in.MCP.Repeat {
 		// The same real call ran before Claude Code was cut off, and Claude
 		// Code makes it again: it may not have kept the result. Running it

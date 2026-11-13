@@ -132,11 +132,30 @@ def main(input):
     return {"ok": True, "message": r.output}
 ```
 
-- What a flow can call: `agent` (a subagent), `parallel`, `tool`, `ask` (ask a person), `decide` (a typed decision), `phase`.
+- What a flow can call: `agent` (a subagent), `parallel`, `tool`, `ask` (ask a person), `decide` (a typed decision), `check` (one of the project's checks, below), `phase`.
 - Run one with `/flow <name> <args>`. `/flow new <description>` has one written from your words; you check its chart and try it before it is saved. `/flow new --from-session [what to make of it]` has one written from what this session did (the record: what was asked, the tools called, the approvals), to do it again; `--from-session=<id>` takes another session of the folder.
 - In the terminal UI, `/flow` alone opens the list of flows. Pick one to see how it is used and its chart, then run it, change it on its chart (`e`), or look at its past runs (`r`). The last row, "make a new flow", starts `/flow new`.
 - `kairocode flow graph <name>` draws a flow, `kairocode flow show -follow <session>` shows one as it runs, and `kairocode flow runs` lists past runs.
 - If it crashes midway, the `agent` and `tool` calls that finished are not run again.
+
+## Checks: who decides the work is done
+
+Declare the commands that tell whether work is done, in `kairocode.json`. Work they gate is done only when they pass, not when the model says so:
+
+```json
+{"checks": {
+  "test": {"command": "go test ./...", "timeout": "10m", "protect": ["*_test.go", "testdata/*"]},
+  "lint": {"command": "golangci-lint run"},
+  "turn": ["lint"],
+  "rounds": 3
+}}
+```
+
+- A flow gates an agent with them: `agent("build", "make the tests pass", checks = ["test"])`. When a check fails, the agent is sent back with its output, up to `rounds` times; then `.ok` is `False`, `.error` is `"checks"`, and `.checks` has each check's verdict, for the flow to decide what follows. `check("test")` runs one as a step of its own.
+- `turn` names the checks a plain turn (the chat, `kairocode run`) must pass. A turn that cannot get them to pass stops with `checks`, and its reply says it is not done. With no `turn`, a turn is not checked, as before.
+- A check runs in KairoCode's sandbox: it may write in the project only, with no network but this machine's. A project's check is asked about before it first runs in a folder. A check cut off by a crash runs again; the agent is not asked again.
+- `protect`: files the gated work may not change (`*` crosses `/`). `edit` and `write` refuse them, and a change by any other means fails the gate. Protect only what the check reads: a check that writes a file it protects fails its own gate.
+- Each check's run and verdict are in the record (`kairocode log`), and `kairocode flow stats` shows how often each flow's gates passed at once, after rounds, or not at all.
 
 ## Permissions and the sandbox
 
@@ -170,6 +189,7 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `http` | Credentials for the `http` and `fetch` tools (`auth`), and whether local addresses are allowed (`allowPrivate`) | Yours |
 | `models.<name>.context` | A model's context length (when summarizing starts) | Yours |
 | `models.<name>.price` | A model's price in US dollars per million tokens (`input`, `output`, `cache_read`, `cache_write`), for a model KairoCode does not know or to correct one | Yours |
+| `checks` | Commands that decide when work is done, the checks a plain turn must pass (`turn`) and how often they send it back (`rounds`, 3). See [Checks](#checks-who-decides-the-work-is-done) | Yours, the project's (a project's check is asked about first) |
 | `limits` | Limits that stop a turn before its next model call: `turn.steps` (50), `turn.time` (`"30m"`; waits for you not counted), and `tokens` or `cost` (US dollars) for `session`, `day` (from 00:00) and `week` (from Monday); `warn` (0.8) is when you are warned. See below | Yours, the project's (the smaller of each) |
 | `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |
 | `rateLimits` | Requests (`rpm`) and tokens (`tpm`) a minute, by provider: `anthropic`, or an OpenAI-compatible provider's name. Calls of every session wait their turn, and a 429 holds them back as long as it asks | Yours, the project's (the smaller of each) |

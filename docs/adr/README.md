@@ -49,3 +49,5 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0038](0038-answer-requests-from-outside.md) | Answering requests from outside the machine: the notify flow reads the answer and gives it | Rejected |
 | [0039](0039-usage-and-limits.md) | Usage and limits: what has been used, shown as Claude Code and Codex show it, and limits that stop a turn | Accepted (2026-11-09) |
 | [0040](0040-provider-rate-limits.md) | Rate limits per provider: requests and tokens a minute, and the waits a 429 asks for | Accepted (2026-11-09) |
+| [0041](0041-results-other-programs-read.md) | Results other programs read: `-json` and an exit code for each way a turn ends | Proposed |
+| [0042](0042-checks-decide-done.md) | Checks decide when work is done: gates on a flow's agents, and after a turn | Accepted (2026-11-13) |

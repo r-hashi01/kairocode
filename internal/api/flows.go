@@ -121,6 +121,21 @@ type FlowStat struct {
 	Last    time.Time      `json:"last,omitzero"`
 	// Defined: the project has its script now.
 	Defined bool `json:"defined"`
+	// Gates: how the work its gates checked went (ADR 0042), by gate.
+	Gates []GateStat `json:"gates,omitempty"`
+}
+
+// GateStat is how the work one gate of a flow checked went: a gated
+// agent(), or a check() (Kind), where in the script (At), with which
+// checks. First: passed at once; Later: passed after the agent was sent
+// back; Stopped: did not pass.
+type GateStat struct {
+	Kind    string `json:"kind"`
+	At      string `json:"at"`
+	Checks  string `json:"checks"`
+	First   int    `json:"first"`
+	Later   int    `json:"later"`
+	Stopped int    `json:"stopped"`
 }
 
 // States of a call of a flow, as its chart shows them.
