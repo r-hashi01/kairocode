@@ -184,3 +184,34 @@ func linesCommand(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	return nil
 }
+
+// gcCommand sweeps now what nothing reaches, and what is past its time
+// (ADR 0045).
+func gcCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("gc", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	dry := fs.Bool("dry-run", false, "only say what would be removed")
+	asJSON := fs.Bool("json", false, "as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	rep, err := c.Sweep(ctx, *dry)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(stdout).Encode(rep)
+	}
+	what := "removed"
+	if *dry {
+		what = "would remove"
+	}
+	_, err = fmt.Fprintf(stdout, "%s: %s\n", what, rep)
+	return err
+}

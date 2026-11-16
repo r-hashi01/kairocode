@@ -79,3 +79,35 @@ There is a second problem, in the other direction. An item's record is its sessi
 - **Close idle sessions after a while.** It would bound the most. But a conversation is the person's, and closing it loses a place the person may come back to. Instead `kairocode sessions` shows each session's size, and closing is left to the person.
 - **Keep everything, and let people delete the data directory.** That is today's behaviour. It does not scale to lines running unattended, and deleting the directory loses the record too.
 - **Keep the whole tree of an ended item (a longer `KeepFinished`).** kairo's `KeepFinished` applies to every tree, and an item's tree holds every model call's input. The result in 4 is the part that is evidence, and it is small.
+
+## Implementation (2026-11-16, M17)
+
+- `internal/runtime/sweep.go`.
+  - `Sweep`, with `sweepRoots` (every run kairo holds, walked from `List` through `Children`, and `Store.RootTexts`).
+  - `sweepMessages`, `sweepSnapshots`, `sweepSessionRows`, `sweepItems`, `sweepCaches`, `retentionSettings`.
+  - `sweepDue` runs it in the background once a day, only in the daemon's runtime (`Config.Sweep`). It is called as the runtime opens and as a session closes; an item's end closes its session.
+- `internal/store/sweep.go` has the queries. Columns added: `kc_message.at`, `kc_item.result` and `kc_item.ended_at`. Table added: `kc_sweep`.
+- **Which messages are swept.** Only the content kinds (`store.ContentKinds`: message, history, system, tools, content, permissions, image). The other kinds of `kc_message` are markers of decisions and notices (a check's decision, a hook's trust, a line's stop told), and are never swept.
+- **The roots are read in one `List`, not in pages.** A page asked for "after" a run that kairo removed meanwhile comes back empty. The roots after it, the newest and live ones among them, would then go unmarked (found in review).
+- **Each part of the sweep runs whatever another came to**, and the errors are joined. A machine where git's sandbox cannot start still sweeps its messages, usage, items and caches.
+- **Marking** follows every `sha256:` string, in the records and in each reached message's body. A reached message therefore keeps the images and messages it names.
+- **Snapshot roots** are every git object name found in the records. One tree, `refs/kairocode/keep`, holds them as subtrees, and `git gc --prune=<grace>` runs in the sandbox with the store writable, as snapshots are taken.
+  - The prune holds the store alone: a flock on `<store>.gc.lock`, which snapshots and restores take shared. git uses an old object again rather than write it anew, and gc must not remove it under a snapshot (found in review).
+  - Stores borrowed from are compared by their paths with links resolved.
+  - This departs from Decision 2: a store that another store's alternates name is not pruned at all. The Decision would have pruned it after adding its borrowers' roots. Only a folder's old store, kept for undo, is borrowed from, and it no longer grows.
+- **Rows about sessions** (`kc_mcp_call`, `kc_mcp_grant`, `kc_kept`, `kc_switch`, `kc_claude_proc`) go once their session is unknown to kairo. Its tree is removed only `KeepFinished` after it closed, and that wait is their grace. `kc_engine_session` is keyed by a hash that does not name its session, and stays (a row is about 60 bytes).
+- **The item's result** (`api.ItemResult`, shown in `kairocode items -json`) is written by `keepItemResult` in `endItem`, before the worktree goes.
+  - An end undone clears it. An end begun again after a crash keeps it.
+  - It records the branch's commit. The sweep removes an ended item's branch only if the branch is still at that commit: one a person has gone on with is theirs.
+  - An item that ended before this, or whose branch was not there as it ended, has no commit recorded. Its branch is never removed; its row still goes after `retention.items`.
+  - An item dropped while its turn runs has its turn cancelled first, so its result has no stations. A review station's result now says who came to its verdict (`StationResult.By`). A check's output in the result is the end of its text (4096 characters), not the hash of the whole output, so the result holds little.
+- **The log** is rotated as a daemon is started (`daemon.rotateLog`), since the daemon's stderr is the log.
+- `pasted/` was already pruned after 7 days by the client (ADR 0026); a pasted image sent is a message of kind `image`, and is swept with the messages. The files images were given to engines as (`images/<hash>.<ext>`) go with them.
+- The migration adds each column and fills it in one transaction.
+- **Not done:** `kairocode sessions` does not show each session's size (Alternatives). Measuring it means marking from one session, as the sweep does for all.
+- **Checked by hand** on a copy of a data directory a month in use, with the messages' times set back a week:
+  - 791 of 1457 messages (2.0 MB) were swept, and the snapshots went from 112 MB to 48 MB;
+  - the record of each of its 42 sessions was the same as on an unswept copy.
+- Tests:
+  - `TestSweepKeepsWhatIsReached`: a live session's conversation, its snapshots, and its undo after the sweep; a kept flow run's history, message and image; a marker. What nothing reaches stays within the grace and goes after it, and a dry run removes nothing.
+  - `TestSweepSharedStores`, `TestPruneWaitsForSnapshots`, `TestUsageRetention`, `TestItemResultKept` (who sent back and with what words, the change's size, the item and its dropped branch gone after `retention.items`), `TestSweepRootsCoverTables`, `TestCrashDuringSweep`, `TestRotateLog`.

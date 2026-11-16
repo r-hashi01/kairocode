@@ -55,6 +55,9 @@ type Config struct {
 	// itself: a check's build cache, apart from the user's shared one
 	// (ADR 0042; default: kairocode in the user's cache directory).
 	CacheDir string
+	// Sweep: sweep by itself what nothing reaches, at most once a day
+	// (ADR 0045); the daemon's runtime does.
+	Sweep bool
 	// ExtraTools are offered besides the built-in ones (tests).
 	ExtraTools []tools.Def
 	// JobRunner runs a command in the background, given its folder
@@ -291,6 +294,7 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 	r.jobs.recover()
 	r.background(r.keepMissed)               // the flows' runs a stopped process did not keep (ADR 0029)
 	r.background(r.notifyLoop)               // telling of requests outside the machine (ADR 0034)
+	r.sweepDue()                             // what nothing reaches (ADR 0045)
 	r.background(func(ctx context.Context) { // items whose branch was merged meanwhile (ADR 0043)
 		if err := r.FinishItems(ctx); err != nil && ctx.Err() == nil {
 			r.logf("the items not started: %v", err)

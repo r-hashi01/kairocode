@@ -221,6 +221,10 @@ func (r *Runtime) checkCache(dir string) (string, error) {
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		return "", err
 	}
+	now := time.Now() // used now: the sweep keeps the caches used lately (ADR 0045)
+	if err := os.Chtimes(d, now, now); err != nil {
+		return "", err
+	}
 	return d, nil
 }
 

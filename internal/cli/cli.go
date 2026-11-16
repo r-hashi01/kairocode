@@ -60,6 +60,7 @@ const usage = `usage:
   kairocode daemon [-data DIR]                       run the daemon in the foreground
   kairocode daemon [-data DIR] stop                  stop it (steps under way get up to 30s to finish)
   kairocode usage [-data DIR] [-session ID] [-json]   what has been used today, this week (and in a session, turn by turn), against the limits
+  kairocode gc [-data DIR] [-dry-run] [-json]       remove now what nothing reaches any more, and what is past its time (ADR 0045)
   kairocode acp [-data DIR]                          an ACP agent on stdin and stdout, for editors (ADR 0002)
   kairocode version                                  the version, its commit, Go and the platform
 
@@ -234,6 +235,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = flowCommand(ctx, args, stdout, stderr)
 	case "usage":
 		err = showUsage(ctx, args, stdout, stderr)
+	case "gc":
+		err = gcCommand(ctx, args, stdout, stderr)
 	case "acp":
 		err = runACP(ctx, args, stdout, stderr)
 	default:

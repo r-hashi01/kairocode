@@ -196,7 +196,7 @@ func Serve(ctx context.Context, o Options) error {
 	// Its socket and token are there: a loopback command must not reach
 	// them (ADR 0031).
 	sandbox.HideFromLoopback(o.Dir)
-	if rt, err = o.Open(ctx, runtime.Config{DB: runtime.DBIn(o.Dir), Owner: Owner, Observe: idle.observe}); err != nil {
+	if rt, err = o.Open(ctx, runtime.Config{DB: runtime.DBIn(o.Dir), Owner: Owner, Observe: idle.observe, Sweep: true}); err != nil {
 		return err
 	}
 	idle.setAwaiting(func() bool { return rt.Awaiting(ctx) })

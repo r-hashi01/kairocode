@@ -119,8 +119,11 @@ type StationResult struct {
 	// message, an agent's failure).
 	Why    string         `json:"why,omitempty"`
 	Checks []CheckVerdict `json:"checks,omitempty"`
-	Steps  int            `json:"steps,omitempty"`
-	Usage  msg.Usage      `json:"usage"`
+	// By: of a review station, who came to its verdict last, ReviewPerson
+	// or ReviewModel (ADR 0045: kept with the item, for feedback).
+	By    string    `json:"by,omitempty"`
+	Steps int       `json:"steps,omitempty"`
+	Usage msg.Usage `json:"usage"`
 }
 
 // LineCommitInput: commit the worktree of Session's item, with Message.

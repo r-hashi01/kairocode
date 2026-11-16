@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
+	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
 // The states of a work item (ADR 0043).
@@ -46,7 +47,35 @@ type Item struct {
 	// Stale: done or stopped for more than a week, neither taken nor
 	// dropped: to be looked at.
 	Stale bool `json:"stale,omitempty"`
+	// Result: of an item that ended, what it came to (ADR 0045).
+	Result *ItemResult `json:"result,omitempty"`
 }
+
+// ItemResult is what an item came to, kept with its row once it ends
+// (ADR 0045), after its record is gone: the factory's evidence, which
+// feedback reads (ADR 0046).
+type ItemResult struct {
+	How string `json:"how"`
+	// Stations: each station as it went, sends-back among them (their
+	// Why is the reviewer's words, By who). A check's Output here is the
+	// end of its output's text (ItemCheckOutput characters), not a hash.
+	Stations []workflows.StationResult `json:"stations,omitempty"`
+	SentBack int                       `json:"sent_back,omitempty"`
+	// Error: why its turn failed, if it did.
+	Error string `json:"error,omitempty"`
+	// Lines and Sum: the change's size and digest (LineDiff).
+	Lines int    `json:"lines,omitempty"`
+	Sum   string `json:"sum,omitempty"`
+	// Commit: its branch's commit as it ended; the sweep removes the
+	// branch only while it is still there (ADR 0045).
+	Commit string    `json:"commit,omitempty"`
+	Steps  int       `json:"steps,omitempty"`
+	Usage  msg.Usage `json:"usage"`
+}
+
+// ItemCheckOutput is how much of a check's output an item's result keeps,
+// in characters.
+const ItemCheckOutput = 4096
 
 // DefaultItemsWip is how many items are in progress at once in a
 // repository when lines.wip does not say (ADR 0044): more wait, queued.
