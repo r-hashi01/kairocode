@@ -25,6 +25,10 @@ type FlowInput struct {
 	Engine  string   `json:"engine,omitempty"`
 	Model   string   `json:"model,omitempty"`
 	Call    FlowCall `json:"call"`
+	// At: of a line's flow station, where on the line it is, so two
+	// stations running one flow with the same words are told apart
+	// (AGENTS.md, invariant 8).
+	At string `json:"at,omitempty"`
 	// Hook, for a hook's flow, names it: the event, the round and its place
 	// (AGENTS.md, invariant 8); Expect is the hash of the script the user
 	// allowed, which alone may run.

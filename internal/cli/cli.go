@@ -44,7 +44,10 @@ const usage = `usage:
   kairocode log [-data DIR] [-json] <session>         the session's record: turns, calls, results, waits, use
   kairocode plugin [-dir DIR] [list|install N[@M]|update N|remove N|connect N|disconnect N]   plugins (ADR 0025, 0027)
   kairocode plugin marketplace [list|add SRC|update M|remove M]   the catalogs plugins are installed from
-  kairocode approvals [-data DIR] <session>          list the calls waiting for a person
+  kairocode approvals [-data DIR] <session>          list the calls waiting for a person (its work items' too)
+  kairocode line [-dir DIR] [-data DIR] [-session ID | -provider P -model M] [-name N] <line> "<request>"   send a request down a standard line (ADR 0043)
+  kairocode line [-data DIR] -keep <item> -session ID <name>   keep the line an item ran as .kairocode/lines/<name>.json
+  kairocode items [-data DIR] [-json] [-drop ITEM [-force]] <session>   the work items a session sent down lines
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
   kairocode flow graph [-dir DIR] [-width N] <name>   draw a flow of .kairocode/workflows (ADR 0003)
@@ -151,6 +154,10 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = jobsCommand(ctx, args, stderr)
 	case "approvals":
 		err = approvals(ctx, args, stdout, stderr)
+	case "line":
+		err = lineCommand(ctx, args, stdout, stderr)
+	case "items":
+		err = itemsCommand(ctx, args, stdout, stderr)
 	case "approve":
 		err = approve(ctx, args, stderr)
 	case "answer":
@@ -564,7 +571,7 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	defer c.Close()
-	p, err := c.Pending(ctx, fs.Arg(0))
+	p, err := c.PendingAll(ctx, fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -572,6 +579,9 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintln(stdout, "nothing waits for approval")
 	}
 	for _, x := range p {
+		if x.Item != "" {
+			fmt.Fprintf(stdout, "[item %s] ", x.Item)
+		}
 		if x.Kind == api.KindQuestion {
 			fmt.Fprintf(stdout, "%s\n  question: %s\n  answers: %s (kairocode answer <key> <answer>)\n", x.Key, x.Subject, strings.Join(x.Options, " | "))
 			continue

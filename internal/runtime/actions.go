@@ -125,7 +125,8 @@ func (r *Runtime) applyPlan(t *kairo.TaskContext, d tools.Def, in workflows.Plan
 		return r.toolResult(t, in.Call, tools.Result{Output: "cannot open the working directory: " + err.Error(), IsError: true})
 	}
 	defer root.Close()
-	res := d.Apply(t, tools.Env{Root: root, Dir: in.Dir}, in.Data)
+	res := d.Apply(t, tools.Env{Root: root, Dir: in.Dir,
+		Items: itemEnv{r: r, conversation: ownerSession(t.RunID), key: t.IdempotencyKey}}, in.Data)
 	if res.Unknown {
 		return workflows.ToolOutput{}, kairo.Unknown(errors.New(res.Output))
 	}
@@ -197,7 +198,8 @@ func (r *Runtime) runTool(t *kairo.TaskContext, d tools.Def, in workflows.ToolIn
 	}
 	defer root.Close()
 	env := tools.Env{Root: root, Dir: in.Dir,
-		Jobs: jobEnv{m: r.jobs, session: ownerSession(t.RunID), dir: in.Dir, key: t.IdempotencyKey}}
+		Jobs:  jobEnv{m: r.jobs, session: ownerSession(t.RunID), dir: in.Dir, key: t.IdempotencyKey},
+		Items: itemEnv{r: r, conversation: ownerSession(t.RunID), key: t.IdempotencyKey}}
 	if d.Name == tools.FetchTool.Name || d.Name == tools.HTTPTool.Name {
 		if env.Net, err = userNet(); err != nil {
 			return r.toolResult(t, in.Call, tools.Result{Output: err.Error(), IsError: true})

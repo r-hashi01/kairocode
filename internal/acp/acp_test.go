@@ -30,6 +30,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/provider"
 	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/sandbox/sandboxtest"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -106,6 +107,30 @@ func (l *local) UsageNow(ctx context.Context, session string) (api.UsageNow, err
 }
 func (l *local) RepoSessions(ctx context.Context, dir string) ([]api.SessionInfo, error) {
 	return l.r.RepoSessions(ctx, dir)
+}
+func (l *local) Items(ctx context.Context, session string) ([]api.Item, error) {
+	return l.r.Items(ctx, session)
+}
+func (l *local) StartItem(ctx context.Context, session string, spec tools.ItemSpec) (api.Item, error) {
+	l.m.Lock()
+	l.n++
+	call := "acp" + strconv.Itoa(l.n)
+	l.m.Unlock()
+	return l.r.StartNamedItem(ctx, session, call, spec)
+}
+func (l *local) DropItem(ctx context.Context, session, item string, force bool) error {
+	return l.r.DropItem(ctx, session, item, force)
+}
+func (l *local) KeepLine(ctx context.Context, session, item, name string) (string, error) {
+	return l.r.KeepLine(ctx, session, item, name)
+}
+func (l *local) PendingAll(ctx context.Context, session string) ([]api.Pending, error) {
+	p, err := l.r.Pending(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := l.r.ItemsPending(ctx, session)
+	return append(p, ip...), err
 }
 func (l *local) MakeWorktree(ctx context.Context, dir, name string) (api.Worktree, error) {
 	return l.r.MakeWorktree(ctx, dir, name)

@@ -41,6 +41,9 @@ var wireErrors = []struct {
 	{"worktree_busy", api.ErrWorktreeBusy},
 	{"worktree_changed", api.ErrWorktreeChanged},
 	{"folder_gone", api.ErrFolderGone},
+	{"items_cap", api.ErrItemsCap},
+	{"not_an_item", api.ErrNotAnItem},
+	{"items_no_git", api.ErrItemsNoGit},
 }
 
 // ErrorCode is err's code on the wire ("" for an error a client does not

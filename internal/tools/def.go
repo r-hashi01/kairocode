@@ -90,6 +90,8 @@ type Env struct {
 	Net Net
 	// Jobs are the session's commands in the background (ADR 0028).
 	Jobs Jobs
+	// Items are the conversation's work items (ADR 0043).
+	Items Items
 }
 
 type Result struct {
@@ -108,5 +110,5 @@ func failed(format string, args ...any) Result {
 
 // Builtin is the tools every agent may be given, by name.
 func Builtin() []Def {
-	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, BashOutputTool, BashWaitTool, BashKillTool, GitCommitTool, GitPushTool, FetchTool, HTTPTool, TodoTool, SkillTool, FlowCheckTool, FlowWriteTool, FlowPublishTool, TaskTool, AskUserTool}
+	return []Def{ReadTool, ListTool, GlobTool, GrepTool, WriteTool, EditTool, BashTool, BashOutputTool, BashWaitTool, BashKillTool, GitCommitTool, GitPushTool, FetchTool, HTTPTool, TodoTool, SkillTool, FlowCheckTool, FlowWriteTool, FlowPublishTool, TaskTool, AskUserTool, LineTool, ItemsTool}
 }

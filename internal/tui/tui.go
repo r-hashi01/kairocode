@@ -69,6 +69,13 @@ type Agent interface {
 	RepoSessions(ctx context.Context, cwd string) ([]api.SessionInfo, error)
 	MakeWorktree(ctx context.Context, cwd, name string) (api.Worktree, error)
 	RemoveWorktree(ctx context.Context, cwd string, force bool) (api.WorktreeRemoved, error)
+	// Items, Line, DropItem, KeepLine and ItemAnswer are /items' and
+	// /line's: the session's work items (ADR 0043).
+	Items(ctx context.Context, session string) ([]api.Item, []api.Pending, error)
+	Line(ctx context.Context, session, line, request string) (api.Item, error)
+	DropItem(ctx context.Context, session, item string, force bool) error
+	KeepLine(ctx context.Context, session, item, name string) (string, error)
+	ItemAnswer(ctx context.Context, key string, ok bool, option string) error
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -230,6 +237,9 @@ func rejectID(options []acp.PermissionOption) string {
 }
 
 type model struct {
+	// itemWaits: what the work items waited for when /items last showed
+	// them, numbered from 1 there, to answer by number (ADR 0043).
+	itemWaits []api.Pending
 	// clip reads the clipboard's image (clipboard.Image; tests put theirs).
 	clip func(context.Context) ([]byte, error)
 	// images: the images put in the input, by the label that stands for
@@ -700,6 +710,15 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.loginWays(msg)
 	case repoSessionsMsg:
 		return m.repoSessions(msg)
+	case itemsMsg:
+		return m.itemsShown(msg)
+	case itemDoneMsg:
+		if msg.err != nil {
+			m.print(bad.Render("  ⎿  " + shortError(msg.err.Error())))
+		} else {
+			m.print(faint.Render("  ⎿  " + msg.text))
+		}
+		return nil
 	case repoTick:
 		if s := m.repo; s != nil && s.gen == msg.gen {
 			gen := s.gen
@@ -1551,6 +1570,9 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 		if text == "/sessions" { // the repository's, across its worktrees (ADR 0037)
 			return m.openRepoSessions()
 		}
+		if cmd, ok := m.itemsCommand(text); ok { // work items (ADR 0043)
+			return cmd
+		}
 		if worktree, name, ok := newSessionCommand(text); ok { // another session, maybe in a new worktree
 			return m.newSession(worktree, name)
 		}
@@ -1612,7 +1634,9 @@ func (m *model) commands() []acp.Command {
 		{Name: "login", Description: "Sign in to the provider (or /login <provider>)"},
 		{Name: "resume", Description: "Take up another session of this folder"},
 		{Name: "new", Description: "Start another session (--worktree [name]: in a new git worktree, on kairo/<name>)"},
-		{Name: "sessions", Description: "The repository's sessions across its worktrees: take one up, remove a worktree"}}, m.cmds...)
+		{Name: "sessions", Description: "The repository's sessions across its worktrees: take one up, remove a worktree"},
+		{Name: "line", Description: "Send a request down a standard line: /line <name> <request> (/line keep <item> <name>: keep the line an item ran)"},
+		{Name: "items", Description: "The work items sent down lines, and what they wait for (/items yes|no <n>, answer <n> <option>, drop <item>)"}}, m.cmds...)
 }
 
 // completions are the commands that begin with what is typed, while a

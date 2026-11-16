@@ -94,8 +94,8 @@ Each step is a milestone with its own ADR. Steps marked "kairo" wait for the use
 
 Out of scope: shipping (deploying, canaries, feature flags). A line ends at a change ready to merge, or merged where the line says so.
 
-## 6. Open questions (for step 2's ADR)
+## 6. Settled questions (ADR 0043)
 
-- **Where standard lines are declared**: in `kairocode.json`, in files of their own (`.kairocode/lines/<name>`), or as a kind of flow file?
-- **Where items live**: as runs under the conversation that started them (as a subagent is), or as sessions of their own that the conversation points to? Leaning: under the conversation.
-- **How KairoCode chooses**: a standard line for a request, or one made on the spot. It says which and why, and the person can always name one.
+- **Where standard lines are declared:** in files of their own, `.kairocode/lines/<name>.json`, in the project. A line is a list of stations, each with one machine and a gate; branches and loops belong in a flow, standing at a station.
+- **Where items live:** each item is a session of its own, in a worktree of its own, pointing back to the conversation that started it; the conversation keeps its items. Not runs under the conversation, which would hold it as a flow does, and lack what a session has.
+- **How KairoCode chooses:** the conversation's model picks a standard line and says which and why, or proposes one put together on the spot, which is always asked about; the person can always name one (`/line`).

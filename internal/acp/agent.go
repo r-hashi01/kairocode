@@ -20,6 +20,7 @@ import (
 	"github.com/r-hashi01/kairocode/internal/locale"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/opencode"
+	"github.com/r-hashi01/kairocode/internal/tools"
 	"github.com/r-hashi01/kairocode/internal/workflows"
 )
 
@@ -80,6 +81,13 @@ type Backend interface {
 	Switch(ctx context.Context, session, provider, model, effort string) (api.Settings, error)
 	Efforts(ctx context.Context, provider string) ([]string, error)
 	SetMode(ctx context.Context, session, mode string) (api.Settings, error)
+	// Items, StartItem, DropItem, KeepLine and PendingAll: the session's
+	// work items (ADR 0043).
+	Items(ctx context.Context, session string) ([]api.Item, error)
+	StartItem(ctx context.Context, session string, spec tools.ItemSpec) (api.Item, error)
+	DropItem(ctx context.Context, session, item string, force bool) error
+	KeepLine(ctx context.Context, session, item, name string) (string, error)
+	PendingAll(ctx context.Context, session string) ([]api.Pending, error)
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -134,6 +142,18 @@ const (
 	// MakeWorktreeRPC makes a worktree for a session ({"cwd", "name"} →
 	// api.Worktree); RemoveWorktreeRPC removes one ({"cwd", "force"} →
 	// api.WorktreeRemoved). ADR 0037.
+	// ItemsRPC lists a session's work items and what they wait for
+	// ({"sessionId"} → {"items": [api.Item], "waiting": [api.Pending]});
+	// LineRPC starts one down a standard line ({"sessionId", "line",
+	// "request", "name"} → api.Item); DropItemRPC drops one ({"sessionId",
+	// "item", "force"}); KeepLineRPC keeps the line one ran ({"sessionId",
+	// "item", "name"} → {"path"}); ItemAnswerRPC answers what one waits
+	// for ({"key", "ok"} or {"key", "option"}). ADR 0043.
+	ItemsRPC          = "_kairocode/items"
+	LineRPC           = "_kairocode/line"
+	DropItemRPC       = "_kairocode/drop_item"
+	KeepLineRPC       = "_kairocode/keep_line"
+	ItemAnswerRPC     = "_kairocode/item_answer"
 	RepoSessionsRPC   = "_kairocode/repo_sessions"
 	MakeWorktreeRPC   = "_kairocode/make_worktree"
 	RemoveWorktreeRPC = "_kairocode/remove_worktree"

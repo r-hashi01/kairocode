@@ -243,9 +243,11 @@ def main(input):
 	n, _ := r.RunFlow(ctx, s, "slow", "")
 	waitUntil(t, ctx, "the command starts", func() bool { return exists(filepath.Join(ws, "started")) })
 	start := time.Now()
-	if err := r.Close(); err != nil { // the command is cut off with its process
+	slow := stacksIfSlow(t, 10*time.Second, "closing") // macOS CI has taken 30s here (the command's sleep)
+	if err := r.Close(); err != nil {                  // the command is cut off with its process
 		t.Errorf("closing (%v): %v", time.Since(start), err)
 	}
+	slow()
 	closed := time.Since(start)
 	r, err = Open(ctx, Config{DB: db, Owner: "slow", Provider: &provider.Fake{HoldAt: -1}})
 	if err != nil {
