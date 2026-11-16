@@ -76,6 +76,7 @@ kairocode run "fix the tests"        # do one task without a conversation, then 
 kairocode run -detach "…"            # stop where a person must approve, and exit (exit code 3)
 kairocode resume <session>           # go on from there
 kairocode run -json "…"              # for a program: how the turn ended, as one JSON object on stdout
+kairocode run -stream-json "…"       # for a program: the turn's events as JSON lines as they come, then that object
 kairocode approvals <session>        # the approvals waiting (-json: as a JSON array)
 kairocode approve [-deny] <key>      # answer an approval (from any terminal)
 kairocode answer <key> <answer>      # answer a flow's question
@@ -102,6 +103,13 @@ kairocode gc -dry-run                # what the daily sweep would remove now (AD
 | 130 | This command was interrupted; the turn goes on in the daemon (`kairocode resume`). |
 
 With `-json`, stdout holds only `{"session", "turn", "status", "stopped", "reply", "steps", "usage", "waiting", "error"}` (`status` is `done`, `stopped`, `cancelled`, `waiting`, `interrupted` or `error`, as the code says); what happens along the way stays on stderr. With `run -detach -json`, `waiting` lists what to answer with `kairocode approve` or `answer`.
+
+With `-stream-json` (ADR 0048), stdout holds JSON lines:
+- `{"type": "session"}` first;
+- then each event of the turn as the daemon sends it (`turn.start`, `token`, `tool.start`, `tool.end`, `approval.requested`, …, `turn.end`), with `{"type": "gap"}` where the stream had to begin again and may have missed some;
+- last, `{"type": "result", …}`: the object `-json` writes.
+
+The events are progress; the result line is how the turn ended. Fields of the events are only ever added.
 
 `kairocode help` lists every command. One daemon runs the sessions of each data directory (`~/.local/share/kairocode` by default). Commands start it as needed, and it stops after 10 minutes without use.
 

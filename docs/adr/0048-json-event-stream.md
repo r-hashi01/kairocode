@@ -56,3 +56,14 @@ Today it has two ways to get that, and neither is good:
 - **A stream only, with no result line.** A program would have to rebuild the end from `turn.end`. But that event is lost when the stream is cut, and cancellation or interruption do not appear as events. The result line is the same object as `-json`'s, so one parser serves both.
 - **A new event schema for the CLI.** It would be cleaner to read, but there would be two shapes to keep. The daemon's SSE clients (the terminal UI, ACP) use `api.Event` already.
 - **Events on stderr, the result on stdout.** It would mix the stream with the human text and errors. Lines on stdout are what `claude` and `codex` do.
+
+## Implementation (2026-11-16, M19)
+
+- `internal/cli`:
+  - `follow` takes an `output`: `outText`, `outJSON` or `outStream`.
+  - `showEvents` takes the function that shows each event, and one that is called when the stream begins again (`gap`).
+  - With `outStream`, every event goes to stdout through one lock, as JSON. Before the result line is written, the stream stops and its goroutine is waited for, so the result is always last.
+  - `turn.start` and `turn.end` of other turns are skipped. Each waits until the followed turn's number is known.
+- With `-stream-json`, the human display is not written to stderr. The session line, the summary of steps and tokens, and errors still are.
+- Tests: `TestRunStreamJSON`, `TestRunStreamJSONWaits`, `TestRunStreamJSONWrongUse`.
+- Checked by hand with `gpt-5.4-mini`: a turn with a tool call wrote `session`, `turn.start`, `tool.start`, `tool.end`, the tokens, `turn.end` and `result` (`done`), and exited 0.

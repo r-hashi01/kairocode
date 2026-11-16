@@ -37,10 +37,11 @@ import (
 const usage = `usage:
   kairocode [chat] [-dir DIR] [-data DIR] [-session ID | -continue | -resume | -worktree[=NAME]]   talk with it in the terminal (kairo is the same; -worktree: in a new git worktree)
   kairocode sessions [-dir DIR] [-all | -repo] [-n N] [-json]   the sessions of a folder, the latest used first (-repo: of its repository, across its worktrees)
-  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] [-json] [-worktree[=NAME]] "<request>"   answer one request, then exit
+  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] [-json | -stream-json] [-worktree[=NAME]] "<request>"   answer one request, then exit
                                                      (-detach: stop when it waits for a person, exit 3;
-                                                     -json: how the turn ended, as one JSON object on stdout)
-  kairocode resume [-data DIR] [-detach] [-json] <session>   go on with a session run left, then close it
+                                                     -json: how the turn ended, as one JSON object on stdout;
+                                                     -stream-json: its events as JSON lines as they come, that object the last)
+  kairocode resume [-data DIR] [-detach] [-json | -stream-json] <session>   go on with a session run left, then close it
   kairocode fork [-data DIR] [-files] <session> [turn]   start another session from a turn of one (the last, unless named)
   kairocode log [-data DIR] [-json] <session>         the session's record: turns, calls, results, waits, use
   kairocode plugin [-dir DIR] [list|install N[@M]|update N|remove N|connect N|disconnect N]   plugins (ADR 0025, 0027)
@@ -395,9 +396,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (ADR 0014)")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (default: the provider's)")
 	asJSON := fs.Bool("json", false, "at the end, how the turn ended as one JSON object on stdout (ADR 0041)")
+	stream := fs.Bool("stream-json", false, "the turn's events as JSON lines on stdout as they come, how it ended the last (ADR 0048)")
 	var wt worktreeFlag
 	fs.Var(&wt, "worktree", "run in a new git worktree of this folder's repository, on a branch kairo/<name> (-worktree=<name>; alone, the first free name)")
 	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	out, err := outputOf(*asJSON, *stream)
+	if err != nil {
 		return err
 	}
 	request := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -437,7 +443,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stderr, "session %s\n", s)
-	return follow(ctx, c, s, *detach, *asJSON, stdout, stderr, func() (int, error) {
+	return follow(ctx, c, s, *detach, out, stdout, stderr, func() (int, error) {
 		if flow, ok := strings.CutPrefix(request, "/flow "); ok { // a flow (ADR 0003)
 			name, args, _ := strings.Cut(strings.TrimSpace(flow), " ")
 			if name == "new" {
@@ -462,11 +468,16 @@ func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3)")
 	asJSON := fs.Bool("json", false, "at the end, how the turn ended as one JSON object on stdout (ADR 0041)")
+	stream := fs.Bool("stream-json", false, "the turn's events as JSON lines on stdout as they come, how it ended the last (ADR 0048)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
+	out, err := outputOf(*asJSON, *stream)
+	if err != nil {
+		return err
+	}
 	if fs.NArg() != 1 {
-		return badUse{error: errors.New("usage: kairocode resume [-data DIR] [-detach] [-json] <session>")}
+		return badUse{error: errors.New("usage: kairocode resume [-data DIR] [-detach] [-json | -stream-json] <session>")}
 	}
 	s := fs.Arg(0)
 	if !strings.HasPrefix(s, "s/") {
@@ -477,7 +488,7 @@ func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 		return err
 	}
 	defer c.Close()
-	return follow(ctx, c, s, *detach, *asJSON, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
+	return follow(ctx, c, s, *detach, out, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
 }
 
 // showLog prints a session's record (ADR 0023).
@@ -556,13 +567,38 @@ func fork(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 // (exit 3); the session goes on with kairocode resume.
 var errWaiting = errors.New("the turn waits for a person")
 
+// output is how follow reports a turn: as text for a person, as one JSON
+// object at its end (-json, ADR 0041), or as a stream of JSON lines
+// (-stream-json, ADR 0048).
+type output int
+
+const (
+	outText output = iota
+	outJSON
+	outStream
+)
+
+// outputOf is the output the flags ask for; both at once is a wrong use.
+func outputOf(asJSON, stream bool) (output, error) {
+	switch {
+	case asJSON && stream:
+		return 0, badUse{error: errors.New("-json and -stream-json: one or the other")}
+	case asJSON:
+		return outJSON, nil
+	case stream:
+		return outStream, nil
+	}
+	return outText, nil
+}
+
 // follow shows what turn n of session s does as it happens, n being what
 // start returns (a turn it starts, or one under way), and prints its reply
 // at its end, then closes the session. With detach, it stops when the
 // turn waits for a person; stopped (Ctrl-C), it says how to go on. How the
-// turn ended is in the error, for the exit code, and with asJSON in one
-// object on stdout (ADR 0041).
-func follow(ctx context.Context, c *daemon.Client, s string, detach, asJSON bool, stdout, stderr io.Writer, start func() (int, error)) error {
+// turn ended is in the error, for the exit code; with outJSON in one
+// object on stdout (ADR 0041); with outStream, the turn's events are JSON
+// lines on stdout as they come, and that object the last (ADR 0048).
+func follow(ctx context.Context, c *daemon.Client, s string, detach bool, out output, stdout, stderr io.Writer, start func() (int, error)) error {
 	// What the turn does is shown as it happens; its result comes from
 	// WaitTurn, which does not depend on the stream. Watching begins before
 	// the turn starts, so no event of it is missed.
@@ -572,6 +608,24 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach, asJSON bool
 	if err != nil {
 		return err // no such session: nothing to report but the error
 	}
+	var outMu sync.Mutex // the stream's lines, from two goroutines
+	line := func(v any) error {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		outMu.Lock()
+		defer outMu.Unlock()
+		_, err = fmt.Fprintf(stdout, "%s\n", b)
+		return err
+	}
+	if out == outStream {
+		if err := line(map[string]string{"type": "session", "session": s}); err != nil {
+			return err
+		}
+	}
+	shown := make(chan struct{})
+	watching := false // showEvents runs, and closes shown at its end
 	res := api.RunResult{Session: s}
 	report := func(status string, err error) error {
 		if status == api.StatusError && ctx.Err() != nil { // cut by the signal
@@ -582,25 +636,52 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach, asJSON bool
 		if status == api.StatusError {
 			res.Error = err.Error()
 		}
-		if asJSON {
-			b, merr := json.Marshal(res)
-			if merr != nil {
-				return merr
+		switch out {
+		case outJSON:
+			if werr := line(res); werr != nil {
+				return werr
 			}
-			if _, werr := fmt.Fprintf(stdout, "%s\n", b); werr != nil {
+		case outStream:
+			// The result is the last line: the stream stops first.
+			stopWatch()
+			if watching {
+				<-shown
+			}
+			if werr := line(struct {
+				Type string `json:"type"`
+				api.RunResult
+			}{"result", res}); werr != nil {
 				return werr
 			}
 		}
 		return err
 	}
 	turnDone := make(chan struct{})
-	shown := make(chan struct{})
 	waiting := make(chan struct{}, 1)
 	n := -1
 	sent := make(chan struct{})
+	show := func(ev api.Event) { showEvent(stderr, ev) }
+	gap := func() {}
+	if out == outStream {
+		// Every event of the turn followed, as the daemon sends it; the
+		// start and end of other turns are not (ADR 0048).
+		show = func(ev api.Event) {
+			if ev.Type == api.EventTurnStart || ev.Type == api.EventTurnEnd {
+				<-sent
+				if ev.N != n {
+					return
+				}
+			}
+			if err := line(ev); err != nil {
+				stopWatch() // stdout is gone: nothing more to write
+			}
+		}
+		gap = func() { _ = line(map[string]string{"type": "gap"}) }
+	}
+	watching = true
 	go func() {
 		defer close(shown)
-		showEvents(watch, c, s, events, stderr, sent, &n, turnDone, waiting)
+		showEvents(watch, c, s, events, show, gap, sent, &n, turnDone, waiting)
 	}()
 	n, err = start()
 	close(sent)
@@ -626,7 +707,7 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach, asJSON bool
 	case r = <-done:
 	case <-stopAt:
 		fmt.Fprintf(stderr, "stopped while the turn waits; answer it, then go on with: kairocode resume %s\n", s)
-		if asJSON {
+		if out != outText {
 			p, err := c.PendingAll(ctx, s)
 			if err != nil {
 				return report(api.StatusError, err)
@@ -653,7 +734,7 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach, asJSON bool
 		<-shown
 	}
 	res.Reply, res.Steps, res.Usage = &r.out.Reply, &r.out.Steps, &r.out.Usage
-	if !asJSON {
+	if out == outText {
 		fmt.Fprintln(stdout, r.out.Reply)
 	}
 	if r.out.Stopped != "" {
@@ -786,12 +867,13 @@ func stopOnSignals(ctx context.Context) (context.Context, <-chan struct{}, func(
 	}
 }
 
-// showEvents writes what session s does to w, from events, until the turn
-// sent (n, known once sent is closed) ends. The stream may end early (the
-// client fell behind): it watches again while the turn has not ended
-// (turnDone). A stream begun again may have missed the turn's end, so it is
-// read only until the turn is known to have ended.
-func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan api.Event, w io.Writer,
+// showEvents shows what session s does (show), from events, until the turn
+// sent (n, known once sent is closed) ends, its end shown too. The stream
+// may end early (the client fell behind): it watches again while the turn
+// has not ended (turnDone), and says so (gap). A stream begun again may
+// have missed the turn's end, so it is read only until the turn is known
+// to have ended.
+func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan api.Event, show func(api.Event), gap func(),
 	sent <-chan struct{}, n *int, turnDone <-chan struct{}, waiting chan<- struct{}) {
 	var until <-chan struct{} // nil: read to the turn's end
 	for {
@@ -809,16 +891,18 @@ func showEvents(ctx context.Context, c *daemon.Client, s string, events <-chan a
 				if events, err = c.Events(ctx, s); err != nil {
 					return
 				}
+				gap() // events may have been missed between
 				until = turnDone
 				continue
 			}
 			if ev.Type == api.EventTurnEnd {
 				<-sent
 				if ev.N == *n {
+					show(ev)
 					return
 				}
 			}
-			showEvent(w, ev)
+			show(ev)
 			switch ev.Type {
 			case api.EventApprovalRequested, api.EventReviewRequested, api.EventQuestionRequested:
 				select {
