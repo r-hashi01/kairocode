@@ -234,3 +234,45 @@ func TestSandboxNestedIsUnavailable(t *testing.T) {
 		t.Skip("no true")
 	}
 }
+
+// A loopback command reads what Readable names, though a directory it
+// does not see (one with others' sockets) holds it, and does not write it:
+// a check in a linked worktree reads its repository (ADR 0046).
+func TestSandboxLoopbackReadable(t *testing.T) {
+	needSandbox(t)
+	root := t.TempDir()
+	hidden := t.TempDir()
+	HideFromLoopback(hidden)
+	repo := filepath.Join(hidden, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("seen"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir, done, err := SocketDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	run := func(readable []string, argv ...string) (string, error) {
+		t.Helper()
+		cmd, err := Command(context.Background(), Policy{Mode: WorkspaceWrite, Root: root, Loopback: true, SocketDir: dir, Readable: readable}, "", argv...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run([]string{repo}, "cat", filepath.Join(repo, "f")); err != nil || out != "seen" {
+		t.Fatalf("not read: %v %q", err, out)
+	}
+	if out, err := run([]string{repo}, "sh", "-c", "echo x > "+filepath.Join(repo, "g")); err == nil {
+		t.Fatalf("written: %q", out)
+	}
+	if runtime.GOOS == "linux" {
+		if out, err := run(nil, "cat", filepath.Join(repo, "f")); err == nil {
+			t.Fatalf("read a hidden directory not named: %q", out)
+		}
+	}
+}

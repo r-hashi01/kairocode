@@ -21,6 +21,7 @@ import (
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
 	"github.com/r-hashi01/kairocode/internal/config"
+	"github.com/r-hashi01/kairocode/internal/gitdir"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/permission"
 	"github.com/r-hashi01/kairocode/internal/sandbox"
@@ -149,6 +150,12 @@ func (r *Runtime) checkRunAction(t *kairo.TaskContext, in workflows.CheckRunInpu
 	cache, cacheErr := r.checkCache(in.Dir)
 	if cache != "" {
 		policy.Writable = []string{cache}
+	}
+	// A linked worktree (an item's, ADR 0037): git reads its repository,
+	// which a hidden directory (/tmp) may hold. Read only: no check writes
+	// .git (ADR 0005).
+	if common, ok := gitdir.Linked(in.Dir); ok {
+		policy.Readable = []string{common}
 	}
 	cmd, err := sandbox.Command(ctx, policy, in.Dir, "sh", "-c", in.Check.Command)
 	if err != nil {

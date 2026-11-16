@@ -125,6 +125,7 @@ ADR 0045 keeps all of it with the item's row after the item's tree is gone. What
   - `TestCheckDraft`
   - `TestFactoryPathsGate`
   - `TestCrashDuringFeedback`
+- **On Linux CI**, the gate's git could not read the item's repository (under `/tmp`, hidden from loopback commands). Checks in a linked worktree now read the repository's common `.git` read-only (ADR 0031's addendum of this date).
 - If the commit fails after a draft's files were put in place, they stay in the worktree, not committed. A person took them, and the item's turn is at its end.
 - **Checked by hand with `gpt-5.4-mini`**, in a scratch repository with the line `quick` (build, then a person's review):
   - Two items were each sent back once by a person with like words, then taken, then dropped. The conversation was told feedback was due, once, and its model asked the person whether to send a draft.

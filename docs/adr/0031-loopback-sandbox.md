@@ -93,6 +93,15 @@ The `sandbox.loopback` setting is recorded at the start of the turn, like the pe
 - `permission.check` decides by `Policy.Loopback` if it is set. It is empty for turns that started before it was recorded. Only then does it read the settings as before (the recorded input is not changed).
 - Test: `internal/runtime` (`TestLoopbackKeptAsTheTurnStarted`). Even if it is changed to `deny` in the middle of a turn, that turn's `loopback` calls pass by the value at the start.
 
+## Addendum (2026-11-16, M18): a linked worktree's repository is read-only, not hidden
+
+- **Why.** On Linux, a loopback command does not see the directories that hold others' sockets (`/tmp`, `$TMPDIR`, the data directory). A check that runs git in a work item's worktree (ADR 0043) must read the worktree's repository, its common `.git`. That repository can lie in one of those directories: it does on Linux CI, under `/tmp`. Hidden, git fails, and the built-in check `factory-paths` (ADR 0046) fails closed on every draft.
+- **What changes.** `sandbox.Policy.Readable` names directories bound read-only after the hiding (`--ro-bind`, last). Checks set it to the common git directory of a linked worktree (`gitdir.Linked`).
+- **What stays.** Nothing else is shown, and nothing is writable: `.git` stays out of a check's writes (ADR 0005).
+- **The trade.** A socket inside that `.git` (git's fsmonitor) would be visible.
+- **macOS** reads everything already, so `Readable` changes nothing there.
+- **Test:** `TestSandboxLoopbackReadable` (read, not written, and on Linux not read without it).
+
 ## Consequences
 
 - KairoCode's agent can run checks inside the sandbox without being asked. It goes outside only when running everything, including tests that need nested sandboxes.
