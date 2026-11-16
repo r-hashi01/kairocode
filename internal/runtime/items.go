@@ -288,7 +288,34 @@ func (r *Runtime) startInTurn(ctx context.Context, row store.ItemRow) (api.Item,
 	if fresh, err := r.Store.Item(ctx, row.ID); err == nil {
 		row = fresh
 	}
-	return r.itemState(ctx, row), nil
+	it := r.itemState(ctx, row)
+	if row.Ended != "" { // ended as it started, in another pass
+		return it, fmt.Errorf("the item %s %s as it started", row.Name, row.Ended)
+	}
+	return it, nil
+}
+
+// tellStartFailed tells the conversation of a queued item that it failed
+// as its turn came, once; and of its line, if that stopped itself.
+func (r *Runtime) tellStartFailed(ctx context.Context, row store.ItemRow, why error) error {
+	key := []byte(row.ID + "\x00start")
+	marker := store.Hash(kindItemTold, key)
+	if _, _, err := r.Store.Get(ctx, marker); errors.Is(err, store.ErrNotFound) {
+		line := row.Line
+		if line == "" {
+			line = "put together on the spot"
+		}
+		text := fmt.Sprintf("[KairoCode] The item %s (line %s) failed as its turn came: %v", row.Name, line, why)
+		if _, err := r.Send(ctx, row.Of, text); err != nil {
+			return fmt.Errorf("telling %s of the item %s: %w", row.Of, row.Name, err)
+		}
+		if _, err := r.Store.Put(ctx, kindItemTold, key); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	return r.tellLineStopped(ctx, row)
 }
 
 // itemsWip is the repository's limit on items in progress: lines.wip, the
@@ -341,15 +368,26 @@ func (r *Runtime) startQueued(ctx context.Context, repo, own string) error {
 		}
 		var line workflows.Line
 		_ = json.Unmarshal(row.Def, &line)
-		if inProgress >= limit || line.Wip > 0 && row.Line != "" && byLine[row.Line] >= line.Wip {
+		// One whose session was made (a start cut off before it was kept
+		// as made) runs already: finished, whatever the limits.
+		_, getErr := r.K.Get(ctx, row.ID)
+		if getErr != nil && (inProgress >= limit || line.Wip > 0 && row.Line != "" && byLine[row.Line] >= line.Wip) {
 			continue // its turn has not come: queued
 		}
 		it, err := r.finishItem(ctx, row)
 		if err != nil {
 			if row.ID == own {
 				ownErr = err
-			} else {
-				r.logf("starting the item %s in its turn: %v", row.Name, err)
+				continue
+			}
+			r.logf("starting the item %s in its turn: %v", row.Name, err)
+			if errors.Is(err, tools.ErrNotSettled) {
+				continue // tried again, the next pass
+			}
+			// It failed as its turn came: its conversation is told, as
+			// of any item's end.
+			if terr := r.tellStartFailed(ctx, row, err); terr != nil {
+				r.logf("%v", terr)
 			}
 			continue
 		}
@@ -864,31 +902,63 @@ func (r *Runtime) DropItem(ctx context.Context, conversation, item string, force
 			if row.Ended != "" {
 				return nil
 			}
-			return r.endItem(ctx, row, api.ItemDropped, force)
+			if err := r.endItem(ctx, row, api.ItemDropped, force); err != nil {
+				return err
+			}
+			// Its place is free: the queue goes on (ADR 0044).
+			if err := r.startQueued(ctx, row.Repo, ""); err != nil {
+				r.logf("the queue of %s: %v", row.Repo, err)
+			}
+			return nil
 		}
 	}
 	return ErrNotAnItem
 }
 
-// endItem cleans item row up, as how (taken, dropped): its session
-// closed, its worktree removed. Its row stays, with how it ended.
+// endItem cleans item row up, as how (taken, dropped, failed): its
+// session closed, its worktree removed. Its row stays, with how it ended.
+// With changes not committed and not force, nothing is done. The row is
+// marked ended first, so what its turn's end tells meanwhile does not take
+// it for failed; if the clean-up fails, the mark is taken back.
 func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, force bool) error {
-	if run, ok, err := r.TurnRun(ctx, row.ID, 0); err == nil && ok && !run.Finished() {
-		if err := r.K.Cancel(ctx, run.RunID); err != nil {
-			return err
+	worktree := row.Dir != ""
+	if worktree {
+		if _, err := os.Stat(row.Dir); err != nil {
+			worktree = false
 		}
 	}
-	if row.Dir != "" {
-		if _, err := os.Stat(row.Dir); err == nil {
-			if _, err := r.RemoveWorktree(ctx, row.Dir, force); err != nil {
-				return err
-			}
+	if worktree && !force {
+		if st, _ := gitIn(ctx, row.Dir, "status", "--porcelain"); st != "" {
+			return ErrWorktreeChanged
+		}
+	}
+	if err := r.Store.EndItem(ctx, row.ID, how); err != nil {
+		return err
+	}
+	undo := func(err error) error {
+		if uerr := r.Store.EndItem(ctx, row.ID, ""); uerr != nil {
+			return errors.Join(err, uerr)
+		}
+		return err
+	}
+	if run, ok, err := r.TurnRun(ctx, row.ID, 0); err == nil && ok && !run.Finished() {
+		if err := r.K.Cancel(ctx, run.RunID); err != nil {
+			return undo(err)
+		}
+		// Its worktree is removed once its turn has stopped.
+		wait, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, _ = r.WaitTurn(wait, row.ID, 0)
+		cancel()
+	}
+	if worktree {
+		if _, err := r.RemoveWorktree(ctx, row.Dir, true); err != nil {
+			return undo(err)
 		}
 	}
 	if err := r.CloseSession(ctx, row.ID); err != nil && !errors.Is(err, kairo.ErrUnknownRun) {
 		r.logf("closing the item %s: %v", row.Name, err)
 	}
-	return r.Store.EndItem(ctx, row.ID, how)
+	return nil
 }
 
 func firstLine(s string) string {

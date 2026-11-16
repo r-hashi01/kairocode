@@ -138,11 +138,17 @@ Where this shows in the implementation:
 
 Where it differs from the decision above, or settles what it left open:
 
-- **A person's review is an approval of kind `review`.** It is recorded by `line.review`, whose result says what it shows: the rule, with why a person reviews, and the outputs and the diff. The turn then waits for the answer as a tool call's approval waits (`approve:line_review_<where>`). It is listed, told to the conversation and answered as any of an item's approvals is. `/items no <n> <words>` gives the words, and so does `kairocode approve -deny -reason`.
+- **A person's review is an approval** (`Pending.Kind` `approval`, its tool `review`: the kind `review` is a call cut off, to confirm). It is recorded by `line.review`, whose result says what it shows: the rule, with why a person reviews, and the outputs and the diff. The turn then waits for the answer as a tool call's approval waits (`approve:line_review_<where>`). It is listed, told to the conversation and answered as any of an item's approvals is. `/items no <n> <words>` gives the words, and so does `kairocode approve -deny -reason`.
 - **A model's review** is a turn of the reviewer agent (`At`: the station's place and round, then `review`), then `decide` with the choices `pass` and `send back` (`At` … `verdict`). A decision the model will not make sends the change back: it never passes it.
-- **The diff** (`line.diff`) is taken from the item's starting commit, or from `HEAD` for a line run outside an item. It covers the work not yet committed and the files git does not track yet. It is read with git, outside the sandbox, as the worktrees are, and it changes nothing (no index is written). It is cut at 60,000 characters.
+- **The diff** (`line.diff`) is taken from the item's starting commit, or from `HEAD` for a line run outside an item. It covers the work not yet committed and the files git does not track yet.
+  - **How it is read.** At the repository's top, with git in KairoCode's read-only sandbox (an agent wrote the worktree).
+  - **Its paths.** `-z` and `--no-renames`, so a path git would quote, or a file moved away, is matched as it is.
+  - **Nothing run, nothing written.** No external diff or text conversion is run, and there is no optional lock, so the index is not refreshed.
+  - **Files not tracked** are read only if they are regular files in the folder, through `os.Root`, up to 64KB each. A file holding a NUL is a binary file, and no NUL reaches the preview.
+  - **Size.** It is cut at 60,000 characters.
+  - **git failing is an error.** A review is never asked of a change not known.
 - **Sending back is a jump back on the line** inside its turn. Every run of a station after its first carries ` round <n>` in where it is (its `At`, its gate's key), so it is a run of its own. A station sent back to is given the words once.
-- **The people's review** is added at the line's end when `lines.people` is set and no person reviewed the change as it is then (an agent or flow station after a person's review makes it unreviewed again). Its `back` is the line's last agent station.
+- **The people's review** is added at the line's end when the change, read again then, touches `lines.people`, and it is not the change a person last took. A person's yes is kept by the diff's hash, so any station that changed the files after it brings the review again: an agent, a flow, a model's reviewer, a check. Its `back` is the line's last agent station.
 - **Version:** turn 7. Version 6 drains with `RunTurnV6`, which runs a line without reviews and without `line.policy`, making the calls it always made.
 - **The andon counts by an item's start**, among a line's items started since a person last started the line again (`kc_line`). It counts back from the latest: an item done or taken stops the count; one running, waiting, queued or dropped is passed over. The conversation of the item whose end stopped the line is told, once for each stop.
 - **The queue is the items kept but not yet started.** They are started in the order sent, within the repository's `lines.wip` and the line's `wip`:
@@ -150,7 +156,17 @@ Where it differs from the decision above, or settles what it left open:
   - when an item's line ends (its notice);
   - as the daemon starts.
 
-  An item waiting for a person counts as in progress. The cap of ADR 0043 is gone, and so is its error for the model.
+  An item waiting for a person counts as in progress.
+  - **One whose session runs already** (a start cut off before it was kept as started) is finished whatever the limits.
+  - **One that fails as its turn comes** is told to its conversation, and counted for its line.
+  - **An item dropped while in progress** frees its place: the queue goes on.
+
+  The cap of ADR 0043 is gone, and so is its error for the model.
+- **Dropping an item**:
+  - with changes not committed and not forced, does nothing;
+  - else it is marked ended first, so the end of its cancelled turn is not told as a failure;
+  - then its turn is cancelled and waited for, and its worktree removed;
+  - the mark is taken back if that fails.
 - **`/line` alone** and `kairocode lines` list the project's lines: in progress, queued, stopped and why. `/line restart <name>` and `kairocode line -restart <name>` start one again. The daemon's API has `GET /lines` and `POST /lines/restart`, and ACP has `_kairocode/lines` and `_kairocode/restart_line`.
 - **Checked by hand (2026-11-16, `gpt-5.4-mini`):**
   - a review by risk, passed by the model alone;

@@ -329,6 +329,21 @@ func TestItemQueue(t *testing.T) {
 	if again, err := r.StartItem(ctx, s, "c", spec); err != nil || again.Name != "quick-3" || again.State != api.ItemQueued {
 		t.Fatalf("again: %+v %v", again, err)
 	}
+	// One in progress dropped, the first queued starts in its place.
+	if err := r.DropItem(ctx, s, "quick-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := r.Items(ctx, s); items[2].State == api.ItemQueued || items[3].State != api.ItemQueued {
+		t.Fatalf("after a drop: %+v", items)
+	}
+	// The limit raised, the daemon's pass as it starts starts the next.
+	putFiles(t, ws, map[string]string{ConfigFile: `{"permission": {"write": "allow", "edit": "allow", "line": "allow"}, "lines": {"wip": 3}}`})
+	if err := r.FinishItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := r.Items(ctx, s); items[3].State == api.ItemQueued {
+		t.Fatalf("after the daemon's pass: %+v", items)
+	}
 	os.WriteFile(release, nil, 0o600)
 	for {
 		items, _ := r.Items(ctx, s)
@@ -338,7 +353,7 @@ func TestItemQueue(t *testing.T) {
 				done++
 			}
 		}
-		if done == 4 {
+		if done == 3 { // and the one dropped
 			break
 		}
 		select {
@@ -350,7 +365,7 @@ func TestItemQueue(t *testing.T) {
 	// Each item's agent ran once: the queued ones in their turn.
 	b, _ := os.ReadFile(prompts)
 	if n := strings.Count(string(b), `You are at the station "build"`); n != 4 {
-		t.Fatalf("the agents were called %d times, want 4", n)
+		t.Fatalf("the agents were called %d times, want 4 (the one dropped cut off)", n)
 	}
 }
 

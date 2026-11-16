@@ -232,11 +232,17 @@ func TestPeoplePathsAlways(t *testing.T) {
 	sandboxtest.Require(t)
 	line := workflows.Line{Name: "plain", Stations: []workflows.Station{{Name: "build", Agent: "build"}}}
 	settings := `{"permission": {"write": "allow"}, "lines": {"people": ["secret/*"]}}`
-	for _, path := range []string{"secret/k.txt", "a.txt"} {
+	// A path git would print quoted (not ASCII) is matched as it is; a link
+	// to a device among the files not tracked is not read.
+	for _, path := range []string{"secret/k.txt", "secret/bäck.txt", "a.txt"} {
 		r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Steps: buildWrites(path)})
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		s, _ := r.CreateSession(ctx, "people", workflows.SessionInput{Dir: itemRepo(t, settings)})
+		ws := itemRepo(t, settings)
+		if err := os.Symlink("/dev/zero", filepath.Join(ws, "zero")); err != nil {
+			t.Fatal(err)
+		}
+		s, _ := r.CreateSession(ctx, "people", workflows.SessionInput{Dir: ws})
 		n, err := r.RunLine(ctx, s, line, "write")
 		if err != nil {
 			t.Fatal(err)
@@ -259,6 +265,35 @@ func TestPeoplePathsAlways(t *testing.T) {
 			t.Fatalf("%v %q: %s", err, out.Stopped, statuses(out))
 		}
 	}
+	// A person's yes covers the change as the person saw it: a station
+	// after it changing a path that needs a person (here the reviewer of a
+	// model's review, which may write) brings a person's review again.
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1, Steps: map[string][]provider.FakeReply{
+		`You are at the station "build"`: {writeCall("a.txt", "one\n"), {Text: "wrote"}},
+		"You review a change":            {writeCall("secret/late.txt", "late\n"), {Text: "Fine."}}},
+		Decide: json.RawMessage(`{"value": "pass"}`)})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "late", workflows.SessionInput{Dir: itemRepo(t, settings)})
+	late := workflows.Line{Name: "late", Stations: []workflows.Station{{Name: "build", Agent: "build"},
+		{Name: "person", Review: workflows.ReviewPerson}, {Name: "model", Review: workflows.ReviewModel, Agent: "build"}}}
+	n, err := r.RunLine(ctx, s, late, "write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"person", workflows.PeopleStation} {
+		p := waitReview(t, ctx, r, s, n)
+		if p == nil || p.Subject != want {
+			t.Fatalf("want the review at %s: %+v", want, p)
+		}
+		if err := r.Approve(ctx, p.Key, true, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := r.WaitTurn(ctx, s, n); err != nil || out.Stopped != "" || statuses(out) != "build passed, person passed, model passed, people passed" {
+		t.Fatalf("%v %q: %s", err, out.Stopped, statuses(out))
+	}
+
 	user := config.Layer{Path: "user", Data: []byte(`{"lines": {"people": ["auth/*"], "reviewLines": 100}}`)}
 	project := config.Layer{Path: "project", Project: true, Data: []byte(`{"lines": {"people": [], "reviewLines": 900}}`)}
 	if p := policyOf([]config.Layer{user, project}); len(p.People) != 1 || p.People[0] != "auth/*" || p.ReviewLines != 100 {

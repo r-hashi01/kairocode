@@ -86,7 +86,8 @@ type LineReviewInput struct {
 	Station string   `json:"station"`
 	Line    string   `json:"line,omitempty"`
 	Diff    LineDiff `json:"diff"`
-	// Outputs: what the stations before it left, by hash, a station each.
+	// Outputs: what the stations before it left, a station each, cut short
+	// (shown to the person, not given to a model).
 	Outputs []string `json:"outputs,omitempty"`
 	// Why: why a person reviews (a path that needs one, the size), if not
 	// because the station says so.

@@ -55,13 +55,15 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 	notes := map[int]string{}                // the words a station sent back to is given
 	runs := map[int]int{}                    // how often each station ran
 	sentBack := map[int]int{}                // how often each review sent back
-	reviewed := false                        // a person reviewed the change as it is now
+	personSaw := ""                          // the change a person last took, by its hash
 	peopleChecked := false
 	for i := 0; ; {
 		if i == len(stations) {
 			// A change touching a path that always needs a person gets
-			// one, whatever the line says (ADR 0044, 2).
-			if !reviews || reviewed || peopleChecked || len(policy.People) == 0 {
+			// one, whatever the line says (ADR 0044, 2): unless a person
+			// took the change as it is now, by its hash (any station may
+			// have changed it since a person's yes).
+			if !reviews || peopleChecked || len(policy.People) == 0 {
 				break
 			}
 			peopleChecked = true
@@ -69,7 +71,7 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 			if err != nil {
 				return TurnOutput{}, err
 			}
-			if touches(d.Paths, policy.People) == "" {
+			if touches(d.Paths, policy.People) == "" || d.Diff == personSaw {
 				break
 			}
 			stations = append(stations, Station{Name: PeopleStation, Review: ReviewPerson, Back: lastAgent(line.Stations)})
@@ -106,7 +108,7 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 			res.Steps, res.Usage, output = v.steps, v.usage, v.text
 			if v.pass {
 				if v.byPerson {
-					reviewed = true
+					personSaw = v.diff
 				}
 				break
 			}
@@ -127,7 +129,6 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 			}
 			res.Status, res.Why = StationStopped, "sent back, with no round left: "+v.words
 		case st.Agent != "":
-			reviewed = false // the change is not as a person saw it
 			text := stationPrompt(line, i, request, outputs[:i], notes[i])
 			delete(notes, i)
 			h, err := kairo.Call[string](ctx, ActFlowPut, FlowPutInput{Role: string(msg.User), Text: text})
@@ -154,7 +155,6 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 				}
 			}
 		case st.Flow != "":
-			reviewed = false
 			args := st.Args
 			if args == "" {
 				args = request
@@ -256,6 +256,7 @@ func gateStation(ctx *kairo.Context, dir string, i int, at string, checks *Check
 type verdict struct {
 	pass, byPerson bool
 	words, text    string
+	diff           string // the change reviewed, by its hash
 	steps          int
 	usage          msg.Usage
 }
@@ -268,7 +269,7 @@ func reviewStation(ctx *kairo.Context, in TurnInput, line string, st Station, at
 	if err != nil {
 		return verdict{}, err
 	}
-	var v verdict
+	v := verdict{diff: d.Diff}
 	person, why := st.Review == ReviewPerson, ""
 	if st.Name == PeopleStation {
 		why = "it touches " + touches(d.Paths, policy.People) + ", a path that always needs a person (lines.people)"
