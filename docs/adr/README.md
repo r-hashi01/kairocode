@@ -56,3 +56,4 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0045](0045-storage-retention.md) | Storage retention: what is kept, for how long, and what goes when nothing reaches it | Accepted (2026-11-16) |
 | [0046](0046-feedback.md) | Feedback: drafts that improve a line, its checks or `AGENTS.md`, from the items that stopped or were sent back | Accepted (2026-11-16) |
 | [0047](0047-intake.md) | Intake: work items from outside, and stations that wait for outside events | Accepted (2026-11-16) |
+| [0048](0048-json-event-stream.md) | A stream of events as JSON lines: `run -stream-json` | Proposed |
