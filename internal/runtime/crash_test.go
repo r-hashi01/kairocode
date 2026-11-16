@@ -62,6 +62,10 @@ func TestMain(m *testing.M) {
 		crashJobChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_REVIEW_CHILD") != "" {
+		crashReviewChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_ITEM_CHILD") != "" {
 		crashItemChild()
 		return

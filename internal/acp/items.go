@@ -95,6 +95,7 @@ func (a *agent) itemAnswer(ctx context.Context, params json.RawMessage) (any, er
 		Key    string `json:"key"`
 		OK     bool   `json:"ok"`
 		Option string `json:"option"`
+		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.Key == "" {
 		return nil, invalid(errors.New(`want {"key", "ok"} or {"key", "option"}`))
@@ -103,7 +104,7 @@ func (a *agent) itemAnswer(ctx context.Context, params json.RawMessage) (any, er
 	if p.Option != "" {
 		err = a.b.Answer(ctx, p.Key, p.Option)
 	} else {
-		err = a.b.Approve(ctx, p.Key, p.OK, "")
+		err = a.b.Approve(ctx, p.Key, p.OK, p.Reason)
 	}
 	if err != nil {
 		return nil, invalid(err)
@@ -145,7 +146,54 @@ func (cl *Client) KeepLine(ctx context.Context, session, item, name string) (str
 }
 
 // ItemAnswer answers what an item waits for: option for a question, else
-// ok for an approval.
-func (cl *Client) ItemAnswer(ctx context.Context, key string, ok bool, option string) error {
-	return cl.c.Call(ctx, ItemAnswerRPC, map[string]any{"key": key, "ok": ok, "option": option}, nil)
+// ok for an approval, with reason (a review sent back: the person's words).
+func (cl *Client) ItemAnswer(ctx context.Context, key string, ok bool, option, reason string) error {
+	return cl.c.Call(ctx, ItemAnswerRPC, map[string]any{"key": key, "ok": ok, "option": option, "reason": reason}, nil)
+}
+
+// lines lists the lines of cwd's project (ADR 0044).
+func (a *agent) lines(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		Cwd string `json:"cwd"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.Cwd == "" {
+		return nil, invalid(errors.New(`want {"cwd"}`))
+	}
+	l, err := a.b.Lines(ctx, p.Cwd)
+	if err != nil {
+		return nil, invalid(err)
+	}
+	if l == nil {
+		l = []api.LineInfo{}
+	}
+	return map[string]any{"lines": l}, nil
+}
+
+// restartLine starts a line that stopped itself again.
+func (a *agent) restartLine(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		Cwd  string `json:"cwd"`
+		Line string `json:"line"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.Cwd == "" || p.Line == "" {
+		return nil, invalid(errors.New(`want {"cwd", "line"}`))
+	}
+	if err := a.b.RestartLine(ctx, p.Cwd, p.Line); err != nil {
+		return nil, invalid(err)
+	}
+	return map[string]any{}, nil
+}
+
+// Lines are the lines of cwd's project, and how they stand.
+func (cl *Client) Lines(ctx context.Context, cwd string) ([]api.LineInfo, error) {
+	var out struct {
+		Lines []api.LineInfo `json:"lines"`
+	}
+	err := cl.c.Call(ctx, LinesRPC, map[string]any{"cwd": cwd}, &out)
+	return out.Lines, err
+}
+
+// RestartLine starts a line of cwd's project that stopped itself again.
+func (cl *Client) RestartLine(ctx context.Context, cwd, line string) error {
+	return cl.c.Call(ctx, RestartLineRPC, map[string]any{"cwd": cwd, "line": line}, nil)
 }

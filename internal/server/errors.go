@@ -42,6 +42,7 @@ var wireErrors = []struct {
 	{"worktree_changed", api.ErrWorktreeChanged},
 	{"folder_gone", api.ErrFolderGone},
 	{"items_cap", api.ErrItemsCap},
+	{"line_stopped", api.ErrLineStopped},
 	{"not_an_item", api.ErrNotAnItem},
 	{"items_no_git", api.ErrItemsNoGit},
 }

@@ -288,33 +288,69 @@ func TestLineOnTheSpot(t *testing.T) {
 	}
 }
 
-// At most api.MaxItemsRunning items run at once in a repository: another
-// is refused, naming those running.
-func TestItemCap(t *testing.T) {
+// Items past the limits on items in progress (lines.wip) are queued, not
+// refused: listed with their place, and started in order as items end
+// (ADR 0044). The same call again is the item it kept.
+func TestItemQueue(t *testing.T) {
 	t.Parallel()
 	sandboxtest.Require(t)
-	ws := itemRepo(t, "")
+	ws := itemRepo(t, `{"permission": {"write": "allow", "edit": "allow", "line": "allow"}, "lines": {"wip": 2}}`)
 	dir := t.TempDir()
 	release := filepath.Join(dir, "release")
+	prompts := filepath.Join(dir, "prompts")
 	r := open(t, filepath.Join(dir, "k.db"), &provider.Fake{HoldAt: -1, HoldFile: filepath.Join(dir, "holding"), HoldOn: `You are at the station "build"`,
-		ReleaseFile: release, Script: []provider.FakeReply{{Text: "ok"}}, Replies: map[string]provider.FakeReply{`You are at the station "build"`: {Text: "built"}}})
+		ReleaseFile: release, PromptLog: prompts, Script: []provider.FakeReply{{Text: "ok"}, {Text: "ok"}, {Text: "ok"}, {Text: "ok"}, {Text: "ok"}},
+		Replies: map[string]provider.FakeReply{`You are at the station "build"`: {Text: "built"}}})
 	defer os.WriteFile(release, nil, 0o600)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	s, _ := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: ws})
 	spec := tools.ItemSpec{Line: "quick", Request: "build"}
-	for i := range api.MaxItemsRunning {
-		if _, err := r.StartItem(ctx, s, "call"+string(rune('a'+i)), spec); err != nil {
+	var started []api.Item
+	for _, key := range []string{"a", "b", "c", "d"} {
+		it, err := r.StartItem(ctx, s, key, spec)
+		if err != nil {
 			t.Fatal(err)
 		}
+		started = append(started, it)
 	}
-	if _, err := r.StartItem(ctx, s, "call-more", spec); !errors.Is(err, ErrItemsCap) || !strings.Contains(err.Error(), "quick-1, quick-2, quick-3, quick-4") {
-		t.Fatalf("a fifth: %v", err)
+	if started[0].State == api.ItemQueued || started[1].State == api.ItemQueued ||
+		started[2].State != api.ItemQueued || started[2].Position != 0 || started[3].State != api.ItemQueued || started[3].Position != 1 {
+		t.Fatalf("started %+v", started)
 	}
-	// The same call again is the item it started, not a new one.
-	again, err := r.StartItem(ctx, s, "calla", spec)
-	if err != nil || again.Name != "quick-1" {
+	if started[2].Dir != "" {
+		t.Fatalf("a queued item has a worktree: %+v", started[2])
+	}
+	text, _ := itemEnv{r: r, conversation: s}.List(ctx)
+	if !strings.Contains(text, "quick-4  line quick  queued (1 before it)") {
+		t.Fatalf("items: %s", text)
+	}
+	// The same call again is the item it kept, queued.
+	if again, err := r.StartItem(ctx, s, "c", spec); err != nil || again.Name != "quick-3" || again.State != api.ItemQueued {
 		t.Fatalf("again: %+v %v", again, err)
+	}
+	os.WriteFile(release, nil, 0o600)
+	for {
+		items, _ := r.Items(ctx, s)
+		done := 0
+		for _, it := range items {
+			if it.State == api.ItemDone {
+				done++
+			}
+		}
+		if done == 4 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("items %+v", items)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	// Each item's agent ran once: the queued ones in their turn.
+	b, _ := os.ReadFile(prompts)
+	if n := strings.Count(string(b), `You are at the station "build"`); n != 4 {
+		t.Fatalf("the agents were called %d times, want 4", n)
 	}
 }
 

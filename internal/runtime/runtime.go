@@ -120,6 +120,8 @@ type Runtime struct {
 	// itemMu: one work item is named and given its worktree at a time, so
 	// two started at once take two names (ADR 0043).
 	itemMu sync.Mutex
+	// queueMu: one pass over a repository's queue at a time (ADR 0044).
+	queueMu sync.Mutex
 	// rates are the providers' rate limits (ADR 0040).
 	rates *rateLimiter
 

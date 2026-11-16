@@ -150,6 +150,8 @@ type fakeAgent struct {
 	items                    []api.Item
 	itemWaits                []api.Pending
 	lines, dropped, answered []string
+	linesInfo                []api.LineInfo
+	restarted                []string
 }
 
 func (a *fakeAgent) GoOn(ctx context.Context, session string) (string, int, error) {
@@ -196,8 +198,17 @@ func (a *fakeAgent) KeepLine(ctx context.Context, session, item, name string) (s
 	return "/repo/.kairocode/lines/" + name + ".json", nil
 }
 
-func (a *fakeAgent) ItemAnswer(ctx context.Context, key string, ok bool, option string) error {
-	a.answered = append(a.answered, fmt.Sprintf("%s ok=%v %s", key, ok, option))
+func (a *fakeAgent) ItemAnswer(ctx context.Context, key string, ok bool, option, reason string) error {
+	a.answered = append(a.answered, fmt.Sprintf("%s ok=%v %s%s", key, ok, option, reason))
+	return nil
+}
+
+func (a *fakeAgent) Lines(ctx context.Context, cwd string) ([]api.LineInfo, error) {
+	return a.linesInfo, nil
+}
+
+func (a *fakeAgent) RestartLine(ctx context.Context, cwd, line string) error {
+	a.restarted = append(a.restarted, cwd+" "+line)
 	return nil
 }
 
@@ -1848,5 +1859,40 @@ func TestItems(t *testing.T) {
 	typed(d, "/line keep item-1 quick")
 	if out := d.view() + d.out(); !strings.Contains(out, "item ship-1 on the line ship (build)") || !strings.Contains(out, "kept as /repo/.kairocode/lines/quick.json") {
 		t.Fatalf("not said\n%s", out)
+	}
+}
+
+// A person's review of a line's change shows in /items with the change,
+// and /items no <n> sends it back with words; /line lists the lines and
+// how they stand; /line restart starts one that stopped itself (ADR 0044).
+func TestItemReviewAndLines(t *testing.T) {
+	d, a := start(t, Options{Dir: "/repo"})
+	a.items = []api.Item{{Name: "ship-1", Line: "ship", State: api.ItemWaiting, Branch: "kairo/ship-1"},
+		{Name: "ship-2", Line: "ship", State: api.ItemQueued, Position: 0, Branch: ""}}
+	a.itemWaits = []api.Pending{{Key: "k1", Item: "ship-1", Tool: "review", Subject: "review",
+		Rule: "review the change of the line ship: 2 lines in 1 files", Preview: "── The change ──\n+one\n+two"}}
+	typed(d, "/items")
+	out := d.view() + d.out()
+	for _, want := range []string{"[1] ship-1 waits for your review at review", "/items no 1 <what to change>", "+two", "ship-2  ship  queued (0 before it)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	typed(d, "/items no 1 add a test")
+	if len(a.answered) != 1 || a.answered[0] != "k1 ok=false add a test" {
+		t.Fatalf("answered %q", a.answered)
+	}
+	a.linesInfo = []api.LineInfo{{Name: "ship", Stations: []string{"build", "review"}, InProgress: 1, Queued: 1, Wip: 1},
+		{Name: "breaks", Stations: []string{"try"}, Stopped: true, Why: "stopped itself: its last 3 items did not pass"}}
+	typed(d, "/line")
+	out = d.view() + d.out()
+	for _, want := range []string{"ship (build → review): 1 in progress, 1 queued, wip 1", "breaks (try): 0 in progress, 0 queued — STOPPED: stopped itself", "/line restart breaks"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	typed(d, "/line restart breaks")
+	if len(a.restarted) != 1 || a.restarted[0] != "/repo breaks" {
+		t.Fatalf("restarted %q", a.restarted)
 	}
 }

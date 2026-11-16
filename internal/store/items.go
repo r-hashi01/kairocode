@@ -121,3 +121,44 @@ func (s *Store) items(ctx context.Context, where string, args ...any) ([]ItemRow
 	}
 	return out, rows.Err()
 }
+
+// LineRestarted is when a person last started line of repo again (zero:
+// never).
+func (s *Store) LineRestarted(ctx context.Context, repo, line string) (time.Time, error) {
+	var at int64
+	err := s.db.QueryRowContext(ctx, `SELECT restarted FROM kc_line WHERE repo = ? AND line = ?`, repo, line).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	return time.UnixMilli(at), err
+}
+
+// RestartLine notes that a person started line of repo again, at.
+func (s *Store) RestartLine(ctx context.Context, repo, line string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_line (repo, line, restarted) VALUES (?, ?, ?)
+		ON CONFLICT (repo, line) DO UPDATE SET restarted = excluded.restarted`, repo, line, at.UnixMilli())
+	return err
+}
+
+// ItemsRepos is the repositories with items not taken or dropped.
+func (s *Store) ItemsRepos(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT repo FROM kc_item WHERE ended = '' ORDER BY repo`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ItemsOfLine is the items of line in repo, the first first, ended or not.
+func (s *Store) ItemsOfLine(ctx context.Context, repo, line string) ([]ItemRow, error) {
+	return s.items(ctx, `repo = ? AND line = ?`, repo, line)
+}

@@ -33,6 +33,8 @@ var handlers = map[string]func(a *agent, ctx context.Context, params json.RawMes
 	DropItemRPC:                 (*agent).dropItem,
 	KeepLineRPC:                 (*agent).keepLine,
 	ItemAnswerRPC:               (*agent).itemAnswer,
+	LinesRPC:                    (*agent).lines,
+	RestartLineRPC:              (*agent).restartLine,
 	MakeWorktreeRPC:             (*agent).makeWorktree,
 	RemoveWorktreeRPC:           (*agent).removeWorktree,
 	FlowRunRPC:                  (*agent).flowRun,

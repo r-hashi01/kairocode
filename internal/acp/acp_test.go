@@ -124,6 +124,12 @@ func (l *local) DropItem(ctx context.Context, session, item string, force bool) 
 func (l *local) KeepLine(ctx context.Context, session, item, name string) (string, error) {
 	return l.r.KeepLine(ctx, session, item, name)
 }
+func (l *local) Lines(ctx context.Context, dir string) ([]api.LineInfo, error) {
+	return l.r.Lines(ctx, dir)
+}
+func (l *local) RestartLine(ctx context.Context, dir, line string) error {
+	return l.r.RestartLine(ctx, dir, line)
+}
 func (l *local) PendingAll(ctx context.Context, session string) ([]api.Pending, error) {
 	p, err := l.r.Pending(ctx, session)
 	if err != nil {

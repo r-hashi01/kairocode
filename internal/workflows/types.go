@@ -17,7 +17,10 @@ const (
 	Session        = "session"
 	SessionVersion = "8"
 	Turn           = "turn"
-	TurnVersion    = "6"
+	TurnVersion    = "7"
+	// TurnVersion6 is the version before a line's reviews (ADR 0044). Its
+	// runs finish with RunTurnV6.
+	TurnVersion6 = "6"
 	// TurnVersion5 and SessionVersion7 are the versions before an item's
 	// line (ADR 0043). Their runs finish with the same functions: none of
 	// them has a line. The versions keep a process without lines from
@@ -123,6 +126,12 @@ const (
 	// ActLineCommit commits a work item's worktree once its line passed
 	// (ADR 0043): the change is on the item's branch, ready to merge.
 	ActLineCommit = "line.commit"
+	// ActLinePolicy, ActLineDiff and ActLineReview: a line's reviews (ADR
+	// 0044): who reviews, the change so far, and a person's review put as
+	// an approval.
+	ActLinePolicy = "line.policy"
+	ActLineDiff   = "line.diff"
+	ActLineReview = "line.review"
 	// ActTaskArgs reads a task call's arguments (the subagent and its
 	// prompt); ActTaskResult answers the call with the subagent's reply.
 	// Its name is a tool's, so its end is told as the call's.

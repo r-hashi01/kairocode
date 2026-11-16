@@ -47,6 +47,8 @@ const usage = `usage:
   kairocode approvals [-data DIR] <session>          list the calls waiting for a person (its work items' too)
   kairocode line [-dir DIR] [-data DIR] [-session ID | -provider P -model M] [-name N] <line> "<request>"   send a request down a standard line (ADR 0043)
   kairocode line [-data DIR] -keep <item> -session ID <name>   keep the line an item ran as .kairocode/lines/<name>.json
+  kairocode line [-dir DIR] [-data DIR] -restart <name>   start a line again after it stopped itself (ADR 0044)
+  kairocode lines [-dir DIR] [-data DIR] [-json]      the project's lines: in progress, queued, stopped
   kairocode items [-data DIR] [-json] [-drop ITEM [-force]] <session>   the work items a session sent down lines
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
@@ -158,6 +160,8 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = lineCommand(ctx, args, stdout, stderr)
 	case "items":
 		err = itemsCommand(ctx, args, stdout, stderr)
+	case "lines":
+		err = linesCommand(ctx, args, stdout, stderr)
 	case "approve":
 		err = approve(ctx, args, stderr)
 	case "answer":

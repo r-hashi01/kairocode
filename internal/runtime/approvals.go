@@ -142,6 +142,18 @@ func (r *Runtime) pendingIn(ctx context.Context, run kairo.RunInfo, top string) 
 			}
 			continue
 		}
+		if c.Plan == "kairo.call/"+workflows.ActLineReview && c.Finished() {
+			// A person's review of a line's change (ADR 0044): an approval
+			// of kind review.
+			var in struct {
+				In workflows.LineReviewInput `json:"in"`
+			}
+			var o workflows.PermissionOutput
+			if json.Unmarshal(c.Input, &in) == nil && json.Unmarshal(c.Output, &o) == nil {
+				checks[in.In.Call], tool[in.In.Call] = o, "review"
+			}
+			continue
+		}
 		if c.Plan != "kairo.call/"+workflows.ActPermissionCheck || !c.Finished() {
 			continue
 		}

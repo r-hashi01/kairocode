@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,9 +48,10 @@ var afterItemWorktree, afterItemSession func(id string)
 const kindItemTold = "item-told"
 
 var (
-	ErrItemsCap   = api.ErrItemsCap
-	ErrNotAnItem  = api.ErrNotAnItem
-	ErrItemsNoGit = api.ErrItemsNoGit
+	ErrItemsCap    = api.ErrItemsCap
+	ErrLineStopped = api.ErrLineStopped
+	ErrNotAnItem   = api.ErrNotAnItem
+	ErrItemsNoGit  = api.ErrItemsNoGit
 )
 
 // itemSessionName is the id of the session an item started by the call
@@ -190,6 +193,10 @@ func (e itemEnv) Start(ctx context.Context, spec tools.ItemSpec) (string, error)
 	if line == "" {
 		line = "put together on the spot"
 	}
+	if it.State == api.ItemQueued {
+		return fmt.Sprintf("Queued the item %s on the line %s (%s): %d items are before it, past the limit on items in progress. It starts in its turn; "+
+			"you are told when it ends or needs the person. The items tool lists the items.", it.Name, line, strings.Join(it.Stations, " → "), it.Position), nil
+	}
 	return fmt.Sprintf("Started the item %s on the line %s (%s), in the worktree %s on the branch %s. It runs behind this conversation: "+
 		"you are told when it ends or needs the person. The items tool lists the items.", it.Name, line, strings.Join(it.Stations, " → "), it.Dir, it.Branch), nil
 }
@@ -223,6 +230,9 @@ func ItemsText(items []api.Item) string {
 		if it.Waiting > 0 {
 			fmt.Fprintf(&b, " for you (%d)", it.Waiting)
 		}
+		if it.State == api.ItemQueued {
+			fmt.Fprintf(&b, " (%d before it)", it.Position)
+		}
 		fmt.Fprintf(&b, "  branch %s  tokens in %d out %d", it.Branch, it.Usage.Input, it.Usage.Output)
 		if it.Stale {
 			b.WriteString("  [left a week: take or drop it]")
@@ -243,8 +253,8 @@ func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec 
 	name := itemSessionName(conversation, key)
 	id := SessionID(name)
 	row, err := r.Store.Item(ctx, id)
-	if err == nil { // kept before: finished from where it was
-		return r.finishItem(ctx, row)
+	if err == nil { // kept before: started in its turn, or finished from where it was
+		return r.startInTurn(ctx, row)
 	} else if !errors.Is(err, store.ErrNoItem) {
 		return api.Item{}, notSettled(err)
 	}
@@ -259,7 +269,94 @@ func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec 
 	if row, err = r.newItem(ctx, conversation, top, main, id, spec); err != nil {
 		return api.Item{}, err
 	}
-	return r.finishItem(ctx, row)
+	return r.startInTurn(ctx, row)
+}
+
+// startInTurn starts the items of row's repository that may start (the
+// queue, in order, within the limits: ADR 0044), and says how row stands:
+// started, or queued. An error starting row itself is its own; others' are
+// logged, and tried again as items end.
+func (r *Runtime) startInTurn(ctx context.Context, row store.ItemRow) (api.Item, error) {
+	if row.Made || row.Ended != "" { // started before
+		return r.finishItem(ctx, row)
+	}
+	if err := r.startQueued(ctx, row.Repo, row.ID); err != nil {
+		return api.Item{}, err
+	}
+	if fresh, err := r.Store.Item(ctx, row.ID); err == nil {
+		row = fresh
+	}
+	return r.itemState(ctx, row), nil
+}
+
+// itemsWip is the repository's limit on items in progress: lines.wip, the
+// user's and the project's, the smaller; api.DefaultItemsWip if neither.
+func itemsWip(repo string) int {
+	limit := 0
+	layers, _ := config.Layers(repo)
+	for _, l := range layers {
+		var cfg struct {
+			Lines struct {
+				Wip int `json:"wip"`
+			} `json:"lines"`
+		}
+		if l.Decode(&cfg) == nil && cfg.Lines.Wip > 0 && (limit == 0 || cfg.Lines.Wip < limit) {
+			limit = cfg.Lines.Wip
+		}
+	}
+	if limit == 0 {
+		limit = api.DefaultItemsWip
+	}
+	return limit
+}
+
+// startQueued starts repo's items not yet started, the first sent first,
+// while the limits on items in progress allow: the repository's, and each
+// line's. One pass at a time (queueMu). The error of starting own is
+// returned; others' are logged.
+func (r *Runtime) startQueued(ctx context.Context, repo, own string) error {
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
+	rows, err := r.Store.ItemsIn(ctx, repo)
+	if err != nil {
+		return notSettled(err)
+	}
+	limit := itemsWip(repo)
+	inProgress, byLine := 0, map[string]int{}
+	for _, row := range rows {
+		if !row.Made {
+			continue
+		}
+		if s := r.itemState(ctx, row).State; s == api.ItemRunning || s == api.ItemWaiting {
+			inProgress++
+			byLine[row.Line]++
+		}
+	}
+	var ownErr error
+	for _, row := range rows {
+		if row.Made {
+			continue
+		}
+		var line workflows.Line
+		_ = json.Unmarshal(row.Def, &line)
+		if inProgress >= limit || line.Wip > 0 && row.Line != "" && byLine[row.Line] >= line.Wip {
+			continue // its turn has not come: queued
+		}
+		it, err := r.finishItem(ctx, row)
+		if err != nil {
+			if row.ID == own {
+				ownErr = err
+			} else {
+				r.logf("starting the item %s in its turn: %v", row.Name, err)
+			}
+			continue
+		}
+		if it.State == api.ItemRunning || it.State == api.ItemWaiting {
+			inProgress++
+			byLine[row.Line]++
+		}
+	}
+	return ownErr
 }
 
 // finishItem makes what item row has not got yet: its worktree, then its
@@ -345,7 +442,7 @@ func (r *Runtime) FinishItems(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var errs []error
+	repos := map[string]bool{}
 	for _, row := range rows {
 		if row.Made { // its session was made: finished, whatever came of it since
 			if _, err := r.K.Get(ctx, row.ID); errors.Is(err, kairo.ErrUnknownRun) {
@@ -353,8 +450,13 @@ func (r *Runtime) FinishItems(ctx context.Context) error {
 			}
 			continue
 		}
-		if _, err := r.finishItem(ctx, row); err != nil {
-			errs = append(errs, fmt.Errorf("finishing the start of the item %s: %w", row.Name, err))
+		repos[row.Repo] = true
+	}
+	// Those not started: in their turn, within the limits (ADR 0044).
+	var errs []error
+	for _, repo := range slices.Sorted(maps.Keys(repos)) {
+		if err := r.startQueued(ctx, repo, ""); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -413,23 +515,16 @@ func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id strin
 	if err != nil {
 		return store.ItemRow{}, err
 	}
-	r.itemMu.Lock()
-	defer r.itemMu.Unlock()
-	// The stop-gap of ADR 0043 until a queue: so many at once in a
-	// repository.
-	kept, err := r.Store.ItemsIn(ctx, main)
-	if err != nil {
-		return store.ItemRow{}, err
-	}
-	var running []string
-	for _, k := range kept {
-		if s := r.itemState(ctx, k).State; s == api.ItemRunning || s == api.ItemWaiting {
-			running = append(running, k.Name)
+	// A line that stopped itself takes no new item (ADR 0044, 3).
+	if line.Name != "" {
+		if stopped, why, err := r.lineStopped(ctx, main, line.Name); err != nil {
+			return store.ItemRow{}, err
+		} else if stopped {
+			return store.ItemRow{}, fmt.Errorf("%w: %s %s; a person starts it again (/line restart %s)", ErrLineStopped, line.Name, why, line.Name)
 		}
 	}
-	if len(running) >= api.MaxItemsRunning {
-		return store.ItemRow{}, fmt.Errorf("%w: %d run in this repository (%s); wait for one to end", ErrItemsCap, len(running), strings.Join(running, ", "))
-	}
+	r.itemMu.Lock()
+	defer r.itemMu.Unlock()
 	used, err := r.Store.ItemNames(ctx, main)
 	if err != nil {
 		return store.ItemRow{}, err
@@ -525,6 +620,21 @@ func (r *Runtime) itemState(ctx context.Context, row store.ItemRow) api.Item {
 	}
 	if row.Ended != "" {
 		it.State = row.Ended
+	}
+	if !row.Made && row.Ended == "" {
+		// Not started: queued, its place in its repository's queue.
+		it.State = api.ItemQueued
+		if rows, err := r.Store.ItemsIn(ctx, row.Repo); err == nil {
+			for _, o := range rows {
+				if o.ID == row.ID {
+					break
+				}
+				if !o.Made {
+					it.Position++
+				}
+			}
+		}
+		return it
 	}
 	run, ok, err := r.TurnRun(ctx, row.ID, 0)
 	if err != nil || !ok {
@@ -651,7 +761,16 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 		if text == "" {
 			text = it.Why
 		}
-		return tell("end", fmt.Sprintf("[KairoCode] The item %s (line %s) is %s, on the branch %s:\n\n%s", row.Name, line, it.State, row.Branch, text))
+		err := tell("end", fmt.Sprintf("[KairoCode] The item %s (line %s) is %s, on the branch %s:\n\n%s", row.Name, line, it.State, row.Branch, text))
+		// Its place is free: the queue goes on (ADR 0044); and a line its
+		// end stopped is told of.
+		if qerr := r.startQueued(ctx, row.Repo, ""); qerr != nil {
+			r.logf("the queue of %s: %v", row.Repo, qerr)
+		}
+		if it.State != api.ItemDone {
+			err = errors.Join(err, r.tellLineStopped(ctx, row))
+		}
+		return err
 	}
 	return nil
 }
