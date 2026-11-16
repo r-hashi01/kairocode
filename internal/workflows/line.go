@@ -106,6 +106,10 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 				return TurnOutput{}, err
 			}
 			res.Steps, res.Usage, output = v.steps, v.usage, v.text
+			res.By = ReviewModel
+			if v.byPerson {
+				res.By = ReviewPerson
+			}
 			if v.pass {
 				if v.byPerson {
 					personSaw = v.diff

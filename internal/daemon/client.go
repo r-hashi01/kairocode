@@ -921,3 +921,15 @@ func (c *Client) Lines(ctx context.Context, dir string) ([]api.LineInfo, error) 
 func (c *Client) RestartLine(ctx context.Context, dir, line string) error {
 	return c.do(ctx, "POST", "/lines/restart", map[string]string{"dir": dir, "line": line}, nil)
 }
+
+// Sweep sweeps now what nothing reaches (ADR 0045); with dry, it only
+// says what it would remove.
+func (c *Client) Sweep(ctx context.Context, dry bool) (api.SweepReport, error) {
+	var out api.SweepReport
+	path := "/gc"
+	if dry {
+		path += "?dry=1"
+	}
+	err := c.do(ctx, "POST", path, nil, &out)
+	return out, err
+}

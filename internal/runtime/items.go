@@ -697,6 +697,12 @@ func (r *Runtime) itemState(ctx context.Context, row store.ItemRow) api.Item {
 		if how, _, being := ending(row.Ended); being {
 			it.State = how
 		}
+		if b, err := r.Store.ItemResult(ctx, row.ID); err == nil && b != nil {
+			var res api.ItemResult
+			if json.Unmarshal(b, &res) == nil {
+				it.Result = &res
+			}
+		}
 	}
 	if !row.Made && row.Ended == "" {
 		// Not started: queued, its place in its repository's queue.
@@ -973,7 +979,9 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 	// hold no lock, tell what came of it and let the queue go on
 	// (afterEnding). endItem itself may run inside a pass of the queue.
 	undo := func(err error) error {
-		if uerr := r.Store.EndItem(ctx, row.ID, ""); uerr != nil {
+		// Kept again: its result, if written, is of a change that may
+		// change yet (ADR 0045); it is made anew at its end.
+		if uerr := errors.Join(r.Store.EndItem(ctx, row.ID, ""), r.Store.SetItemResult(ctx, row.ID, nil)); uerr != nil {
 			return errors.Join(err, uerr)
 		}
 		return err
@@ -986,6 +994,9 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 		wait, cancel := context.WithTimeout(ctx, 30*time.Second)
 		_, _ = r.WaitTurn(wait, row.ID, 0)
 		cancel()
+	}
+	if err := r.keepItemResult(ctx, row, how, worktree, again); err != nil {
+		return undo(err)
 	}
 	if worktree {
 		// Written while it was being stopped: not dropped unless forced.
@@ -1000,6 +1011,73 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 		r.logf("closing the item %s: %v", row.Name, err)
 	}
 	return r.Store.EndItem(ctx, row.ID, how)
+}
+
+// keepItemResult keeps what item row came to as it ends how (ADR 0045):
+// its line turn's stations and what it cost, its change while its worktree
+// is there, and its branch's commit. An end begun again (again: cut off,
+// its worktree gone perhaps) keeps the result written before, and changes
+// only how it ends.
+func (r *Runtime) keepItemResult(ctx context.Context, row store.ItemRow, how string, worktree, again bool) error {
+	var res api.ItemResult
+	if b, err := r.Store.ItemResult(ctx, row.ID); err != nil {
+		return err
+	} else if b != nil && again {
+		if err := json.Unmarshal(b, &res); err != nil {
+			return err
+		}
+		res.How = how
+		return r.putItemResult(ctx, row.ID, res)
+	}
+	res.How = how
+	if run, ok, err := r.TurnRun(ctx, row.ID, 0); err != nil {
+		return err
+	} else if ok {
+		var out workflows.TurnOutput
+		if len(run.Output) > 0 && runOutput(run.Output, &out) == nil {
+			res.Stations, res.Steps, res.Usage = out.Line, out.Steps, out.Usage
+		}
+		res.Error = run.Error
+	}
+	for i := range res.Stations {
+		if res.Stations[i].Status == workflows.StationSentBack {
+			res.SentBack++
+		}
+		for j := range res.Stations[i].Checks {
+			// Its output's text, the end of it, not the hash of all of it:
+			// what the result keeps is small (ADR 0045, 4).
+			c := &res.Stations[i].Checks[j]
+			if c.Output == "" {
+				continue
+			}
+			text := ""
+			if m, err := r.Store.Message(ctx, c.Output); err == nil {
+				text = m.Text()
+			}
+			c.Output = lastRunes(text, api.ItemCheckOutput)
+		}
+	}
+	if worktree {
+		if d, err := r.lineDiff(ctx, row.ID, row.Dir); err == nil {
+			res.Lines, res.Sum = d.Lines, d.Sum
+		} else {
+			r.logf("the change of item %s: %v", row.Name, err)
+		}
+	}
+	if row.Branch != "" && row.Repo != "" {
+		if tip, err := gitIn(ctx, row.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+row.Branch); err == nil {
+			res.Commit = strings.TrimSpace(tip)
+		}
+	}
+	return r.putItemResult(ctx, row.ID, res)
+}
+
+func (r *Runtime) putItemResult(ctx context.Context, id string, res api.ItemResult) error {
+	b, err := json.Marshal(res)
+	if err != nil {
+		return err
+	}
+	return r.Store.SetItemResult(ctx, id, b)
 }
 
 // afterEnding is what follows ending item row, done or not: what came of

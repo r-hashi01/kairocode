@@ -86,6 +86,7 @@ kairocode sessions -repo             # the repository's sessions across its work
 kairocode fork [-files] <session> [turn]   # go on from a past turn, as another session
 kairocode plugin install <name>      # install a plugin (MCP servers and skills); connect gives it credentials
 kairocode usage [-session <session>]  # what was used today, this week (and in a session), against your limits
+kairocode gc -dry-run                # what the daily sweep would remove now (ADR 0045); without -dry-run, remove it
 ```
 
 `run` and `resume` exit with a code for each way the turn ended, so a script or CI step can tell (ADR 0041):
@@ -252,6 +253,7 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |
 | `rateLimits` | Requests (`rpm`) and tokens (`tpm`) a minute, by provider: `anthropic`, or an OpenAI-compatible provider's name. Calls of every session wait their turn, and a 429 holds them back as long as it asks | Yours, the project's (the smaller of each) |
 | `flowHistory` | How many flow runs to keep (`keep`) and for how many days (`days`) | Yours |
+| `retention` | What the data directory keeps (ADR 0045), in days: `grace` (7) before what nothing reaches any more goes (messages, snapshots, rows of sessions gone), `usage` (90, at least 8), `items` (180) for ended work items and their results, `caches` (30) for the check caches of a repository not checked; `cacheSize` (5, in GB) for them all; `off: true` stops the daily sweep. Nothing an open session, a kept flow run or a kept item reaches is removed, and sessions are never closed for you. `kairocode gc [-dry-run]` sweeps now | Yours |
 | `notify`, `language` | How to notify, and the language shown | Yours |
 
 ## Usage and limits

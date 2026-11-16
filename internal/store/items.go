@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -73,8 +74,28 @@ func (s *Store) SetItemMade(ctx context.Context, id string) error {
 
 // EndItem notes item id taken or dropped.
 func (s *Store) EndItem(ctx context.Context, id, how string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE kc_item SET ended = ? WHERE id = ?`, how, id)
+	var at int64 // kept, or being ended: not ended yet
+	if how != "" && !strings.HasPrefix(how, "ending:") {
+		at = time.Now().UnixMilli()
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE kc_item SET ended = ?, ended_at = ? WHERE id = ?`, how, at, id)
 	return err
+}
+
+// SetItemResult keeps what item id came to (ADR 0045), as JSON.
+func (s *Store) SetItemResult(ctx context.Context, id string, result []byte) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE kc_item SET result = ? WHERE id = ?`, result, id)
+	return err
+}
+
+// ItemResult is what item id came to, nil when none was kept.
+func (s *Store) ItemResult(ctx context.Context, id string) ([]byte, error) {
+	var b []byte
+	err := s.db.QueryRowContext(ctx, `SELECT result FROM kc_item WHERE id = ?`, id).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return b, err
 }
 
 // ItemsOf is the items conversation sent, the first first.

@@ -39,6 +39,7 @@ func New(rt *runtime.Runtime, token string, newID func() string) *Server {
 	s.mux.HandleFunc("POST /sessions/{id}/items/keep", s.keepLine)
 	s.mux.HandleFunc("GET /lines", s.lines)
 	s.mux.HandleFunc("POST /lines/restart", s.restartLine)
+	s.mux.HandleFunc("POST /gc", s.sweep)
 	s.mux.HandleFunc("POST /approvals", s.approve)
 	s.mux.HandleFunc("POST /approvals/try", s.tryFlow)
 	s.mux.HandleFunc("POST /questions", s.answer)

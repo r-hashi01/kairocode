@@ -70,6 +70,10 @@ func TestMain(m *testing.M) {
 		crashItemChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_SWEEP_CHILD") == "1" {
+		crashSweepChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_LINE_CHILD") == "1" {
 		crashLineChild()
 		return

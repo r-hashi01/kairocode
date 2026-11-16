@@ -250,6 +250,7 @@ func (r *Runtime) CloseSession(ctx context.Context, session string) error {
 			r.logf("the switch waiting for %s, closed, stays: %v", session, err)
 		}
 	}
+	r.sweepDue()
 	return nil
 }
 

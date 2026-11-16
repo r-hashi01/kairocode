@@ -132,3 +132,14 @@ func (s *Server) restartLine(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// sweep sweeps now what nothing reaches (ADR 0045); ?dry=1 only says what
+// it would remove.
+func (s *Server) sweep(w http.ResponseWriter, r *http.Request) {
+	rep, err := s.rt.Sweep(r.Context(), r.URL.Query().Get("dry") == "1")
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}

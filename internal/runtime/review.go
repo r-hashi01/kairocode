@@ -85,11 +85,16 @@ const maxUntracked = 64 << 10
 // regular file in the folder, up to a size. git failing is an error: a
 // review is never asked of a change not known.
 func (r *Runtime) lineDiffAction(t *kairo.TaskContext, in workflows.LineDiffInput) (workflows.LineDiff, error) {
+	return r.lineDiff(t, in.Session, in.Dir)
+}
+
+// lineDiff is the change of item session in dir, as lineDiffAction has it.
+func (r *Runtime) lineDiff(t context.Context, session, dir string) (workflows.LineDiff, error) {
 	start := "HEAD"
-	if row, err := r.Store.Item(t, in.Session); err == nil && row.Start != "" {
+	if row, err := r.Store.Item(t, session); err == nil && row.Start != "" {
 		start = row.Start
 	}
-	top, err := diffGit(t, in.Dir, "rev-parse", "--show-toplevel")
+	top, err := diffGit(t, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return workflows.LineDiff{}, err
 	}

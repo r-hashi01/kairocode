@@ -220,6 +220,11 @@ func (r *Runtime) snapshot(ctx context.Context, dir string) (string, error) {
 		return "", err
 	}
 	defer removeIndex(index)
+	unlock, err := lockStore(store, false) // not while the sweep prunes it (ADR 0045)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if _, err := snapGit(ctx, dir, store, index, append([]string{"add", "--all"}, excluded()...)...); err != nil {
 		return "", err
 	}
@@ -242,6 +247,11 @@ func (r *Runtime) restore(ctx context.Context, dir, tree, from string) (string, 
 		return "", err
 	}
 	defer removeIndex(index)
+	unlock, err := lockStore(store, false) // not while the sweep prunes it (ADR 0045)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if _, err := snapGit(ctx, dir, store, index, "read-tree", tree); err != nil {
 		return "", err
 	}

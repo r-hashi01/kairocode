@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/r-hashi01/kairocode/internal/msg"
 )
@@ -160,6 +161,10 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			line TEXT NOT NULL,
 			restarted INTEGER NOT NULL,
 			PRIMARY KEY (repo, line))`,
+		// When each part of the sweep last ran (ADR 0045).
+		`CREATE TABLE IF NOT EXISTS kc_sweep (
+			name TEXT PRIMARY KEY,
+			at INTEGER NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS kc_item_of ON kc_item (of)`,
 		`CREATE INDEX IF NOT EXISTS kc_item_repo ON kc_item (repo)`,
 	} {
@@ -171,6 +176,39 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 	if _, err := db.ExecContext(ctx, `ALTER TABLE kc_flow_run ADD COLUMN try INTEGER NOT NULL DEFAULT 0`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return nil, fmt.Errorf("store: %w", err)
+	}
+	// Retention (ADR 0045): when a message was last written; an item's
+	// result, and when it ended. Rows from before them count from now, so
+	// they get their grace in full.
+	now := time.Now().UnixMilli()
+	for _, m := range []struct{ add, fill string }{
+		{`ALTER TABLE kc_message ADD COLUMN at INTEGER NOT NULL DEFAULT 0`, `UPDATE kc_message SET at = ? WHERE at = 0`},
+		{`ALTER TABLE kc_item ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0`, `UPDATE kc_item SET ended_at = ? WHERE ended_at = 0 AND ended <> '' AND ended NOT LIKE 'ending:%'`},
+		{`ALTER TABLE kc_item ADD COLUMN result BLOB`, ``},
+	} {
+		// The column and its fill at once: a crash between them would
+		// leave rows that count as written long ago.
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, m.add)
+		if err != nil {
+			tx.Rollback()
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue // there already
+			}
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		if m.fill != "" {
+			if _, err := tx.ExecContext(ctx, m.fill, now); err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("store: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -188,9 +226,11 @@ func Hash(kind string, body []byte) string {
 // changes nothing, so Put is safe to repeat.
 func (s *Store) Put(ctx context.Context, kind string, body []byte) (string, error) {
 	h := Hash(kind, body)
+	// Written again, its body stays as it is (invariant 5); when it was
+	// last written moves on, so the sweep gives it its grace (ADR 0045).
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO kc_message (hash, kind, body) VALUES (?, ?, ?) ON CONFLICT (hash) DO NOTHING`,
-		h, kind, body); err != nil {
+		`INSERT INTO kc_message (hash, kind, body, at) VALUES (?, ?, ?, ?) ON CONFLICT (hash) DO UPDATE SET at = excluded.at`,
+		h, kind, body, time.Now().UnixMilli()); err != nil {
 		return "", fmt.Errorf("store: put %s: %w", kind, err)
 	}
 	return h, nil
