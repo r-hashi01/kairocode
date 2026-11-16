@@ -499,6 +499,9 @@ func (r *Runtime) FinishItems(ctx context.Context) error {
 			// Being ended when a process stopped: finished now.
 			if err := r.endItem(ctx, row, how, force); err != nil {
 				r.logf("ending the item %s: %v", row.Name, err)
+				if terr := r.tellItem(ctx, row.ID); terr != nil { // kept again
+					r.logf("%v", terr)
+				}
 			}
 			repos[row.Repo] = true
 			continue
@@ -703,7 +706,7 @@ func (r *Runtime) itemState(ctx context.Context, row store.ItemRow) api.Item {
 				if o.ID == row.ID {
 					break
 				}
-				if !o.Made {
+				if !o.Made && o.Ended == "" {
 					it.Position++
 				}
 			}
@@ -917,20 +920,16 @@ func (r *Runtime) DropItem(ctx context.Context, conversation, item string, force
 	for _, row := range rows {
 		if row.ID == item || row.Name == item {
 			how, forced, being := ending(row.Ended)
-			switch {
-			case being: // being ended: finished now, as it was asked
-				return r.endItem(ctx, row, how, forced || force)
-			case row.Ended != "":
+			if !being && row.Ended != "" {
 				return nil
 			}
-			if err := r.endItem(ctx, row, api.ItemDropped, force); err != nil {
-				return err
+			if !being {
+				how, forced = api.ItemDropped, false
 			}
-			// Its place is free: the queue goes on (ADR 0044).
-			if err := r.startQueued(ctx, row.Repo, ""); err != nil {
-				r.logf("the queue of %s: %v", row.Repo, err)
-			}
-			return nil
+			// Being ended already: finished now, as it was asked.
+			err := r.endItem(ctx, row, how, forced || force)
+			r.afterEnding(ctx, row) // its place may be free: the queue goes on (ADR 0044)
+			return err
 		}
 	}
 	return ErrNotAnItem
@@ -957,16 +956,22 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 		st, _ := gitIn(ctx, row.Dir, "status", "--porcelain")
 		return st != ""
 	}
-	if worktree && !force && changed() {
+	_, _, again := ending(row.Ended) // being ended already: its turn may still run
+	if !again && worktree && !force && changed() {
 		return ErrWorktreeChanged
 	}
-	mark := "ending:" + how
-	if force {
-		mark += "!"
+	if !again {
+		mark := "ending:" + how
+		if force {
+			mark += "!"
+		}
+		if err := r.Store.EndItem(ctx, row.ID, mark); err != nil {
+			return err
+		}
 	}
-	if err := r.Store.EndItem(ctx, row.ID, mark); err != nil {
-		return err
-	}
+	// Kept again, its turn perhaps stopped meanwhile: the callers, which
+	// hold no lock, tell what came of it and let the queue go on
+	// (afterEnding). endItem itself may run inside a pass of the queue.
 	undo := func(err error) error {
 		if uerr := r.Store.EndItem(ctx, row.ID, ""); uerr != nil {
 			return errors.Join(err, uerr)
@@ -995,6 +1000,18 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 		r.logf("closing the item %s: %v", row.Name, err)
 	}
 	return r.Store.EndItem(ctx, row.ID, how)
+}
+
+// afterEnding is what follows ending item row, done or not: what came of
+// it is told (one kept again, its turn stopped), and its place may be
+// free. Called holding no lock.
+func (r *Runtime) afterEnding(ctx context.Context, row store.ItemRow) {
+	if err := r.tellItem(ctx, row.ID); err != nil {
+		r.logf("%v", err)
+	}
+	if err := r.startQueued(ctx, row.Repo, ""); err != nil {
+		r.logf("the queue of %s: %v", row.Repo, err)
+	}
 }
 
 // ending is how an item being ended is to end, and whether forced; ok

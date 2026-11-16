@@ -151,7 +151,7 @@ Where it differs from the decision above, or settles what it left open:
 - **The people's review** is added at the line's end when the change, read again then, touches `lines.people`, and it is not the change a person last took. Its `back` is the line's last agent station.
   - **What a person's yes is kept by:** a digest of the whole change (`LineDiff.Sum`): `git diff --binary`, and every byte of each file not tracked. It is not the text shown, which is cut short and says only that a binary file changed.
   - So any station that changed the files after the yes brings the review again: an agent, a flow, a model's reviewer, a check.
-  - Files not tracked are opened without waiting, and read only if they are still regular files.
+  - Files not tracked are opened without waiting, and read only if they are still regular files. A link's target is in the digest.
 - **Version:** turn 7. Version 6 drains with `RunTurnV6`, which runs a line without reviews and without `line.policy`, making the calls it always made.
 - **The andon counts by an item's start**, among a line's items started since a person last started the line again (`kc_line`). It counts back from the latest: an item done or taken stops the count; one running, waiting, queued or dropped is passed over. The conversation of the item whose end stopped the line is told, once for each stop.
 - **The queue is the items kept but not yet started.** They are started in the order sent, within the repository's `lines.wip` and the line's `wip`:
@@ -171,7 +171,7 @@ Where it differs from the decision above, or settles what it left open:
   - its turn is cancelled and waited for;
   - not forced, its worktree is checked again for changes written meanwhile; then the worktree is removed and its session closed;
   - only then is it marked ended. The mark is taken back if that cannot be done.
-  - A process stopped in between finishes it as it starts (`FinishItems`), as does a drop asked again.
+  - A process stopped in between finishes it as it starts (`FinishItems`), as does a drop asked again. Finishing it again stops its turn first, then checks for changes; kept again, it is told of, and the queue goes on.
 - **A repository using git-lfs** cannot be reviewed for now: its clean filter writes under `.git` as `git diff` runs, which the read-only sandbox refuses. The diff then fails, and the item with it: closed, never a review skipped.
 - **`/line` alone** and `kairocode lines` list the project's lines: in progress, queued, stopped and why. `/line restart <name>` and `kairocode line -restart <name>` start one again. The daemon's API has `GET /lines` and `POST /lines/restart`, and ACP has `_kairocode/lines` and `_kairocode/restart_line`.
 - **Checked by hand (2026-11-16, `gpt-5.4-mini`):**

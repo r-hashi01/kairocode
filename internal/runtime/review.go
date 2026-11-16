@@ -145,6 +145,11 @@ func (r *Runtime) lineDiffAction(t *kairo.TaskContext, in workflows.LineDiffInpu
 		case !fi.Mode().IsRegular():
 			fmt.Fprintf(&b, ": not a regular file (%v), not read\n", fi.Mode().Type())
 			fmt.Fprintf(sum, "%v", fi.Mode().Type())
+			if fi.Mode()&os.ModeSymlink != 0 { // what a link points to is committed: in the digest
+				if to, err := root.Readlink(p); err == nil {
+					fmt.Fprintf(sum, " -> %s", to)
+				}
+			}
 			continue
 		}
 		// Opened without waiting (a file swapped for a pipe since), and
