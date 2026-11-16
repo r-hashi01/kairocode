@@ -144,7 +144,7 @@ func (r *Runtime) logRuns(ctx context.Context, run string, w logWidth) ([]LogEnt
 	if err != nil {
 		return nil, err
 	}
-	slices.SortStableFunc(kids, func(a, b kairo.RunInfo) int { return a.Created.Compare(b.Created) })
+	slices.SortStableFunc(kids, madeBefore)
 	var out []LogEntry
 	for _, k := range kids {
 		e := r.logRun(ctx, k, w)

@@ -137,7 +137,7 @@ func (r *Runtime) lastTry(ctx context.Context, calls []kairo.RunInfo, script, ca
 				}
 			}
 		}
-		slices.SortStableFunc(kids, func(a, b kairo.RunInfo) int { return a.Created.Compare(b.Created) })
+		slices.SortStableFunc(kids, madeBefore)
 		for _, k := range kids {
 			switch {
 			case k.Plan == "kairo.call/"+workflows.ActFlowWould && k.Status == "completed":
