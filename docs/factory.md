@@ -88,7 +88,7 @@ Each step is a milestone with its own ADR. Steps marked "kairo" wait for the use
    - Paths that always need a person.
    - A line that keeps failing stops itself and tells the person.
    - A queue with a limit on items in progress per line.
-4. **Results other programs read** (ADR 0041): exit codes and JSON, so schedules and CI can send work in and read what came out.
+4. **Results other programs read** (M16, ADR 0041, done): exit codes and JSON, so schedules and CI can send work in and read what came out.
 5. **Intake** (kairo): items from issues, tickets and alerts; waits on outside events; running without a process (ADR 0012).
 6. **Feedback**: from an item that stopped or was reworked, a draft that improves the line, its checks or `AGENTS.md`.
 

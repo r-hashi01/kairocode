@@ -267,7 +267,7 @@ func TestRunDetachAndResume(t *testing.T) {
 
 func TestRunNeedsARequest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Main(context.Background(), []string{"run"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "needs a request") {
+	if code := Main(context.Background(), []string{"run"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "needs a request") {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
 }

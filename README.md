@@ -75,7 +75,8 @@ kairo                                # the terminal UI; asks whether to trust a 
 kairocode run "fix the tests"        # do one task without a conversation, then exit
 kairocode run -detach "…"            # stop where a person must approve, and exit (exit code 3)
 kairocode resume <session>           # go on from there
-kairocode approvals <session>        # the approvals waiting
+kairocode run -json "…"              # for a program: how the turn ended, as one JSON object on stdout
+kairocode approvals <session>        # the approvals waiting (-json: as a JSON array)
 kairocode approve [-deny] <key>      # answer an approval (from any terminal)
 kairocode answer <key> <answer>      # answer a flow's question
 kairocode log <session>              # the session's record: turns, model input and output, tools, waits, usage
@@ -86,6 +87,20 @@ kairocode fork [-files] <session> [turn]   # go on from a past turn, as another 
 kairocode plugin install <name>      # install a plugin (MCP servers and skills); connect gives it credentials
 kairocode usage [-session <session>]  # what was used today, this week (and in a session), against your limits
 ```
+
+`run` and `resume` exit with a code for each way the turn ended, so a script or CI step can tell (ADR 0041):
+
+| Code | Meaning |
+|---|---|
+| 0 | The model was done. |
+| 1 | An error: the turn failed, or the daemon could not be reached. |
+| 2 | Wrong use: an unknown command, a bad flag or argument. |
+| 3 | `-detach`: the turn waits for a person; go on with `kairocode resume`. |
+| 4 | The turn stopped before the model was done: a limit, a hook, `max_steps`, `max_tokens`, a full context, a refusal, its checks or a station. `stopped` says which. |
+| 5 | The turn was cancelled. |
+| 130 | This command was interrupted; the turn goes on in the daemon (`kairocode resume`). |
+
+With `-json`, stdout holds only `{"session", "turn", "status", "stopped", "reply", "steps", "usage", "waiting", "error"}` (`status` is `done`, `stopped`, `cancelled`, `waiting`, `interrupted` or `error`, as the code says); what happens along the way stays on stderr. With `run -detach -json`, `waiting` lists what to answer with `kairocode approve` or `answer`.
 
 `kairocode help` lists every command. One daemon runs the sessions of each data directory (`~/.local/share/kairocode` by default). Commands start it as needed, and it stops after 10 minutes without use.
 
