@@ -1,6 +1,6 @@
 # 0046 Feedback: drafts that improve a line, its checks or `AGENTS.md`, from the items that stopped or were sent back
 
-- Status: Proposed
+- Status: Accepted (2026-11-16)
 - Date: 2026-11-16
 - Related: `docs/factory.md` step 6 and principles 3 and 4, ADR 0036 (a flow made from a session), 0042 (checks), 0043 (lines, items), 0044 (people at stations, a line that stops itself), 0045 (an item's result kept)
 

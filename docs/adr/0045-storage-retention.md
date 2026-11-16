@@ -1,6 +1,6 @@
 # 0045 Storage retention: what is kept, for how long, and what goes when nothing reaches it
 
-- Status: Proposed
+- Status: Accepted (2026-11-16)
 - Date: 2026-11-16
 - Related: design 2.2 and 7 (messages, snapshots), NFR-5, invariant 5, ADR 0006 (saving the conversation), 0023 (the record), 0026 (pasted images), 0029 (flow runs kept), 0037 (worktrees, shared stores), 0039 (the usage ledger), 0042 (check caches), 0043 and 0044 (work items, lines), kairo's ADR 0054 (`KeepFinished`), `docs/factory.md` principle 6
 

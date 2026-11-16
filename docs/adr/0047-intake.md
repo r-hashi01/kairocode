@@ -1,6 +1,6 @@
 # 0047 Intake: work items from outside, and stations that wait for outside events
 
-- Status: Proposed
+- Status: Accepted (2026-11-16)
 - Date: 2026-11-16
 - Related: `docs/factory.md` step 5, ADR 0012 (GitHub and serverless; proposed, on hold), 0003 (`wait` in flows), 0034 (telling outside the machine), 0041 (results other programs read), 0043 and 0044 (lines, items, queue), kairo's ADR 0064 and 0071 (`SendSignal`, `SignalID`, `OnlyIfWaiting`; in kairo's main, after v0.4.1)
 
