@@ -49,7 +49,10 @@ Decisions on kairo's side are in kairo's `docs/adr/`.
 | [0038](0038-answer-requests-from-outside.md) | Answering requests from outside the machine: the notify flow reads the answer and gives it | Rejected |
 | [0039](0039-usage-and-limits.md) | Usage and limits: what has been used, shown as Claude Code and Codex show it, and limits that stop a turn | Accepted (2026-11-09) |
 | [0040](0040-provider-rate-limits.md) | Rate limits per provider: requests and tokens a minute, and the waits a 429 asks for | Accepted (2026-11-09) |
-| [0041](0041-results-other-programs-read.md) | Results other programs read: `-json` and an exit code for each way a turn ends | Accepted |
+| [0041](0041-results-other-programs-read.md) | Results other programs read: `-json` and an exit code for each way a turn ends | Accepted (2026-11-16) |
 | [0042](0042-checks-decide-done.md) | Checks decide when work is done: gates on a flow's agents, and after a turn | Accepted (2026-11-13) |
 | [0043](0043-lines-and-work-items.md) | Lines and work items: lines declared in the project or put together on the spot, and items sent down them from the conversation | Accepted (2026-11-13) |
 | [0044](0044-people-at-stations.md) | People at stations: review stations, paths that always need a person, lines that stop themselves, and a queue | Accepted (2026-11-16) |
+| [0045](0045-storage-retention.md) | Storage retention: what is kept, for how long, and what goes when nothing reaches it | Accepted (2026-11-16) |
+| [0046](0046-feedback.md) | Feedback: drafts that improve a line, its checks or `AGENTS.md`, from the items that stopped or were sent back | Accepted (2026-11-16) |
+| [0047](0047-intake.md) | Intake: work items from outside, and stations that wait for outside events | Accepted (2026-11-16) |
