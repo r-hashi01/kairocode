@@ -3,12 +3,15 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 
@@ -113,6 +116,12 @@ func (r *Runtime) lineDiffAction(t *kairo.TaskContext, in workflows.LineDiffInpu
 	if err != nil {
 		return workflows.LineDiff{}, err
 	}
+	// The digest of the whole change: every byte of it, binary files and
+	// what the text cuts among it.
+	sum := sha256.New()
+	if err := diffGitTo(t, top, sum, "diff", "--no-renames", "--binary", "--no-ext-diff", "--no-textconv", start); err != nil {
+		return workflows.LineDiff{}, err
+	}
 	var b strings.Builder
 	b.WriteString(text)
 	others, err := diffGit(t, top, "ls-files", "-z", "--others", "--exclude-standard")
@@ -127,6 +136,7 @@ func (r *Runtime) lineDiffAction(t *kairo.TaskContext, in workflows.LineDiffInpu
 	for _, p := range splitZ(others) {
 		out.Paths = append(out.Paths, p)
 		fmt.Fprintf(&b, "\nnew file %s (not yet committed)", p)
+		fmt.Fprintf(sum, "\x00new %s\x00", p)
 		fi, err := root.Lstat(p)
 		switch {
 		case err != nil:
@@ -134,32 +144,42 @@ func (r *Runtime) lineDiffAction(t *kairo.TaskContext, in workflows.LineDiffInpu
 			continue
 		case !fi.Mode().IsRegular():
 			fmt.Fprintf(&b, ": not a regular file (%v), not read\n", fi.Mode().Type())
+			fmt.Fprintf(sum, "%v", fi.Mode().Type())
 			continue
 		}
-		f, err := root.Open(p)
+		// Opened without waiting (a file swapped for a pipe since), and
+		// read only if it is still a regular file.
+		f, err := root.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			fmt.Fprintf(&b, ": cannot be read: %v\n", err)
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(f, maxUntracked+1))
+		if fi, err = f.Stat(); err != nil || !fi.Mode().IsRegular() {
+			f.Close()
+			fmt.Fprintf(&b, ": not a regular file, not read\n")
+			continue
+		}
+		var data bytes.Buffer
+		_, err = io.Copy(io.MultiWriter(sum, &limited{w: &data, n: maxUntracked + 1}), f)
 		f.Close()
 		if err != nil {
 			fmt.Fprintf(&b, ": cannot be read: %v\n", err)
 			continue
 		}
-		if bytes.IndexByte(data, 0) >= 0 {
+		if bytes.IndexByte(data.Bytes(), 0) >= 0 {
 			fmt.Fprintf(&b, ": a binary file of %d bytes\n", fi.Size())
 			out.Lines++
 			continue
 		}
-		cut := len(data) > maxUntracked
+		shown := data.String()
+		cut := len(shown) > maxUntracked
 		if cut {
-			data = data[:maxUntracked]
+			shown = shown[:maxUntracked]
 		}
-		lines := strings.Count(string(data), "\n")
+		lines := strings.Count(shown, "\n")
 		out.Lines += lines
 		fmt.Fprintf(&b, " (%d lines):\n", lines)
-		for _, l := range strings.SplitAfter(string(data), "\n") {
+		for _, l := range strings.SplitAfter(shown, "\n") {
 			if l != "" {
 				b.WriteString("+" + l)
 			}
@@ -179,8 +199,25 @@ func (r *Runtime) lineDiffAction(t *kairo.TaskContext, in workflows.LineDiffInpu
 	if err != nil {
 		return workflows.LineDiff{}, err
 	}
-	out.Diff = h
+	out.Diff, out.Sum = h, hex.EncodeToString(sum.Sum(nil))
 	return out, nil
+}
+
+// limited writes up to n bytes to w, and takes the rest without writing it.
+type limited struct {
+	w io.Writer
+	n int
+}
+
+func (l *limited) Write(p []byte) (int, error) {
+	if l.n > 0 {
+		k := min(len(p), l.n)
+		if _, err := l.w.Write(p[:k]); err != nil {
+			return 0, err
+		}
+		l.n -= k
+	}
+	return len(p), nil
 }
 
 // diffGit runs git to read a change, in KairoCode's sandbox, reading only
@@ -200,6 +237,22 @@ func diffGit(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// diffGitTo runs git as diffGit does, its output to w.
+func diffGitTo(ctx context.Context, dir string, w io.Writer, args ...string) error {
+	cmd, err := sandbox.Command(ctx, sandbox.Policy{Mode: sandbox.ReadOnly, Root: dir}, dir,
+		append([]string{"git", "-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=false"}, args...)...)
+	if err != nil {
+		return err
+	}
+	cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = w, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // splitZ splits git's -z output into its records.

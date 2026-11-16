@@ -440,6 +440,26 @@ func TestItemCleanedUp(t *testing.T) {
 	if !branchExists(ctx, ws, two.Branch) {
 		t.Fatal("the dropped item's branch, not merged, is gone")
 	}
+
+	// A drop a process stopped in the middle of (marked as being ended)
+	// is finished as the daemon starts: its place held meanwhile.
+	three, err := r.StartItem(ctx, s, "three", tools.ItemSpec{Line: "quick", Request: "three"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItem(t, ctx, r, s, api.ItemDone)
+	if err := r.Store.EndItem(ctx, three.ID, "ending:"+api.ItemDropped+"!"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.FinishItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := r.Store.Item(ctx, three.ID); row.Ended != api.ItemDropped {
+		t.Fatalf("the drop not finished: %q", row.Ended)
+	}
+	if _, err := os.Stat(three.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("its worktree: %v", err)
+	}
 }
 
 // crashItemChild starts an item and is held where KC_CRASH_ITEM_CHILD

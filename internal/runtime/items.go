@@ -353,6 +353,12 @@ func (r *Runtime) startQueued(ctx context.Context, repo, own string) error {
 	limit := itemsWip(repo)
 	inProgress, byLine := 0, map[string]int{}
 	for _, row := range rows {
+		if _, _, being := ending(row.Ended); being {
+			// Being ended: its place is held until it is.
+			inProgress++
+			byLine[row.Line]++
+			continue
+		}
 		if !row.Made {
 			continue
 		}
@@ -363,7 +369,7 @@ func (r *Runtime) startQueued(ctx context.Context, repo, own string) error {
 	}
 	var ownErr error
 	for _, row := range rows {
-		if row.Made {
+		if row.Made || row.Ended != "" {
 			continue
 		}
 		var line workflows.Line
@@ -489,6 +495,14 @@ func (r *Runtime) FinishItems(ctx context.Context) error {
 	}
 	repos := map[string]bool{}
 	for _, row := range rows {
+		if how, force, being := ending(row.Ended); being {
+			// Being ended when a process stopped: finished now.
+			if err := r.endItem(ctx, row, how, force); err != nil {
+				r.logf("ending the item %s: %v", row.Name, err)
+			}
+			repos[row.Repo] = true
+			continue
+		}
 		if row.Made { // its session was made: finished, whatever came of it since
 			if _, err := r.K.Get(ctx, row.ID); errors.Is(err, kairo.ErrUnknownRun) {
 				_, _ = r.finishItem(ctx, row) // ends it, closed
@@ -677,6 +691,9 @@ func (r *Runtime) itemState(ctx context.Context, row store.ItemRow) api.Item {
 	}
 	if row.Ended != "" {
 		it.State = row.Ended
+		if how, _, being := ending(row.Ended); being {
+			it.State = how
+		}
 	}
 	if !row.Made && row.Ended == "" {
 		// Not started: queued, its place in its repository's queue.
@@ -899,7 +916,11 @@ func (r *Runtime) DropItem(ctx context.Context, conversation, item string, force
 	}
 	for _, row := range rows {
 		if row.ID == item || row.Name == item {
-			if row.Ended != "" {
+			how, forced, being := ending(row.Ended)
+			switch {
+			case being: // being ended: finished now, as it was asked
+				return r.endItem(ctx, row, how, forced || force)
+			case row.Ended != "":
 				return nil
 			}
 			if err := r.endItem(ctx, row, api.ItemDropped, force); err != nil {
@@ -915,11 +936,16 @@ func (r *Runtime) DropItem(ctx context.Context, conversation, item string, force
 	return ErrNotAnItem
 }
 
-// endItem cleans item row up, as how (taken, dropped, failed): its
-// session closed, its worktree removed. Its row stays, with how it ended.
-// With changes not committed and not force, nothing is done. The row is
-// marked ended first, so what its turn's end tells meanwhile does not take
-// it for failed; if the clean-up fails, the mark is taken back.
+// endItem cleans item row up, as how (taken, dropped, failed): its turn
+// stopped, its worktree removed, its session closed. Its row stays, with
+// how it ended. With changes not committed and not force, nothing is done.
+//
+// The row is first marked as being ended ("ending:<how>", "!" with force),
+// so its cancelled turn's end is not told as a failure, and it still holds
+// its place in the limits; a process stopped meanwhile finishes it as it
+// starts (FinishItems), and a drop asked again does too. Once all is done
+// it is marked ended. If the clean-up cannot be done, the mark is taken
+// back.
 func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, force bool) error {
 	worktree := row.Dir != ""
 	if worktree {
@@ -927,12 +953,18 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 			worktree = false
 		}
 	}
-	if worktree && !force {
-		if st, _ := gitIn(ctx, row.Dir, "status", "--porcelain"); st != "" {
-			return ErrWorktreeChanged
-		}
+	changed := func() bool {
+		st, _ := gitIn(ctx, row.Dir, "status", "--porcelain")
+		return st != ""
 	}
-	if err := r.Store.EndItem(ctx, row.ID, how); err != nil {
+	if worktree && !force && changed() {
+		return ErrWorktreeChanged
+	}
+	mark := "ending:" + how
+	if force {
+		mark += "!"
+	}
+	if err := r.Store.EndItem(ctx, row.ID, mark); err != nil {
 		return err
 	}
 	undo := func(err error) error {
@@ -951,6 +983,10 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 		cancel()
 	}
 	if worktree {
+		// Written while it was being stopped: not dropped unless forced.
+		if !force && changed() {
+			return undo(ErrWorktreeChanged)
+		}
 		if _, err := r.RemoveWorktree(ctx, row.Dir, true); err != nil {
 			return undo(err)
 		}
@@ -958,7 +994,18 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 	if err := r.CloseSession(ctx, row.ID); err != nil && !errors.Is(err, kairo.ErrUnknownRun) {
 		r.logf("closing the item %s: %v", row.Name, err)
 	}
-	return nil
+	return r.Store.EndItem(ctx, row.ID, how)
+}
+
+// ending is how an item being ended is to end, and whether forced; ok
+// false for one not being ended.
+func ending(ended string) (how string, force, ok bool) {
+	how, ok = strings.CutPrefix(ended, "ending:")
+	if !ok {
+		return "", false, false
+	}
+	how, force = strings.CutSuffix(how, "!")
+	return how, force, true
 }
 
 func firstLine(s string) string {

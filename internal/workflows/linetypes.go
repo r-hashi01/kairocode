@@ -76,6 +76,10 @@ type LineDiff struct {
 	Diff  string   `json:"diff"`
 	Lines int      `json:"lines"`
 	Paths []string `json:"paths,omitempty"`
+	// Sum is a digest of the whole change (the text shown is cut short,
+	// and says only that a binary file changed): what a person's yes is
+	// kept by.
+	Sum string `json:"sum"`
 }
 
 // LineReviewInput puts a change to a person as an approval of kind

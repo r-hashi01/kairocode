@@ -71,7 +71,7 @@ func runLineTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, er
 			if err != nil {
 				return TurnOutput{}, err
 			}
-			if touches(d.Paths, policy.People) == "" || d.Diff == personSaw {
+			if touches(d.Paths, policy.People) == "" || d.Sum == personSaw {
 				break
 			}
 			stations = append(stations, Station{Name: PeopleStation, Review: ReviewPerson, Back: lastAgent(line.Stations)})
@@ -256,7 +256,7 @@ func gateStation(ctx *kairo.Context, dir string, i int, at string, checks *Check
 type verdict struct {
 	pass, byPerson bool
 	words, text    string
-	diff           string // the change reviewed, by its hash
+	diff           string // the change reviewed, by its digest
 	steps          int
 	usage          msg.Usage
 }
@@ -269,7 +269,7 @@ func reviewStation(ctx *kairo.Context, in TurnInput, line string, st Station, at
 	if err != nil {
 		return verdict{}, err
 	}
-	v := verdict{diff: d.Diff}
+	v := verdict{diff: d.Sum}
 	person, why := st.Review == ReviewPerson, ""
 	if st.Name == PeopleStation {
 		why = "it touches " + touches(d.Paths, policy.People) + ", a path that always needs a person (lines.people)"

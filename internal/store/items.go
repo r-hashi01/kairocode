@@ -82,14 +82,16 @@ func (s *Store) ItemsOf(ctx context.Context, conversation string) ([]ItemRow, er
 	return s.items(ctx, `of = ?`, conversation)
 }
 
-// ItemsIn is the items of repository repo not taken or dropped.
+// ItemsIn is the items of repository repo not taken or dropped, those
+// being ended ("ending:...") among them.
 func (s *Store) ItemsIn(ctx context.Context, repo string) ([]ItemRow, error) {
-	return s.items(ctx, `repo = ? AND ended = ''`, repo)
+	return s.items(ctx, `repo = ? AND (ended = '' OR ended LIKE 'ending:%')`, repo)
 }
 
-// ItemsKept is every item not taken or dropped.
+// ItemsKept is every item not taken or dropped, those being ended among
+// them.
 func (s *Store) ItemsKept(ctx context.Context) ([]ItemRow, error) {
-	return s.items(ctx, `ended = ''`)
+	return s.items(ctx, `ended = '' OR ended LIKE 'ending:%'`)
 }
 
 // ItemNames is the names the items of repository repo took, ended or not.

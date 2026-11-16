@@ -148,7 +148,10 @@ Where it differs from the decision above, or settles what it left open:
   - **Size.** It is cut at 60,000 characters.
   - **git failing is an error.** A review is never asked of a change not known.
 - **Sending back is a jump back on the line** inside its turn. Every run of a station after its first carries ` round <n>` in where it is (its `At`, its gate's key), so it is a run of its own. A station sent back to is given the words once.
-- **The people's review** is added at the line's end when the change, read again then, touches `lines.people`, and it is not the change a person last took. A person's yes is kept by the diff's hash, so any station that changed the files after it brings the review again: an agent, a flow, a model's reviewer, a check. Its `back` is the line's last agent station.
+- **The people's review** is added at the line's end when the change, read again then, touches `lines.people`, and it is not the change a person last took. Its `back` is the line's last agent station.
+  - **What a person's yes is kept by:** a digest of the whole change (`LineDiff.Sum`): `git diff --binary`, and every byte of each file not tracked. It is not the text shown, which is cut short and says only that a binary file changed.
+  - So any station that changed the files after the yes brings the review again: an agent, a flow, a model's reviewer, a check.
+  - Files not tracked are opened without waiting, and read only if they are still regular files.
 - **Version:** turn 7. Version 6 drains with `RunTurnV6`, which runs a line without reviews and without `line.policy`, making the calls it always made.
 - **The andon counts by an item's start**, among a line's items started since a person last started the line again (`kc_line`). It counts back from the latest: an item done or taken stops the count; one running, waiting, queued or dropped is passed over. The conversation of the item whose end stopped the line is told, once for each stop.
 - **The queue is the items kept but not yet started.** They are started in the order sent, within the repository's `lines.wip` and the line's `wip`:
@@ -162,11 +165,14 @@ Where it differs from the decision above, or settles what it left open:
   - **An item dropped while in progress** frees its place: the queue goes on.
 
   The cap of ADR 0043 is gone, and so is its error for the model.
-- **Dropping an item**:
-  - with changes not committed and not forced, does nothing;
-  - else it is marked ended first, so the end of its cancelled turn is not told as a failure;
-  - then its turn is cancelled and waited for, and its worktree removed;
-  - the mark is taken back if that fails.
+- **Ending an item** (dropped, taken, failed as it starts):
+  - with changes not committed and not forced, nothing is done;
+  - else it is first marked as being ended (`ending:<how>`, `!` when forced), so the end of its cancelled turn is not told as a failure, and it still holds its place in the limits;
+  - its turn is cancelled and waited for;
+  - not forced, its worktree is checked again for changes written meanwhile; then the worktree is removed and its session closed;
+  - only then is it marked ended. The mark is taken back if that cannot be done.
+  - A process stopped in between finishes it as it starts (`FinishItems`), as does a drop asked again.
+- **A repository using git-lfs** cannot be reviewed for now: its clean filter writes under `.git` as `git diff` runs, which the read-only sandbox refuses. The diff then fails, and the item with it: closed, never a review skipped.
 - **`/line` alone** and `kairocode lines` list the project's lines: in progress, queued, stopped and why. `/line restart <name>` and `kairocode line -restart <name>` start one again. The daemon's API has `GET /lines` and `POST /lines/restart`, and ACP has `_kairocode/lines` and `_kairocode/restart_line`.
 - **Checked by hand (2026-11-16, `gpt-5.4-mini`):**
   - a review by risk, passed by the model alone;
