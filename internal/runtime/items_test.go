@@ -580,12 +580,11 @@ func TestItemNotMadeTwice(t *testing.T) {
 	defer cancel()
 	s, _ := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: ws})
 	def, _ := json.Marshal(workflows.Line{Name: "quick", Stations: []workflows.Station{{Name: "build", Agent: "build"}}})
+	// Kept made at once: the daemon's own pass (FinishItems, as it opens)
+	// must not see it half written.
 	row, err := r.Store.AddItem(ctx, store.ItemRow{ID: SessionID("gone"), Of: s, Line: "quick", Def: def, Request: "x", Name: "quick-1",
-		Repo: ws, Dir: ws, Branch: "kairo/quick-1", Started: time.Now()})
+		Repo: ws, Dir: ws, Branch: "kairo/quick-1", Made: true, Started: time.Now()})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Store.SetItemMade(ctx, row.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.FinishItems(ctx); err != nil {
