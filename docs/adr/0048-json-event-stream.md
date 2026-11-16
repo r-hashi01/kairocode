@@ -1,6 +1,6 @@
 # 0048 A stream of events as JSON lines: `run -stream-json`
 
-- Status: Proposed
+- Status: Accepted (2026-11-16)
 - Date: 2026-11-16
 - Related: ADR 0041 (results other programs read; this was its deferred alternative), issue #1 (events), ADR 0008 (the daemon's SSE), invariant 6 (secrets stay out of the record)
 
