@@ -79,6 +79,10 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if err != nil {
 		return err
 	}
+	if it.State == "queued" {
+		fmt.Fprintf(stdout, "item %s on the line %s (%s): queued, %d before it; it starts in its turn\n", it.Name, it.Line, strings.Join(it.Stations, " → "), it.Position)
+		return nil
+	}
 	fmt.Fprintf(stdout, "item %s on the line %s (%s): worktree %s, branch %s\n", it.Name, it.Line, strings.Join(it.Stations, " → "), it.Dir, it.Branch)
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/config"
+	"github.com/r-hashi01/kairocode/internal/flowchart"
 	"github.com/r-hashi01/kairocode/internal/lines"
 	"github.com/r-hashi01/kairocode/internal/msg"
 	"github.com/r-hashi01/kairocode/internal/permission"
@@ -401,6 +403,11 @@ func (r *Runtime) finishItem(ctx context.Context, row store.ItemRow) (api.Item, 
 			if err := r.endItem(ctx, row, api.ItemFailed, true); err != nil {
 				return api.Item{}, notSettled(err)
 			}
+			// An item that failed as it started counts for its line too:
+			// its conversation is told if the line stopped itself.
+			if err := r.tellLineStopped(ctx, row); err != nil {
+				r.logf("%v", err)
+			}
 			return api.Item{}, errors.New(why)
 		}
 		var conv workflows.SessionInput
@@ -510,6 +517,18 @@ func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id strin
 	// The worktree has HEAD's files: what the line uses must be there.
 	if st, _ := gitIn(ctx, dir, "status", "--porcelain", "--", ".kairocode", ".opencode", ConfigFile); st != "" {
 		return store.ItemRow{}, fmt.Errorf("the item's worktree starts from HEAD, and these are not committed: commit them first:\n%s", st)
+	}
+	// A flow the line runs must be in HEAD itself: one git ignores is not
+	// in git status, and not in the worktree either. (The line itself is
+	// recorded as the item starts: it need not be.)
+	for _, st := range line.Stations {
+		if st.Flow == "" {
+			continue
+		}
+		p := path.Join(flowchart.Dir, st.Flow+".star")
+		if _, err := gitIn(ctx, dir, "cat-file", "-e", "HEAD:"+p); err != nil {
+			return store.ItemRow{}, fmt.Errorf("the flow %s (%s) is not in HEAD (not committed, or git ignores it): the item's worktree starts from HEAD", st.Flow, p)
+		}
 	}
 	def, err := json.Marshal(line)
 	if err != nil {

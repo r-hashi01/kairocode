@@ -469,3 +469,25 @@ func TestCrashDuringReview(t *testing.T) {
 		})
 	}
 }
+
+// A flow a line runs must be in HEAD: one git ignores is in no git status,
+// and not in the item's worktree either. It is refused before anything is
+// made (found checking by hand: .kairocode/ ignored).
+func TestItemFlowNotInHead(t *testing.T) {
+	t.Parallel()
+	ws := itemRepo(t, "")
+	putFiles(t, ws, map[string]string{".gitignore": ".kairocode/workflows/\n", ".kairocode/lines/ignored.json": `{"stations": [{"name": "try", "flow": "hidden"}]}`})
+	gitT(t, ws, "add", "-A")
+	gitT(t, ws, "commit", "-q", "-m", "a line whose flow git ignores")
+	putFiles(t, ws, map[string]string{".kairocode/workflows/hidden.star": "def main(input):\n    return {\"ok\": True, \"message\": \"ran\"}\n"})
+	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, _ := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: ws})
+	if _, err := r.StartItem(ctx, s, "k", tools.ItemSpec{Line: "ignored", Request: "x"}); err == nil || !strings.Contains(err.Error(), "the flow hidden (.kairocode/workflows/hidden.star) is not in HEAD") {
+		t.Fatalf("a flow git ignores: %v", err)
+	}
+	if items, _ := r.Items(ctx, s); len(items) != 0 {
+		t.Fatalf("items %+v", items)
+	}
+}

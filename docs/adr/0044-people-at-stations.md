@@ -152,9 +152,18 @@ Where it differs from the decision above, or settles what it left open:
 
   An item waiting for a person counts as in progress. The cap of ADR 0043 is gone, and so is its error for the model.
 - **`/line` alone** and `kairocode lines` list the project's lines: in progress, queued, stopped and why. `/line restart <name>` and `kairocode line -restart <name>` start one again. The daemon's API has `GET /lines` and `POST /lines/restart`, and ACP has `_kairocode/lines` and `_kairocode/restart_line`.
+- **Checked by hand (2026-11-16, `gpt-5.4-mini`):**
+  - a review by risk, passed by the model alone;
+  - a queue (`lines.wip` 1);
+  - a person sending an item back with words, which the agent followed;
+  - a line stopping itself, refusing an item, telling once, and running again once restarted.
+
+  Found and fixed on the way:
+  - **A line's flows must be in `HEAD`.** A flow git ignores is in no `git status`, so it passed the check made before an item starts, and then failed in the worktree.
+  - **A line stopped by items that failed as they started now tells their conversation.**
 - **Tests:**
   - `TestLineReviewPerson`, `TestLineReviewModel`, `TestLineReviewRisk`;
   - `TestPeoplePathsAlways` (with `policyOf`: a project's setting only adds paths);
-  - `TestLineStopsItself`, `TestItemQueue`;
+  - `TestLineStopsItself`, `TestItemQueue`, `TestItemFlowNotInHead`;
   - `TestCrashDuringReview` (killed while a person's review waits, and while a reviewer works);
   - `TestItemReviewAndLines` (the terminal UI).
