@@ -1,6 +1,6 @@
 # 0041 Results other programs read: `-json` and an exit code for each way a turn ends
 
-- Status: Proposed
+- Status: Accepted (2026-11-16)
 - Date: 2026-11-13
 - Related: ADR 0039 (limits), 0011 (cancelling a turn), 0034 (telling of requests outside), M4 (`kairocode run -detach`, `resume`), M13
 
@@ -61,3 +61,13 @@ The user wants KairoCode to be one of the parts a software factory is built from
 - **One code for every way the turn stops.** Cancelled (a person decided) and stopped (a limit or the model) call for different next steps: a factory may retry or raise a limit on 4, but should not retry what a person cancelled.
 - **A stream of events as JSON lines on stdout** (as `claude -p --output-format stream-json`). Useful, and it may come later; the result at the end is what a caller needs first, and the daemon's SSE already gives the stream to a program that wants it.
 - **The files the turn changed, in the result.** The caller can ask git, and the turn's snapshots are kept for undo, not shaped for this; left out until a caller needs it.
+
+## Implementation (2026-11-16, M16)
+
+- `api.RunResult` and the `api.Status…` constants (`internal/api/run.go`). `follow` in `internal/cli` reports each ending through one function, which writes the object with `-json` and returns the error `Main` maps to the code (`errStopped` 4, `errCancelled` 5, `errInterrupted` 130, `badUse` 2).
+- `reply`, `steps` and `usage` are pointers, so they are absent, not zero, when the turn did not end; `turn` is absent when no turn was started. A turn's end after which the session cannot be closed is an error (1), with the reply still in the object.
+- A cancelled turn has `status: "cancelled"` and no `stopped`. The `checks` and `station` stops of ADR 0042 and 0043 are stops like the others (4).
+- `resume` of a session that is not there prints no JSON, as an error before a session does. `-h` on any command now exits 0.
+- An interruption is 130 wherever it comes: before the session exists (no JSON, nothing to go on with), while the turn is sent, or while it is followed. An error that comes of the signal (a request cut) is the interruption, not an error.
+- Tests: `TestRunExitCodes` (done 0, a refusal 4, a limit 4, `-detach` waiting 3, a failed turn 1, each with its object), `TestRunCancelledAndInterrupted` (5; 130, then `resume -json` takes the turn up to 0), `TestRunWrongUse` (2, no JSON), `TestRunInterruptedBeforeASession` (130, no JSON), `TestApprovalsJSON` (the array, its keys answered, then `[]`). A hook's stop is the same path as a refusal's (the turn's `Stopped`) and has no test of its own.
+- Checked by hand with a real model (`gpt-5.4-mini`): done 0; `-detach` 3, its key read from the object, answered, and `resume -json` 0 with the file written; a session token limit 4 with `stopped: "limit"`; SIGINT and SIGTERM at moments from 0.05s to 4s, 130, and `resume` took the turn up. Found and fixed: a signal before the session existed exited 1. Once, an object of an interrupted run had no `turn` although the turn had been sent; it did not come again in about 20 tries, and the code does not show how it could.

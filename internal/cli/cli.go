@@ -37,14 +37,15 @@ import (
 const usage = `usage:
   kairocode [chat] [-dir DIR] [-data DIR] [-session ID | -continue | -resume | -worktree[=NAME]]   talk with it in the terminal (kairo is the same; -worktree: in a new git worktree)
   kairocode sessions [-dir DIR] [-all | -repo] [-n N] [-json]   the sessions of a folder, the latest used first (-repo: of its repository, across its worktrees)
-  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] [-worktree[=NAME]] "<request>"   answer one request, then exit
-                                                     (-detach: stop when it waits for a person, exit 3)
-  kairocode resume [-data DIR] [-detach] <session>   go on with a session run left, then close it
+  kairocode run [-dir DIR] [-data DIR] [-provider P] [-model M] [-detach] [-json] [-worktree[=NAME]] "<request>"   answer one request, then exit
+                                                     (-detach: stop when it waits for a person, exit 3;
+                                                     -json: how the turn ended, as one JSON object on stdout)
+  kairocode resume [-data DIR] [-detach] [-json] <session>   go on with a session run left, then close it
   kairocode fork [-data DIR] [-files] <session> [turn]   start another session from a turn of one (the last, unless named)
   kairocode log [-data DIR] [-json] <session>         the session's record: turns, calls, results, waits, use
   kairocode plugin [-dir DIR] [list|install N[@M]|update N|remove N|connect N|disconnect N]   plugins (ADR 0025, 0027)
   kairocode plugin marketplace [list|add SRC|update M|remove M]   the catalogs plugins are installed from
-  kairocode approvals [-data DIR] <session>          list the calls waiting for a person (its work items' too)
+  kairocode approvals [-data DIR] [-json] <session>  list the calls waiting for a person (its work items' too)
   kairocode line [-dir DIR] [-data DIR] [-session ID | -provider P -model M] [-name N] <line> "<request>"   send a request down a standard line (ADR 0043)
   kairocode line [-data DIR] -keep <item> -session ID <name>   keep the line an item ran as .kairocode/lines/<name>.json
   kairocode line [-dir DIR] [-data DIR] -restart <name>   start a line again after it stopped itself (ADR 0044)
@@ -61,6 +62,12 @@ const usage = `usage:
   kairocode usage [-data DIR] [-session ID] [-json]   what has been used today, this week (and in a session, turn by turn), against the limits
   kairocode acp [-data DIR]                          an ACP agent on stdin and stdout, for editors (ADR 0002)
   kairocode version                                  the version, its commit, Go and the platform
+
+run and resume exit 0 when the model was done, 1 on an error, 2 on a wrong
+use, 3 when -detach stopped at a wait, 4 when the turn stopped before the
+model was done (a limit, a hook, max_steps, max_tokens, a full context, a
+refusal, checks or a station), 5 when it was cancelled, and 130 when this
+command was interrupted (the turn goes on: kairocode resume) (ADR 0041).
 
 One daemon per data directory runs the sessions (ADR 0008); the commands
 above start it when it is not running, and it stops after 10 minutes with
@@ -101,11 +108,29 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	default:
 		err = command(ctx, args[0], args[1:], stdout, stderr)
 	}
-	if errors.Is(err, errWaiting) {
+	// The codes of how a turn ended (ADR 0041): what it came to is on
+	// stderr already.
+	switch {
+	case errors.Is(err, errWaiting):
 		return 3
+	case errors.Is(err, errStopped):
+		return 4
+	case errors.Is(err, errCancelled):
+		return 5
+	case errors.Is(err, errInterrupted):
+		return 130
+	case errors.Is(err, flag.ErrHelp): // -h: the flags were shown
+		return 0
 	}
 	if errors.Is(err, errUnknownCommand) {
 		fmt.Fprintf(stderr, "kairocode: unknown command %q\n\n%s", args[0], usage)
+		return 2
+	}
+	var bad badUse
+	if errors.As(err, &bad) {
+		if !bad.shown {
+			fmt.Fprintf(stderr, "kairocode: %v\n", err)
+		}
 		return 2
 	}
 	if err != nil {
@@ -133,15 +158,54 @@ func isVersion(arg string) bool {
 
 var errUnknownCommand = errors.New("unknown command")
 
+// How a followed turn ended, when it was not done (ADR 0041).
+var (
+	errStopped     = errors.New("the turn stopped before the model was done")
+	errCancelled   = errors.New("the turn was cancelled")
+	errInterrupted = errors.New("interrupted; the turn goes on")
+)
+
+// interrupted is err of run or resume, an error cut by a signal before
+// the turn was followed (connecting, starting a session) being an
+// interruption too (130, ADR 0041).
+func interrupted(ctx context.Context, err error, stderr io.Writer) error {
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	for _, known := range []error{errWaiting, errStopped, errCancelled, errInterrupted} {
+		if errors.Is(err, known) {
+			return err
+		}
+	}
+	fmt.Fprintln(stderr, "\nstopped")
+	return errInterrupted
+}
+
+// badUse is a wrong use of a command (exit 2): a bad flag or argument.
+// shown: the flag package has said what was wrong.
+type badUse struct {
+	error
+	shown bool
+}
+
+// parseFlags parses args, a bad flag being a badUse.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	err := fs.Parse(args)
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	return badUse{err, true}
+}
+
 // command runs the command named cmd.
 func command(ctx context.Context, cmd string, args []string, stdout, stderr io.Writer) (err error) {
 	switch cmd {
 	case "chat":
 		err = chat(ctx, args, stdout, stderr)
 	case "run":
-		err = run(ctx, args, stdout, stderr)
+		err = interrupted(ctx, run(ctx, args, stdout, stderr), stderr)
 	case "resume":
-		err = resume(ctx, args, stdout, stderr)
+		err = interrupted(ctx, resume(ctx, args, stdout, stderr), stderr)
 	case "fork":
 		err = fork(ctx, args, stdout, stderr)
 	case "log":
@@ -326,14 +390,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3); go on with kairocode resume")
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "who runs the model: anthropic, claude-code, codex, copilot (ADR 0014)")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the model (default: the provider's)")
+	asJSON := fs.Bool("json", false, "at the end, how the turn ended as one JSON object on stdout (ADR 0041)")
 	var wt worktreeFlag
 	fs.Var(&wt, "worktree", "run in a new git worktree of this folder's repository, on a branch kairo/<name> (-worktree=<name>; alone, the first free name)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	request := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if request == "" {
-		return errors.New(`run needs a request: kairocode run "<request>"`)
+		return badUse{error: errors.New(`run needs a request: kairocode run "<request>"`)}
 	}
 	abs, err := filepath.Abs(*dir) // the daemon runs elsewhere
 	if err != nil {
@@ -368,7 +433,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stderr, "session %s\n", s)
-	return follow(ctx, c, s, *detach, stdout, stderr, func() (int, error) {
+	return follow(ctx, c, s, *detach, *asJSON, stdout, stderr, func() (int, error) {
 		if flow, ok := strings.CutPrefix(request, "/flow "); ok { // a flow (ADR 0003)
 			name, args, _ := strings.Cut(strings.TrimSpace(flow), " ")
 			if name == "new" {
@@ -392,11 +457,12 @@ func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	fs.SetOutput(stderr)
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
 	detach := fs.Bool("detach", false, "stop when the turn waits for a person (exit 3)")
-	if err := fs.Parse(args); err != nil {
+	asJSON := fs.Bool("json", false, "at the end, how the turn ended as one JSON object on stdout (ADR 0041)")
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: kairocode resume [-data DIR] [-detach] <session>")
+		return badUse{error: errors.New("usage: kairocode resume [-data DIR] [-detach] [-json] <session>")}
 	}
 	s := fs.Arg(0)
 	if !strings.HasPrefix(s, "s/") {
@@ -407,7 +473,7 @@ func resume(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 		return err
 	}
 	defer c.Close()
-	return follow(ctx, c, s, *detach, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
+	return follow(ctx, c, s, *detach, *asJSON, stdout, stderr, func() (int, error) { return c.LastTurn(ctx, s) })
 }
 
 // showLog prints a session's record (ADR 0023).
@@ -489,8 +555,10 @@ var errWaiting = errors.New("the turn waits for a person")
 // follow shows what turn n of session s does as it happens, n being what
 // start returns (a turn it starts, or one under way), and prints its reply
 // at its end, then closes the session. With detach, it stops when the
-// turn waits for a person; stopped (Ctrl-C), it says how to go on.
-func follow(ctx context.Context, c *daemon.Client, s string, detach bool, stdout, stderr io.Writer, start func() (int, error)) error {
+// turn waits for a person; stopped (Ctrl-C), it says how to go on. How the
+// turn ended is in the error, for the exit code, and with asJSON in one
+// object on stdout (ADR 0041).
+func follow(ctx context.Context, c *daemon.Client, s string, detach, asJSON bool, stdout, stderr io.Writer, start func() (int, error)) error {
 	// What the turn does is shown as it happens; its result comes from
 	// WaitTurn, which does not depend on the stream. Watching begins before
 	// the turn starts, so no event of it is missed.
@@ -498,6 +566,27 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach bool, stdout
 	defer stopWatch()
 	events, err := c.Events(watch, s)
 	if err != nil {
+		return err // no such session: nothing to report but the error
+	}
+	res := api.RunResult{Session: s}
+	report := func(status string, err error) error {
+		if status == api.StatusError && ctx.Err() != nil { // cut by the signal
+			fmt.Fprintf(stderr, "\nstopped; the session goes on without this command: kairocode resume %s\n", s)
+			status, err = api.StatusInterrupted, errInterrupted
+		}
+		res.Status = status
+		if status == api.StatusError {
+			res.Error = err.Error()
+		}
+		if asJSON {
+			b, merr := json.Marshal(res)
+			if merr != nil {
+				return merr
+			}
+			if _, werr := fmt.Fprintf(stdout, "%s\n", b); werr != nil {
+				return werr
+			}
+		}
 		return err
 	}
 	turnDone := make(chan struct{})
@@ -512,8 +601,9 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach bool, stdout
 	n, err = start()
 	close(sent)
 	if err != nil {
-		return err
+		return report(api.StatusError, err)
 	}
+	res.Turn = &n
 	type result struct {
 		out daemon.Turn
 		err error
@@ -532,14 +622,21 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach bool, stdout
 	case r = <-done:
 	case <-stopAt:
 		fmt.Fprintf(stderr, "stopped while the turn waits; answer it, then go on with: kairocode resume %s\n", s)
-		return errWaiting
+		if asJSON {
+			p, err := c.PendingAll(ctx, s)
+			if err != nil {
+				return report(api.StatusError, err)
+			}
+			res.Waiting = p
+		}
+		return report(api.StatusWaiting, errWaiting)
 	case <-ctx.Done():
 		fmt.Fprintf(stderr, "\nstopped; the session goes on without this command: kairocode resume %s\n", s)
-		return ctx.Err()
+		return report(api.StatusInterrupted, errInterrupted)
 	}
 	close(turnDone)
 	if r.err != nil {
-		return r.err
+		return report(api.StatusError, r.err)
 	}
 	// The turn's last events come with its end, and the display returns at
 	// turn.end. A turn that ended before this command watched (resume) has
@@ -551,19 +648,33 @@ func follow(ctx context.Context, c *daemon.Client, s string, detach bool, stdout
 		stopWatch()
 		<-shown
 	}
-	fmt.Fprintln(stdout, r.out.Reply)
+	res.Reply, res.Steps, res.Usage = &r.out.Reply, &r.out.Steps, &r.out.Usage
+	if !asJSON {
+		fmt.Fprintln(stdout, r.out.Reply)
+	}
 	if r.out.Stopped != "" {
 		fmt.Fprintf(stderr, "stopped: %s\n", r.out.Stopped)
 	}
 	fmt.Fprintf(stderr, "steps %d, tokens in %d out %d (cache read %d)\n",
 		r.out.Steps, r.out.Usage.Input, r.out.Usage.Output, r.out.Usage.CacheRead)
-	return c.CloseSession(ctx, s)
+	if err := c.CloseSession(ctx, s); err != nil {
+		return report(api.StatusError, err)
+	}
+	switch r.out.Stopped {
+	case "":
+		return report(api.StatusDone, nil)
+	case api.StoppedCancelled:
+		return report(api.StatusCancelled, errCancelled)
+	}
+	res.Stopped = r.out.Stopped
+	return report(api.StatusStopped, errStopped)
 }
 
 func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("approvals", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	asJSON := fs.Bool("json", false, "as a JSON array (ADR 0041)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -578,6 +689,12 @@ func approvals(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	p, err := c.PendingAll(ctx, fs.Arg(0))
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		if p == nil {
+			p = []api.Pending{} // [], not null
+		}
+		return json.NewEncoder(stdout).Encode(p)
 	}
 	if len(p) == 0 {
 		fmt.Fprintln(stdout, "nothing waits for approval")
