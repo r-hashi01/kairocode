@@ -389,7 +389,9 @@ func TestReadChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Defs) != 2 || c.Defs[0].Name != "a" || c.Defs[1].Timeout != 90 || !c.Defs[1].Project || c.Rounds != 2 || len(c.Turn) != 1 {
+	// a, b, and the built-in factory-paths (ADR 0046), not the project's.
+	if len(c.Defs) != 3 || c.Defs[0].Name != "a" || c.Defs[1].Timeout != 90 || !c.Defs[1].Project || c.Rounds != 2 || len(c.Turn) != 1 ||
+		c.Defs[2].Name != FactoryPathsCheck || c.Defs[2].Project {
 		t.Fatalf("%+v", c)
 	}
 	for _, bad := range []string{`{"x": {}}`, `{"x": {"command": "y", "timeout": "2h"}}`, `{"turn": "x"}`, `{"rounds": 0}`} {
@@ -397,7 +399,8 @@ func TestReadChecks(t *testing.T) {
 			t.Errorf("%s: no error", bad)
 		}
 	}
-	if c, err := readChecks(repo(t)); c != nil || err != nil {
+	// None declared: the built-in one only, and nothing a turn must pass.
+	if c, err := readChecks(repo(t)); err != nil || len(c.Defs) != 1 || c.Defs[0].Name != FactoryPathsCheck || len(c.Turn) != 0 {
 		t.Fatalf("none declared: %+v %v", c, err)
 	}
 }

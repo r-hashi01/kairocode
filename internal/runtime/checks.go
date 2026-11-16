@@ -42,7 +42,8 @@ const maxCheckTimeout = time.Hour
 //	}
 //
 // A check the project declares takes the place of the user's of that name,
-// and is asked about before it first runs. "turn" lists the checks a plain
+// and is asked about before it first runs. The built-in check
+// factory-paths (ADR 0046) is there too, unless one of the name is. "turn" lists the checks a plain
 // turn must pass: the user's and the project's are both kept. Of two
 // "rounds", the smaller holds. nil: none declared.
 func readChecks(dir string) (*workflows.Checks, error) {
@@ -111,8 +112,10 @@ func readChecks(dir string) (*workflows.Checks, error) {
 	if bad != nil {
 		return nil, bad
 	}
-	if len(defs) == 0 && len(out.Turn) == 0 {
-		return nil, nil
+	// Built in (ADR 0046): the change touches the factory's files only, for
+	// the line improve's drafts; the settings may name another of the name.
+	if _, ok := defs[FactoryPathsCheck]; !ok {
+		defs[FactoryPathsCheck] = factoryPathsCheckDef()
 	}
 	for _, name := range slices.Sorted(func(yield func(string) bool) {
 		for k := range defs {
@@ -157,6 +160,11 @@ func (r *Runtime) checkRunAction(t *kairo.TaskContext, in workflows.CheckRunInpu
 		// (ADR 0031), and go test runs in it. A command that names its own
 		// cache keeps it.
 		cmd.Env = append(cmd.Env, "GOCACHE="+filepath.Join(cache, "go-build"), "XDG_CACHE_HOME="+cache)
+	}
+	// In a work item's worktree, the commit it started from: what its
+	// change is against, whatever its stations committed (ADR 0046).
+	if row, err := r.itemOfDir(t, in.Dir); err == nil && row.Start != "" {
+		cmd.Env = append(cmd.Env, "KAIROCODE_BASE="+row.Start)
 	}
 	// Its own process group, stopped whole at its timeout or when the
 	// turn stops: a test binary that go test started does not outlive it

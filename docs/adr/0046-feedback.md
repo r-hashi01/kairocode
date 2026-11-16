@@ -70,3 +70,64 @@ ADR 0045 keeps all of it with the item's row after the item's tree is gone. What
 - **Apply small fixes at once (for example, append a person's note to `AGENTS.md`).** Cheap, but it changes the factory without a person, and notes often belong to one item only.
 - **Draft after every item that stops.** Too many drafts, most of them noise; one failure is rarely a pattern. The triggers in 1 need a repeat, or a line that stopped itself, or a person's request.
 - **Store lessons in a separate memory instead of the project's files.** A memory outside the repository is not reviewed like code, and is not shared with the team. The factory's rules live in files (principle 3), so its lessons do too.
+
+## Implementation (2026-11-16, M18)
+
+- `internal/runtime/feedback.go`:
+  - `feedbackDue` reads the kept results (ADR 0045) and the line's stop.
+  - `considerFeedback` runs in the background after an item ends (`endItem`), and after one stopped or failed is told (for a line that stopped itself). It tells the conversation of the line's last evidence item, or with `auto` starts the draft. The marker kind `feedback-told` keeps a notice from being told twice.
+  - `improveSpec` builds the draft's request: why, the line as it is, and each evidence item's request and result inside `<evidence>`, quoted. Each item's result is cut to 8 KB.
+  - `improveLine` is the built-in line, and `readLine` puts it in place of a missing `.kairocode/lines/improve.json`.
+- **The trigger is wider than "repeats".** A model's send-back does not count, only a person's. A check that stopped the item counts per check name, at its station.
+- **Evidence used once.**
+  - `kc_item.fed` is `asked` once the conversation was told, or the draft item's id. A draft takes the items asked about, those due now, and those already marked for its own id.
+  - The draft's evidence is marked before the draft is made. If a start is cut off between, the next decision finds evidence marked for an item that does not exist, treats it as free, and makes the same draft (same key, same id).
+- **The way in.**
+  - The `line` tool takes `{"improve": "<line>"}` alone, with the permission subject `improve`.
+  - `/line improve <name>`, `kairocode line -improve <name>`, ACP's `_kairocode/line` with `improve`, and the daemon's `POST /sessions/{id}/items` with `improve`.
+  - When the person asks and nothing is due, the draft learns from the line's last items that stopped or were sent back. If there are none, the request is refused.
+- **Factory paths** (`factoryPaths`) are added to every line's `lines.people` in `policyOf`, as globs:
+  - `.kairocode/lines/*` and `.kairocode/workflows/*`;
+  - `kairocode.json`;
+  - `AGENTS.md` and `CLAUDE.md`, at any depth.
+
+  Because of this, every line now reads its change at its end, which needs git. A line's item always runs in a git worktree.
+- **A draft writes the protected files under `kairocode-draft/`.**
+  - The line, the flows and `kairocode.json` are among the names the sandbox and the write tools keep out of reach (ADR 0005), so that no agent can change what its own next turn may do. A draft is an agent, and its station runs again when sent back, so it may not write them in place either.
+  - It writes the whole new version of each under `kairocode-draft/<path>`. The person reviews that diff. The line's commit (`lineCommitAction`, for an item of the line `improve`) puts the files in place, removes the folder, and commits (`promoteDraft`). The files reach the project only when the person merges the branch.
+  - `AGENTS.md` and `CLAUDE.md` are written in place.
+  - Found by hand: the first draft by a real model could change nothing but `AGENTS.md`.
+- **A draft's lines are checked** (`checkDraft`): their shape and what they name.
+  - Nothing may be under `kairocode-draft/` but a line, a flow or `kairocode.json`.
+  - A drafted `kairocode.json` may differ from the file in place only in `checks` and `lines` (Decision 4). A draft that widens a permission, or changes the sandbox or the servers, does not hold. Agents count as known if the project has them; flows if the project or the draft has them; checks if `kairocode.json` or the draft's `kairocode.json` declares them.
+  - The review's preview says when one does not hold.
+  - The commit refuses to put such a draft in place.
+  - The draft's request lists the declared checks, and says how to declare one and that a review station takes no checks.
+  - Found by hand: a draft named a check no one declared, on a review station.
+- **One lock, `feedbackMu`, covers both a decision on feedback and a draft's start**, from its evidence chosen to its item made, so two never take the same evidence (found in review).
+  - A mark is set with compare-and-set: it never overwrites a mark naming a draft that exists.
+  - A draft not made gives its evidence back to what it was for before, only once it is known not to exist.
+  - A database error is never read as "unused".
+  - The daemon considers feedback for every line as it starts (`ConsiderAllFeedback`), so a decision cut off after an item ended is made then.
+  - The items there before this change are marked `before` as the store is upgraded, and are not evidence. So the first start after the upgrade tells no one about a line's old history, and makes no draft from it.
+  - Checks find the item of their folder by the path recorded, or else by the folder with links resolved, so `KAIROCODE_BASE` is set whichever path the folder is given by.
+  - In ask mode, a notice found already told still marks its evidence.
+- **The gate on a draft** is a built-in check, `factory-paths`. It is always there unless the settings declare one of the name, and it is the user's, so it is not asked about. It is a shell command:
+  - it lists the change against the commit the item started from (given to checks in an item's worktree as `KAIROCODE_BASE`; `HEAD` elsewhere), with `--no-renames`, and the files not yet tracked. So a station's commit, or a file moved away, hides nothing (found in review);
+  - it fails on anything but `AGENTS.md`, `CLAUDE.md` (not under `kairocode-draft/`), and the line, the flows and `kairocode.json` under `kairocode-draft/`, and fails if git or awk does;
+  - a path git quotes fails too.
+- **Tests:**
+  - `TestFeedbackDue`
+  - `TestFeedbackAsk`
+  - `TestFeedbackAuto`: the draft is taken, and its line is in place on its branch.
+  - `TestImproveLineOnlyFactoryPaths`
+  - `TestFactoryPathsNeedAPerson`
+  - `TestCheckDraft`
+  - `TestFactoryPathsGate`
+  - `TestCrashDuringFeedback`
+- If the commit fails after a draft's files were put in place, they stay in the worktree, not committed. A person took them, and the item's turn is at its end.
+- **Checked by hand with `gpt-5.4-mini`**, in a scratch repository with the line `quick` (build, then a person's review):
+  - Two items were each sent back once by a person with like words, then taken, then dropped. The conversation was told feedback was due, once, and its model asked the person whether to send a draft.
+  - `kairocode line -improve quick` sent the draft, and the model wrote `kairocode-draft/.kairocode/lines/quick.json` and `kairocode-draft/kairocode.json`.
+  - Sent back once with words, the second draft declared its check. Taken, the branch had the real `.kairocode/lines/quick.json` and `kairocode.json`, and no `kairocode-draft/`.
+  - The model's account of its own draft was wrong in one place: it said the check was on the build station, and it was not. The person's review is what catches that.

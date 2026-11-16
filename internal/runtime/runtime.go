@@ -302,6 +302,10 @@ func Open(ctx context.Context, cfg Config) (*Runtime, error) {
 		if err := r.TakeAllItems(ctx); err != nil && ctx.Err() == nil {
 			r.logf("the items taken: %v", err)
 		}
+		// A decision on feedback cut off after an item ended (ADR 0046).
+		if err := r.ConsiderAllFeedback(ctx); err != nil && ctx.Err() == nil {
+			r.logf("feedback: %v", err)
+		}
 	})
 	return r, nil
 }

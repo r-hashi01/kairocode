@@ -184,6 +184,10 @@ func (a *fakeAgent) Items(ctx context.Context, session string) ([]api.Item, []ap
 	return a.items, a.itemWaits, nil
 }
 
+func (a *fakeAgent) Improve(ctx context.Context, session, line string) (api.Item, error) {
+	return api.Item{Name: "improve-1", Line: "improve", Stations: []string{"draft", "review"}, Branch: "kairo/improve-1"}, nil
+}
+
 func (a *fakeAgent) Line(ctx context.Context, session, line, request string) (api.Item, error) {
 	a.lines = append(a.lines, line+": "+request)
 	return api.Item{Name: line + "-1", Line: line, Stations: []string{"build"}, Branch: "kairo/" + line + "-1"}, nil

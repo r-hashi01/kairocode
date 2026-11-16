@@ -42,7 +42,8 @@ func (r *Runtime) linePolicyAction(t *kairo.TaskContext, in workflows.LinePolicy
 }
 
 // policyOf is the policy the layers of settings make: every layer's paths
-// (a project only adds to the user's), and the smaller size.
+// (a project only adds to the user's) and the factory's own, and the
+// smaller size.
 func policyOf(layers []config.Layer) workflows.LinePolicy {
 	out := workflows.LinePolicy{ReviewLines: defaultReviewLines}
 	smaller := 0
@@ -67,6 +68,12 @@ func policyOf(layers []config.Layer) workflows.LinePolicy {
 	}
 	if smaller > 0 {
 		out.ReviewLines = smaller
+	}
+	// The factory's own files always need a person (ADR 0046, 4).
+	for _, p := range factoryPaths {
+		if !slices.Contains(out.People, p) {
+			out.People = append(out.People, p)
+		}
 	}
 	return out
 }
@@ -289,6 +296,14 @@ func (r *Runtime) lineReviewAction(t *kairo.TaskContext, in workflows.LineReview
 	}
 	rule += ". Yes takes it; no, with your words, sends it back."
 	var b strings.Builder
+	// A draft (ADR 0046): whether the lines it wrote hold, for the person
+	// to see before they say yes; one that does not is not put in place.
+	if row, err := r.Store.Item(t, in.Session); err == nil && row.Line == ImproveLine && row.Dir != "" {
+		if err := checkDraft(row.Dir); err != nil {
+			rule += " The draft does not hold: see the preview."
+			fmt.Fprintf(&b, "── The draft does not hold (it would not be put in place) ──\n%v\n\n", err)
+		}
+	}
 	for j, o := range in.Outputs {
 		if strings.TrimSpace(o) != "" {
 			fmt.Fprintf(&b, "── What station %d left ──\n%s\n\n", j+1, o)

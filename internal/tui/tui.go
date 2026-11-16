@@ -73,6 +73,7 @@ type Agent interface {
 	// /line's: the session's work items (ADR 0043).
 	Items(ctx context.Context, session string) ([]api.Item, []api.Pending, error)
 	Line(ctx context.Context, session, line, request string) (api.Item, error)
+	Improve(ctx context.Context, session, line string) (api.Item, error)
 	DropItem(ctx context.Context, session, item string, force bool) error
 	KeepLine(ctx context.Context, session, item, name string) (string, error)
 	ItemAnswer(ctx context.Context, key string, ok bool, option, reason string) error
@@ -1639,7 +1640,7 @@ func (m *model) commands() []acp.Command {
 		{Name: "resume", Description: "Take up another session of this folder"},
 		{Name: "new", Description: "Start another session (--worktree [name]: in a new git worktree, on kairo/<name>)"},
 		{Name: "sessions", Description: "The repository's sessions across its worktrees: take one up, remove a worktree"},
-		{Name: "line", Description: "The project's lines (/line <name> <request>: send one down it; /line restart <name>; /line keep <item> <name>)"},
+		{Name: "line", Description: "The project's lines (/line <name> <request>: send one down it; /line improve <name>: a draft from its items; /line restart <name>; /line keep <item> <name>)"},
 		{Name: "items", Description: "The work items sent down lines, and what they wait for (/items yes <n>, no <n> [words], answer <n> <option>, drop <item>)"}}, m.cmds...)
 }
 

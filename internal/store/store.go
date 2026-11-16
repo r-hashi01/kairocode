@@ -181,10 +181,17 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 	// result, and when it ended. Rows from before them count from now, so
 	// they get their grace in full.
 	now := time.Now().UnixMilli()
-	for _, m := range []struct{ add, fill string }{
-		{`ALTER TABLE kc_message ADD COLUMN at INTEGER NOT NULL DEFAULT 0`, `UPDATE kc_message SET at = ? WHERE at = 0`},
-		{`ALTER TABLE kc_item ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0`, `UPDATE kc_item SET ended_at = ? WHERE ended_at = 0 AND ended <> '' AND ended NOT LIKE 'ending:%'`},
-		{`ALTER TABLE kc_item ADD COLUMN result BLOB`, ``},
+	for _, m := range []struct {
+		add, fill string
+		args      []any
+	}{
+		{`ALTER TABLE kc_message ADD COLUMN at INTEGER NOT NULL DEFAULT 0`, `UPDATE kc_message SET at = ? WHERE at = 0`, []any{now}},
+		{`ALTER TABLE kc_item ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0`, `UPDATE kc_item SET ended_at = ? WHERE ended_at = 0 AND ended <> '' AND ended NOT LIKE 'ending:%'`, []any{now}},
+		{`ALTER TABLE kc_item ADD COLUMN result BLOB`, ``, nil},
+		// Feedback (ADR 0046): what used an item's result, so it is used
+		// once. The items from before it are not evidence: feedback starts
+		// from the items that end after it, not from a line's old history.
+		{`ALTER TABLE kc_item ADD COLUMN fed TEXT NOT NULL DEFAULT ''`, `UPDATE kc_item SET fed = '` + FedBefore + `'`, nil},
 	} {
 		// The column and its fill at once: a crash between them would
 		// leave rows that count as written long ago.
@@ -201,7 +208,7 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			return nil, fmt.Errorf("store: %w", err)
 		}
 		if m.fill != "" {
-			if _, err := tx.ExecContext(ctx, m.fill, now); err != nil {
+			if _, err := tx.ExecContext(ctx, m.fill, m.args...); err != nil {
 				tx.Rollback()
 				return nil, fmt.Errorf("store: %w", err)
 			}

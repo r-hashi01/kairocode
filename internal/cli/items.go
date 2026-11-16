@@ -29,6 +29,7 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	name := fs.String("name", "", "the item's worktree and branch name (default: <line>-<n>)")
 	keep := fs.String("keep", "", "keep the line this item ran as .kairocode/lines/<name>.json")
 	restart := fs.String("restart", "", "start this line again, after it stopped itself (ADR 0044)")
+	improve := fs.String("improve", "", "send a draft that improves this line, its checks or AGENTS.md, from its items (ADR 0046)")
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "with no -session: who runs the model, as run's")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "with no -session: the model, as run's")
 	if err := fs.Parse(args); err != nil {
@@ -61,8 +62,8 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		fmt.Fprintf(stdout, "kept as %s: review it, and commit it to make it the project's\n", path)
 		return nil
 	}
-	if fs.NArg() < 2 {
-		return errors.New(`usage: kairocode line [-session ID] <line> "<request>"`)
+	if *improve == "" && fs.NArg() < 2 {
+		return errors.New(`usage: kairocode line [-session ID] <line> "<request>", or kairocode line [-session ID] -improve <line>`)
 	}
 	s := sessionArg(*session)
 	if *session == "" {
@@ -75,7 +76,11 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		}
 		fmt.Fprintf(stderr, "session %s (told of the item; kairocode items %s)\n", s, s)
 	}
-	it, err := c.StartItem(ctx, s, tools.ItemSpec{Line: fs.Arg(0), Request: strings.Join(fs.Args()[1:], " "), Name: *name})
+	spec := tools.ItemSpec{Improve: *improve}
+	if *improve == "" {
+		spec = tools.ItemSpec{Line: fs.Arg(0), Request: strings.Join(fs.Args()[1:], " "), Name: *name}
+	}
+	it, err := c.StartItem(ctx, s, spec)
 	if err != nil {
 		return err
 	}

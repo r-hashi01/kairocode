@@ -24,14 +24,24 @@ type ItemRow struct {
 	Made    bool   // its session was made: never made again
 	Started time.Time
 	Ended   string // "" while kept; "taken" or "dropped"
+	// Fed: what used its result for feedback (ADR 0046): FedAsked, the
+	// feedback item's id, or "" while unused.
+	Fed string
 }
 
-const itemCols = `id, of, line, def, request, name, repo, dir, branch, base, start, made, started, ended`
+// FedAsked: the conversation was asked whether to draft from it.
+const FedAsked = "asked"
+
+// FedBefore: the item was there before feedback was (ADR 0046): not
+// evidence.
+const FedBefore = "before"
+
+const itemCols = `id, of, line, def, request, name, repo, dir, branch, base, start, made, started, ended, fed`
 
 func scanItem(sc interface{ Scan(...any) error }) (ItemRow, error) {
 	var r ItemRow
 	var at int64
-	err := sc.Scan(&r.ID, &r.Of, &r.Line, &r.Def, &r.Request, &r.Name, &r.Repo, &r.Dir, &r.Branch, &r.Base, &r.Start, &r.Made, &at, &r.Ended)
+	err := sc.Scan(&r.ID, &r.Of, &r.Line, &r.Def, &r.Request, &r.Name, &r.Repo, &r.Dir, &r.Branch, &r.Base, &r.Start, &r.Made, &at, &r.Ended, &r.Fed)
 	r.Started = time.UnixMilli(at)
 	return r, err
 }
@@ -39,9 +49,9 @@ func scanItem(sc interface{ Scan(...any) error }) (ItemRow, error) {
 // AddItem keeps r as an item, unless one is kept under its id already:
 // the one kept, either way (a start made again finds the first).
 func (s *Store) AddItem(ctx context.Context, r ItemRow) (ItemRow, error) {
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO kc_item (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO kc_item (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
-		r.ID, r.Of, r.Line, r.Def, r.Request, r.Name, r.Repo, r.Dir, r.Branch, r.Base, r.Start, r.Made, r.Started.UnixMilli(), r.Ended); err != nil {
+		r.ID, r.Of, r.Line, r.Def, r.Request, r.Name, r.Repo, r.Dir, r.Branch, r.Base, r.Start, r.Made, r.Started.UnixMilli(), r.Ended, r.Fed); err != nil {
 		return ItemRow{}, err
 	}
 	return s.Item(ctx, r.ID)
@@ -80,6 +90,42 @@ func (s *Store) EndItem(ctx context.Context, id, how string) error {
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE kc_item SET ended = ?, ended_at = ? WHERE id = ?`, how, at, id)
 	return err
+}
+
+// SetItemsFed records that fed used the results of items ids (ADR 0046),
+// all at once: each only while it is not used by a draft that was made
+// (unused, asked about, fed's already, or a draft never made), so a mark
+// of a draft that exists is never overwritten.
+func (s *Store) SetItemsFed(ctx context.Context, ids []string, fed string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE kc_item SET fed = ? WHERE id = ?
+			AND (fed = '' OR fed = ? OR fed = ? OR fed <> ? AND fed NOT IN (SELECT id FROM kc_item))`, fed, id, FedAsked, fed, FedBefore); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// UnsetItemsFed gives the items' results back what they were used for
+// before (was, by id), each only while fed still marks it: a draft that
+// was not made frees its evidence.
+func (s *Store) UnsetItemsFed(ctx context.Context, was map[string]string, fed string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for id, prior := range was {
+		if _, err := tx.ExecContext(ctx, `UPDATE kc_item SET fed = ? WHERE id = ? AND fed = ?`, prior, id, fed); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetItemResult keeps what item id came to (ADR 0045), as JSON.
@@ -184,4 +230,22 @@ func (s *Store) ItemsRepos(ctx context.Context) ([]string, error) {
 // ItemsOfLine is the items of line in repo, the first first, ended or not.
 func (s *Store) ItemsOfLine(ctx context.Context, repo, line string) ([]ItemRow, error) {
 	return s.items(ctx, `repo = ? AND line = ?`, repo, line)
+}
+
+// LastItemOfEachLine is, for each standard line of each repository, the
+// item last started on it.
+func (s *Store) LastItemOfEachLine(ctx context.Context) ([]ItemRow, error) {
+	return s.items(ctx, `line <> '' AND started = (SELECT max(k.started) FROM kc_item k WHERE k.repo = kc_item.repo AND k.line = kc_item.line)`)
+}
+
+// ItemByDir is the item whose worktree is dir.
+func (s *Store) ItemByDir(ctx context.Context, dir string) (ItemRow, error) {
+	rows, err := s.items(ctx, `dir = ?`, dir)
+	if err != nil {
+		return ItemRow{}, err
+	}
+	if len(rows) == 0 {
+		return ItemRow{}, ErrNoItem
+	}
+	return rows[len(rows)-1], nil
 }

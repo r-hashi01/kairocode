@@ -27,14 +27,15 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 
 // startItem starts an item down the standard line the person named
 // (/line): {"line", "request", "name", "call"}, call naming the request so
-// the same one sent again starts no second item.
+// the same one sent again starts no second item; or {"improve", "call"},
+// a draft that improves a line (ADR 0046).
 func (s *Server) startItem(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		tools.ItemSpec
 		Call string `json:"call"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Line == "" || in.Request == "" || in.Call == "" {
-		fail(w, http.StatusBadRequest, errors.New(`want {"line": "...", "request": "...", "call": "..."}`))
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Call == "" || in.Improve == "" && (in.Line == "" || in.Request == "") {
+		fail(w, http.StatusBadRequest, errors.New(`want {"line": "...", "request": "...", "call": "..."} or {"improve": "...", "call": "..."}`))
 		return
 	}
 	it, err := s.rt.StartNamedItem(r.Context(), sessionOf(r), in.Call, in.ItemSpec)
