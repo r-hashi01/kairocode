@@ -181,7 +181,7 @@ Where this shows in the implementation:
 
 ## Implementation (2026-11-13, M14)
 
-Where it differs from the decision above, or settles what it left open:
+Where it differs from the decision above, or settles what it left open. The departures from accepted decisions were approved by the user (2026-11-16): a notice may come twice in one crash window until kairo with `SignalID`; the item's session input carries the line itself; a project's check answered in a repository is answered for its worktrees (ADR 0042 kept it per folder).
 
 - **A line that passes commits its work to the item's branch** (`line.commit`). Decision 4 says the line ends at a change ready to merge, on the item's branch; the agents at the stations need not commit. So once every station passed, the line's turn commits the worktree's changes as `git_commit` does: plan then apply, compare and replace, so a commit done again after a crash makes no second one. The message is `<line>: <the request's first line>`. A line run outside an item's session commits nothing. "Taken" then means the branch has commits beyond the one its worktree started from, and they are in the branch it started from.
 - **The line tool is a planned write** (`Plan` and `Apply`), like every idempotent tool that acts: its plan checks the call, and its apply starts the item. The item's session id comes from the apply's idempotency key.

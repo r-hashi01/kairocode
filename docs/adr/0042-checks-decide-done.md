@@ -128,3 +128,7 @@ Found on the way, and fixed:
 - **An escalation was asked where the rules deny `bash`.** The model, held by the gate, asked to run the tests outside the sandbox, and was asked about though `bash` was `deny`. Running outside the sandbox and `git_push` are asked whatever the rules allow (ADR 0005), but a rule that denies them now refuses them: a refusal is never loosened into a question (ADR 0005's addendum). (`TestEscalationDenied`.)
 - **Two smaller ones.** `kairocode log` said a check that failed was `completed (error)`, as if the step had failed; it now says `completed (did not pass)`. And `kairocode resume` of a session `run` had closed printed the turn, then failed with kairo's "workflow … has finished": closing a closed session is now nothing to do.
 - **The chart did not show an agent's gate.** A gated agent's box now says `agent build · checks test`, in a call and in a `parallel` spec, and gating an agent or taking its gate away marks its box changed in a review. (`TestGatedAgent`.)
+
+## Addendum (2026-11-16; approved by the user)
+
+A project's check answered in a repository is answered for all its worktrees: the answer is kept by the repository's main checkout, as trust is (ADR 0037), not by the folder. A work item's worktree (ADR 0043) is a new folder, and was asked again for each item. The check's command is in the key, so a changed command is asked about again.
