@@ -120,6 +120,12 @@ func platformCommand(ctx context.Context, p Policy, root string, argv []string) 
 		args = append(args, "--bind", p.SocketDir, p.SocketDir)
 		args = append(args, protect(p, []string{p.SocketDir})...)
 	}
+	// What it may read though a hidden directory holds it: read-only.
+	for _, d := range p.Readable {
+		if real, err := filepath.EvalSymlinks(d); err == nil {
+			args = append(args, "--ro-bind", real, real)
+		}
+	}
 	if !p.Network {
 		args = append(args, "--unshare-net")
 	}

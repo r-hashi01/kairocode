@@ -149,6 +149,9 @@ func subject(tool string, args json.RawMessage) string {
 	if tool == tools.LineTool.Name { // the line's name: "line": {"<name>": ...} (ADR 0043)
 		var l tools.ItemSpec
 		_ = json.Unmarshal(args, &l)
+		if l.Improve != "" && l.Line == "" && len(l.Stations) == 0 {
+			return ImproveLine // a draft, down the line improve (ADR 0046)
+		}
 		if l.Line == "" {
 			return onTheSpot
 		}

@@ -16,7 +16,9 @@ import (
 )
 
 // lineWorkspace is a project with the check "fixed" (a file named fixed is
-// there) and the flow review, which says what it was given.
+// there) and the flow review, which says what it was given: a git
+// repository, as a line's item always has (its end reads the change, for
+// the paths that need a person).
 func lineWorkspace(t *testing.T) string {
 	t.Helper()
 	ws := checksWorkspace(t, `{"fixed": {"command": "test -f fixed || { echo 'no file named fixed'; exit 1; }"}}`)
@@ -25,6 +27,10 @@ func lineWorkspace(t *testing.T) string {
 def main(input):
     return {"ok": True, "message": "reviewed: " + input["args"]}
 `})
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.name", "T"}, {"config", "user.email", "t@example.com"},
+		{"add", "-A"}, {"commit", "-q", "-m", "first"}} {
+		gitT(t, ws, args...)
+	}
 	return ws
 }
 
@@ -146,6 +152,12 @@ func TestCrashDuringLine(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "k.db")
 	ws := repo(t)
+	// A git repository, as a line's item always has: its end reads the
+	// change (the paths that need a person).
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.name", "T"}, {"config", "user.email", "t@example.com"},
+		{"add", "-A"}, {"commit", "-q", "-m", "first"}} {
+		gitT(t, ws, args...)
+	}
 	prompts := filepath.Join(dir, "prompts")
 	hold := filepath.Join(dir, "holding")
 	replies := map[string]provider.FakeReply{`station "plan"`: {Text: "the plan"}, `station "build"`: {Text: "built"}}

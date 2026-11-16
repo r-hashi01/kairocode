@@ -63,6 +63,11 @@ type Policy struct {
 	// SocketDir is the Loopback command's own temporary directory, made by
 	// SocketDir().
 	SocketDir string
+	// Readable are directories it may read though a Loopback command's
+	// hidden directories (/tmp, ...) hold them: a linked worktree's
+	// repository (ADR 0037), which git reads. Bound read-only, last.
+	// Everything else is readable anyway.
+	Readable []string
 }
 
 var (

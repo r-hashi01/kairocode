@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -296,7 +297,9 @@ func TestPeoplePathsAlways(t *testing.T) {
 
 	user := config.Layer{Path: "user", Data: []byte(`{"lines": {"people": ["auth/*"], "reviewLines": 100}}`)}
 	project := config.Layer{Path: "project", Project: true, Data: []byte(`{"lines": {"people": [], "reviewLines": 900}}`)}
-	if p := policyOf([]config.Layer{user, project}); len(p.People) != 1 || p.People[0] != "auth/*" || p.ReviewLines != 100 {
+	// The user's paths, then the factory's own (ADR 0046), always.
+	if p := policyOf([]config.Layer{user, project}); len(p.People) != 1+len(factoryPaths) || p.People[0] != "auth/*" ||
+		!slices.Contains(p.People, "AGENTS.md") || p.ReviewLines != 100 {
 		t.Fatalf("policy %+v", p)
 	}
 }

@@ -149,7 +149,8 @@ const (
 	// ItemsRPC lists a session's work items and what they wait for
 	// ({"sessionId"} → {"items": [api.Item], "waiting": [api.Pending]});
 	// LineRPC starts one down a standard line ({"sessionId", "line",
-	// "request", "name"} → api.Item); DropItemRPC drops one ({"sessionId",
+	// "request", "name"} → api.Item), or a draft that improves one
+	// ({"sessionId", "improve"}, ADR 0046); DropItemRPC drops one ({"sessionId",
 	// "item", "force"}); KeepLineRPC keeps the line one ran ({"sessionId",
 	// "item", "name"} → {"path"}); ItemAnswerRPC answers what one waits
 	// for ({"key", "ok"} or {"key", "option"}). ADR 0043.

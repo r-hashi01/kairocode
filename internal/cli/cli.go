@@ -49,6 +49,7 @@ const usage = `usage:
   kairocode line [-dir DIR] [-data DIR] [-session ID | -provider P -model M] [-name N] <line> "<request>"   send a request down a standard line (ADR 0043)
   kairocode line [-data DIR] -keep <item> -session ID <name>   keep the line an item ran as .kairocode/lines/<name>.json
   kairocode line [-dir DIR] [-data DIR] -restart <name>   start a line again after it stopped itself (ADR 0044)
+  kairocode line [-dir DIR] [-data DIR] [-session ID] -improve <name>   send a draft that improves a line from its items (ADR 0046)
   kairocode lines [-dir DIR] [-data DIR] [-json]      the project's lines: in progress, queued, stopped
   kairocode items [-data DIR] [-json] [-drop ITEM [-force]] <session>   the work items a session sent down lines
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one

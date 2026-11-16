@@ -63,6 +63,13 @@ func (m *model) itemsCommand(text string) (tea.Cmd, bool) {
 				path, err := a.KeepLine(ctx, s, item, name)
 				return "kept as " + path + ": review it, and commit it to make it the project's", err
 			}), true
+		case len(fields) == 3 && fields[1] == "improve": // a draft from its items (ADR 0046)
+			line := fields[2]
+			return done(func() (string, error) {
+				it, err := a.Improve(ctx, s, line)
+				return fmt.Sprintf("item %s drafts an improvement of the line %s (%s): branch %s; a person reviews it before it is taken", it.Name, line,
+					strings.Join(it.Stations, " → "), it.Branch), err
+			}), true
 		case len(fields) >= 3:
 			line, request := fields[1], strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "/line"), " "+fields[1]))
 			return done(func() (string, error) {
@@ -71,7 +78,7 @@ func (m *model) itemsCommand(text string) (tea.Cmd, bool) {
 					strings.Join(it.Stations, " → "), it.Branch), err
 			}), true
 		}
-		m.print(bad.Render("  ⎿  /line, /line <name> <request>, /line restart <name>, or /line keep <item> <name>"))
+		m.print(bad.Render("  ⎿  /line, /line <name> <request>, /line improve <name>, /line restart <name>, or /line keep <item> <name>"))
 		return nil, true
 	}
 	switch {

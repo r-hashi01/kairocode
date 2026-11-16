@@ -78,11 +78,15 @@ func (r *Runtime) isItem(ctx context.Context, session string) bool {
 func standardLines(dir string) string {
 	var b strings.Builder
 	// What a station's checks may name: the checks declared, by name.
-	if c, err := readChecks(dir); err == nil && c != nil && len(c.Defs) > 0 {
-		names := make([]string, len(c.Defs))
-		for i, d := range c.Defs {
-			names[i] = d.Name
+	var names []string // the built-in factory-paths is for drafts (ADR 0046): not offered
+	if c, err := readChecks(dir); err == nil && c != nil {
+		for _, d := range c.Defs {
+			if d.Name != FactoryPathsCheck {
+				names = append(names, d.Name)
+			}
 		}
+	}
+	if len(names) > 0 {
 		fmt.Fprintf(&b, "\n\nA station's checks name checks declared in kairocode.json, and only those: %s.", strings.Join(names, ", "))
 	} else {
 		b.WriteString("\n\nNo checks are declared in kairocode.json: a station has no checks.")
@@ -115,8 +119,10 @@ func lineCanRun(ctx context.Context, dir string, args json.RawMessage) error {
 	}
 	var line workflows.Line
 	switch {
+	case in.Improve != "":
+		line = improveLine() // the project's of the name, if any, is checked as the item starts
 	case in.Line != "":
-		l, err := lines.Read(dir, in.Line)
+		l, err := readLine(dir, in.Line)
 		if err != nil {
 			return err
 		}
@@ -268,7 +274,32 @@ func (r *Runtime) StartItem(ctx context.Context, conversation, key string, spec 
 	if err != nil {
 		return api.Item{}, ErrItemsNoGit
 	}
+	// A draft that improves a line (ADR 0046): its evidence is marked as
+	// used by this item before it is made, so a start cut off finds it
+	// again, and nothing makes feedback due for it twice.
+	var was map[string]string
+	if spec.Improve != "" {
+		// From its evidence chosen to the item made, no other decision on
+		// feedback, and no other draft, may take the same evidence.
+		defer lockFeedback(ctx)()
+		if spec, was, err = r.improveSpec(ctx, top, main, spec.Improve, id); err != nil {
+			return api.Item{}, err
+		}
+		ids := slices.Sorted(maps.Keys(was))
+		if err := r.Store.SetItemsFed(ctx, ids, id); err != nil {
+			return api.Item{}, notSettled(err)
+		}
+		if afterFeedbackFed != nil {
+			afterFeedbackFed()
+		}
+	}
 	if row, err = r.newItem(ctx, conversation, top, main, id, spec); err != nil {
+		// Not made: its evidence is given back what it was for before.
+		if _, gerr := r.Store.Item(ctx, id); len(was) > 0 && errors.Is(gerr, store.ErrNoItem) {
+			if uerr := r.Store.UnsetItemsFed(ctx, was, id); uerr != nil {
+				r.logf("feedback's evidence, given back: %v", uerr)
+			}
+		}
 		return api.Item{}, err
 	}
 	return r.startInTurn(ctx, row)
@@ -558,7 +589,7 @@ func (r *Runtime) itemWorktree(ctx context.Context, dir string, row store.ItemRo
 func (r *Runtime) newItem(ctx context.Context, conversation, dir, main, id string, spec tools.ItemSpec) (store.ItemRow, error) {
 	var line workflows.Line
 	if spec.Line != "" {
-		l, err := lines.Read(dir, spec.Line)
+		l, err := readLine(dir, spec.Line)
 		if err != nil {
 			return store.ItemRow{}, err
 		}
@@ -852,6 +883,7 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 		}
 		if it.State != api.ItemDone {
 			err = errors.Join(err, r.tellLineStopped(ctx, row))
+			r.considerFeedbackLater(row) // a line stopped itself (ADR 0046)
 		}
 		return err
 	}
@@ -882,6 +914,13 @@ func (r *Runtime) lineCommitAction(t *kairo.TaskContext, in workflows.LineCommit
 		return workflows.LineCommitOutput{}, nil // not an item's worktree: nothing committed
 	} else if err != nil {
 		return workflows.LineCommitOutput{}, err
+	}
+	if row.Line == ImproveLine {
+		// A draft a person took (ADR 0046): its new versions of the line,
+		// the flows and kairocode.json go in place, to be committed.
+		if err := promoteDraft(in.Dir); err != nil {
+			return workflows.LineCommitOutput{Note: "Not committed: " + err.Error()}, nil
+		}
 	}
 	root, err := os.OpenRoot(in.Dir)
 	if err != nil {
@@ -1010,7 +1049,11 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 	if err := r.CloseSession(ctx, row.ID); err != nil && !errors.Is(err, kairo.ErrUnknownRun) {
 		r.logf("closing the item %s: %v", row.Name, err)
 	}
-	return r.Store.EndItem(ctx, row.ID, how)
+	if err := r.Store.EndItem(ctx, row.ID, how); err != nil {
+		return err
+	}
+	r.considerFeedbackLater(row) // its result may make feedback due (ADR 0046)
+	return nil
 }
 
 // keepItemResult keeps what item row came to as it ends how (ADR 0045):
@@ -1115,6 +1158,12 @@ func firstLine(s string) string {
 // (/line, kairocode line): nothing is asked, the person chose it. call
 // names the request, so the same one made again starts no second item.
 func (r *Runtime) StartNamedItem(ctx context.Context, conversation, call string, spec tools.ItemSpec) (api.Item, error) {
+	if spec.Improve != "" { // a draft the person asked for (ADR 0046)
+		if spec.Line != "" || len(spec.Stations) > 0 || spec.Request != "" {
+			return api.Item{}, errors.New("improve names the line to improve: send it alone, with no line, stations or request")
+		}
+		return r.StartItem(ctx, conversation, "person:"+call, spec)
+	}
 	if spec.Line == "" || len(spec.Stations) > 0 {
 		return api.Item{}, errors.New("name a standard line: /line <name> <request>")
 	}

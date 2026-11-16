@@ -44,8 +44,8 @@ func (a *agent) line(ctx context.Context, params json.RawMessage) (any, error) {
 		SessionID string `json:"sessionId"`
 		tools.ItemSpec
 	}
-	if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" || p.Line == "" || p.Request == "" {
-		return nil, invalid(errors.New(`want {"sessionId", "line", "request"}`))
+	if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" || p.Improve == "" && (p.Line == "" || p.Request == "") {
+		return nil, invalid(errors.New(`want {"sessionId", "line", "request"} or {"sessionId", "improve"}`))
 	}
 	it, err := a.b.StartItem(ctx, p.SessionID, p.ItemSpec)
 	if err != nil {
@@ -127,6 +127,14 @@ func (cl *Client) Items(ctx context.Context, session string) ([]api.Item, []api.
 func (cl *Client) Line(ctx context.Context, session, line, request string) (api.Item, error) {
 	var out api.Item
 	err := cl.c.Call(ctx, LineRPC, map[string]any{"sessionId": session, "line": line, "request": request}, &out)
+	return out, err
+}
+
+// Improve starts a draft that improves the line named, from its items
+// (ADR 0046).
+func (cl *Client) Improve(ctx context.Context, session, line string) (api.Item, error) {
+	var out api.Item
+	err := cl.c.Call(ctx, LineRPC, map[string]any{"sessionId": session, "improve": line}, &out)
 	return out, err
 }
 
