@@ -329,7 +329,19 @@ func TestItemQueue(t *testing.T) {
 	if again, err := r.StartItem(ctx, s, "c", spec); err != nil || again.Name != "quick-3" || again.State != api.ItemQueued {
 		t.Fatalf("again: %+v %v", again, err)
 	}
-	// One in progress dropped, the first queued starts in its place.
+	// One in progress dropped, the first queued starts in its place: once
+	// both in progress have called the model (and are held there).
+	for {
+		b, _ := os.ReadFile(prompts)
+		if strings.Count(string(b), `You are at the station "build"`) == 2 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the two in progress did not call the model:\n%s", b)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	if err := r.DropItem(ctx, s, "quick-1", true); err != nil {
 		t.Fatal(err)
 	}
