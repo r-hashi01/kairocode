@@ -153,6 +153,13 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			made INTEGER NOT NULL DEFAULT 0,
 			started INTEGER NOT NULL,
 			ended TEXT NOT NULL DEFAULT '')`,
+		// When a person last started a line again after it stopped itself
+		// (ADR 0044): its items before then are not counted.
+		`CREATE TABLE IF NOT EXISTS kc_line (
+			repo TEXT NOT NULL,
+			line TEXT NOT NULL,
+			restarted INTEGER NOT NULL,
+			PRIMARY KEY (repo, line))`,
 		`CREATE INDEX IF NOT EXISTS kc_item_of ON kc_item (of)`,
 		`CREATE INDEX IF NOT EXISTS kc_item_repo ON kc_item (repo)`,
 	} {

@@ -28,6 +28,7 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	session := fs.String("session", "", "the conversation that sends it (default: a new session in the folder)")
 	name := fs.String("name", "", "the item's worktree and branch name (default: <line>-<n>)")
 	keep := fs.String("keep", "", "keep the line this item ran as .kairocode/lines/<name>.json")
+	restart := fs.String("restart", "", "start this line again, after it stopped itself (ADR 0044)")
 	prov := fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "with no -session: who runs the model, as run's")
 	model := fs.String("model", os.Getenv("KAIROCODE_MODEL"), "with no -session: the model, as run's")
 	if err := fs.Parse(args); err != nil {
@@ -38,6 +39,17 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 	defer c.Close()
+	if *restart != "" {
+		abs, err := filepath.Abs(*dir)
+		if err != nil {
+			return err
+		}
+		if err := c.RestartLine(ctx, abs, *restart); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "the line %s runs again\n", *restart)
+		return nil
+	}
 	if *keep != "" {
 		if *session == "" || fs.NArg() != 1 {
 			return errors.New(`usage: kairocode line -keep <item> -session ID <name>`)
@@ -66,6 +78,10 @@ func lineCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	it, err := c.StartItem(ctx, s, tools.ItemSpec{Line: fs.Arg(0), Request: strings.Join(fs.Args()[1:], " "), Name: *name})
 	if err != nil {
 		return err
+	}
+	if it.State == "queued" {
+		fmt.Fprintf(stdout, "item %s on the line %s (%s): queued, %d before it; it starts in its turn\n", it.Name, it.Line, strings.Join(it.Stations, " → "), it.Position)
+		return nil
 	}
 	fmt.Fprintf(stdout, "item %s on the line %s (%s): worktree %s, branch %s\n", it.Name, it.Line, strings.Join(it.Stations, " → "), it.Dir, it.Branch)
 	return nil
@@ -119,4 +135,52 @@ func sessionArg(s string) string {
 		return s
 	}
 	return runtime.SessionID(s)
+}
+
+// linesCommand lists the project's lines and how they stand (ADR 0044).
+func linesCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("lines", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", ".", "working directory")
+	data := fs.String("data", runtime.DefaultDataDir(), "data directory")
+	asJSON := fs.Bool("json", false, "as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(*dir)
+	if err != nil {
+		return err
+	}
+	c, err := connect(ctx, *data)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	l, err := c.Lines(ctx, abs)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(l)
+	}
+	if len(l) == 0 {
+		fmt.Fprintln(stdout, "no lines: declare them in .kairocode/lines/<name>.json")
+	}
+	for _, x := range l {
+		if x.Error != "" {
+			fmt.Fprintf(stdout, "%s  cannot be read: %s\n", x.Name, x.Error)
+			continue
+		}
+		fmt.Fprintf(stdout, "%s  %s  in progress %d, queued %d", x.Name, strings.Join(x.Stations, " → "), x.InProgress, x.Queued)
+		if x.Wip > 0 {
+			fmt.Fprintf(stdout, ", wip %d", x.Wip)
+		}
+		if x.Stopped {
+			fmt.Fprintf(stdout, "  STOPPED: %s", x.Why)
+		}
+		fmt.Fprintln(stdout)
+	}
+	return nil
 }

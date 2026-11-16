@@ -16,7 +16,19 @@ import (
 // (design 7). A flow's turn runs the flow between the snapshots instead
 // (ADR 0003), and a flow's agent is RunTurnV3 alone. Both are new fields of
 // the input: a turn without them makes the calls it always made.
+//
+// Version 7: a line's turn has reviews (ADR 0044). RunTurnV6 is a turn
+// without them, as version 6 made its calls.
 func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
+	return runTurn(ctx, in, true)
+}
+
+// RunTurnV6 is a turn of version 6: a line's turn without reviews.
+func RunTurnV6(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
+	return runTurn(ctx, in, false)
+}
+
+func runTurn(ctx *kairo.Context, in TurnInput, reviews bool) (TurnOutput, error) {
 	if in.Undo != nil {
 		return runUndo(ctx, in)
 	}
@@ -31,7 +43,7 @@ func RunTurn(ctx *kairo.Context, in TurnInput) (TurnOutput, error) {
 	var out TurnOutput
 	switch {
 	case in.Line != nil:
-		out, err = runLineTurn(ctx, in)
+		out, err = runLineTurn(ctx, in, reviews)
 	case in.Flow != nil:
 		out, err = runFlowTurn(ctx, in)
 	default:

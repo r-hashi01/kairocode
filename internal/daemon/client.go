@@ -909,3 +909,15 @@ func (c *Client) PendingAll(ctx context.Context, session string) ([]api.Pending,
 	err := c.do(ctx, "GET", sessionPath(session)+"/approvals?items=1", nil, &out)
 	return out, err
 }
+
+// Lines are the lines of dir's project, and how they stand (ADR 0044).
+func (c *Client) Lines(ctx context.Context, dir string) ([]api.LineInfo, error) {
+	var out []api.LineInfo
+	err := c.do(ctx, "GET", "/lines?dir="+url.QueryEscape(dir), nil, &out)
+	return out, err
+}
+
+// RestartLine starts a line of dir's project that stopped itself again.
+func (c *Client) RestartLine(ctx context.Context, dir, line string) error {
+	return c.do(ctx, "POST", "/lines/restart", map[string]string{"dir": dir, "line": line}, nil)
+}

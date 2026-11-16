@@ -88,6 +88,10 @@ type Backend interface {
 	DropItem(ctx context.Context, session, item string, force bool) error
 	KeepLine(ctx context.Context, session, item, name string) (string, error)
 	PendingAll(ctx context.Context, session string) ([]api.Pending, error)
+	// Lines and RestartLine: the project's lines and how they stand, and
+	// starting one that stopped itself again (ADR 0044).
+	Lines(ctx context.Context, dir string) ([]api.LineInfo, error)
+	RestartLine(ctx context.Context, dir, line string) error
 }
 
 // InstallMeta, in a provider's value's _meta, says it is installed when
@@ -149,11 +153,16 @@ const (
 	// "item", "force"}); KeepLineRPC keeps the line one ran ({"sessionId",
 	// "item", "name"} → {"path"}); ItemAnswerRPC answers what one waits
 	// for ({"key", "ok"} or {"key", "option"}). ADR 0043.
-	ItemsRPC          = "_kairocode/items"
-	LineRPC           = "_kairocode/line"
-	DropItemRPC       = "_kairocode/drop_item"
-	KeepLineRPC       = "_kairocode/keep_line"
-	ItemAnswerRPC     = "_kairocode/item_answer"
+	ItemsRPC      = "_kairocode/items"
+	LineRPC       = "_kairocode/line"
+	DropItemRPC   = "_kairocode/drop_item"
+	KeepLineRPC   = "_kairocode/keep_line"
+	ItemAnswerRPC = "_kairocode/item_answer"
+	// LinesRPC lists the lines of a folder's project ({"cwd"} → {"lines":
+	// [api.LineInfo]}); RestartLineRPC starts one that stopped itself again
+	// ({"cwd", "line"}). ADR 0044.
+	LinesRPC          = "_kairocode/lines"
+	RestartLineRPC    = "_kairocode/restart_line"
 	RepoSessionsRPC   = "_kairocode/repo_sessions"
 	MakeWorktreeRPC   = "_kairocode/make_worktree"
 	RemoveWorktreeRPC = "_kairocode/remove_worktree"

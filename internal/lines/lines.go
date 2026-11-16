@@ -60,11 +60,35 @@ func Shape(l workflows.Line) error {
 	if len(l.Stations) == 0 {
 		return fmt.Errorf("%s has no stations", what)
 	}
+	if l.Wip < 0 {
+		return fmt.Errorf("%s: wip is %d, not 0 or more", what, l.Wip)
+	}
 	seen := map[string]bool{}
+	agents := map[string]bool{} // the agent stations before this one
 	for i, s := range l.Stations {
 		at := fmt.Sprintf("%s, station %d", what, i+1)
 		if s.Name != "" {
 			at = fmt.Sprintf("%s, station %q", what, s.Name)
+		}
+		if s.Review != "" { // a review station (ADR 0044): its own rules
+			switch {
+			case !ValidName(s.Name):
+				return fmt.Errorf("%s: a station's name is lowercase letters, digits and dashes", at)
+			case seen[s.Name]:
+				return fmt.Errorf("%s: two stations have this name", at)
+			case s.Review != workflows.ReviewPerson && s.Review != workflows.ReviewModel && s.Review != workflows.ReviewRisk:
+				return fmt.Errorf("%s: review is person, model or risk, not %q", at, s.Review)
+			case s.Flow != "" || s.Args != "":
+				return fmt.Errorf("%s: a review station has no flow", at)
+			case (s.Agent != "" || s.Prompt != "") && s.Review == workflows.ReviewPerson:
+				return fmt.Errorf("%s: a person reviews here: an agent or prompt is for a model's review", at)
+			case s.Back != "" && !agents[s.Back]:
+				return fmt.Errorf("%s: back names %q, which is no agent station before it", at, s.Back)
+			case s.Rounds < 0:
+				return fmt.Errorf("%s: rounds is %d, not 0 or more", at, s.Rounds)
+			}
+			seen[s.Name] = true
+			continue
 		}
 		switch {
 		case !ValidName(s.Name):
@@ -83,8 +107,13 @@ func Shape(l workflows.Line) error {
 			return fmt.Errorf("%s: rounds is %d, not 0 or more", at, s.Rounds)
 		case s.Rounds > 0 && s.Agent == "":
 			return fmt.Errorf("%s: rounds send an agent back; a flow or a gate is not sent back", at)
+		case s.Back != "":
+			return fmt.Errorf("%s: back is for a review station", at)
 		}
 		seen[s.Name] = true
+		if s.Agent != "" {
+			agents[s.Name] = true
+		}
 	}
 	return nil
 }

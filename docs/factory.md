@@ -77,13 +77,13 @@ A line runs many long items unattended. Nothing on it may be redone or lost, and
 
 Each step is a milestone with its own ADR. Steps marked "kairo" wait for the user's work on kairo to settle.
 
-1. **Gates** (M13, ADR 0042): checks decide when work is done. They are placed on a flow's agents and on a plain turn now, and on stations once lines exist.
-2. **Lines and work items**:
+1. **Gates** (M13, ADR 0042, done): checks decide when work is done. They are placed on a flow's agents and on a plain turn now, and on stations once lines exist.
+2. **Lines and work items** (M14, ADR 0043, done):
    - Standard lines are declared in the project, and KairoCode puts lines together on the spot.
    - From the conversation, KairoCode sends items down them, each in its own worktree, running behind the conversation.
    - The conversation shows the items it started (status, station, cost), and what needs the person comes back into it.
    - A line made on the spot can be kept as a standard line.
-3. **People at stations**:
+3. **People at stations** (M15, ADR 0044, done):
    - Review stations: a person, a model, or both, by risk.
    - Paths that always need a person.
    - A line that keeps failing stops itself and tells the person.

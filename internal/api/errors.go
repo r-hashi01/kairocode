@@ -35,9 +35,10 @@ var (
 
 // ErrItemsCap, ErrNotAnItem, ErrItemsNoGit: work items (ADR 0043).
 var (
-	ErrItemsCap   = errors.New("too many items running")
-	ErrNotAnItem  = errors.New("no such item")
-	ErrItemsNoGit = errors.New("a line runs in a worktree: the conversation's folder is in no git repository with a commit")
+	ErrItemsCap    = errors.New("too many items running")
+	ErrLineStopped = errors.New("the line stopped itself")
+	ErrNotAnItem   = errors.New("no such item")
+	ErrItemsNoGit  = errors.New("a line runs in a worktree: the conversation's folder is in no git repository with a commit")
 )
 
 // ErrFolderGone: the session's folder was removed (ADR 0037).

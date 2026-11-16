@@ -75,7 +75,11 @@ type Agent interface {
 	Line(ctx context.Context, session, line, request string) (api.Item, error)
 	DropItem(ctx context.Context, session, item string, force bool) error
 	KeepLine(ctx context.Context, session, item, name string) (string, error)
-	ItemAnswer(ctx context.Context, key string, ok bool, option string) error
+	ItemAnswer(ctx context.Context, key string, ok bool, option, reason string) error
+	// Lines and RestartLine are /line's: the project's lines and how they
+	// stand, and starting one that stopped itself again (ADR 0044).
+	Lines(ctx context.Context, cwd string) ([]api.LineInfo, error)
+	RestartLine(ctx context.Context, cwd, line string) error
 }
 
 // Options are what the UI shows and does around the conversation.
@@ -1635,8 +1639,8 @@ func (m *model) commands() []acp.Command {
 		{Name: "resume", Description: "Take up another session of this folder"},
 		{Name: "new", Description: "Start another session (--worktree [name]: in a new git worktree, on kairo/<name>)"},
 		{Name: "sessions", Description: "The repository's sessions across its worktrees: take one up, remove a worktree"},
-		{Name: "line", Description: "Send a request down a standard line: /line <name> <request> (/line keep <item> <name>: keep the line an item ran)"},
-		{Name: "items", Description: "The work items sent down lines, and what they wait for (/items yes|no <n>, answer <n> <option>, drop <item>)"}}, m.cmds...)
+		{Name: "line", Description: "The project's lines (/line <name> <request>: send one down it; /line restart <name>; /line keep <item> <name>)"},
+		{Name: "items", Description: "The work items sent down lines, and what they wait for (/items yes <n>, no <n> [words], answer <n> <option>, drop <item>)"}}, m.cmds...)
 }
 
 // completions are the commands that begin with what is typed, while a

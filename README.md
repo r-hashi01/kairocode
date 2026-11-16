@@ -184,7 +184,17 @@ A line is a row of stations a request goes down, from the request to a change re
 - **Told back.** The conversation is told when an item ends or waits for you.
   - `/items` (or `kairocode items <session>`) lists the items: their line, station, state, branch and cost.
   - `/items` also lists what the items wait for. Answer by number with `/items yes 1` or `/items answer 2 <option>`, or use `kairocode approvals <session>`.
-  - At most 4 items run at once in a repository.
+- **Review stations** (ADR 0044). A station with `"review"` reviews the item's change so far (its diff, and what the stations before it left):
+  - `"person"`: the item waits for you, shown in `/items`. `/items yes <n>` takes the change; `/items no <n> <what to change>` sends it back.
+  - `"model"`: a reviewer agent (`"agent"`, default `plan`, with a `"prompt"`) passes it or sends it back.
+  - `"risk"`: the model, then you when the change touches `lines.people` or is larger than `lines.reviewLines` (400).
+
+  Sent back, the station named `"back"` runs again with the review's words, up to `"rounds"` times (1). Then the line goes on from there.
+- **Paths that always need a person.** `"lines": {"people": ["internal/auth/*"]}`: a change touching them gets your review before its line ends, whatever the line says. A project's setting adds to yours; it cannot take yours away.
+- **A line that keeps failing stops itself.** After `lines.stopAfter` (3) of its items in a row stop or fail, it takes no new item, and you are told. `/line restart <name>` starts it again.
+- **A queue.** At most `lines.wip` (4) items are in progress at once in a repository, and at most a line's `"wip"` of that line. More are queued, and start in their turn.
+  - `/line` (or `kairocode lines`) lists the lines: in progress, queued, stopped.
+  - `/items` lists the items, with each queued one's place.
 - **Cleaning up.** Merge an item's branch and it is cleaned up (its worktree removed, its session closed); `/items drop <item>` drops one. `/line keep <item> <name>` keeps a line put together on the spot as `.kairocode/lines/<name>.json`, for you to review and commit.
 
 ## Permissions and the sandbox
@@ -220,6 +230,8 @@ A project's settings (permissions, hooks, MCP servers) are not read until you sa
 | `models.<name>.context` | A model's context length (when summarizing starts) | Yours |
 | `models.<name>.price` | A model's price in US dollars per million tokens (`input`, `output`, `cache_read`, `cache_write`), for a model KairoCode does not know or to correct one | Yours |
 | `checks` | Commands that decide when work is done, the checks a plain turn must pass (`turn`) and how often they send it back (`rounds`, 3). See [Checks](#checks-who-decides-the-work-is-done) | Yours, the project's (a project's check is asked about first) |
+| `lines.people` | Paths a change cannot touch without your review, whatever a line says (`*` crosses `/`). See [Lines](#lines-and-work-items-work-behind-the-conversation) | Yours, the project's (both taken) |
+| `lines.reviewLines`, `lines.stopAfter`, `lines.wip` | When a review by risk calls you (lines changed, 400); how many items stopped in a row stop a line (3); how many items are in progress at once in a repository (4) | Yours, the project's (the smaller) |
 | `lines.onTheSpot` | Whether KairoCode may put a line together on the spot: `ask` (default; always asked) or `deny`. See [Lines](#lines-and-work-items-work-behind-the-conversation) | Yours, the project's (the stricter) |
 | `limits` | Limits that stop a turn before its next model call: `turn.steps` (50), `turn.time` (`"30m"`; waits for you not counted), and `tokens` or `cost` (US dollars) for `session`, `day` (from 00:00) and `week` (from Monday); `warn` (0.8) is when you are warned. See below | Yours, the project's (the smaller of each) |
 | `providers` | OpenAI-compatible APIs, local models among them (above) | Yours only |

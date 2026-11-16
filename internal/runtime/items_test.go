@@ -288,33 +288,96 @@ func TestLineOnTheSpot(t *testing.T) {
 	}
 }
 
-// At most api.MaxItemsRunning items run at once in a repository: another
-// is refused, naming those running.
-func TestItemCap(t *testing.T) {
+// Items past the limits on items in progress (lines.wip) are queued, not
+// refused: listed with their place, and started in order as items end
+// (ADR 0044). The same call again is the item it kept.
+func TestItemQueue(t *testing.T) {
 	t.Parallel()
 	sandboxtest.Require(t)
-	ws := itemRepo(t, "")
+	ws := itemRepo(t, `{"permission": {"write": "allow", "edit": "allow", "line": "allow"}, "lines": {"wip": 2}}`)
 	dir := t.TempDir()
 	release := filepath.Join(dir, "release")
+	prompts := filepath.Join(dir, "prompts")
 	r := open(t, filepath.Join(dir, "k.db"), &provider.Fake{HoldAt: -1, HoldFile: filepath.Join(dir, "holding"), HoldOn: `You are at the station "build"`,
-		ReleaseFile: release, Script: []provider.FakeReply{{Text: "ok"}}, Replies: map[string]provider.FakeReply{`You are at the station "build"`: {Text: "built"}}})
+		ReleaseFile: release, PromptLog: prompts, Script: []provider.FakeReply{{Text: "ok"}, {Text: "ok"}, {Text: "ok"}, {Text: "ok"}, {Text: "ok"}},
+		Replies: map[string]provider.FakeReply{`You are at the station "build"`: {Text: "built"}}})
 	defer os.WriteFile(release, nil, 0o600)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	s, _ := r.CreateSession(ctx, "conv", workflows.SessionInput{Dir: ws})
 	spec := tools.ItemSpec{Line: "quick", Request: "build"}
-	for i := range api.MaxItemsRunning {
-		if _, err := r.StartItem(ctx, s, "call"+string(rune('a'+i)), spec); err != nil {
+	var started []api.Item
+	for _, key := range []string{"a", "b", "c", "d"} {
+		it, err := r.StartItem(ctx, s, key, spec)
+		if err != nil {
 			t.Fatal(err)
 		}
+		started = append(started, it)
 	}
-	if _, err := r.StartItem(ctx, s, "call-more", spec); !errors.Is(err, ErrItemsCap) || !strings.Contains(err.Error(), "quick-1, quick-2, quick-3, quick-4") {
-		t.Fatalf("a fifth: %v", err)
+	if started[0].State == api.ItemQueued || started[1].State == api.ItemQueued ||
+		started[2].State != api.ItemQueued || started[2].Position != 0 || started[3].State != api.ItemQueued || started[3].Position != 1 {
+		t.Fatalf("started %+v", started)
 	}
-	// The same call again is the item it started, not a new one.
-	again, err := r.StartItem(ctx, s, "calla", spec)
-	if err != nil || again.Name != "quick-1" {
+	if started[2].Dir != "" {
+		t.Fatalf("a queued item has a worktree: %+v", started[2])
+	}
+	text, _ := itemEnv{r: r, conversation: s}.List(ctx)
+	if !strings.Contains(text, "quick-4  line quick  queued (1 before it)") {
+		t.Fatalf("items: %s", text)
+	}
+	// The same call again is the item it kept, queued.
+	if again, err := r.StartItem(ctx, s, "c", spec); err != nil || again.Name != "quick-3" || again.State != api.ItemQueued {
 		t.Fatalf("again: %+v %v", again, err)
+	}
+	// One in progress dropped, the first queued starts in its place: once
+	// both in progress have called the model (and are held there).
+	for {
+		b, _ := os.ReadFile(prompts)
+		if strings.Count(string(b), `You are at the station "build"`) == 2 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the two in progress did not call the model:\n%s", b)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err := r.DropItem(ctx, s, "quick-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := r.Items(ctx, s); items[2].State == api.ItemQueued || items[3].State != api.ItemQueued {
+		t.Fatalf("after a drop: %+v", items)
+	}
+	// The limit raised, the daemon's pass as it starts starts the next.
+	putFiles(t, ws, map[string]string{ConfigFile: `{"permission": {"write": "allow", "edit": "allow", "line": "allow"}, "lines": {"wip": 3}}`})
+	if err := r.FinishItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := r.Items(ctx, s); items[3].State == api.ItemQueued {
+		t.Fatalf("after the daemon's pass: %+v", items)
+	}
+	os.WriteFile(release, nil, 0o600)
+	for {
+		items, _ := r.Items(ctx, s)
+		done := 0
+		for _, it := range items {
+			if it.State == api.ItemDone {
+				done++
+			}
+		}
+		if done == 3 { // and the one dropped
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("items %+v", items)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	// Each item's agent ran once: the queued ones in their turn.
+	b, _ := os.ReadFile(prompts)
+	if n := strings.Count(string(b), `You are at the station "build"`); n != 4 {
+		t.Fatalf("the agents were called %d times, want 4 (the one dropped cut off)", n)
 	}
 }
 
@@ -388,6 +451,26 @@ func TestItemCleanedUp(t *testing.T) {
 	}
 	if !branchExists(ctx, ws, two.Branch) {
 		t.Fatal("the dropped item's branch, not merged, is gone")
+	}
+
+	// A drop a process stopped in the middle of (marked as being ended)
+	// is finished as the daemon starts: its place held meanwhile.
+	three, err := r.StartItem(ctx, s, "three", tools.ItemSpec{Line: "quick", Request: "three"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItem(t, ctx, r, s, api.ItemDone)
+	if err := r.Store.EndItem(ctx, three.ID, "ending:"+api.ItemDropped+"!"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.FinishItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := r.Store.Item(ctx, three.ID); row.Ended != api.ItemDropped {
+		t.Fatalf("the drop not finished: %q", row.Ended)
+	}
+	if _, err := os.Stat(three.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("its worktree: %v", err)
 	}
 }
 

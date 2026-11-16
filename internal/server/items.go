@@ -100,3 +100,35 @@ func (s *Server) keepLine(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": path})
 }
+
+// lines lists a project's lines and how they stand: ?dir=<folder>.
+func (s *Server) lines(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		fail(w, http.StatusBadRequest, errors.New("want ?dir=<folder>"))
+		return
+	}
+	l, err := s.rt.Lines(r.Context(), dir)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
+// restartLine starts a line that stopped itself again: {"dir", "line"}.
+func (s *Server) restartLine(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Dir  string `json:"dir"`
+		Line string `json:"line"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" || in.Line == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "line": "..."}`))
+		return
+	}
+	if err := s.rt.RestartLine(r.Context(), in.Dir, in.Line); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

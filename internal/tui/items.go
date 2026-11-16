@@ -45,7 +45,18 @@ func (m *model) itemsCommand(text string) (tea.Cmd, bool) {
 		}
 	}
 	if fields[0] == "/line" {
+		dir := m.o.Dir
 		switch {
+		case len(fields) == 1:
+			return done(func() (string, error) {
+				l, err := a.Lines(ctx, dir)
+				return linesText(l), err
+			}), true
+		case len(fields) == 3 && fields[1] == "restart":
+			name := fields[2]
+			return done(func() (string, error) {
+				return "the line " + name + " runs again", a.RestartLine(ctx, dir, name)
+			}), true
 		case len(fields) == 4 && fields[1] == "keep":
 			item, name := fields[2], fields[3]
 			return done(func() (string, error) {
@@ -60,7 +71,7 @@ func (m *model) itemsCommand(text string) (tea.Cmd, bool) {
 					strings.Join(it.Stations, " → "), it.Branch), err
 			}), true
 		}
-		m.print(bad.Render("  ⎿  /line <name> <request>, or /line keep <item> <name>"))
+		m.print(bad.Render("  ⎿  /line, /line <name> <request>, /line restart <name>, or /line keep <item> <name>"))
 		return nil, true
 	}
 	switch {
@@ -69,21 +80,26 @@ func (m *model) itemsCommand(text string) (tea.Cmd, bool) {
 			items, waiting, err := a.Items(ctx, s)
 			return itemsMsg{items: items, waiting: waiting, err: err}
 		}, true
-	case len(fields) == 3 && (fields[1] == "yes" || fields[1] == "no"), len(fields) >= 4 && fields[1] == "answer":
+	case len(fields) == 3 && fields[1] == "yes", len(fields) >= 3 && fields[1] == "no", len(fields) >= 4 && fields[1] == "answer":
 		n, err := strconv.Atoi(fields[2])
 		if err != nil || n < 1 || n > len(m.itemWaits) {
 			m.print(bad.Render("  ⎿  no such wait: /items lists them, numbered"))
 			return nil, true
 		}
-		p, ok, option := m.itemWaits[n-1], fields[1] == "yes", ""
-		if fields[1] == "answer" {
+		p, ok, option, reason := m.itemWaits[n-1], fields[1] == "yes", "", ""
+		switch {
+		case fields[1] == "answer":
 			option = strings.Join(fields[3:], " ")
-		} else if p.Kind == api.KindQuestion {
+		case fields[1] == "no":
+			// The words a review sends the work back with (ADR 0044).
+			reason = strings.Join(fields[3:], " ")
+		}
+		if fields[1] != "answer" && p.Kind == api.KindQuestion {
 			m.print(bad.Render("  ⎿  a question: /items answer " + fields[2] + " <" + strings.Join(p.Options, " | ") + ">"))
 			return nil, true
 		}
 		return done(func() (string, error) {
-			return "answered: item " + p.Item, a.ItemAnswer(ctx, p.Key, ok, option)
+			return "answered: item " + p.Item, a.ItemAnswer(ctx, p.Key, ok, option, reason)
 		}), true
 	case len(fields) >= 3 && fields[1] == "drop":
 		item, force := fields[2], len(fields) > 3 && fields[3] == "--force"
@@ -117,6 +133,9 @@ func (m *model) itemsShown(msg itemsMsg) tea.Cmd {
 			line = "(on the spot)"
 		}
 		fmt.Fprintf(&b, "  %s  %s  %s", it.Name, line, it.State)
+		if it.State == api.ItemQueued {
+			fmt.Fprintf(&b, " (%d before it)", it.Position)
+		}
 		if it.Station != "" {
 			fmt.Fprintf(&b, " at %s", it.Station)
 		}
@@ -134,8 +153,54 @@ func (m *model) itemsShown(msg itemsMsg) tea.Cmd {
 			fmt.Fprintf(&b, "  [%d] %s asks: %s  — /items answer %d <%s>\n", i+1, p.Item, p.Subject, i+1, strings.Join(p.Options, " | "))
 			continue
 		}
+		if p.Tool == "review" { // a person's review of a line's change (ADR 0044)
+			fmt.Fprintf(&b, "  [%d] %s waits for your review at %s: %s  — /items yes %d · /items no %d <what to change>\n", i+1, p.Item, p.Subject, p.Rule, i+1, i+1)
+			if p.Preview != "" {
+				b.WriteString(indentLines(clipLines(p.Preview, 40), "      ") + "\n")
+			}
+			continue
+		}
 		fmt.Fprintf(&b, "  [%d] %s waits: %s %s  — /items yes %d · /items no %d\n", i+1, p.Item, p.Tool, p.Subject, i+1, i+1)
 	}
 	m.block(strings.TrimRight(b.String(), "\n"))
 	return nil
+}
+
+// linesText says the project's lines and how they stand (/line).
+func linesText(l []api.LineInfo) string {
+	if len(l) == 0 {
+		return "no lines: declare them in .kairocode/lines/<name>.json"
+	}
+	var b strings.Builder
+	for k, x := range l {
+		if k > 0 {
+			b.WriteString("\n     ")
+		}
+		if x.Error != "" {
+			fmt.Fprintf(&b, "%s: cannot be read: %s", x.Name, shortError(x.Error))
+			continue
+		}
+		fmt.Fprintf(&b, "%s (%s): %d in progress, %d queued", x.Name, strings.Join(x.Stations, " → "), x.InProgress, x.Queued)
+		if x.Wip > 0 {
+			fmt.Fprintf(&b, ", wip %d", x.Wip)
+		}
+		if x.Stopped {
+			fmt.Fprintf(&b, " — STOPPED: %s (/line restart %s)", x.Why, x.Name)
+		}
+	}
+	return b.String()
+}
+
+// clipLines is s's first n lines, marked as cut.
+func clipLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n…(%d lines more)", len(lines)-n)
+}
+
+// indentLines puts prefix before each of s's lines.
+func indentLines(s, prefix string) string {
+	return prefix + strings.ReplaceAll(s, "\n", "\n"+prefix)
 }
