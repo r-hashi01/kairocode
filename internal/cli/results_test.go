@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -248,5 +249,91 @@ func TestRunInterruptedBeforeASession(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Main(ctx, []string{"run", "-json", "-dir", t.TempDir(), "-data", dataDir(t), "hi"}, &stdout, &stderr); code != 130 || stdout.Len() != 0 {
 		t.Fatalf("exit %d: %q %q", code, stdout.String(), stderr.String())
+	}
+}
+
+// streamLines reads stdout as JSON lines: each line's type, in order, and
+// the lines themselves.
+func streamLines(t *testing.T, stdout string) ([]string, []map[string]any) {
+	t.Helper()
+	var types []string
+	var lines []map[string]any
+	for _, l := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("not a JSON line: %q (%v)\nstdout:\n%s", l, err, stdout)
+		}
+		types = append(types, m["type"].(string))
+		lines = append(lines, m)
+	}
+	return types, lines
+}
+
+// -stream-json writes the turn's events as JSON lines as they come, and
+// how it ended the last (ADR 0048).
+func TestRunStreamJSON(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	ws := resultsWorkspace(t, "", provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "glob", Input: json.RawMessage(`{"pattern":"*"}`)}}}, {Text: "done looking"},
+	}})
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	if c := Main(ctx, []string{"run", "-stream-json", "-dir", ws, "-data", data, "look"}, &stdout, &stderr); c != 0 {
+		t.Fatalf("exit %d: %s", c, stderr.String())
+	}
+	types, lines := streamLines(t, stdout.String())
+	// The order that matters, other events (tokens) between.
+	want := []string{"session", "turn.start", "tool.start", "tool.end", "turn.end", "result"}
+	i := 0
+	for _, ty := range types {
+		if i < len(want) && ty == want[i] {
+			i++
+		}
+	}
+	if i != len(want) || types[0] != "session" || types[len(types)-1] != "result" {
+		t.Fatalf("lines %v", types)
+	}
+	last := lines[len(lines)-1]
+	if last["status"] != api.StatusDone || last["reply"] != "done looking" || last["session"] != lines[0]["session"] {
+		t.Fatalf("result %v", last)
+	}
+	if strings.Contains(stderr.String(), "· glob") {
+		t.Fatalf("the human display on stderr too:\n%s", stderr.String())
+	}
+}
+
+// -detach with -stream-json: what waits, then a result that says so; exit 3.
+func TestRunStreamJSONWaits(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a daemon process")
+	}
+	ws := resultsWorkspace(t, `{"permission": {"write": "ask"}}`, provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+		{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hi\n"}`)}}}, {Text: "written"},
+	}})
+	data := dataDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	if c := Main(ctx, []string{"run", "-stream-json", "-detach", "-dir", ws, "-data", data, "write"}, &stdout, &stderr); c != 3 {
+		t.Fatalf("exit %d: %s", c, stderr.String())
+	}
+	types, lines := streamLines(t, stdout.String())
+	if !slices.Contains(types, api.EventApprovalRequested) || types[len(types)-1] != "result" {
+		t.Fatalf("lines %v", types)
+	}
+	if last := lines[len(lines)-1]; last["status"] != api.StatusWaiting || last["waiting"] == nil {
+		t.Fatalf("result %v", last)
+	}
+}
+
+// -stream-json with -json is a wrong use.
+func TestRunStreamJSONWrongUse(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if c := Main(context.Background(), []string{"run", "-json", "-stream-json", "x"}, &stdout, &stderr); c != 2 || stdout.Len() != 0 {
+		t.Fatalf("exit %d: %q %q", c, stdout.String(), stderr.String())
 	}
 }
