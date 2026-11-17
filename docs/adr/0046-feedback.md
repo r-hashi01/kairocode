@@ -97,6 +97,7 @@ ADR 0045 keeps all of it with the item's row after the item's tree is gone. What
   - It writes the whole new version of each under `kairocode-draft/<path>`. The person reviews that diff. The line's commit (`lineCommitAction`, for an item of the line `improve`) puts the files in place, removes the folder, and commits (`promoteDraft`). The files reach the project only when the person merges the branch.
   - `AGENTS.md` and `CLAUDE.md` are written in place.
   - Found by hand: the first draft by a real model could change nothing but `AGENTS.md`.
+  - **Covered by this ADR.** Asked whether this staging needed an ADR of its own, the user answered (2026-11-16) that this ADR's acceptance covers it. A draft still changes only the factory's files (Decision 4), and nothing ADR 0005 protects changes until a person has taken it.
 - **A draft's lines are checked** (`checkDraft`): their shape and what they name.
   - Nothing may be under `kairocode-draft/` but a line, a flow or `kairocode.json`.
   - A drafted `kairocode.json` may differ from the file in place only in `checks` and `lines` (Decision 4). A draft that widens a permission, or changes the sandbox or the servers, does not hold. Agents count as known if the project has them; flows if the project or the draft has them; checks if `kairocode.json` or the draft's `kairocode.json` declares them.
