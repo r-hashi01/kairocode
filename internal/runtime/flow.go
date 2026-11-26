@@ -245,7 +245,8 @@ func (r *Runtime) flowStep(t *kairo.TaskContext, in workflows.FlowStep) (bool, e
 //
 // Told once, under a marker and the notice's signal id (tell). This
 // action is unprotected: a stop between telling and the marker tells
-// again, once, until kairo keeps the signal id (kairo#102).
+// again under the same id, which kairo takes as the notice told before
+// (kairo#102, fixed in kairo 0.5.1).
 func (r *Runtime) tellCutOff(t *kairo.TaskContext, kids []kairo.RunInfo) error {
 	var calls []string
 	for _, k := range kids {

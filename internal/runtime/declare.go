@@ -105,8 +105,9 @@ func (r *Runtime) declare() {
 	// off, and note a turn holding an MCP call to review (ADR 0003,
 	// addendum 2026-11-26): the note made again is the same note, and the
 	// notice is told once under a marker and its signal id, so it stays
-	// unprotected (until kairo#102, a stop between telling and the marker
-	// tells again, once). It signals the session from inside a step: in
+	// unprotected (a stop between telling and the marker tells again under
+	// the same id, which kairo takes as told before). It signals the
+	// session from inside a step: in
 	// suspend mode (not used: ADR 0012), kairo's SendSignal settles first,
 	// which would wait for this step itself.
 	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
