@@ -111,3 +111,21 @@ There is a second problem, in the other direction. An item's record is its sessi
 - Tests:
   - `TestSweepKeepsWhatIsReached`: a live session's conversation, its snapshots, and its undo after the sweep; a kept flow run's history, message and image; a marker. What nothing reaches stays within the grace and goes after it, and a dry run removes nothing.
   - `TestSweepSharedStores`, `TestPruneWaitsForSnapshots`, `TestUsageRetention`, `TestItemResultKept` (who sent back and with what words, the change's size, the item and its dropped branch gone after `retention.items`), `TestSweepRootsCoverTables`, `TestCrashDuringSweep`, `TestRotateLog`.
+
+## Addendum: a fork and a sweep do not overlap (2026-11-26)
+
+- **What was wrong.** A model check of the message sweep (`.claude/skills/verify-message-retention`, TLA+) found two orders that delete a forked session's history.
+  - `Fork` reads a turn's head H from the session it forks, then creates the new session with `History: H`. It does not write H again, so H keeps its old `at`.
+  - F1: kairo removes the source's tree after `Fork` reads it, and a sweep starts before the new session exists. Neither session is in the sweep's `K.List`, so H and the messages it links are deleted.
+  - F2: the source failed, so its row names no head. It is forked after the sweep's `K.List`, and kairo removes its tree before the sweep walks it. The walk finds nothing, so H is deleted under the new session.
+  - Both need a source finished longer ago than `KeepFinished` (24 hours by default). F1 has a window of milliseconds; F2's lasts the whole walk.
+- **Decision.** A read-write lock, `Runtime.forkMu`.
+  - `Fork` holds the read side from its first read of the source until the new session holds what it read (`CreateSession`, and with files, the event that restores them).
+  - The sweep holds the write side from before `K.List` to its end.
+  - A fork therefore waits for a sweep under way, and a sweep waits for a fork under way. Once the fork is done, the new session's input names H, and the sweep marks it.
+  - One daemon owns a data directory (ADR 0008), so a lock in the process covers every fork and sweep.
+- **Why not write H again.** A `Store.Put` of H would refresh only H, not the messages it links, which the mark would then not reach.
+- **Cost.** A fork during a sweep waits for it. The sweep runs at most once a day, or with `kairocode gc`.
+- **Tests.**
+  - `TestForkKeepsTheSweepOut` (a fork with files) checks that `Fork` holds the lock both at its read and once the new session holds what it read, and that the sweep holds it. It fails with the lock taken out of either side, or released before `CreateSession` (checked).
+  - The model: `ForkLock = TRUE` with both orders allowed passes. `-set ForkLock=FALSE` fails with F1 or F2.

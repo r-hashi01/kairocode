@@ -20,7 +20,12 @@ var (
 // changed (ADR 0021). With files, the new session's first turn puts the
 // working files back as they were after turn n. It returns the session
 // and the turn it was forked from.
+//
+// No sweep runs from the first read of from until the new session holds
+// what it read (forkMu).
 func (r *Runtime) Fork(ctx context.Context, id, from string, n int, files bool) (string, int, error) {
+	r.forkMu.RLock()
+	defer r.forkMu.RUnlock()
 	info, err := r.K.Get(ctx, from)
 	if err != nil {
 		return "", 0, err
@@ -84,6 +89,9 @@ func (r *Runtime) Fork(ctx context.Context, id, from string, n int, files bool) 
 			return "", 0, ErrNoSnapshot
 		}
 	}
+	if r.cfg.forkStep != nil {
+		r.cfg.forkStep("read")
+	}
 	engine := tin.Engine
 	if engine == "" {
 		engine = r.cfg.Engine // the daemon's, which the turn ran with
@@ -98,6 +106,9 @@ func (r *Runtime) Fork(ctx context.Context, id, from string, n int, files bool) 
 			Restore: &workflows.UndoInput{Of: tin.N, Tree: tree}}); err != nil {
 			return "", 0, err
 		}
+	}
+	if r.cfg.forkStep != nil {
+		r.cfg.forkStep("made")
 	}
 	return s, tin.N, nil
 }

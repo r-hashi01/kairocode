@@ -173,3 +173,58 @@ func TestForkFilesFromAnUndo(t *testing.T) {
 		t.Fatalf("forked from the undo, x.txt %q", read())
 	}
 }
+
+// No sweep runs while a fork holds a head (and with files, a snapshot
+// tree) it read from another session and has not yet given to the new one,
+// and no fork reads while a sweep runs (ADR 0045, addendum 2026-11-26): a
+// sweep could otherwise see neither session hold them, when kairo removed
+// the source's tree meanwhile or the source failed, and remove the fork's
+// history. verify-message-retention checks the orders; this checks that
+// Fork and the sweep hold forkMu where the model says they do.
+func TestForkKeepsTheSweepOut(t *testing.T) {
+	t.Parallel()
+	var r *Runtime
+	var steps []string
+	held := 0
+	ws := repo(t)
+	var err error
+	r, err = Open(context.Background(), Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "fork",
+		Provider: &provider.Fake{HoldAt: -1, Script: []provider.FakeReply{
+			{Tools: []provider.FakeTool{{Name: "write", Input: json.RawMessage(`{"path":"notes.txt","content":"hi\n"}`)}}},
+			{Text: "wrote it"},
+		}},
+		forkStep: func(at string) {
+			steps = append(steps, at)
+			if r.forkMu.TryLock() {
+				r.forkMu.Unlock()
+				t.Errorf("a sweep could start while the fork held what it read (%s)", at)
+			}
+		},
+		sweepHeld: func() {
+			held++
+			if r.forkMu.TryRLock() {
+				r.forkMu.RUnlock()
+				t.Error("a fork could read while the sweep ran")
+			}
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	ctx := context.Background()
+	os.WriteFile(filepath.Join(ws, "kairocode.json"), []byte(`{"permission": {"write": "allow"}}`), 0o644)
+	a, _ := r.CreateSession(ctx, "a", workflows.SessionInput{Dir: ws})
+	turn(t, r, a, "write a note")
+	if _, _, err := r.Fork(ctx, "b", a, -1, true); err != nil { // with files: its restore is signalled under the lock
+		t.Fatal(err)
+	}
+	if got := strings.Join(steps, " "); got != "read made" {
+		t.Fatalf("the fork's steps: %q", got)
+	}
+	if _, err := r.Sweep(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if held != 1 {
+		t.Fatalf("the sweep held forkMu %d times, want 1", held)
+	}
+}

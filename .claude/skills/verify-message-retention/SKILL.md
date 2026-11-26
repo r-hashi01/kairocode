@@ -24,8 +24,7 @@ The invariants, at the end of `model/MessageRetention.tla`:
 .claude/skills/verify-message-retention/scripts/stale.sh            # has the covered code changed since the sync commit?
 .claude/skills/verify-message-retention/scripts/check.sh            # the check: about 50 s and 5.6 million states on an M-series Mac
 .claude/skills/verify-message-retention/scripts/check.sh -set MaxTurns=1   # a quick look only (about 1 s; one turn, so no history chain)
-.claude/skills/verify-message-retention/scripts/check.sh -set RemoveDuringFork=TRUE   # finding F1: exits 12
-.claude/skills/verify-message-retention/scripts/check.sh -set ForkFailed=TRUE         # finding F2: exits 12
+.claude/skills/verify-message-retention/scripts/check.sh -set ForkLock=FALSE   # without forkMu: findings F1 and F2, exits 12
 ```
 
 - `check.sh` takes TLC v1.7.4 (`tla2tools.jar`) from `${XDG_CACHE_HOME:-~/.cache}/kairo-tla/v1.7.4/`, the copy kairo's own TLA+ skill uses; it downloads it once if it is missing and refuses it unless its SHA-256 matches. Java 11 or later runs it: `JAVA`, Homebrew's `openjdk@21` (`brew install openjdk@21`), or `java` on `PATH`. With none, it runs the pinned `eclipse-temurin` JRE image through Docker.
@@ -72,9 +71,9 @@ By hand: each `State n: <Action line ...>` is one step; name it through the cove
 | `Close` | `Runtime.CloseSession`: `EventClose`, and `runSession` returns `SessionOutput{Head: head}` |
 | `Fail` | `runSession` returning an error that is no turn's outcome (`ActTurnSettled` or `ActHistoryCancelled` failing): kairo records the run failed, with no output |
 | `Remove` | kairo's tick: `SQLStore.RemoveFinished` deletes a finished tree `KeepFinished` after it finished, in one transaction |
-| `ForkRead` | `Runtime.Fork` (`fork.go`): `K.Get(from)`, `K.Children(from)`, the completed turns' `TurnOutput.Head` |
-| `ForkCreate` | `Runtime.Fork`: `CreateSession(id, SessionInput{History: tout.Head})` |
-| `List` | `Runtime.sweep`'s `grace`; `sweepRoots`: one `K.List(ctx, kairo.Filter{})`, `take(info.Input)` and `take(info.Output)` of each root |
+| `ForkRead` | `Runtime.Fork` (`fork.go`): `r.forkMu.RLock()`, then `K.Get(from)`, `K.Children(from)`, the completed turns' `TurnOutput.Head` |
+| `ForkCreate` | `Runtime.Fork`: `CreateSession(id, SessionInput{History: tout.Head})`, then the read lock is released (`defer`) |
+| `List` | `Runtime.sweep`: `sweepMu`, then `r.forkMu.Lock()` (held to the sweep's end), `grace`; `sweepRoots`: one `K.List(ctx, kairo.Filter{})`, `take(info.Input)` and `take(info.Output)` of each root |
 | `Walk` | `sweepRoots`' `walk`: `K.Children` and the runs under them, with their `Input` and `Output` |
 | `MarkStep` | `sweepMessages`' marking loop (`Store.Get`; `ErrNotFound` is passed over) |
 | `Unswept` | `Store.Unswept`: `SELECT hash FROM kc_message WHERE at < ? AND kind IN (ContentKinds)` |
@@ -83,9 +82,9 @@ By hand: each `State n: <Action line ...>` is one step; name it through the cove
 | `Tick` | time passing (`time.Now`) |
 | `Crash` | the daemon stopping: a sweep cut off begins again; an unrecorded `history.extend` runs again |
 
-Files `stale.sh` watches: `internal/runtime/sweep.go`, `internal/store/sweep.go`, `internal/store/store.go`, `internal/runtime/fork.go`, `internal/runtime/send.go`, `internal/runtime/declare.go`, `internal/workflows/session.go`, `internal/workflows/turn.go`, and the kairo line of `go.mod` (the model relies on how kairo's `List`, `Children` and `RemoveFinished` behave in v0.5.0).
+Files `stale.sh` watches (`forkMu` is declared in `internal/runtime/runtime.go`, which is not watched; its uses are): `internal/runtime/sweep.go`, `internal/store/sweep.go`, `internal/store/store.go`, `internal/runtime/fork.go`, `internal/runtime/send.go`, `internal/runtime/declare.go`, `internal/workflows/session.go`, `internal/workflows/turn.go`, and the kairo line of `go.mod` (the model relies on how kairo's `List`, `Children` and `RemoveFinished` behave, as of v0.5.1).
 
-sync commit: `b3ba509eed7961c8892ff6a703f63c4e3864e583` (2026-11-26, branch `kairo-0.5`, kairo v0.5.0)
+sync commit: `347293de613fc5671ae1fd934bef21af90258f30` (2026-11-26, `forkMu` merged with main on kairo v0.5.1, whose changes (a signal's logical id kept with its wait) touch nothing the model relies on)
 
 ## Scope
 
@@ -103,11 +102,11 @@ sync commit: `b3ba509eed7961c8892ff6a703f63c4e3864e583` (2026-11-26, branch `kai
 
 **Not covered:** pruning snapshot stores (`sweepSnapshots`, `pruneStore`, `lockStore`, `git gc`); images; the rows of `RootTexts` (`kc_flow_run`, `kc_item`, `kc_switch`), which no modelled writer writes; compact, undo and redo turns (they extend their `History` as `Extend` does, but are not modelled); work items' sessions; subagents, flows and MCP call roots; when the sweep runs (`sweepDue`: the model sweeps at any moment, which only adds orders); dry runs; marker kinds; the sweep's other parts; PostgreSQL.
 
-## Open findings
+## Findings, fixed
 
-The default `.cfg` sets `RemoveDuringFork` and `ForkFailed` to `FALSE`, which leaves out the two orders below. Both are orders the code allows, so the default run checks that nothing else loses a message; it does not say these two are fixed. When a fix lands, model it, set both constants to `TRUE` in the `.cfg`, and once that passes, remove the two switches.
+`ForkLock` models `forkMu` (`internal/runtime/runtime.go`): `Fork` holds it to read from the first read of its source to `CreateSession`, and the sweep holds it to write from before `K.List` to its end. The default `.cfg` sets it `TRUE`, and the model lets kairo remove a fork's source at any moment and lets `Fork` start from a failed session. `check.sh -set ForkLock=FALSE` shows the two orders the lock prevents (`NothingReachedIsLost`, exit 12). The Go test `TestForkKeepsTheSweepOut` (`internal/runtime/fork_test.go`) checks that the code holds the lock where the model says: `Fork` from its read to the new session (with files, its restore signalled too), and the sweep from before `K.List`.
 
-**F1. kairo removes a fork's source while `Fork` runs** (`check.sh -set RemoveDuringFork=TRUE`, a 15-state trace):
+**F1. kairo removes a fork's source while `Fork` runs** (a 15-state trace without the lock):
 
 1. Session A's turns ran more than `retention.grace` ago, and A closed (or failed) more than `KeepFinished` ago.
 2. `Fork` reads A (`K.Get`, `K.Children`) and takes a turn's `TurnOutput.Head`, H.
@@ -116,9 +115,7 @@ The default `.cfg` sets `RemoveDuringFork` and `ForkFailed` to `FALSE`, which le
 5. `Store.Unswept` lists H and the message it links, both older than the grace, and `Store.SweepMessage` deletes them.
 6. `Fork` calls `CreateSession(B, SessionInput{History: H})`. B's conversation is gone before its first turn.
 
-Steps 3 to 5 fall between two calls in `Fork` that are milliseconds apart, so this is unlikely, but nothing in the code prevents it.
-
-**F2. A failed session forked while a sweep walks** (`check.sh -set ForkFailed=TRUE`, a 17-state trace):
+**F2. A failed session forked while a sweep walks** (a 17-state trace without the lock):
 
 1. Session A's turns ran more than `retention.grace` ago, and A failed more than `KeepFinished` ago. kairo keeps no `Output` for a failed run, so A's row names no head.
 2. A sweep's `K.List` returns A.
@@ -126,14 +123,12 @@ Steps 3 to 5 fall between two calls in `Fork` that are milliseconds apart, so th
 4. kairo's tick removes A's tree.
 5. The sweep's `walk(A)`: `K.Children(A)` returns nothing. Nothing marks H, and `Store.SweepMessage` deletes it and the message it links.
 
-The window here is the whole walk of the records, not milliseconds. For a closed session the same order is safe: `K.List` gives A's `SessionOutput.Head`, and every turn's head lies on the chain back from it through `Link.Prev`, so the mark reaches whichever head a fork takes.
-
-**What a fix could be (not implemented):** have `Fork` and the sweep exclude each other, with the sweep holding a lock from `K.List` to its last `SweepMessage` and `Fork` holding it from `K.Get` to `CreateSession`. Or have `Fork` write H again (a `Store.Put` refreshes `at`) and have the mark also start from every message written within the grace, as `git gc` keeps what recent objects reach. Refreshing H alone is not enough, because the mark would still not reach the messages H links.
+With the lock, step 3 of F2 waits for the sweep's end, and step 4 of F1 for `CreateSession`: B is then in the list, its `Input` naming H.
 
 ## Record (2026-11-26)
 
 - At the sync commit, the default `.cfg` passed: 5,564,006 distinct states (21,328,778 generated) in 48 s on 14 cores. With `-coverage`, every action ran, and the delete branch of `SweepMessage` was taken 28,775 times, so the passing model does delete messages.
-- `-set RemoveDuringFork=TRUE` and `-set ForkFailed=TRUE` each fail `NothingReachedIsLost` within 2 s (F1 and F2 above).
+- Before `forkMu`, F1 and F2 (above) each failed `NothingReachedIsLost` within 2 s. With it (`ForkLock = TRUE`, and both orders allowed), see the record of the fix below; `-set ForkLock=FALSE` fails again within 2 s.
 - **A break in the code, caught by following this skill.** In `Store.SweepMessage`, `DELETE FROM kc_message WHERE hash = ? AND at < ?` became `WHERE hash = ?`. `stale.sh` printed that hunk. Written into `SweepMessage` (the `at[h] < sw.grace` test dropped), `check.sh` failed `NothingReachedIsLost` in 1 s with a 14-state trace:
   1. A turn's `history.extend` puts link L, and the daemon stops before L is recorded.
   2. Days pass. On restart, a sweep lists L as unmarked and older than the grace.
@@ -146,3 +141,9 @@ The window here is the whole walk of the records, not milliseconds. For a closed
   - `sweepRoots` does not take a root's `Output`. This is F2's order with a closed session.
   - `Store.Put` does not refresh `at` (`ON CONFLICT DO NOTHING`). A link put again after a crash stays old and is deleted.
   - The delete drops its `at` test, as in the code break above.
+
+## Record of the fix (2026-11-26, `forkMu`)
+
+- With `ForkLock = TRUE`, the default `.cfg` passed. This time kairo may remove a fork's source at any moment, and `Fork` may start from a failed session. TLC found 5,498,512 distinct states (21,053,894 generated) in 50 s on 14 cores.
+- `-set ForkLock=FALSE` fails `NothingReachedIsLost` within 2 s, as F1 and F2 did.
+- `TestForkKeepsTheSweepOut` fails with the lock taken out of either side, or released before `CreateSession` (checked).
