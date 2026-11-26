@@ -29,7 +29,7 @@ KairoCode runs each session as a workflow on [kairo](https://github.com/r-hashi0
 | Homebrew (macOS, Linux) | `brew install r-hashi01/tap/kairocode` |
 | Go | `go install github.com/r-hashi01/kairocode/cmd/kairocode@latest` (does not create the `kairo` link) |
 | Binaries | Download the tar.gz for your OS and CPU from [Releases](https://github.com/r-hashi01/kairocode/releases) and put `kairocode` and `kairo` on your `PATH` |
-| Source | `git clone https://github.com/r-hashi01/kairocode && cd kairocode && make build` (Go 1.27.2 or later; builds `bin/kairocode` and `bin/kairo`) |
+| Source | `git clone https://github.com/r-hashi01/kairocode && cd kairocode && make build` (Go 1.27.4 or later; builds `bin/kairocode` and `bin/kairo`) |
 
 `kairo` is the same as `kairocode chat`: it opens the terminal UI. `kairocode version` prints the version.
 

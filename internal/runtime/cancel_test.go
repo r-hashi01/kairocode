@@ -417,18 +417,20 @@ func endStoppedTurn(r **Runtime, fail bool) func(*kairo.Context, workflows.TurnI
 	}
 }
 
-// A turn stopped just as it ends, with a value or a failure (kairo#3), is
-// taken as its run was recorded, cancelled, live and read back
-// alike: the session read back
+// A turn stopped just as it ends, with a value or a failure, is taken as
+// its run was recorded, live and read back alike: the session read back
 // gives the next turn the same input, so it is not run again under another
-// id. Version 6 took the value live and the cancellation read back.
+// id. Version 8 reads back how the turn was recorded (kairo#3); version 9
+// takes its result, which kairo 0.5.0 makes the record's (kairo's ADR
+// 0061); version 6 took its result too, which before kairo 0.5.0 was the
+// value live and the cancellation read back.
 func TestTurnStoppedAsItEnds(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		version string
 		fail    bool
 		turns   int
-	}{{"", false, 3}, {"", true, 3}, {workflows.SessionVersion6, false, 4}} {
+	}{{"", false, 3}, {"", true, 3}, {workflows.SessionVersion8, false, 3}, {workflows.SessionVersion8, true, 3}, {workflows.SessionVersion6, false, 3}} {
 		t.Run(fmt.Sprintf("version %s fail %v", cmp.Or(c.version, workflows.SessionVersion), c.fail), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()

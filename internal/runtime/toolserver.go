@@ -362,7 +362,11 @@ func (s *mcpServer) claim(ctx context.Context, t *mcpTurn, tool, key string, arg
 	if len(t.hooks) > 0 {
 		in.Session = t.session
 	}
-	// kairo#4: the run is a root of its own, not a child of the turn.
+	// The run is a root of its own, not a child of the turn. kairo 0.5.0
+	// could attach it to the turn's tree (kairo.Parent, kairo#4), but then
+	// the turn's end would cancel a call of it cut off and waiting to be
+	// reviewed (kairo's ADR 0062), which as a root is still asked about
+	// (ADR 0047, implementation).
 	if _, err := s.rt.K.Submit(ctx, workflows.MCPCall, in, kairo.WithID(id)); err != nil {
 		return "", false, err
 	}

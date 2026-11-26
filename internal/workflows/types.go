@@ -15,15 +15,20 @@ import (
 // 0060): change a workflow's calls and its version goes up.
 const (
 	Session        = "session"
-	SessionVersion = "8"
+	SessionVersion = "9"
 	Turn           = "turn"
 	TurnVersion    = "7"
+	// SessionVersion8 is the version before kairo recorded a turn's first
+	// outcome as its only one (kairo#3, fixed in kairo 0.5.0). Its runs
+	// finish with RunSessionV8, which reads back how each turn was
+	// recorded.
+	SessionVersion8 = "8"
 	// TurnVersion6 is the version before a line's reviews (ADR 0044). Its
 	// runs finish with RunTurnV6.
 	TurnVersion6 = "6"
 	// TurnVersion5 and SessionVersion7 are the versions before an item's
-	// line (ADR 0043). Their runs finish with the same functions: none of
-	// them has a line. The versions keep a process without lines from
+	// line (ADR 0043). Their runs finish with the turn's function and
+	// RunSessionV8: none of them has a line. The versions keep a process without lines from
 	// driving an item, as a plain turn.
 	TurnVersion5    = "5"
 	SessionVersion7 = "7"

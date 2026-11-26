@@ -162,7 +162,7 @@ func (r *Runtime) tellLineStopped(ctx context.Context, row store.ItemRow) error 
 	}
 	text := fmt.Sprintf("[KairoCode] The line %s %s. It takes no new item until the person starts it again: /line restart %s, or kairocode line -restart %s.",
 		row.Line, why, row.Line, row.Line)
-	if _, err := r.Send(ctx, row.Of, text); err != nil {
+	if _, err := r.tell(ctx, row.Of, kindLineTold+"\x00"+string(key), text); err != nil {
 		return fmt.Errorf("telling %s that the line %s stopped: %w", row.Of, row.Line, err)
 	}
 	_, err = r.Store.Put(ctx, kindLineTold, key)

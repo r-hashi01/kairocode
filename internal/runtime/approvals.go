@@ -37,9 +37,10 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 		}
 		calls = append(calls, p...)
 	}
-	// What a flow that went another way left running, as it holds a call
-	// to review (ADR 0003, addendum 2026-11-04): nothing above it waits for
-	// it, so it is not reached from the turns. Forgotten once finished.
+	// What a flow that went another way left, as it holds a call to review
+	// (ADR 0003, addenda 2026-11-04 and 2026-11-26: a CLI engine's MCP
+	// call since kairo 0.5.0): nothing above it waits for it, so it is not
+	// reached from the turns. Forgotten once finished.
 	kept, err := r.Store.Kept(ctx, session)
 	if err != nil {
 		return nil, err
@@ -51,8 +52,13 @@ func (r *Runtime) Pending(ctx context.Context, session string) ([]Pending, error
 			p, err = r.pendingIn(ctx, info, k.Top)
 		}
 		// Gone, or finished with nothing left to answer (a finished turn may
-		// still hold an MCP call to review): forgotten.
-		if errors.Is(err, kairo.ErrUnknownRun) || err == nil && info.Finished() && len(p) == 0 {
+		// still hold an MCP call to review, or one still running that may
+		// yet stop for review): forgotten.
+		open := false
+		if err == nil && info.Finished() && len(p) == 0 {
+			open, err = r.openMCP(ctx, k.Run)
+		}
+		if errors.Is(err, kairo.ErrUnknownRun) || err == nil && info.Finished() && len(p) == 0 && !open {
 			if err := r.Store.Unkeep(ctx, k.Run); err != nil {
 				return nil, err
 			}
@@ -282,9 +288,9 @@ func (r *Runtime) Answer(ctx context.Context, key, option string) error {
 	}
 	run, id, _ := strings.Cut(key, "#")
 	r.ev.answered(session, key, true)
-	if err := r.K.Signal(ctx, run, workflows.SignalAnswerPrefix+id, workflows.FlowAnswer{Option: option}); err != nil {
+	if _, err := r.K.SendSignal(ctx, run, workflows.SignalAnswerPrefix+id, workflows.FlowAnswer{Option: option}, kairo.OnlyIfWaiting()); err != nil {
 		r.ev.forget(session, key)
-		return err
+		return answered(err)
 	}
 	return nil
 }
@@ -312,10 +318,11 @@ func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason strin
 	}
 	// kairo's Signal and Resolve end the wait (or the review) within the
 	// call, so under approveMu a request that waits has not been answered.
-	// This holds within one process: the one daemon of a data directory
-	// (ADR 0008). Processes sharing a database would need more (kairo#7).
-	// Pending lists the waits of the session's turns and of the runs
-	// below them (flows, their agents).
+	// Answered meanwhile by another process sharing the database, the
+	// answer is refused (OnlyIfWaiting, kairo#7) but for a request whose
+	// try still runs: its wait is made once the try ends, and it takes an
+	// answer sent ahead. Pending lists the waits of the session's turns and
+	// of the runs below them (flows, their agents).
 	i := slices.IndexFunc(pending, func(p Pending) bool { return p.Key == key })
 	if i < 0 {
 		return ErrAnswered
@@ -325,15 +332,16 @@ func (r *Runtime) Approve(ctx context.Context, key string, ok bool, reason strin
 	}
 	// Kept before it is given: the request may be seen resolved at once.
 	r.ev.answered(session, key, ok)
-	if err := r.answer(ctx, key, ok, reason); err != nil {
+	if err := r.answer(ctx, key, ok, reason, !pending[i].Trying); err != nil {
 		r.ev.forget(session, key)
 		return err
 	}
 	return nil
 }
 
-// answer gives the answer to kairo.
-func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string) error {
+// answer gives the answer to kairo; waiting, only to a wait there is now
+// (ErrAnswered if none is).
+func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string, waiting bool) error {
 	if run, isReview := strings.CutPrefix(key, reviewPrefix); isReview {
 		text := "The run of this call was cut off. The user says it did not take effect; it was not run again."
 		if ok {
@@ -369,5 +377,19 @@ func (r *Runtime) answer(ctx context.Context, key string, ok bool, reason string
 		return fmt.Errorf("not an approval key: %q", key)
 	}
 	// The run that waits: the turn, or a flow or an agent below it.
-	return r.K.Signal(ctx, run, workflows.SignalApprovePrefix+call, workflows.Approval{OK: ok, Reason: reason})
+	var opts []kairo.SignalOption
+	if waiting {
+		opts = append(opts, kairo.OnlyIfWaiting())
+	}
+	_, err := r.K.SendSignal(ctx, run, workflows.SignalApprovePrefix+call, workflows.Approval{OK: ok, Reason: reason}, opts...)
+	return answered(err)
+}
+
+// answered is err, as ErrAnswered when the answer was refused for want of
+// a wait: another answered first.
+func answered(err error) error {
+	if errors.Is(err, kairo.ErrNotWaiting) {
+		return ErrAnswered
+	}
+	return err
 }

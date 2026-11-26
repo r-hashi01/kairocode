@@ -276,6 +276,14 @@ var fullAccessUsers = []string{"internal/sandbox/", "internal/tools/bash.go", "i
 	"internal/runtime/external.go",     // the user's MCP servers and custom tools, or a project's they let out (ADR 0022)
 	"internal/runtime/jobs.go"}         // a command in the background the user let out (escalate), as bash (ADR 0028)
 
+// otherModule says whether dir holds a module of its own (a go.mod), as a
+// git worktree of this repository under it does (.claude/worktrees): not
+// this module's code, as the go tool takes it.
+func otherModule(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "go.mod"))
+	return err == nil
+}
+
 // Commands reports, in the non-test Go files under root, every way to start
 // a command outside the sandbox: exec.Command, exec.CommandContext or an
 // exec.Cmd literal outside commandStarters, os.StartProcess anywhere, and
@@ -287,7 +295,7 @@ func Commands(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && (d.Name() == "testdata" || d.Name() == ".git") {
+		if d.IsDir() && (d.Name() == "testdata" || d.Name() == ".git" || p != root && otherModule(p)) {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {

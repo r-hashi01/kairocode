@@ -71,16 +71,25 @@ func RunSessionV6(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 	return runSession(ctx, in, true, true, false)
 }
 
-// RunSession is a session of version 7: RunSessionV6, and a turn is taken
-// as its run was recorded, cancelled or not, whatever its result said when
-// it came (kairo#3: a turn stopped just as it ended returns its value
-// live and is read back cancelled).
-func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+// RunSessionV8 is a session of version 8 (and 7, which had no work items):
+// RunSessionV6, and a turn is taken as its run was recorded, cancelled or
+// not, whatever its result said when it came (kairo#3: before kairo 0.5.0,
+// a turn stopped just as it ended returned its value live and was read back
+// cancelled).
+func RunSessionV8(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
 	return runSession(ctx, in, true, true, true)
 }
 
+// RunSession is a session of version 9: RunSessionV8 without reading back
+// how each turn was recorded. kairo 0.5.0 gives a turn's first recorded
+// outcome, live and read back alike (kairo's ADR 0061), so the result is
+// the record.
+func RunSession(ctx *kairo.Context, in SessionInput) (SessionOutput, error) {
+	return runSession(ctx, in, true, true, false)
+}
+
 // runSession is RunSessionV4; with keepStopped RunSessionV5; with switches
-// too RunSessionV6; with settle too RunSession.
+// too RunSessionV6 and RunSession; with settle too RunSessionV8.
 func runSession(ctx *kairo.Context, in SessionInput, keepStopped, switches, settle bool) (SessionOutput, error) {
 	head := in.History // a forked session's (ADR 0021); "" otherwise
 	engine, model, effort, mode, epoch := in.Engine, in.Model, in.Effort, "", 0

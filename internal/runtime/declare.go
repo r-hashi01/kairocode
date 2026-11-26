@@ -38,6 +38,9 @@ const modelAttempts = 5
 
 func (r *Runtime) declare() {
 	switch v := r.cfg.onlyVersion; v {
+	case workflows.SessionVersion8:
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV8, kairo.WorkflowVersion(v))
+		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
 	case workflows.SessionVersion6:
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV6, kairo.WorkflowVersion(v))
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
@@ -54,11 +57,14 @@ func (r *Runtime) declare() {
 		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion))
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion))
 		// Turn version 6 finishes without reviews (ADR 0044).
+		// Version 8 finishes as it started: it reads back how each turn
+		// was recorded (kairo#3).
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV8, kairo.WorkflowVersion(workflows.SessionVersion8), kairo.Draining())
 		kairo.Workflow(r.K, workflows.Turn, workflows.RunTurnV6, kairo.WorkflowVersion(workflows.TurnVersion6), kairo.Draining())
-		// Turn version 5 and session version 7 finish with the same
-		// functions: no line (ADR 0043).
+		// Turn version 5 and session version 7 finish with the turn's
+		// function and RunSessionV8: no line (ADR 0043).
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion5), kairo.Draining())
-		kairo.Workflow(r.K, workflows.Session, workflows.RunSession, kairo.WorkflowVersion(workflows.SessionVersion7), kairo.Draining())
+		kairo.Workflow(r.K, workflows.Session, workflows.RunSessionV8, kairo.WorkflowVersion(workflows.SessionVersion7), kairo.Draining())
 		// Turn version 4 finishes with the same function: no gate (ADR
 		// 0042).
 		kairo.Workflow(r.K, workflows.Turn, r.turnWorkflow(), kairo.WorkflowVersion(workflows.TurnVersion4), kairo.Draining())
@@ -95,8 +101,14 @@ func (r *Runtime) declare() {
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV2, kairo.WorkflowVersion(workflows.FlowVersion2), kairo.Draining())
 		kairo.Workflow(r.K, workflows.Flow, workflows.RunFlowV1, kairo.WorkflowVersion(workflows.FlowVersion1), kairo.Draining())
 	}
-	// flow.step may cancel what a run before left (ADR 0003, addendum
-	// 2026-11-04): a cancel done again does nothing, so it stays unprotected.
+	// flow.step may tell the session of the calls a run before left cut
+	// off, and note a turn holding an MCP call to review (ADR 0003,
+	// addendum 2026-11-26): the note made again is the same note, and the
+	// notice is told once under a marker and its signal id, so it stays
+	// unprotected (until kairo#102, a stop between telling and the marker
+	// tells again, once). It signals the session from inside a step: in
+	// suspend mode (not used: ADR 0012), kairo's SendSignal settles first,
+	// which would wait for this step itself.
 	kairo.Action(r.K, workflows.ActFlowStep, kairo.Unprotected, r.flowStep)
 	kairo.Action(r.K, workflows.ActFlowLoad, kairo.Unprotected, r.flowLoad)
 	kairo.Action(r.K, workflows.ActFlowWould, kairo.Unprotected, r.flowWould)

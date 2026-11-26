@@ -699,9 +699,19 @@ func TestRunInAWorktree(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ws, "notes.txt")); err == nil {
 		t.Fatal("written in the folder, not the worktree")
 	}
+	// The session closed by run ends once the daemon has driven it to its
+	// close (kairo 0.5.0 does not within the close's send): listed until
+	// then as idle.
 	var out bytes.Buffer
-	if code := Main(ctx, []string{"sessions", "-dir", ws, "-data", data, "-repo"}, &out, &out); code != 0 {
-		t.Fatalf("sessions -repo: %s", out.String())
+	for {
+		out.Reset()
+		if code := Main(ctx, []string{"sessions", "-dir", ws, "-data", data, "-repo"}, &out, &out); code != 0 {
+			t.Fatalf("sessions -repo: %s", out.String())
+		}
+		if strings.Contains(out.String(), "closed") || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	for _, want := range []string{"fix (kairo/fix) · 1 untracked", "closed", "write a note"} {
 		if !strings.Contains(out.String(), want) {

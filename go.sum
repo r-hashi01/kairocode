@@ -72,8 +72,8 @@ github.com/pb33f/ordered-map/v2 v2.3.1 h1:5319HDO0aw4DA4gzi+zv4FXU9UlSs3xGZ40wcP
 github.com/pb33f/ordered-map/v2 v2.3.1/go.mod h1:qxFQgd0PkVUtOMCkTapqotNgzRhMPL7VvaHKbd1HnmQ=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/r-hashi01/kairo v0.4.1 h1:wYOdjAoeVqy16T58kJvnGWYPYUPMW0EqvrSoCnD84gQ=
-github.com/r-hashi01/kairo v0.4.1/go.mod h1:rB/6T9+VN8uAGHeQjnQr5CRexZnlp0PESF+VvhA46po=
+github.com/r-hashi01/kairo v0.5.0 h1:ck5yi2ZhDSoJquXlwuwciUsqwcomixRGVobjARfa58Q=
+github.com/r-hashi01/kairo v0.5.0/go.mod h1:3CLmoQRXK7wdkwOgvu+4so08fD0jjvxG4kkhqTNXXXY=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=

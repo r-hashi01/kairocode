@@ -224,58 +224,122 @@ func (r *Runtime) flowStep(t *kairo.TaskContext, in workflows.FlowStep) (bool, e
 			In workflows.FlowStep `json:"in"`
 		}
 		if json.Unmarshal(k.Input, &before) == nil && before.In.Seq == in.Seq && before.In.Sig != in.Sig {
-			return false, r.cancelLeft(t, kids)
+			return false, r.tellCutOff(t, kids)
 		}
 	}
 	return true, nil
 }
 
-// cancelLeft cancels the flow's child workflows that have not finished, as
-// the flow stops for going another way (ADR 0003, addendum 2026-11-04):
-// what a run before started and the flow will never wait for now (its
-// agents' turns) would otherwise go on after it, resumed from the record.
-// One that holds a call whose outcome may be unknown (a tool's call not
-// finished, or blocked) is left as it is: cancelled, it would drop the
-// question whether that call took effect (invariant 4). It is noted in the
-// store, so Pending lists what it waits for though nothing above it does.
-// A cancel of a run already settled does nothing, and a note made again
-// is the same note, so doing it again (this action is unprotected) is safe.
-// kairo#2: kairo lets a child outlive its parent; its calls that are not
-// workflows cannot be cancelled one by one, and are left as they are. Nor
-// is the check and the cancel one step: a tool's call that starts between
-// them is cancelled with the turn, not left to be reviewed.
-func (r *Runtime) cancelLeft(t *kairo.TaskContext, kids []kairo.RunInfo) error {
+// tellCutOff tells the session the calls a run before left cut off under
+// the flow, as the flow stops for going another way (ADR 0003, addenda
+// 2026-11-04 and 2026-11-26): the flow's own calls not finished, and those
+// under its child workflows. The flow's end cancels them (kairo's ADR
+// 0062: a child its replay does not reach is not resumed on its own, and
+// what is unfinished under the flow is cancelled before it settles), a
+// call whose outcome is unknown too, which is then not asked about
+// (kairo#2). The session is told what those calls were, so the person can
+// look whether they took effect. A CLI engine's MCP calls are runs of
+// their own (kairo#4), which the flow's end does not cancel: the turn
+// holding one not finished is noted in the store, so Pending still lists
+// it to be reviewed once nothing above it does.
+//
+// Told once, under a marker and the notice's signal id (tell). This
+// action is unprotected: a stop between telling and the marker tells
+// again, once, until kairo keeps the signal id (kairo#102).
+func (r *Runtime) tellCutOff(t *kairo.TaskContext, kids []kairo.RunInfo) error {
+	var calls []string
 	for _, k := range kids {
-		if k.Plan != "kairo.workflow" || k.Finished() {
+		if k.Finished() || k.RunID == t.RunID {
 			continue
 		}
-		open, err := r.openCall(t, k.RunID)
-		if err != nil {
-			return kairo.Retryable(err)
-		}
-		if open {
-			if err := r.Store.Keep(t, ownerSession(k.RunID), turnOf(k.RunID), k.RunID); err != nil {
+		switch {
+		case k.Plan == "kairo.workflow":
+			cut, err := r.cutOff(t, k.RunID)
+			if err != nil {
 				return kairo.Retryable(err)
 			}
-			continue
+			calls = append(calls, cut...)
+		case strings.HasPrefix(k.Plan, "kairo.call/") && k.Plan != "kairo.call/"+workflows.ActModel:
+			calls = append(calls, r.callSubject(t, k)) // the flow's own (tool())
 		}
-		if err := r.K.Cancel(t, k.RunID); err != nil {
-			return kairo.Retryable(err)
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	flow := t.RunID[:strings.LastIndex(t.RunID, "/")]
+	session := ownerSession(flow)
+	marker := store.Hash(kindCutOffTold, []byte(flow))
+	if _, _, err := r.Store.Get(t, marker); err == nil {
+		return nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return kairo.Retryable(err)
+	}
+	text := "[KairoCode] A flow went another way than when it ran before, and stopped. A run of it before had these calls under way, " +
+		"cut off when its process stopped; they were cancelled with the flow and may have taken effect. Tell the user, so they can look:\n- " +
+		strings.Join(calls, "\n- ")
+	if _, err := r.tell(t, session, kindCutOffTold+"\x00"+flow, text); err != nil {
+		if errors.Is(err, ErrSessionFailed) || errors.Is(err, ErrFolderGone) {
+			r.logf("telling %s of the calls a flow left cut off: %v", session, err)
+			return nil // it takes no more: nothing to try again
 		}
+		return kairo.Retryable(err)
+	}
+	if _, err := r.Store.Put(t, kindCutOffTold, []byte(flow)); err != nil {
+		return kairo.Retryable(err)
 	}
 	return nil
 }
 
-// openCall says whether a call under run id, other than a model's, has not
-// finished (running, or blocked: its outcome may be unknown); the MCP calls
-// of a CLI engine's turn too, which are runs of their own (kairo#4).
-func (r *Runtime) openCall(t *kairo.TaskContext, id string) (bool, error) {
-	mcpRuns, err := r.Store.MCPRuns(t, id)
+// kindCutOffTold is what the store keeps of a flow's cut-off calls told to
+// its session: told once.
+const kindCutOffTold = "cut-off-told"
+
+// cutOff describes the calls under run id, other than a model's, that have
+// not finished (running, or blocked: their outcome may be unknown). A CLI
+// engine's MCP calls, runs of their own (kairo#4), are not among them: a
+// turn holding one not finished is noted to be reviewed (Store.Keep).
+func (r *Runtime) cutOff(t *kairo.TaskContext, id string) ([]string, error) {
+	open, err := r.openMCP(t, id)
+	if err != nil {
+		return nil, err
+	}
+	if open {
+		if err := r.Store.Keep(t, ownerSession(id), turnOf(id), id); err != nil {
+			return nil, err
+		}
+	}
+	kids, err := r.K.Children(t, id)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, k := range kids {
+		if k.Finished() {
+			continue
+		}
+		if strings.HasPrefix(k.Plan, "kairo.call/") && k.Plan != "kairo.call/"+workflows.ActModel {
+			out = append(out, r.callSubject(t, k))
+		}
+		if k.Plan == "kairo.workflow" {
+			cut, err := r.cutOff(t, k.RunID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, cut...)
+		}
+	}
+	return out, nil
+}
+
+// openMCP says whether a step of the MCP calls of turn (a CLI engine's,
+// runs of their own: kairo#4) has not finished.
+func (r *Runtime) openMCP(ctx context.Context, turn string) (bool, error) {
+	mcpRuns, err := r.Store.MCPRuns(ctx, turn)
 	if err != nil {
 		return false, err
 	}
 	for _, m := range mcpRuns {
-		steps, err := r.K.Children(t, m)
+		steps, err := r.K.Children(ctx, m)
 		if err != nil && !errors.Is(err, kairo.ErrUnknownRun) {
 			return false, err
 		}
@@ -285,24 +349,26 @@ func (r *Runtime) openCall(t *kairo.TaskContext, id string) (bool, error) {
 			}
 		}
 	}
-	kids, err := r.K.Children(t, id)
-	if err != nil {
-		return false, err
-	}
-	for _, k := range kids {
-		if k.Finished() {
-			continue
-		}
-		if strings.HasPrefix(k.Plan, "kairo.call/") && k.Plan != "kairo.call/"+workflows.ActModel {
-			return true, nil
-		}
-		if k.Plan == "kairo.workflow" {
-			if open, err := r.openCall(t, k.RunID); err != nil || open {
-				return open, err
-			}
-		}
-	}
 	return false, nil
+}
+
+// callSubject is a call, as the person knows it: a tool's name and what it
+// was called on ("bash: make test"), or else its action's name.
+func (r *Runtime) callSubject(ctx context.Context, c kairo.RunInfo) string {
+	name, isTool := strings.CutPrefix(c.Plan, "kairo.call/"+workflows.ActToolPrefix)
+	if !isTool {
+		return strings.TrimPrefix(c.Plan, "kairo.call/")
+	}
+	var in struct {
+		In workflows.ToolInput `json:"in"`
+	}
+	_ = json.Unmarshal(c.Input, &in)
+	if args, err := r.toolArgs(ctx, in.In); err == nil {
+		if subj := subject(name, args); subj != "" {
+			return name + ": " + subj
+		}
+	}
+	return name
 }
 
 var FlowHelp = flowfile.FlowHelp

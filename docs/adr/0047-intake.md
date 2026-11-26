@@ -86,3 +86,20 @@ ADR 0012 decided a webhook server for GitHub and running without a process, in s
 - **Poll the sources from the daemon.** It would hold a process to wait (invariant 7), and every user's daemon would poll GitHub. A pass that a schedule runs and that then exits keeps the daemon quiet.
 - **Items from outside in a new conversation each.** Each would be a session no one opens. One intake conversation per repository is where the person looks.
 - **Build on kairo v0.4.1 with KairoCode's own dedupe.** Possible for the intake, by marker rows, but not for early events, which v0.4.1 cannot keep for a wait not yet reached. Waiting for v0.5.0 avoids a workaround that would be removed soon after.
+
+## Implementation
+
+### The move to kairo v0.5.0 (decision 6, 2026-11-26)
+
+KairoCode is on kairo v0.5.0 (Go 1.27.4, which v0.5.0 needs). What became of each workaround:
+
+- **kairo#2 (a child outlives its parent): gone.** A flow that goes another way no longer cancels what a run before left; kairo does that when the flow ends. kairo also cancels a call cut off under it, which KairoCode used to keep for review. The session is told of such calls instead (ADR 0003, addendum 2026-11-26, chosen by the user).
+- **kairo#3 (completion and cancellation not exclusive): gone for new sessions.** Session version 9 no longer reads back how each turn was recorded. Versions 8 and 7 keep `turn.settled`, draining (ADR 0011).
+- **kairo#4 (a run started with a parent): kept, by the user's choice (2026-11-26).** A CLI engine's MCP calls stay roots of their own. Attached to the turn with `kairo.Parent`, a call of theirs cut off and waiting for review would be cancelled when the turn ends (kairo's ADR 0062). As roots they are still asked about.
+- **kairo#5 (a store error fails the workflow): gone as a cause.** kairo now replays instead. The check that refuses messages to a failed session stays, for sessions that failed before and for other failures (ADR 0021).
+- **kairo#6 (which wait a signal filled): gone.** The number of the turn a message starts is the occurrence kairo reports (`SignalReceipt.Index`), not a count taken under `sendMu`.
+- **kairo#7 (only if waiting): used.** Answers to approvals, questions and tries go with `OnlyIfWaiting`: one given after another process answered is refused (`ErrAnswered`) instead of kept for a later wait. The exception is an approval whose try still runs: its wait is made once the try ends, so the answer is sent ahead.
+- **kairo#49 (order within a millisecond): gone.** Children come in the order they were made; only the runs of two lists (a turn's and its MCP calls') are sorted, stably, by when they were made.
+- **SignalID: sent, not yet kept.** KairoCode's notices go under a signal id (`Runtime.tell`), unless a switch of engine, model or mode waits to go with them. kairo 0.5.0's embedded runtime does not keep the id with the wait that takes the signal (r-hashi01/kairo#102), so the window of ADR 0043's twice-sent notice stays. **This also blocks decision 4's "sent twice, delivered once" for `kairocode event`,** until kairo#102 is fixed.
+- `Cancel` of a turn that ended just before now says so (`kairo.ErrRunSettled`, kairo's ADR 0061). `/stop` answers that no turn is running, and ending an item goes on.
+- Tests: `TestTurnStoppedAsItEnds` (versions 9, 8, 6), `TestCrashDivergedFlowTellsACutOffCall` (an agent's call and the flow's own), `TestWorkflowScriptDivergence` (stricter), `TestApprovalToManyClients` (an answer past the look is refused), `TestItemCleanedUp` (waits for the closed session to end: closing is no longer finished within the send).
