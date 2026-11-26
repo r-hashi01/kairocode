@@ -320,3 +320,39 @@ func TestOpenAIAutoModeJudge(t *testing.T) {
 		t.Fatalf("the Claude API asked %d times; requests %q", claude, reqs)
 	}
 }
+
+// A session made with no provider takes the one last chosen, with the
+// model last chosen for it: a provider that needs a model has it before it
+// is checked (found taking work in from outside, M20).
+func TestSessionTakesLastProviderWithItsModel(t *testing.T) {
+	srv := (&oaiScript{replies: readThenDone}).serve(t)
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("KC_TEST_OAI_KEY", oaiKeyValue)
+	putFiles(t, cfg, map[string]string{"kairocode/kairocode.json": `{"providers": {"nomodel": {"baseURL": "` + srv.URL + `/v1", "keyEnv": "KC_TEST_OAI_KEY"}}}`})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := Open(ctx, Config{DB: filepath.Join(t.TempDir(), "k.db"), Owner: "test", Provider: &provider.Fake{HoldAt: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Store.SetLastProvider(ctx, "oai:nomodel"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Store.SetProviderChoice(ctx, "oai:nomodel", "m9", ""); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.CreateSession(ctx, "last", workflows.SessionInput{Dir: repo(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := r.K.Get(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in workflows.SessionInput
+	if err := json.Unmarshal(input(info), &in); err != nil || in.Engine != "oai:nomodel" || in.Model != "m9" {
+		t.Fatalf("the session's input %+v %v", in, err)
+	}
+}

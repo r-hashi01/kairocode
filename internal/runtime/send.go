@@ -37,15 +37,10 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 	}
 	if in.Engine != "" {
 		in.Engine, _ = engineOf(in.Engine) // a provider's name: its engine's
-		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {
-			return "", err
-		}
-		if id := registryAgent(in.Engine); id != "" && !r.knownAgent(ctx, id) {
-			return "", fmt.Errorf("%w: %s", ErrNoProvider, id)
-		}
 	}
 	// A session that names no model or effort gets those last chosen for
-	// its provider (ADR 0014, addendum).
+	// its provider (ADR 0014, addendum): before the provider is checked, as
+	// one that needs a model has it then.
 	engine := in.Engine
 	if engine == "" {
 		engine = r.cfg.Engine
@@ -60,6 +55,14 @@ func (r *Runtime) CreateSession(ctx context.Context, id string, in workflows.Ses
 		}
 		if in.Effort == "" && pref.Effort != "" {
 			in.Effort, in.Engine = pref.Effort, engine
+		}
+	}
+	if in.Engine != "" {
+		if _, _, err := r.engineFor(in.Engine, in.Model); err != nil {
+			return "", err
+		}
+		if id := registryAgent(in.Engine); id != "" && !r.knownAgent(ctx, id) {
+			return "", fmt.Errorf("%w: %s", ErrNoProvider, id)
 		}
 	}
 	abs, err := filepath.Abs(in.Dir)

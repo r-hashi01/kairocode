@@ -110,6 +110,8 @@ KairoCode is on kairo v0.5.0 (Go 1.27.4, which v0.5.0 needs). What became of eac
   - The item is started by `StartItem` from the intake conversation, with the call `intake:<line>\x00<key>`. Its session's id is the hash of the conversation and the call, so the item is the same for every sender of the key.
   - `intakeMu` makes the look for the item and its making one step, so `New` is true for one sender only.
   - The conversation is `IntakeSession(main)`: `s/intake-<first 24 hex of sha256(main checkout)>`, made by `CreateSession` as it is first needed.
+    - It is made with the provider and model of `-provider` and `-model` (`IntakeWith`), else those last chosen, as for any session.
+    - Found by hand (2026-11-26): `CreateSession` checked the last provider before applying the model remembered for it. It now applies the model first (`TestSessionTakesLastProviderWithItsModel`).
   - The request is `intakeRequest`: the key, a line saying the text is to be taken as a request to consider, then the text quoted with `> `.
   - A stopped line is `ErrLineStopped` (wire code `line_stopped`). The CLI maps it to exit 6 (`exitWith`).
 - **`kairocode intake github`** (`internal/cli/intake.go`) runs `gh repo view` and `gh issue list --label <label>` in the folder, with the user's credentials. The command allowlist of ADR 0005 (`internal/invariants`) names this file for it.

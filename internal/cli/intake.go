@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -41,6 +42,7 @@ func intakeCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	line := fs.String("line", "", "the standard line to send it down")
 	key := fs.String("key", "", "the work outside: github:owner/repo#12, cron:deps:2026-W47, pagerduty:Q1W2E3")
 	asJSON := fs.Bool("json", false, "print the item as JSON")
+	prov, model := intakeProvider(fs)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -56,7 +58,7 @@ func intakeCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return err
 	}
 	defer c.Close()
-	in, err := c.Intake(ctx, abs, *line, *key, strings.Join(fs.Args(), " "))
+	in, err := c.Intake(ctx, abs, *line, *key, strings.Join(fs.Args(), " "), *prov, *model)
 	if err != nil {
 		return intakeError(err)
 	}
@@ -67,6 +69,14 @@ func intakeCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	fmt.Fprintln(stdout, intakeText(in))
 	return nil
+}
+
+// intakeProvider is the flags that choose the intake conversation's
+// provider and model when it is first made, as run's.
+func intakeProvider(fs *flag.FlagSet) (prov, model *string) {
+	prov = fs.String("provider", os.Getenv("KAIROCODE_ENGINE"), "the intake conversation's provider, when it is first made (default: the one last chosen)")
+	model = fs.String("model", os.Getenv("KAIROCODE_MODEL"), "the intake conversation's model, when it is first made")
+	return prov, model
 }
 
 // intakeError is err of an intake: 6 for a line that stopped itself.
@@ -104,6 +114,7 @@ func intakeGitHub(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	label := fs.String("label", "kairo", "take the open issues with this label")
 	asJSON := fs.Bool("json", false, "print what each issue came to as JSON")
 	ci := fs.Bool("ci", false, "also give each item in progress its branch's finished workflow runs, as the event ci.result")
+	prov, model := intakeProvider(fs)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -140,7 +151,7 @@ func intakeGitHub(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	for _, is := range issues {
 		key := fmt.Sprintf("github:%s#%d", repo.NameWithOwner, is.Number)
 		request := strings.TrimSpace(is.Title + "\n\n" + is.Body + "\n\n" + is.URL)
-		in, err := c.Intake(ctx, abs, *line, key, request)
+		in, err := c.Intake(ctx, abs, *line, key, request, *prov, *model)
 		if err != nil {
 			return intakeError(fmt.Errorf("%s: %w", key, err))
 		}

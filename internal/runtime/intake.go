@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 
+	kairo "github.com/r-hashi01/kairo/sdk/go"
+
 	"github.com/r-hashi01/kairocode/internal/api"
 	"github.com/r-hashi01/kairocode/internal/store"
 	"github.com/r-hashi01/kairocode/internal/tools"
@@ -35,7 +37,22 @@ func intakeName(main string) string {
 // conversation, made when first needed. The queue, wip, a stopped line
 // (ErrLineStopped) and the people stations apply as to any item.
 func (r *Runtime) Intake(ctx context.Context, dir, line, key, request string) (api.Intake, error) {
-	key, request = strings.TrimSpace(key), strings.TrimSpace(request)
+	return r.IntakeWith(ctx, IntakeInput{Dir: dir, Line: line, Key: key, Request: request})
+}
+
+// IntakeInput is what Intake takes; Engine and Model, the provider and
+// model of the intake conversation when it is first made (else those last
+// chosen, as for any session).
+type IntakeInput struct {
+	Dir, Line, Key, Request string
+	Engine, Model           string
+}
+
+// IntakeWith is Intake, with the intake conversation's provider and model
+// if it is made now.
+func (r *Runtime) IntakeWith(ctx context.Context, in IntakeInput) (api.Intake, error) {
+	dir, line := in.Dir, in.Line
+	key, request := strings.TrimSpace(in.Key), strings.TrimSpace(in.Request)
 	switch {
 	case line == "":
 		return api.Intake{}, errors.New("intake takes work in down a standard line of the project: name it")
@@ -52,9 +69,14 @@ func (r *Runtime) Intake(ctx context.Context, dir, line, key, request string) (a
 	// so of two that send the same key at once one makes it.
 	r.intakeMu.Lock()
 	defer r.intakeMu.Unlock()
-	conv, err := r.CreateSession(ctx, intakeName(main), workflows.SessionInput{Dir: sameDir(main)})
-	if err != nil {
-		return api.Intake{}, fmt.Errorf("the intake conversation: %w", err)
+	conv := IntakeSession(main)
+	if _, err := r.K.Get(ctx, conv); errors.Is(err, kairo.ErrUnknownRun) {
+		_, err = r.CreateSession(ctx, intakeName(main), workflows.SessionInput{Dir: sameDir(main), Engine: in.Engine, Model: in.Model})
+		if err != nil {
+			return api.Intake{}, fmt.Errorf("the intake conversation: %w", err)
+		}
+	} else if err != nil {
+		return api.Intake{}, err
 	}
 	call := "intake:" + line + "\x00" + key
 	_, err = r.Store.Item(ctx, SessionID(itemSessionName(conv, call)))

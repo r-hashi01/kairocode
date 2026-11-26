@@ -237,6 +237,7 @@ A line is a row of stations a request goes down, from the request to a change re
   - **One intake conversation.** Items from outside belong to the repository's intake conversation, `s/intake-…`. It is made when first needed, and is told what comes of the items (`/sessions`, `kairocode items <it>`). What needs you is asked there, as for any item.
   - **The request is quoted as data.** It is prefixed with its key, and the agents read it as a request to consider, not as instructions about KairoCode.
   - **Exit codes:** `0` taken in (or there already), `1` an error, `2` a wrong use, `6` the line stopped itself.
+  - **`-provider` and `-model`** choose the intake conversation's provider and model when it is first made (else those you last chose).
   - **`intake github`** runs `gh` with your own credentials, one pass at a time.
     - Each labelled open issue is the work `github:<owner>/<repo>#<n>`.
     - With `-ci`, each item in progress is given its branch's finished workflow runs, as `ci.result`, once per run.

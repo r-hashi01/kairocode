@@ -936,10 +936,12 @@ func (c *Client) Sweep(ctx context.Context, dry bool) (api.SweepReport, error) {
 
 // Intake takes work in from outside down dir's repository's standard line
 // line, as the work key names (ADR 0047): the same key again is the same
-// item.
-func (c *Client) Intake(ctx context.Context, dir, line, key, request string) (api.Intake, error) {
+// item. provider and model are the intake conversation's, if it is made
+// now ("": those last chosen).
+func (c *Client) Intake(ctx context.Context, dir, line, key, request, provider, model string) (api.Intake, error) {
 	var out api.Intake
-	err := c.do(ctx, "POST", "/intake", map[string]string{"dir": dir, "line": line, "key": key, "request": request}, &out)
+	err := c.do(ctx, "POST", "/intake", map[string]string{"dir": dir, "line": line, "key": key, "request": request,
+		"provider": provider, "model": model}, &out)
 	return out, err
 }
 

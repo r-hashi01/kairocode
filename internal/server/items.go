@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/r-hashi01/kairocode/internal/api"
+	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/tools"
 )
 
@@ -149,16 +150,19 @@ func (s *Server) sweep(w http.ResponseWriter, r *http.Request) {
 // "request"}. The same key sent again is the same item (new false).
 func (s *Server) intake(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Dir     string `json:"dir"`
-		Line    string `json:"line"`
-		Key     string `json:"key"`
-		Request string `json:"request"`
+		Dir      string `json:"dir"`
+		Line     string `json:"line"`
+		Key      string `json:"key"`
+		Request  string `json:"request"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" || in.Line == "" || in.Key == "" || in.Request == "" {
 		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "line": "...", "key": "...", "request": "..."}`))
 		return
 	}
-	out, err := s.rt.Intake(r.Context(), in.Dir, in.Line, in.Key, in.Request)
+	out, err := s.rt.IntakeWith(r.Context(), runtime.IntakeInput{Dir: in.Dir, Line: in.Line, Key: in.Key, Request: in.Request,
+		Engine: in.Provider, Model: in.Model})
 	if err != nil {
 		code := http.StatusBadRequest
 		switch {

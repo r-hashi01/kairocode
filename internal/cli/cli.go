@@ -52,7 +52,7 @@ const usage = `usage:
   kairocode line [-dir DIR] [-data DIR] -restart <name>   start a line again after it stopped itself (ADR 0044)
   kairocode line [-dir DIR] [-data DIR] [-session ID] -improve <name>   send a draft that improves a line from its items (ADR 0046)
   kairocode lines [-dir DIR] [-data DIR] [-json]      the project's lines: in progress, queued, stopped
-  kairocode intake [-dir DIR] [-data DIR] -line <line> -key <key> [-json] "<request>"   take work in from outside, once per key (ADR 0047; exit 6: the line stopped)
+  kairocode intake [-dir DIR] [-data DIR] [-provider P -model M] -line <line> -key <key> [-json] "<request>"   take work in from outside, once per key (ADR 0047; exit 6: the line stopped)
   kairocode intake github [-dir DIR] [-data DIR] -line <line> [-label kairo] [-json]   take in the repository's open issues with the label, through gh
   kairocode event [-dir DIR] [-data DIR] -item <item> -name <name> [-id ID] '<JSON>'   give an outside event to an item's flow, waiting in wait(name)
   kairocode items [-data DIR] [-json] [-drop ITEM [-force]] <session>   the work items a session sent down lines
