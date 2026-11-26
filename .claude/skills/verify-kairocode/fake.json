@@ -1,0 +1,29 @@
+{
+  "hold_at": -1,
+  "steps": {
+    "KCV-WRITE": [
+      {"tools": [{"name": "write", "input": {"path": "hello.txt", "content": "hello from kcv\n"}}]},
+      {"text": "KCV-WRITE finished."}
+    ],
+    "KCV-BASH": [
+      {"tools": [{"name": "bash", "input": {"command": "echo ran > bash.txt"}}]},
+      {"text": "KCV-BASH finished."}
+    ],
+    "KCV-TEXT": [
+      {"text": "KCV-TEXT reply: no tools were called."}
+    ],
+    "You are at the station \"build\"": [
+      {"tools": [{"name": "write", "input": {"path": "notes.txt", "content": "notes from the line\n"}}]},
+      {"text": "The build station wrote notes.txt."}
+    ],
+    "[KairoCode]": [
+      {"text": "Noted."}
+    ]
+  },
+  "script": [
+    {"text": "kcv fake: the request named no KCV- key, so this is the fallback reply."},
+    {"text": "kcv fake: the request named no KCV- key, so this is the fallback reply."},
+    {"text": "kcv fake: the request named no KCV- key, so this is the fallback reply."},
+    {"text": "kcv fake: the request named no KCV- key, so this is the fallback reply."}
+  ]
+}

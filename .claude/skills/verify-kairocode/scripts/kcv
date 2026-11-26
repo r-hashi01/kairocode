@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# kcv drives KairoCode for verification in an isolated root: its own HOME,
+# XDG folders, data directory (so its own daemon), workspace, tmux server
+# and fake model. It never touches the user's daemon, data, settings,
+# keychain or tmux. See ../SKILL.md.
+#
+#   root=$(kcv new)                     make a root; prints its path
+#   KCV_ROOT=$root kcv up               start its daemon, wait until it answers
+#   KCV_ROOT=$root kcv doctor           read-only: is this root worth driving?
+#   KCV_ROOT=$root kcv kc ARGS...       run bin/kairocode ARGS in the root (cwd: its workspace)
+#   KCV_ROOT=$root kcv rec DIR NAME ARGS...   the same, saving the command, stdout, stderr, exit code
+#   KCV_ROOT=$root kcv git ARGS...      git in its workspace, as the root's user
+#   KCV_ROOT=$root kcv chat             the terminal UI in the root's own tmux server
+#   KCV_ROOT=$root kcv keys KEY...      send keys to it (tmux send-keys syntax)
+#   KCV_ROOT=$root kcv screen [FILE]    its screen as text
+#   KCV_ROOT=$root kcv wait-screen TEXT [SECONDS]   until the screen shows TEXT
+#   KCV_ROOT=$root kcv stop             stop what this root started (tmux, daemon)
+#   KCV_ROOT=$root kcv clean            stop, then remove the root (never the evidence)
+#   kcv evidence FEATURE                make and print a folder for proof that survives clean
+#   kcv build                           make build
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+skill=$(dirname "$here")
+repo=$(cd "$skill/../../.." && pwd)
+bin=${KCV_BIN:-$repo/bin/kairocode}
+self=$here/kcv
+
+die() {
+  echo "kcv: $*" >&2
+  exit 1
+}
+
+need_root() {
+  [[ -n ${KCV_ROOT:-} ]] || die "KCV_ROOT is not set: root=\$(kcv new), then KCV_ROOT=\$root kcv $1"
+  [[ -f $KCV_ROOT/kcv-root ]] || die "$KCV_ROOT is not a kcv root (no kcv-root marker)"
+  root=$(cd "$KCV_ROOT" && pwd)
+  home=$root/home
+  data=$root/data/kairocode
+  ws=$root/ws
+  mode=$(cat "$root/mode")
+  tsock=kcv-$(basename "$root")
+}
+
+# kc_env fills env_args: the whole environment bin/kairocode (and the daemon
+# it starts, which inherits it) sees. Nothing else of the caller's passes:
+# not KAIROCODE_ENGINE/MODEL, not API keys (except, in a real root, the
+# names in KCV_PASS).
+kc_env() {
+  env_args=(
+    "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+    "HOME=$home"
+    "XDG_CONFIG_HOME=$home/.config"
+    "XDG_DATA_HOME=$root/data"
+    "XDG_CACHE_HOME=$root/cache"
+    "TMPDIR=${TMPDIR:-/tmp}"
+    "USER=${USER:-kcv}"
+    "LOGNAME=${LOGNAME:-${USER:-kcv}}"
+    "LANG=en_US.UTF-8"
+    "TERM=${TERM:-xterm-256color}"
+    "KAIROCODE_LANG=en"
+    "KAIROCODE_NO_CLIS=1"
+    "KAIROCODE_ACP_REGISTRY=off"
+    "KAIROCODE_LSP=off"
+    "KAIROCODE_SECRETS=file"
+    "KAIROCODE_DAEMON_IDLE=${KCV_IDLE:-10m}"
+  )
+  if [[ -n ${TMUX:-} ]]; then env_args+=("TMUX=$TMUX"); fi
+  if [[ $mode == fake ]]; then
+    env_args+=("KAIROCODE_PROVIDER=fake" "KAIROCODE_FAKE=$root/fake.json")
+  else
+    local name
+    for name in ${KCV_PASS:-OPENAI_API_KEY}; do
+      if [[ -n ${!name:-} ]]; then env_args+=("$name=${!name}"); fi
+    done
+  fi
+}
+
+daemon_pid() { # the pid in server.json, if any (never the token)
+  [[ -f $data/server.json ]] && jq -r '.pid // empty' "$data/server.json" 2>/dev/null || true
+}
+
+owned() { # pid $1 is a kairocode daemon of this root's data directory
+  local cmd
+  cmd=$(ps -o command= -p "$1" 2>/dev/null) || return 1
+  [[ $cmd == *"daemon -data $data"* ]]
+}
+
+cmd_new() {
+  local m=fake
+  [[ ${1:-} == --real ]] && m=real
+  local base=${KCV_BASE:-${TMPDIR:-/tmp}}
+  local r
+  r=$(mktemp -d "${base%/}/kcv.XXXXXX")
+  r=$(cd "$r" && pwd -P)
+  mkdir -p "$r/home/.config/kairocode" "$r/data/kairocode" "$r/cache" "$r/ws"
+  echo "$m" >"$r/mode"
+  : >"$r/kcv-root"
+  printf '[user]\n\tname = kcv\n\temail = kcv@example.invalid\n[init]\n\tdefaultBranch = main\n' >"$r/home/.gitconfig"
+  if [[ $m == fake ]]; then cp "$skill/fake.json" "$r/fake.json"; fi
+  (
+    cd "$r/ws"
+    export HOME=$r/home GIT_CONFIG_NOSYSTEM=1
+    git init -q
+    echo "# kcv workspace" >README.md
+    git add README.md
+    git commit -q -m "first"
+  )
+  echo "$r"
+}
+
+cmd_kc() {
+  need_root kc
+  kc_env
+  [[ -x $bin ]] || die "no $bin: run kcv build"
+  cd "${KCV_DIR:-$ws}"
+  exec env -i "${env_args[@]}" "$bin" "$@"
+}
+
+cmd_git() {
+  need_root git
+  cd "${KCV_DIR:-$ws}"
+  HOME=$home GIT_CONFIG_NOSYSTEM=1 exec git "$@"
+}
+
+cmd_rec() {
+  need_root rec
+  (($# >= 2)) || die "usage: kcv rec DIR NAME ARGS..."
+  local dir=$1 name=$2
+  shift 2
+  mkdir -p "$dir"
+  printf 'KCV_ROOT=%q kcv kc' "$root" >"$dir/$name.cmd"
+  printf ' %q' "$@" >>"$dir/$name.cmd"
+  echo >>"$dir/$name.cmd"
+  local code=0
+  "$self" kc "$@" </dev/null >"$dir/$name.out" 2>"$dir/$name.err" || code=$?
+  echo "$code" >"$dir/$name.code"
+  echo "$name: exit $code; stdout $(wc -l <"$dir/$name.out" | tr -d ' ') lines, stderr $(wc -l <"$dir/$name.err" | tr -d ' ') lines ($dir/$name.*)" >&2
+  return "$code"
+}
+
+cmd_up() {
+  need_root up
+  "$self" kc sessions -json >/dev/null || die "the daemon did not start: see $data/daemon.log"
+  local pid
+  pid=$(daemon_pid)
+  [[ -n $pid ]] && owned "$pid" || die "no daemon of $data after a client connected"
+  echo "ready: daemon pid $pid, data $data" >&2
+}
+
+cmd_doctor() {
+  need_root doctor
+  local bad=0
+  ok() { echo "ok    $*"; }
+  no() {
+    echo "FAIL  $*"
+    bad=1
+  }
+  ok "root $root (mode $mode)"
+  [[ $data == "$root"/* ]] && ok "data directory $data (inside the root)" || no "data directory $data is outside the root"
+  [[ -d $ws/.git ]] && ok "workspace $ws (a git repository)" || no "workspace $ws is not a git repository"
+  if [[ -x $bin ]]; then
+    ok "binary $("$bin" version)"
+    local newer
+    # Go files and what they embed (the sandbox policies, the plugin catalog).
+    newer=$(find "$repo/cmd" "$repo/internal" "$repo/go.mod" "$repo/go.sum" -type f -newer "$bin" \
+      -not -name '*_test.go' -not -path '*/testdata/*' -print -quit 2>/dev/null || true)
+    [[ -z $newer ]] && ok "binary is newer than the sources" || no "binary is older than $newer: run kcv build"
+  else
+    no "no binary $bin: run kcv build"
+  fi
+  if [[ $mode == fake ]]; then
+    jq -e . "$root/fake.json" >/dev/null 2>&1 && ok "fake script $root/fake.json" || no "fake script $root/fake.json is not JSON"
+  else
+    local name
+    for name in ${KCV_PASS:-OPENAI_API_KEY}; do
+      [[ -n ${!name:-} ]] && ok "real mode: $name is set (value not shown)" || no "real mode: $name is not set in this command (load .env in the same command)"
+    done
+  fi
+  local pid
+  pid=$(daemon_pid)
+  if [[ -z $pid ]]; then
+    ok "daemon not running (the first client starts it; kcv up)"
+  elif ! kill -0 "$pid" 2>/dev/null; then
+    no "server.json names pid $pid, which is gone (a stale file; kcv stop)"
+  elif ! owned "$pid"; then
+    no "pid $pid is not this root's daemon: $(ps -o command= -p "$pid")"
+  else
+    ok "daemon pid $pid serves $data"
+    local want have
+    want=$(shasum -a 256 "$bin" | cut -c1-24)
+    have=$(jq -r '.version // empty' "$data/server.json")
+    [[ $want == "$have" ]] && ok "daemon runs this build ($have)" || no "daemon runs build $have, the binary is $want (kcv stop; it restarts on next use)"
+    local sock
+    sock=$(jq -r '.socket // empty' "$data/server.json")
+    [[ -S $sock ]] && ok "socket $sock" || no "no socket at $sock"
+    if "$self" kc sessions -all -json >/dev/null 2>&1; then ok "daemon answers (sessions -all -json)"; else no "daemon does not answer: see $data/daemon.log"; fi
+  fi
+  if tmux -L "$tsock" has-session 2>/dev/null; then ok "tmux server $tsock runs: $(tmux -L "$tsock" list-sessions -F '#S' | tr '\n' ' ')"; fi
+  return "$bad"
+}
+
+cmd_chat() {
+  need_root chat
+  local name=${1:-chat}
+  tmux -L "$tsock" has-session -t "$name" 2>/dev/null && die "tmux session $name already runs in $tsock"
+  local shell_cmd
+  shell_cmd=$(printf 'KCV_ROOT=%q KCV_DIR=%q exec %q kc chat' "$root" "${KCV_DIR:-$ws}" "$self")
+  shift || true
+  local a
+  for a in "$@"; do shell_cmd+=" $(printf '%q' "$a")"; done
+  tmux -f /dev/null -L "$tsock" new-session -d -s "$name" -x "${KCV_COLS:-120}" -y "${KCV_ROWS:-40}" "$shell_cmd"
+  tmux -L "$tsock" set-option -t "$name" remain-on-exit on >/dev/null
+  echo "tmux -L $tsock: session $name runs kairocode chat" >&2
+}
+
+cmd_keys() {
+  need_root keys
+  tmux -L "$tsock" send-keys -t "${KCV_TMUX:-chat}" "$@"
+}
+
+cmd_screen() {
+  need_root screen
+  if [[ -n ${1:-} ]]; then
+    mkdir -p "$(dirname "$1")"
+    tmux -L "$tsock" capture-pane -p -t "${KCV_TMUX:-chat}" >"$1"
+  else
+    tmux -L "$tsock" capture-pane -p -t "${KCV_TMUX:-chat}"
+  fi
+}
+
+cmd_wait_screen() {
+  need_root wait-screen
+  local text=${1:?usage: kcv wait-screen TEXT [SECONDS]} secs=${2:-30}
+  local end=$((SECONDS + secs))
+  while ((SECONDS < end)); do
+    if tmux -L "$tsock" capture-pane -p -t "${KCV_TMUX:-chat}" 2>/dev/null | grep -qF -- "$text"; then return 0; fi
+    sleep 0.2
+  done
+  echo "kcv: no \"$text\" on the screen after ${secs}s; it shows:" >&2
+  tmux -L "$tsock" capture-pane -p -t "${KCV_TMUX:-chat}" >&2 || true
+  return 1
+}
+
+cmd_stop() {
+  need_root stop
+  if tmux -L "$tsock" has-session 2>/dev/null; then
+    tmux -L "$tsock" kill-server
+    echo "stopped tmux server $tsock" >&2
+  fi
+  local pid
+  pid=$(daemon_pid)
+  if [[ -z $pid ]] || ! kill -0 "$pid" 2>/dev/null; then
+    echo "no daemon runs for $data" >&2
+    return 0
+  fi
+  owned "$pid" || die "pid $pid in $data/server.json is not this root's daemon; not touching it"
+  "$self" kc daemon stop || true
+  local end=$((SECONDS + 45)) # steps under way get up to 30s
+  while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.2; done
+  if kill -0 "$pid" 2>/dev/null && owned "$pid"; then
+    kill -9 "$pid"
+    echo "daemon $pid did not stop; killed it" >&2
+  fi
+  echo "stopped daemon $pid of $data" >&2
+}
+
+cmd_clean() {
+  need_root clean
+  cmd_stop
+  # Items' worktrees are registered in the workspace's git; they live in the
+  # data directory, so they go with the root.
+  rm -rf "$root"
+  echo "removed $root" >&2
+}
+
+cmd_evidence() {
+  local feature=${1:?usage: kcv evidence FEATURE}
+  local d
+  d=$repo/.claude/.cache/verify-kairocode/$(date -u +%Y%m%dT%H%M%SZ)-$feature
+  mkdir -p "$d"
+  echo "$d"
+}
+
+cmd=${1:-help}
+shift || true
+case $cmd in
+  new) cmd_new "$@" ;;
+  build) make -C "$repo" build ;;
+  kc) cmd_kc "$@" ;;
+  git) cmd_git "$@" ;;
+  rec) cmd_rec "$@" ;;
+  up) cmd_up ;;
+  doctor) cmd_doctor ;;
+  chat) cmd_chat "$@" ;;
+  keys) cmd_keys "$@" ;;
+  screen) cmd_screen "$@" ;;
+  wait-screen) cmd_wait_screen "$@" ;;
+  stop) cmd_stop ;;
+  clean) cmd_clean ;;
+  evidence) cmd_evidence "$@" ;;
+  help | -h | --help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' ;;
+  *) die "unknown command $cmd (kcv help)" ;;
+esac
