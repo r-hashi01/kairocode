@@ -87,6 +87,33 @@ func TestSecretsCheckerFindsKeys(t *testing.T) {
 	}
 }
 
+// A module of its own under root (a git worktree of this repository, say)
+// is not this module's code: its files are not checked against this
+// module's lists.
+func TestCommandsSkipsOtherModules(t *testing.T) {
+	dir := t.TempDir()
+	src := "package x\n\nimport \"os/exec\"\n\nvar _ = exec.Command(\"true\")\n"
+	for _, f := range []string{"go.mod", "x.go", "nested/go.mod", "nested/y.go"} {
+		body := src
+		if filepath.Base(f) == "go.mod" {
+			body = "module example\n"
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad, err := Commands(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) != 1 || !strings.Contains(bad[0], "x.go") {
+		t.Errorf("want only x.go flagged; got %q", bad)
+	}
+}
+
 // ADR 0005: commands start only through the sandbox.
 func TestCommandsStartOnlyInTheSandbox(t *testing.T) {
 	bad, err := Commands(root)
