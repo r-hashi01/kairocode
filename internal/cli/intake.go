@@ -119,7 +119,7 @@ func intakeGitHub(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	if *line == "" || fs.NArg() != 0 {
-		return badUse{error: errors.New(`usage: kairocode intake github [-dir DIR] -line <line> [-label kairo] [-ci] [-json]`)}
+		return badUse{error: errors.New(`usage: kairocode intake github [-dir DIR] [-provider P -model M] -line <line> [-label kairo] [-ci] [-json]`)}
 	}
 	abs, err := filepath.Abs(*dir)
 	if err != nil {
