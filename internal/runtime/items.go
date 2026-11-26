@@ -841,9 +841,8 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 			return err
 		}
 		// Told under the notice's signal id (tell): once, even by a
-		// process stopped between telling and keeping it as told, when
-		// kairo keeps the id (kairo#102); until then, twice in that window
-		// (ADR 0043, implementation).
+		// process stopped between telling and keeping it as told (ADR
+		// 0043, implementation).
 		if _, err := r.tell(ctx, row.Of, kindItemTold+"\x00"+row.ID+"\x00"+what, text); err != nil {
 			return fmt.Errorf("telling %s of the item %s: %w", row.Of, row.Name, err)
 		}

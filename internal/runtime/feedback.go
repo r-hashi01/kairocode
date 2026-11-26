@@ -408,9 +408,9 @@ func (r *Runtime) considerFeedback(ctx context.Context, row store.ItemRow) error
 	text := fmt.Sprintf("[KairoCode] Feedback is due for the line %s: %s (the items %s). Ask the person whether to send a draft that improves "+
 		"the line, its checks or AGENTS.md from them; a person reviews it before anything changes. If they agree, call the line tool with "+
 		`{"improve": %q} (or they type /line improve %s).`, row.Line, c.why, strings.Join(names, ", "), row.Line, row.Line)
-	// Cut off between telling and keeping it as told, it is told again,
-	// once, as the other notices are (ADR 0043), until kairo keeps the
-	// notice's signal id (tell, kairo#102).
+	// Cut off between telling and keeping it as told, it is told again
+	// under the same signal id, which kairo takes as the notice told
+	// before (tell; ADR 0043).
 	if _, err := r.tell(ctx, conv, kindFeedbackTold+"\x00"+row.Repo+"\x00"+key, text); err != nil {
 		return fmt.Errorf("telling %s that feedback is due: %w", conv, err)
 	}

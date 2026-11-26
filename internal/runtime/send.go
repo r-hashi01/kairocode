@@ -127,11 +127,11 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 // between giving it and noting it told gives it again under the same key,
 // and kairo takes it as the one given before (ADR 0043, implementation).
 // The text is part of the id: given again in other words, it is another
-// notice. kairo#102: kairo 0.5.0's embedded runtime does not keep the id
-// with the wait that takes it, so until it does a notice given twice is
-// two, and the callers' told-markers narrow that to a stop between giving
-// it and noting it told. A switch of engine, model or mode waiting goes
-// with it, as with any message (and then not under the id: signalAs).
+// notice. Since kairo 0.5.1 the wait that takes it keeps the id (kairo#102),
+// whether the session was waiting or busy. The callers' told-markers stay:
+// they spare a notice already told the work of giving it again. A switch
+// of engine, model or mode waiting goes with it, as with any message (and
+// then not under the id: signalAs).
 func (r *Runtime) tell(ctx context.Context, session, key, text string) (int, error) {
 	h, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: text}}})
 	if err != nil {
