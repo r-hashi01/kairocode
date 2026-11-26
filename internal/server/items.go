@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/r-hashi01/kairocode/internal/api"
+	"github.com/r-hashi01/kairocode/internal/runtime"
 	"github.com/r-hashi01/kairocode/internal/tools"
 )
 
@@ -143,4 +144,78 @@ func (s *Server) sweep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// intake takes work in from outside (ADR 0047): {"dir", "line", "key",
+// "request"}. The same key sent again is the same item (new false).
+func (s *Server) intake(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Dir      string `json:"dir"`
+		Line     string `json:"line"`
+		Key      string `json:"key"`
+		Request  string `json:"request"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" || in.Line == "" || in.Key == "" || in.Request == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "line": "...", "key": "...", "request": "..."}`))
+		return
+	}
+	out, err := s.rt.IntakeWith(r.Context(), runtime.IntakeInput{Dir: in.Dir, Line: in.Line, Key: in.Key, Request: in.Request,
+		Engine: in.Provider, Model: in.Model})
+	if err != nil {
+		code := http.StatusBadRequest
+		switch {
+		case errors.Is(err, api.ErrItemsCap), errors.Is(err, api.ErrLineStopped):
+			code = http.StatusConflict
+		}
+		fail(w, code, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// event gives an outside event to a work item of dir's repository (ADR
+// 0047): {"dir", "item", "name", "id", "value"}.
+func (s *Server) event(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Dir   string          `json:"dir"`
+		Item  string          `json:"item"`
+		Name  string          `json:"name"`
+		ID    string          `json:"id"`
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Dir == "" || in.Item == "" || in.Name == "" {
+		fail(w, http.StatusBadRequest, errors.New(`want {"dir": "...", "item": "...", "name": "...", "id": "...", "value": ...}`))
+		return
+	}
+	it, err := s.rt.ItemEvent(r.Context(), in.Dir, in.Item, in.Name, in.ID, in.Value)
+	if err != nil {
+		code := http.StatusBadRequest
+		switch {
+		case errors.Is(err, api.ErrNotAnItem):
+			code = http.StatusNotFound
+		case errors.Is(err, api.ErrEventEnded):
+			code = http.StatusConflict
+		}
+		fail(w, code, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// repoItems lists the work items of the repository of ?dir=, from any
+// conversation (ADR 0047).
+func (s *Server) repoItems(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		fail(w, http.StatusBadRequest, errors.New("want ?dir=<a folder of the repository>"))
+		return
+	}
+	items, err := s.rt.RepoItems(r.Context(), dir)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }

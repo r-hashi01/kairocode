@@ -156,7 +156,7 @@ def main(input):
     return {"ok": True, "message": r.output}
 ```
 
-- What a flow can call: `agent` (a subagent), `parallel`, `tool`, `ask` (ask a person), `decide` (a typed decision), `check` (one of the project's checks, below), `phase`.
+- What a flow can call: `agent` (a subagent), `parallel`, `tool`, `ask` (ask a person), `wait` (an event from outside, below), `decide` (a typed decision), `check` (one of the project's checks, below), `phase`.
 - Run one with `/flow <name> <args>`. `/flow new <description>` has one written from your words; you check its chart and try it before it is saved. `/flow new --from-session [what to make of it]` has one written from what this session did (the record: what was asked, the tools called, the approvals), to do it again; `--from-session=<id>` takes another session of the folder.
 - In the terminal UI, `/flow` alone opens the list of flows. Pick one to see how it is used and its chart, then run it, change it on its chart (`e`), or look at its past runs (`r`). The last row, "make a new flow", starts `/flow new`.
 - `kairocode flow graph <name>` draws a flow, `kairocode flow show -follow <session>` shows one as it runs, and `kairocode flow runs` lists past runs.
@@ -226,6 +226,25 @@ A line is a row of stations a request goes down, from the request to a change re
   - `/line` (or `kairocode lines`) lists the lines: in progress, queued, stopped.
   - `/items` lists the items, with each queued one's place.
 - **Cleaning up.** Merge an item's branch and it is cleaned up (its worktree removed, its session closed); `/items drop <item>` drops one. `/line keep <item> <name>` keeps a line put together on the spot as `.kairocode/lines/<name>.json`, for you to review and commit.
+- **Work from outside** (ADR 0047). A schedule, a CI step or a GitHub Action sends work in down a standard line:
+
+  ```sh
+  kairocode intake -line fix -key github:owner/repo#12 "Fix the login"   # once per key: sent again, it is the same item
+  kairocode intake github -line fix -label kairo -ci                     # the open issues labelled kairo; -ci: CI results to items
+  kairocode event -item kairo/fix-1 -name ci.result '{"passed": true}'   # an event for a flow station's wait("ci.result")
+  ```
+
+  - **One intake conversation.** Items from outside belong to the repository's intake conversation, `s/intake-…`. It is made when first needed, and is told what comes of the items (`/sessions`, `kairocode items <it>`). What needs you is asked there, as for any item.
+  - **The request is quoted as data.** It is prefixed with its key, and the agents read it as a request to consider, not as instructions about KairoCode.
+  - **Exit codes:** `0` taken in (or there already), `1` an error, `2` a wrong use, `6` the line stopped itself.
+  - **`-provider` and `-model`** choose the intake conversation's provider and model when it is first made (else those you last chose).
+  - **`intake github`** runs `gh` with your own credentials, one pass at a time.
+    - Each labelled open issue is the work `github:<owner>/<repo>#<n>`.
+    - With `-ci`, each item in progress is given its branch's finished workflow runs, as `ci.result`, once per run.
+  - **A flow at a station waits with `wait("ci.result", timeout = "2h")`**, holding no process. `kairocode event` gives it the event, found by the item's name, session or branch.
+    - An event sent before the wait is kept for it.
+    - One sent twice under its `-id` is taken once.
+    - One sent to an item whose line ended is refused (exit 1).
 
 ## Permissions and the sandbox
 

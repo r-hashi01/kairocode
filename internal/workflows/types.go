@@ -99,6 +99,9 @@ const (
 	// (design 6.3).
 	ActFlowAsk    = "flow.ask"
 	ActFlowDecide = "flow.decide"
+	// ActFlowWait notes that a flow waits for outside events of a name, and
+	// gives it those kept for it (ADR 0047), before it waits for them.
+	ActFlowWait = "flow.wait"
 	// ActFlowStep records the k-th call of a flow (its content's hash)
 	// before it is made, and says whether a run before made another k-th
 	// call: the script went another way (ADR 0003, a safety net).
@@ -195,6 +198,9 @@ const (
 	// SignalAnswerPrefix + a question's id is the signal that answers a
 	// flow's ask() (ADR 0003).
 	SignalAnswerPrefix = "answer/"
+	// SignalEventPrefix + an event's name is the signal of an outside event
+	// a flow's wait() takes (ADR 0047).
+	SignalEventPrefix = "event/"
 	// SignalJobPrefix + a command's id + "/" + the call is the signal that
 	// tells a run waiting for it (bash_wait) that it ended (ADR 0028). ActJobWatch
 	// starts the wait (or finds the command ended), ActJobResult answers

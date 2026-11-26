@@ -933,3 +933,31 @@ func (c *Client) Sweep(ctx context.Context, dry bool) (api.SweepReport, error) {
 	err := c.do(ctx, "POST", path, nil, &out)
 	return out, err
 }
+
+// Intake takes work in from outside down dir's repository's standard line
+// line, as the work key names (ADR 0047): the same key again is the same
+// item. provider and model are the intake conversation's, if it is made
+// now ("": those last chosen).
+func (c *Client) Intake(ctx context.Context, dir, line, key, request, provider, model string) (api.Intake, error) {
+	var out api.Intake
+	err := c.do(ctx, "POST", "/intake", map[string]string{"dir": dir, "line": line, "key": key, "request": request,
+		"provider": provider, "model": model}, &out)
+	return out, err
+}
+
+// Event gives the outside event name, its value JSON, under id ("" for the
+// hash of its name and value), to the work item of dir's repository that
+// item names: its name, its session or its branch (ADR 0047).
+func (c *Client) Event(ctx context.Context, dir, item, name, id string, value json.RawMessage) (api.Item, error) {
+	var out api.Item
+	err := c.do(ctx, "POST", "/events", map[string]any{"dir": dir, "item": item, "name": name, "id": id, "value": value}, &out)
+	return out, err
+}
+
+// RepoItems lists the work items of dir's repository, from any
+// conversation (ADR 0047).
+func (c *Client) RepoItems(ctx context.Context, dir string) ([]api.Item, error) {
+	var out []api.Item
+	err := c.do(ctx, "GET", "/items?dir="+url.QueryEscape(dir), nil, &out)
+	return out, err
+}

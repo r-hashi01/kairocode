@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	kairo "github.com/r-hashi01/kairo/sdk/go"
 	"go.starlark.net/starlark"
@@ -105,6 +107,7 @@ type flowRun struct {
 	usage  msg.Usage
 	tools  int
 	asks   int
+	waits  int
 	// policy: the session agent's rules, loaded at the first tool call;
 	// ext, its MCP servers' and custom tools (ADR 0022, 0025).
 	policy *Agent
@@ -274,6 +277,7 @@ func (r *flowRun) builtins() starlark.StringDict {
 		"parallel": starlark.NewBuiltin("parallel", r.parallel),
 		"tool":     starlark.NewBuiltin("tool", r.tool),
 		"ask":      starlark.NewBuiltin("ask", r.ask),
+		"wait":     starlark.NewBuiltin("wait", r.wait),
 		"decide":   starlark.NewBuiltin("decide", r.decide),
 		"phase":    starlark.NewBuiltin("phase", r.setPhase),
 		"check":    starlark.NewBuiltin("check", r.check),
@@ -345,6 +349,88 @@ func (r *flowRun) ask(thread *starlark.Thread, b *starlark.Builtin, args starlar
 		return nil, r.fail(err)
 	}
 	return valued(true, a.Option, "", starlark.String(a.Option)), nil
+}
+
+// wait(event, timeout=None): waits for an outside event named event (ADR
+// 0047), sent by kairocode event: no process is held meanwhile (invariant
+// 7). Its value is the event's JSON; past timeout ("30s", "2h", "7d") ok
+// is False and timed_out True. Events of a name are taken in the order
+// they came, one a wait; one that came before the wait was kept for it.
+func (r *flowRun) wait(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var event string
+	var timeout starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "event", &event, "timeout?", &timeout); err != nil {
+		return nil, err
+	}
+	if event == "" {
+		return nil, fmt.Errorf("wait: name the event, as wait(\"ci.result\")")
+	}
+	var d time.Duration
+	limit := ""
+	if timeout != starlark.None {
+		s, ok := starlark.AsString(timeout)
+		if !ok {
+			return nil, fmt.Errorf("wait: timeout is a string, as \"30s\", \"2h\" or \"7d\"")
+		}
+		var err error
+		if d, err = waitTimeout(s); err != nil {
+			return nil, err
+		}
+		limit = s
+	}
+	if err := r.step("wait", map[string]any{"event": event, "timeout": limit, "at": r.at(thread)}); err != nil {
+		return nil, err
+	}
+	r.waits++
+	in := FlowWaitInput{At: r.at(thread), ID: fmt.Sprintf("wait_%d_%d", r.in.N, r.waits), Event: event}
+	if _, err := kairo.Call[bool](r.ctx, ActFlowWait, in); err != nil {
+		return nil, r.fail(err)
+	}
+	var opts []kairo.WaitOption
+	if d > 0 {
+		opts = append(opts, kairo.WaitTimeout(d))
+	}
+	v, err := kairo.WaitFor[json.RawMessage](r.ctx, SignalEventPrefix+event, opts...)
+	if errors.Is(err, kairo.ErrTimedOut) {
+		return waited(false, nil, true), nil
+	}
+	if err != nil {
+		return nil, r.fail(err)
+	}
+	return waited(true, v, false), nil
+}
+
+// waited is what wait() returns: ok, the event's value (and its JSON as
+// output), and whether it timed out.
+func waited(ok bool, raw json.RawMessage, timedOut bool) starlark.Value {
+	var value starlark.Value = starlark.None
+	if len(raw) > 0 {
+		var x any
+		if json.Unmarshal(raw, &x) == nil {
+			value = fromGo(x)
+		}
+	}
+	errText := ""
+	if timedOut {
+		errText = "timed out"
+	}
+	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
+		"ok": starlark.Bool(ok), "output": starlark.String(raw), "error": starlark.String(errText), "value": value,
+		"timed_out": starlark.Bool(timedOut),
+	})
+}
+
+// waitTimeout reads a wait's timeout: a Go duration ("90s", "2h30m"), or a
+// whole number of days ("7d").
+func waitTimeout(s string) (time.Duration, error) {
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n > 0 {
+			return time.Duration(n) * 24 * time.Hour, nil
+		}
+	} else if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d, nil
+	}
+	return 0, fmt.Errorf("wait: timeout %q is not a length of time, as \"30s\", \"2h\" or \"7d\"", s)
 }
 
 // decide(prompt, type="bool", choices=None): the model's decision, typed

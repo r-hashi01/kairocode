@@ -119,6 +119,14 @@ type FlowAskInput struct {
 	Options  []string `json:"options"`
 }
 
+// FlowWaitInput is a flow's wait for an outside event of a name (ADR
+// 0047): the k-th wait of the flow's turn.
+type FlowWaitInput struct {
+	At    string `json:"at,omitempty"`
+	ID    string `json:"id"`
+	Event string `json:"event"`
+}
+
 // FlowAnswer is the user's answer to a flow's question.
 type FlowAnswer struct {
 	Option string `json:"option"`

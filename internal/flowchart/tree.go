@@ -23,6 +23,8 @@ func Label(n Node) string {
 		return join("tool", n.Title)
 	case Ask:
 		return "ask"
+	case Wait:
+		return join("wait", n.Title)
 	case Decide:
 		return join("decide", n.Title)
 	case Gate:

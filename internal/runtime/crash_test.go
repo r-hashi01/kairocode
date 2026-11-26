@@ -70,6 +70,14 @@ func TestMain(m *testing.M) {
 		crashItemChild()
 		return
 	}
+	if os.Getenv("KC_CRASH_EVENT_CHILD") != "" {
+		crashEventChild()
+		return
+	}
+	if os.Getenv("KC_CRASH_INTAKE_CHILD") != "" {
+		crashIntakeChild()
+		return
+	}
 	if os.Getenv("KC_CRASH_FEEDBACK_CHILD") == "1" {
 		crashFeedbackChild()
 		return

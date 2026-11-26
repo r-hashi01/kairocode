@@ -36,6 +36,7 @@ const (
 	Agent    = "agent"
 	Tool     = "tool"
 	Ask      = "ask"
+	Wait     = "wait" // an outside event (ADR 0047): Title, the timeout as Text
 	Decide   = "decide"
 	Gate     = "check"    // a check as a step of its own (ADR 0042): Title
 	Parallel = "parallel" // agents at once: Branches, or Body for each of Over
@@ -468,6 +469,8 @@ func (b *builder) call(fn string, x *syntax.CallExpr) []Node {
 			}
 		}
 		return at(n)
+	case "wait":
+		return at(Node{Kind: Wait, Title: b.arg(x, 0, "event"), Text: b.arg(x, 1, "timeout")})
 	case "decide":
 		text, code := b.argOf(x, 0, "prompt")
 		return at(Node{Kind: Decide, Title: b.arg(x, 1, "type"), Text: text, Code: code, Edit: b.edit(x, literal(argExpr(x, 0, "prompt")))})
@@ -696,6 +699,8 @@ func (b *builder) remember(stmt syntax.Stmt, nodes []Node) {
 			what = "result of tool " + n.Title
 		case Ask:
 			what = "your answer"
+		case Wait:
+			what = "event " + n.Title
 		case Decide:
 			what = "decision of the model"
 		case Parallel:
