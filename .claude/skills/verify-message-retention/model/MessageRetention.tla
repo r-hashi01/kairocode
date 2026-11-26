@@ -18,11 +18,10 @@ CONSTANTS
     Grace,      \* retention.grace, in ticks of the clock
     Keep,       \* kairo's KeepFinished, in ticks (shorter than the grace)
     MaxTime,    \* the clock stops here
-    \* The two findings (SKILL.md), each off unless check.sh -set turns it on:
-    RemoveDuringFork, \* F1: kairo may remove a fork's source while Fork runs
-    ForkFailed        \* F2: Fork may start from a failed session
+    ForkLock    \* forkMu: a Fork and a sweep do not overlap (FALSE: as before
+                \* it, which loses a fork's history: SKILL.md, F1 and F2)
 
-ASSUME Keep < Grace /\ Grace < MaxTime /\ {RemoveDuringFork, ForkFailed} \subseteq BOOLEAN
+ASSUME Keep < Grace /\ Grace < MaxTime /\ ForkLock \in BOOLEAN
 
 (* kc_message is keyed by its content's hash, so here a message is its     *)
 (* content. Every message has the same four fields, so TLC compares them.  *)
@@ -154,12 +153,11 @@ Fail(s) ==
 
 \* kairo's tick: RemoveFinished deletes, in one transaction, the tree of a
 \* root finished before now - KeepFinished. K.Get and K.Children find
-\* nothing of it after. Nothing in KairoCode holds it back while a Fork
-\* reads it; RemoveDuringFork = FALSE assumes so (finding F1).
+\* nothing of it after. Nothing in KairoCode holds it back, a Fork reading
+\* it included.
 Remove(s) ==
     /\ status[s] \in {"closed", "failed"}
     /\ endedAt[s] + Keep < now
-    /\ RemoveDuringFork \/ \A f \in fork : f.from # s
     /\ status' = [status EXCEPT ![s] = "removed"]
     /\ input' = [input EXCEPT ![s] = {}]
     /\ output' = [output EXCEPT ![s] = {}]
@@ -170,11 +168,12 @@ Remove(s) ==
 
 \* Fork (fork.go): K.Get(from) and K.Children(from), then the Head of one
 \* of its completed turns. Nothing is put: the hash is held as it is. Fork
-\* takes any session kairo holds; ForkFailed = FALSE leaves out the failed
-\* ones (finding F2).
+\* takes any session kairo holds, a failed one too. It holds forkMu (read)
+\* from here to CreateSession, so it waits for a sweep under way.
 ForkRead(from, to) ==
     /\ fork = {}
-    /\ status[from] \in (IF ForkFailed THEN Held ELSE {"live", "closed"})
+    /\ ~ForkLock \/ sw.ph = "idle"
+    /\ status[from] \in Held
     /\ status[to] = "none"
     /\ to # from
     /\ \E i \in 1..Len(heads[from]) :
@@ -193,12 +192,13 @@ ForkCreate ==
 
 -----------------------------------------------------------------------------
 (* The sweep (sweep.go): sweepRoots, then sweepMessages. sweepMu lets one *)
-(* run at a time.                                                         *)
+(* run at a time; it holds forkMu (write) from before K.List to its end.  *)
 
 \* sweep: grace = now - retention.grace; sweepRoots' one K.List of every
 \* root, each with the Input and Output it has then (take).
 List ==
     /\ sw.ph = "idle"
+    /\ ~ForkLock \/ fork = {}  \* the sweep holds forkMu (write) to its end
     /\ LET roots == {s \in Sessions : status[s] \in Held}
        IN sw' = [ph |-> "walk", grace |-> now - Grace, todo |-> roots,
                  names |-> UNION {input[s] \cup output[s] : s \in roots},

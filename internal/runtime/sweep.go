@@ -163,6 +163,14 @@ var sweepStep func()
 func (r *Runtime) sweep(ctx context.Context, dry bool, now time.Time) (api.SweepReport, error) {
 	sweepMu.Lock()
 	defer sweepMu.Unlock()
+	// No fork is under way from what is present to the last removal: a
+	// fork's new session holds what it names before the sweep looks
+	// (forkMu).
+	r.forkMu.Lock()
+	defer r.forkMu.Unlock()
+	if r.cfg.sweepHeld != nil {
+		r.cfg.sweepHeld()
+	}
 	set := retentionSettings()
 	rep := api.SweepReport{Dry: dry}
 	roots, err := r.sweepRoots(ctx)

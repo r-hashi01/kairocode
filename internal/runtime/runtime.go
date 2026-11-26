@@ -87,6 +87,11 @@ type Config struct {
 	// onlyFlowVersion, in tests, declares the flow at that old version
 	// only ("1").
 	onlyFlowVersion string
+	// forkStep, in tests, is called in Fork once it has read what it forks
+	// from ("read"), and once the new session holds it ("made"); sweepStep
+	// in the sweep, once it holds forkMu.
+	forkStep  func(at string)
+	sweepHeld func()
 	// flowFunc, in tests, runs the flows of the current version in place
 	// of workflows.RunFlow: code that changed under the same version.
 	flowFunc func(*kairo.Context, workflows.FlowInput) (workflows.FlowOutput, error)
@@ -125,6 +130,13 @@ type Runtime struct {
 	itemMu sync.Mutex
 	// queueMu: one pass over a repository's queue at a time (ADR 0044).
 	queueMu sync.Mutex
+	// forkMu: a fork (read) and a sweep (write) do not overlap (ADR 0045,
+	// addendum 2026-11-26). A fork names, in the session it makes, a head
+	// and a snapshot tree it read from another session, without writing
+	// them again; between, the sweep would see neither session hold them
+	// when kairo removed the source's tree meanwhile, or when the source
+	// failed (its output names no head).
+	forkMu sync.RWMutex
 	// rates are the providers' rate limits (ADR 0040).
 	rates *rateLimiter
 

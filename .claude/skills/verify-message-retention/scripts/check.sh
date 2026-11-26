@@ -3,8 +3,7 @@
 #
 #   check.sh                          # the whole check, bounds from the .cfg
 #   check.sh -set MaxTime=3           # a constant set otherwise (repeatable)
-#   check.sh -set RemoveDuringFork=TRUE   # reproduce finding F1 (exit 12)
-#   check.sh -set ForkFailed=TRUE         # reproduce finding F2 (exit 12)
+#   check.sh -set ForkLock=FALSE   # without forkMu: findings F1 and F2 (exit 12)
 #   check.sh -coverage                # also report how often each action ran
 #
 # Exit status is TLC's: 0 passed, 12 an invariant violated, 150 the model
