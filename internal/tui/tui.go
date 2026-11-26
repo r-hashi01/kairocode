@@ -685,6 +685,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case startedMsg:
 		m.writeHeader()
+		m.endReplay()
 		if msg.err != nil {
 			m.print(bad.Render("Could not start the session: " + msg.err.Error()))
 			return m.leave()
@@ -697,6 +698,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case sessionsMsg:
 		return m.sessionPick(msg)
 	case resumedMsg:
+		m.endReplay()
 		m.loading, m.state = "", stateReady
 		if msg.err != nil {
 			m.print(bad.Render("  ⎿  the session could not be taken up: " + shortError(msg.err.Error())))
@@ -963,8 +965,23 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// endReplay ends what a session taken up again said (session/load sends
+// its conversation before it answers): its last reply, which no turn's end
+// closes, goes into the scrollback.
+func (m *model) endReplay() {
+	if m.live != "" {
+		m.flushLive()
+	}
+}
+
 // take shows an ACP update.
 func (m *model) take(u acp.Update) {
+	switch u.Kind {
+	case "user_message_chunk", "agent_message_chunk", "tool_call", "tool_call_update":
+		// A session taken up sends its conversation before it is started:
+		// under the header, not above it.
+		m.writeHeader()
+	}
 	switch u.Kind {
 	case acp.WaitingNotice:
 		// A call waits for a provider's rate limit (ADR 0040): said on the
