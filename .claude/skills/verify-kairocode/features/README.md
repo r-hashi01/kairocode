@@ -49,4 +49,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 | [Run one request](./run.md) | `run` text and `-json`, the exit codes 0, 2 and 4, `log`, `usage -json` | Steps observed while writing the skill, not yet as one recorded run |
 | [Stream a turn's events](./stream-json.md) | `run -stream-json`: done, waiting at an approval, wrong use | Steps observed while writing the skill, not yet as one recorded run |
 | [Work items and lines](./lines-items.md) | `lines -json`, `line`, `items -json`, the item's branch, `items -drop` | Only the uncommitted-line refusal observed. The rest is from `internal/runtime/items_test.go`, not yet driven |
-| [Chat in the terminal UI](./tui-chat.md) | trust prompt, send and reply, a written file, leaving, `-continue` | Steps observed while writing the skill. `chat-continue` fails: see its Gotchas |
+| [Chat in the terminal UI](./tui-chat.md) | trust prompt, send and reply, a written file, leaving, `-continue` | Steps observed while writing the skill. `chat-continue` failed on 2026-11-26 and was proved fixed by PR #42: see its Gotchas |
