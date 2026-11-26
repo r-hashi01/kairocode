@@ -132,6 +132,7 @@ type fakeAgent struct {
 	files    []string
 	prompts  []string
 	turn     []acp.Update
+	replay   []acp.Update // what LoadSession sends
 	cancels  []string
 	onPrompt func()   // what the turn does to the files
 	set      []string // settings set: id=value
@@ -309,6 +310,10 @@ func (a *fakeAgent) ListSessions(ctx context.Context, cwd string) ([]acp.Session
 func (a *fakeAgent) LoadSession(ctx context.Context, session, cwd string) error {
 	a.cwds = append(a.cwds, cwd)
 	a.loaded = session
+	for _, u := range a.replay { // the conversation, sent before it answers
+		u.Session = session
+		a.d.send(updateMsg(u))
+	}
 	return nil
 }
 
@@ -1898,5 +1903,35 @@ func TestItemReviewAndLines(t *testing.T) {
 	typed(d, "/line restart breaks")
 	if len(a.restarted) != 1 || a.restarted[0] != "/repo breaks" {
 		t.Fatalf("restarted %q", a.restarted)
+	}
+}
+
+// A session taken up again (kairo -continue, /resume) shows its
+// conversation under the header, its last reply included: session/load
+// sends it before it answers, and no turn's end closes the last reply.
+func TestTakenUpShowsItsConversation(t *testing.T) {
+	replay := []acp.Update{
+		{Kind: "user_message_chunk", Text: "first message"},
+		{Kind: "agent_message_chunk", Text: "the reply"},
+	}
+	// kairo -continue: loaded as it starts.
+	a := &fakeAgent{replay: replay}
+	d := &driver{t: t, m: newModel(context.Background(), a, Options{Dir: "/work/repo", Session: "s/aaaa"})}
+	a.d = d
+	d.send(tea.WindowSizeMsg{Width: 80, Height: 24})
+	d.run(d.m.Init())
+	out := d.out()
+	head, said, reply := strings.Index(out, "ϟ kairo"), strings.Index(out, "first message"), strings.Index(out, "the reply")
+	if head < 0 || said < head || reply < said {
+		t.Fatalf("-continue: header %d, message %d, reply %d in\n%s", head, said, reply, out)
+	}
+	// /resume: loaded from the list.
+	d, a = start(t, Options{})
+	a.replay = replay
+	a.list = []acp.SessionInfo{{ID: "s/0123456789abcdef", Title: "this one"}, {ID: "s/aaaa", Title: "the other"}}
+	typed(d, "/resume")
+	d.send(key("enter"))
+	if out := d.out(); !strings.Contains(out, "the reply") {
+		t.Fatalf("/resume: no reply in\n%s", out)
 	}
 }
