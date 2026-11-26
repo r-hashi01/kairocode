@@ -337,7 +337,7 @@ func (r *Runtime) tellStartFailed(ctx context.Context, row store.ItemRow, why er
 			line = "put together on the spot"
 		}
 		text := fmt.Sprintf("[KairoCode] The item %s (line %s) failed as its turn came: %v", row.Name, line, why)
-		if _, err := r.Send(ctx, row.Of, text); err != nil {
+		if _, err := r.tell(ctx, row.Of, kindItemTold+"\x00"+string(key), text); err != nil {
 			return fmt.Errorf("telling %s of the item %s: %w", row.Of, row.Name, err)
 		}
 		if _, err := r.Store.Put(ctx, kindItemTold, key); err != nil {
@@ -840,11 +840,11 @@ func (r *Runtime) tellItem(ctx context.Context, session string) error {
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
-		// Once KairoCode is on a kairo with SignalID (kairo's ADR 0071;
-		// the update waits: docs/milestones.md, future work), it makes this once. Until
-		// then a process stopped between sending and keeping it as told
-		// sends it again, once (ADR 0043, implementation).
-		if _, err := r.Send(ctx, row.Of, text); err != nil {
+		// Told under the notice's signal id (tell): once, even by a
+		// process stopped between telling and keeping it as told, when
+		// kairo keeps the id (kairo#102); until then, twice in that window
+		// (ADR 0043, implementation).
+		if _, err := r.tell(ctx, row.Of, kindItemTold+"\x00"+row.ID+"\x00"+what, text); err != nil {
 			return fmt.Errorf("telling %s of the item %s: %w", row.Of, row.Name, err)
 		}
 		_, err := r.Store.Put(ctx, kindItemTold, []byte(row.ID+"\x00"+what))
@@ -1026,7 +1026,8 @@ func (r *Runtime) endItem(ctx context.Context, row store.ItemRow, how string, fo
 		return err
 	}
 	if run, ok, err := r.TurnRun(ctx, row.ID, 0); err == nil && ok && !run.Finished() {
-		if err := r.K.Cancel(ctx, run.RunID); err != nil {
+		// One that ended meanwhile is settled already (kairo's ADR 0061).
+		if err := r.K.Cancel(ctx, run.RunID); err != nil && !errors.Is(err, kairo.ErrRunSettled) {
 			return undo(err)
 		}
 		// Its worktree is removed once its turn has stopped.

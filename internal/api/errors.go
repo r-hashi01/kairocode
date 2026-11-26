@@ -91,8 +91,8 @@ var ErrUnavailable = errors.New("not available here")
 // older): it would take an undo for a message.
 var ErrNoUndo = errors.New("this session started before undo existed: start a new session to undo")
 
-// ErrSessionFailed: the session stopped on an error (a store's, say:
-// kairo#5) and takes no more messages. It goes on in a session forked
+// ErrSessionFailed: the session stopped on an error (before kairo 0.5.0,
+// a store's: kairo#5) and takes no more messages. It goes on in a session forked
 // from its last finished turn (ADR 0021).
 var ErrSessionFailed = errors.New("this session stopped on an error and takes no more messages")
 

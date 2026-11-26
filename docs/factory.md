@@ -89,7 +89,7 @@ Each step is a milestone with its own ADR. Steps marked "kairo" wait for the use
    - A line that keeps failing stops itself and tells the person.
    - A queue with a limit on items in progress per line.
 4. **Results other programs read** (M16, ADR 0041, done): exit codes and JSON, so schedules and CI can send work in and read what came out.
-5. **Intake** (kairo; ADR 0047): items from issues, tickets, alerts and schedules through one idempotent way in, and stations that wait for outside events; after the move to kairo v0.5.0. Running without a process stays with ADR 0012.
+5. **Intake** (kairo; ADR 0047): items from issues, tickets, alerts and schedules through one idempotent way in, and stations that wait for outside events; on kairo v0.5.0 (moved 2026-11-26). Running without a process stays with ADR 0012.
 6. **Feedback** (ADR 0046): from items that stopped or were sent back, a draft that improves the line, its checks or `AGENTS.md`, sent as an item on a built-in line and reviewed by a person. It reads the item results kept by storage retention (ADR 0045), which also bounds what the factory's data directory keeps.
 
 Out of scope: shipping (deploying, canaries, feature flags). A line ends at a change ready to merge, or merged where the line says so.

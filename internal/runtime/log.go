@@ -140,11 +140,10 @@ func (r *Runtime) logTurn(ctx context.Context, k kairo.RunInfo, w logWidth) (Log
 
 // logRuns are run's children, oldest first, each with its own.
 func (r *Runtime) logRuns(ctx context.Context, run string, w logWidth) ([]LogEntry, error) {
-	kids, err := r.K.Children(ctx, run)
+	kids, err := r.K.Children(ctx, run) // in the order they were made
 	if err != nil {
 		return nil, err
 	}
-	slices.SortStableFunc(kids, madeBefore)
 	var out []LogEntry
 	for _, k := range kids {
 		e := r.logRun(ctx, k, w)

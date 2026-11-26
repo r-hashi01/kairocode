@@ -1,6 +1,6 @@
 module github.com/r-hashi01/kairocode
 
-go 1.27.2
+go 1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.2.1
@@ -9,7 +9,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.79.1
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/r-hashi01/kairo v0.4.1
+	github.com/r-hashi01/kairo v0.5.0
 	go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9
 	golang.org/x/net v0.41.0
 	golang.org/x/oauth2 v0.35.0

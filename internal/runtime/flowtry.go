@@ -74,8 +74,9 @@ func (r *Runtime) TryFlow(ctx context.Context, key, args string) error {
 	}
 	run, call, _ := strings.Cut(key, "#")
 	t := pending[i].Try
-	return r.K.Signal(ctx, run, workflows.SignalApprovePrefix+call,
-		workflows.Approval{Try: &workflows.FlowTry{Name: t.Name, Script: t.Script, Args: strings.TrimSpace(args)}})
+	_, err = r.K.SendSignal(ctx, run, workflows.SignalApprovePrefix+call,
+		workflows.Approval{Try: &workflows.FlowTry{Name: t.Name, Script: t.Script, Args: strings.TrimSpace(args)}}, kairo.OnlyIfWaiting())
+	return answered(err)
 }
 
 // lastTry is the last try, among calls, of the flow whose script is

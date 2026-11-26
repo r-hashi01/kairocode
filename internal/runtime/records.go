@@ -49,14 +49,11 @@ func inputOf(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// madeBefore orders runs by when they were made. kairo#49: Children gives
-// runs made in the same millisecond in the order of their ids (a hash),
-// not the order they were made; of two such, the one that finished first
-// is taken as made first (a step in a sequence finishes before the next
-// is made). Runs made and finished in one millisecond may still swap.
+// madeBefore orders runs by when they were made, for runs of more than one
+// list (a turn's children and its CLI engine's MCP calls, runs of their
+// own: kairo#4). Sorted stably, runs made in the same millisecond keep
+// their order in kairo's lists, which since kairo 0.5.0 is the order they
+// were made (kairo#49; runs recorded before it keep the old order).
 func madeBefore(a, b kairo.RunInfo) int {
-	if c := a.Created.Compare(b.Created); c != 0 {
-		return c
-	}
-	return a.Updated.Compare(b.Updated)
+	return a.Created.Compare(b.Created)
 }

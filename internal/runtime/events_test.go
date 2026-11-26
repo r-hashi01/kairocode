@@ -326,4 +326,10 @@ func TestApprovalToManyClients(t *testing.T) {
 	if err := r.Approve(ctx, key, true, ""); !errors.Is(err, ErrAnswered) {
 		t.Fatalf("a late answer: %v", err)
 	}
+	// So is one given past the look at what waits (another process sharing
+	// the database, which listed it before the first answer): kairo has no
+	// wait for it (OnlyIfWaiting, kairo#7), and does not keep it for one.
+	if err := r.answer(ctx, key, true, "", true); !errors.Is(err, ErrAnswered) {
+		t.Fatalf("an answer past the look: %v", err)
+	}
 }

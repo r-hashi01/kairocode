@@ -393,7 +393,7 @@ func (m *jobManager) done(id string) {
 		status, _ := os.ReadFile(m.path(id, jobFileStatus))
 		text := fmt.Sprintf("[KairoCode] The command in the background %s ended (%s): %s\nbash_output {\"id\": %q} reads what it wrote.",
 			id, strings.TrimSpace(string(status)), s.Command, id)
-		if _, err := m.r.Send(ctx, s.Session, text); err != nil {
+		if _, err := m.r.tell(ctx, s.Session, "job\x00"+id, text); err != nil {
 			m.r.logf("telling session %s that %s ended: %v", s.Session, id, err)
 		} else {
 			os.WriteFile(m.path(id, jobFileTold), nil, 0o600)

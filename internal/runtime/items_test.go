@@ -431,9 +431,11 @@ func TestItemCleanedUp(t *testing.T) {
 	if branchExists(ctx, ws, one.Branch) {
 		t.Fatal("the taken item's branch is there")
 	}
-	if info, err := r.K.Get(ctx, one.ID); err != nil || !info.Finished() {
-		t.Fatalf("the taken item's session: %+v %v", info, err)
-	}
+	// Closed: it ends once kairo has driven it to its close.
+	waitUntil(t, ctx, "the taken item's session to end", func() bool {
+		info, err := r.K.Get(ctx, one.ID)
+		return err == nil && info.Finished()
+	})
 
 	os.WriteFile(filepath.Join(two.Dir, "more.txt"), []byte("more"), 0o644)
 	if err := r.DropItem(ctx, s, two.Name, false); !errors.Is(err, ErrWorktreeChanged) {

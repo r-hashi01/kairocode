@@ -13,10 +13,10 @@ import (
 	"github.com/r-hashi01/kairocode/internal/provider"
 )
 
-// A session that failed (a store's error in it, kairo#5) takes no
-// more messages: Send says so, and why, instead of sending one to be lost
-// (ADR 0021). The failed run here is a workflow that fails as a session
-// does on a store's error.
+// A session that failed (before kairo 0.5.0, a store's error in it:
+// kairo#5) takes no more messages: Send says so, and why, instead of
+// sending one to be lost (ADR 0021). The failed run here is a workflow that
+// fails as a session did on a store's error.
 func TestSendToAFailedSession(t *testing.T) {
 	t.Parallel()
 	r := open(t, filepath.Join(t.TempDir(), "k.db"), &provider.Fake{HoldAt: -1})
