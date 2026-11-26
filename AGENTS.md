@@ -15,7 +15,7 @@ The requirements and the design live in the kairo repository. We assume `kairo` 
 
 KairoCode is a coding agent built on kairo (a durable workflow runtime). It is the same kind of tool as opencode or Claude Code, but it runs sessions as kairo workflows. The goal is that it "does not break when it crashes, waits, or runs side by side."
 
-- Go 1.27.4. kairo is used through the embedded runtime (`kairo.Open`) of the Go SDK `github.com/r-hashi01/kairo/sdk/go` (v0.5.0 or later, package name `kairo`) (ADR 0001).
+- Go 1.27.4. kairo is used through the embedded runtime (`kairo.Open`) of the Go SDK `github.com/r-hashi01/kairo/sdk/go` (v0.5.1 or later, package name `kairo`) (ADR 0001).
 - Storage is SQLite (`modernc.org/sqlite`) locally, and PostgreSQL for serverless and teams. The local server uses wait mode; serverless uses suspend mode.
 - It is split into a server (HTTP + SSE) and clients that connect to it (TUI and CLI). It ships as a single binary (`cmd/kairocode`).
 
