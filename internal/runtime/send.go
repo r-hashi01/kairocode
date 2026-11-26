@@ -133,8 +133,8 @@ func (r *Runtime) signal(ctx context.Context, session string, ev workflows.Sessi
 // notice. Since kairo 0.5.1 the wait that takes it keeps the id (kairo#102),
 // whether the session was waiting or busy. The callers' told-markers stay:
 // they spare a notice already told the work of giving it again. A switch
-// of engine, model or mode waiting goes with it, as with any message (and
-// then not under the id: signalAs).
+// of engine, model or mode waiting goes with it, as with any message: the
+// event is kept as it is first given, and given again the same (signalAs).
 func (r *Runtime) tell(ctx context.Context, session, key, text string) (int, error) {
 	h, err := r.Store.PutMessage(ctx, msg.Message{Role: msg.User, Parts: []msg.Part{{Type: msg.Text, Text: text}}})
 	if err != nil {
@@ -144,8 +144,10 @@ func (r *Runtime) tell(ctx context.Context, session, key, text string) (int, err
 	return r.signalAs(ctx, session, workflows.SessionEvent{Kind: workflows.EventMessage, Message: h}, "tell:"+hex.EncodeToString(sum[:]))
 }
 
-// signalAs is signal, under the signal id id if it is not "" and no
-// switch waits to go with the event.
+// signalAs is signal, under the signal id id if it is not "": the event,
+// with the switch waiting if any, is kept as it is first given under id,
+// and given again after a crash the same, which kairo takes as given
+// (kc_told). The switch it took is removed once it is sent.
 func (r *Runtime) signalAs(ctx context.Context, session string, ev workflows.SessionEvent, id string) (int, error) {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
@@ -167,12 +169,23 @@ func (r *Runtime) signalAs(ctx context.Context, session string, ev workflows.Ses
 		return 0, err
 	}
 	ev.Switch = sw
-	// Under a signal id only with nothing else riding along: the same id
-	// then always goes with the same event. With a switch waiting, the
-	// event goes as any other (once taken, the switch is gone, and given
-	// again the event would not be the same).
 	var opts []kairo.SignalOption
-	if id != "" && sw == nil {
+	if id != "" {
+		// The same id with the same event: as first given, the switch
+		// that went with it included, though it is removed since.
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return 0, err
+		}
+		kept, keptSeq, err := r.Store.KeepTold(ctx, id, session, b, seq)
+		if err != nil {
+			return 0, err
+		}
+		ev = workflows.SessionEvent{}
+		if err := json.Unmarshal(kept, &ev); err != nil {
+			return 0, err
+		}
+		sw, seq = ev.Switch, keptSeq
 		opts = append(opts, kairo.SignalID(id))
 	}
 	// Read before it is sent: an error once sent would have the caller

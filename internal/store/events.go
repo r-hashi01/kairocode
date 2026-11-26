@@ -86,3 +86,29 @@ func (s *Store) ClearEventWait(ctx context.Context, session, name, run string) e
 	_, err := s.db.ExecContext(ctx, `DELETE FROM kc_event_wait WHERE session = ? AND name = ? AND run = ?`, session, name, run)
 	return err
 }
+
+// KeepRestorePrior keeps tree as the files just before the restore of step
+// run, and returns the one kept: the first, if one was kept before (the
+// restore made again after a crash).
+func (s *Store) KeepRestorePrior(ctx context.Context, run, tree string) (string, error) {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO kc_restore_prior (run, tree) VALUES (?, ?) ON CONFLICT (run) DO NOTHING`, run, tree); err != nil {
+		return "", err
+	}
+	var kept string
+	err := s.db.QueryRowContext(ctx, `SELECT tree FROM kc_restore_prior WHERE run = ?`, run).Scan(&kept)
+	return kept, err
+}
+
+// KeepTold keeps event, with the seq of the switch going with it, as the
+// notice id to session, and returns the one kept: the first, if the notice
+// was kept before (given again after a crash).
+func (s *Store) KeepTold(ctx context.Context, id, session string, event []byte, seq int64) ([]byte, int64, error) {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO kc_told (session, id, event, seq) VALUES (?, ?, ?, ?) ON CONFLICT (session, id) DO NOTHING`,
+		session, id, event, seq); err != nil {
+		return nil, 0, err
+	}
+	var kept []byte
+	var keptSeq int64
+	err := s.db.QueryRowContext(ctx, `SELECT event, seq FROM kc_told WHERE session = ? AND id = ?`, session, id).Scan(&kept, &keptSeq)
+	return kept, keptSeq, err
+}

@@ -116,6 +116,14 @@ The second is refused before the request is processed, and not billed. With a pr
 - These 429s ("Request too large", quota) are not counted by `/usage` (it counts the 429s that hold a provider back) and no longer hold back the provider's other calls for 10 seconds. An error of the same words inside the stream (after a 200) is taken the same way.
 - **Left for later:** on a low tier (tens of thousands of tokens a minute), a session whose history alone goes past the limit now fails at once, as it did after waiting before. Compacting the history (ADR 0020) might let it pass; taking "Request too large" as a context too long would start that, but its message would then speak of the context. To decide when it is met.
 
+### Calls in flight count against the tokens (2026-11-26)
+
+- **What was wrong.** A call leaves the gate as it starts, and what its reply used is counted only when it comes. So calls that started while one was in flight saw the same tokens left, and all started on them. With 90 of 100 tokens a minute used, a call waiting for its reply did not hold back the next one. Found by a review of the whole repository.
+- **Fixed.** The window counts the calls in flight, and reckons each to use as much as the most a reply of the last minute used (the last reply's, with none in the minute). When the tokens of the last minute plus what the calls in flight are reckoned to use reach the limit, a call waits for one in flight to end, then looks again. The reply's use is known by then. A provider with no reply yet has no reckoning, so nothing waits for that.
+- A call is counted as ended however it ends: a reply, a failure, a 429, or a panic, which kairo takes as the step's failure while the daemon goes on.
+- **A cost.** While a call in flight holds the next ones back, they wait for it, still within the 5 minutes a call waits in all. A reply that streams for longer than that, with the minute's tokens near the limit, makes the calls waiting behind it fail as "the calls under way took longer than 5m0s". Before, they started, and went past the limit.
+- `TestRateLimitTokensInFlight` and `TestRateLimitPanicEndsTheCall` cover it, and fail with the limiter as it was.
+
 ## Alternatives considered
 
 - **kairo's `Rate` and `Limit` on the `model` action.** One limit for every provider together, and no tokens: a fast local model would be held to a hosted provider's limit.

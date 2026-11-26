@@ -137,6 +137,106 @@ func TestRateLimitTokens(t *testing.T) {
 	}
 }
 
+// With tpm, a call does not start on the tokens a call in flight may use:
+// 90 of 100 used, while one call waits for its reply the next waits for it
+// to end (what it used is known then), and then for tokens to leave the
+// minute, instead of both starting on the 10 left.
+func TestRateLimitTokensInFlight(t *testing.T) {
+	l, c := clocked()
+	ctx := context.Background()
+	set := rateSetting{TPM: 100}
+	var n int
+	if _, err := l.complete(ctx, "lab", set, noWaiting, replies(&n, msg.Usage{Input: 90})); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var order []string
+	note := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, s)
+	}
+	aIn, aRelease := make(chan struct{}), make(chan struct{})
+	aDone := make(chan error, 1)
+	go func() {
+		_, err := l.complete(ctx, "lab", rateSetting{TPM: 1000}, noWaiting, func() (provider.Response, error) {
+			note("a starts")
+			close(aIn)
+			<-aRelease
+			note("a ends")
+			return provider.Response{Usage: msg.Usage{Input: 20}}, nil
+		})
+		aDone <- err
+	}()
+	<-aIn
+	bWaits := make(chan struct{})
+	var once sync.Once
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := l.complete(ctx, "lab", set, func(s string) {
+			if strings.Contains(s, "other calls first") {
+				once.Do(func() { close(bWaits) })
+			}
+		}, func() (provider.Response, error) {
+			note("b starts")
+			return provider.Response{Usage: msg.Usage{Input: 5}}, nil
+		})
+		bDone <- err
+	}()
+	select {
+	case <-bWaits:
+	case err := <-bDone:
+		t.Fatalf("the second call started while the first was in flight (%v): %q", err, order)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second call neither waited nor started")
+	}
+	close(aRelease)
+	if err := <-aDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-bDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ", "); got != "a starts, a ends, b starts" {
+		t.Fatalf("order %q", got)
+	}
+	// 110 tokens in the minute once the first ended: the 90 leave it a
+	// minute after they were used.
+	if c.total() != time.Minute {
+		t.Fatalf("waited %v, want 1m", c.total())
+	}
+}
+
+// A call that panics (kairo takes it as the step's failure, the daemon
+// going on) is ended all the same: the calls after it are not held back by
+// a call in flight that is not.
+func TestRateLimitPanicEndsTheCall(t *testing.T) {
+	l, _ := clocked()
+	ctx := context.Background()
+	set := rateSetting{TPM: 100}
+	var n int
+	if _, err := l.complete(ctx, "lab", set, noWaiting, replies(&n, msg.Usage{Input: 90})); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		l.complete(ctx, "lab", set, noWaiting, func() (provider.Response, error) { panic("the adapter broke") })
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.complete(ctx, "lab", set, noWaiting, replies(&n, msg.Usage{Input: 5}))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("held back by the call that panicked")
+	}
+}
+
 // A 429 holds the provider back as long as it asks (10s if it does not
 // say), for every call, and the call is asked again; after rateTries
 // 429s, it fails as the provider said.

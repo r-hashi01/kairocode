@@ -236,10 +236,16 @@ func (r *Runtime) snapshot(ctx context.Context, dir string) (string, error) {
 // taken back) has: files made outside that change stay, and so do files
 // the restored .gitignore ignores, and repositories inside dir. It returns
 // the snapshot of the files as they were before it.
-func (r *Runtime) restore(ctx context.Context, dir, tree, from string) (string, error) {
+func (r *Runtime) restore(ctx context.Context, run, dir, tree, from string) (string, error) {
 	dir = filepath.Clean(dir)
 	prior, err := r.snapshot(ctx, dir)
 	if err != nil {
+		return "", err
+	}
+	// The files before the restore, kept before it changes them: made again
+	// (cut off once it had put the files back), it gives the files before
+	// it the first time, not those it put back, for a redo to put back.
+	if prior, err = r.Store.KeepRestorePrior(ctx, run, prior); err != nil {
 		return "", err
 	}
 	store, index, err := r.openStore(ctx, dir)
@@ -352,7 +358,7 @@ func (r *Runtime) restoreAction(t *kairo.TaskContext, in workflows.RestoreInput)
 		out.Skipped = true
 		text = fmt.Sprintf("Turn %d has no snapshot of the files: it was passed over, and the files were not changed.", u.Of)
 	default:
-		prior, err := r.restore(t, in.Dir, u.Tree, u.From)
+		prior, err := r.restore(t, t.RunID, in.Dir, u.Tree, u.From)
 		if err != nil {
 			return out, err
 		}

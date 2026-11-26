@@ -111,6 +111,13 @@ type rateWindow struct {
 	starts []time.Time
 	used   []tokensAt
 	paused time.Time
+	// inFlight counts the calls started whose replies have not come:
+	// what they use is not known yet. Each is reckoned to use the most a
+	// reply of the last minute used, or the last reply's (last) with none
+	// in it. ended is closed (and made anew) as one of them ends.
+	inFlight int
+	last     int64
+	ended    chan struct{}
 	// limited counts the 429s met today (day is the day they count for).
 	limited int
 	day     time.Time
@@ -150,7 +157,7 @@ func (l *rateLimiter) window(p string) *rateWindow {
 	defer l.mu.Unlock()
 	w := l.w[p]
 	if w == nil {
-		w = &rateWindow{gate: make(chan struct{}, 1)}
+		w = &rateWindow{gate: make(chan struct{}, 1), ended: make(chan struct{})}
 		l.w[p] = w
 	}
 	return w
@@ -187,9 +194,27 @@ func (l *rateLimiter) take(ctx context.Context, p string, set rateSetting, deadl
 	}
 	defer func() { <-w.gate }()
 	for {
-		d := l.wait(w, set)
-		if d <= 0 {
+		d, ended := l.wait(w, set)
+		if d <= 0 && ended == nil {
 			break
+		}
+		if d <= 0 { // until a call in flight ends: what it used is counted then
+			if !told {
+				waiting(-1)
+				told = true
+			}
+			gctx, cancel := context.WithTimeout(ctx, deadline.Sub(l.now()))
+			select {
+			case <-ended:
+				cancel()
+				continue
+			case <-gctx.Done():
+				cancel()
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return fmt.Errorf("%s's rate limit: the calls under way took longer than %v", p, rateWaitMax)
+			}
 		}
 		if l.now().Add(d).After(deadline) {
 			return fmt.Errorf("%s's rate limit asks to wait %v, past the %v a call waits: try again later", p, d.Round(time.Second), rateWaitMax)
@@ -204,13 +229,17 @@ func (l *rateLimiter) take(ctx context.Context, p string, set rateSetting, deadl
 	}
 	l.mu.Lock()
 	w.starts = append(w.starts, l.now())
+	w.inFlight++
 	l.mu.Unlock()
 	return nil
 }
 
 // wait is how long a call to w must wait now: for a pause, for a start to
-// leave the last minute, or for tokens to; 0 if it may start.
-func (l *rateLimiter) wait(w *rateWindow, set rateSetting) time.Duration {
+// leave the last minute, or for tokens to; 0 if it may start. With the
+// tokens of the last minute and those the calls in flight are reckoned to
+// use reaching the limit, it is ended: the call waits for one of them to
+// end (what it used is known then), not to start on what they may use too.
+func (l *rateLimiter) wait(w *rateWindow, set rateSetting) (time.Duration, <-chan struct{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -233,21 +262,60 @@ func (l *rateLimiter) wait(w *rateWindow, set rateSetting) time.Duration {
 		for _, u := range w.used {
 			sum += u.tokens
 		}
+		reckoned := w.last
+		if len(w.used) > 0 {
+			reckoned = 0
+			for _, u := range w.used {
+				reckoned = max(reckoned, u.tokens)
+			}
+		}
+		if d <= 0 && w.inFlight > 0 && sum+int64(w.inFlight)*reckoned >= set.TPM {
+			return 0, w.ended
+		}
 		// Until enough of the oldest leave the minute to bring it under.
 		for i := 0; sum >= set.TPM && i < len(w.used); i++ {
 			sum -= w.used[i].tokens
 			d = max(d, w.used[i].at.Add(time.Minute).Sub(now))
 		}
 	}
-	return d
+	return d, nil
 }
 
-// used counts what a reply of p used.
-func (l *rateLimiter) used(p string, tokens int64) {
+// end counts a call to p as ended, and what its reply used (0 for none:
+// it failed), so the calls waiting for one in flight look again.
+func (l *rateLimiter) end(p string, tokens int64) {
 	w := l.window(p)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	w.used = append(w.used, tokensAt{at: l.now(), tokens: tokens})
+	if tokens > 0 {
+		w.used = append(w.used, tokensAt{at: l.now(), tokens: tokens})
+		w.last = tokens
+	}
+	if w.inFlight > 0 {
+		w.inFlight--
+	}
+	close(w.ended)
+	w.ended = make(chan struct{})
+}
+
+// called makes call, and counts it as ended however it ends: a reply, a
+// failure, or a panic (which kairo takes as the step's failure, the
+// daemon going on).
+func (l *rateLimiter) called(p string, call func() (provider.Response, error)) (resp provider.Response, err error) {
+	ended := false
+	defer func() {
+		if !ended {
+			l.end(p, 0)
+		}
+	}()
+	resp, err = call()
+	var tokens int64
+	if err == nil {
+		tokens = workflows.Tokens(resp.Usage)
+	}
+	ended = true
+	l.end(p, tokens)
+	return resp, err
 }
 
 // pause holds p back for d (a 429), and counts it.
@@ -303,12 +371,9 @@ func (l *rateLimiter) complete(ctx context.Context, p string, set rateSetting, w
 		if err := l.take(ctx, p, set, deadline, tell); err != nil {
 			return provider.Response{}, err
 		}
-		resp, err := call()
+		resp, err := l.called(p, call)
 		var limited *provider.RateLimitError
 		if !errors.As(err, &limited) {
-			if err == nil {
-				l.used(p, workflows.Tokens(resp.Usage))
-			}
 			return resp, err
 		}
 		d := limited.After

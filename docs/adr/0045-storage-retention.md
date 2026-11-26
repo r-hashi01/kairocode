@@ -129,3 +129,10 @@ There is a second problem, in the other direction. An item's record is its sessi
 - **Tests.**
   - `TestForkKeepsTheSweepOut` (a fork with files) checks that `Fork` holds the lock both at its read and once the new session holds what it read, and that the sweep holds it. It fails with the lock taken out of either side, or released before `CreateSession` (checked).
   - The model: `ForkLock = TRUE` with both orders allowed passes. `-set ForkLock=FALSE` fails with F1 or F2.
+
+## Addendum: tables added since (2026-11-26)
+
+- **`kc_event` and `kc_event_wait`** (ADR 0047) hold outside events and the flow runs that wait for them. They name no message. They are swept with their session; a queued item's rows stay until its session is made.
+- **`kc_told`** (ADR 0043) holds a notice's event as it was first given. It names the notice's message, so the sweep reads it as a root. It is swept with its session.
+- **`kc_restore_prior`** (design 7) holds the files just before a restore (an undo's or a redo's). A restore made again after a crash gives the same files for a redo. It names a snapshot tree, so the sweep reads it as a root. It is swept with its session.
+- `TestSweepRootsCoverTables` classifies each.

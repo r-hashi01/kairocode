@@ -16,6 +16,7 @@ import (
 // as wide as the screen, the cursor on the input's line. Not told, or with
 // NO_COLOR, two rules as before.
 func TestInputBox(t *testing.T) {
+	t.Setenv("NO_COLOR", "") // colour, whatever the shell running the tests says
 	d, _ := start(t, Options{})
 	if v := d.view(); !strings.Contains(v, strings.Repeat("─", 20)) || strings.Contains(v, "▄") {
 		t.Fatalf("no background told: want the rules\n%s", v)
@@ -47,6 +48,7 @@ func TestInputBox(t *testing.T) {
 // The ground is a shade off the terminal's: lighter on a dark one, darker
 // on a light one, close to it.
 func TestPanelColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "") // colour, whatever the shell running the tests says
 	for _, c := range []struct {
 		bg      color.RGBA
 		lighter bool

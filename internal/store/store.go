@@ -113,6 +113,22 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			session TEXT NOT NULL,
 			top TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS kc_kept_session ON kc_kept (session)`,
+		// The files just before a restore (an undo's, a redo's: design 7), kept
+		// as it begins: made again after a crash, the restore keeps them,
+		// not the files it had put back. run is the restore step's run.
+		`CREATE TABLE IF NOT EXISTS kc_restore_prior (
+			run TEXT PRIMARY KEY,
+			tree TEXT NOT NULL)`,
+		// A notice of KairoCode's to a session, as it is given under its
+		// signal id (ADR 0043): the event (its message's hash, a switch
+		// going with it) and the switch's seq, so the notice given again
+		// after a crash is the same event, which kairo takes as given.
+		`CREATE TABLE IF NOT EXISTS kc_told (
+			session TEXT NOT NULL,
+			id TEXT NOT NULL,
+			event BLOB NOT NULL,
+			seq INTEGER NOT NULL,
+			PRIMARY KEY (session, id))`,
 		// Events from outside for a session's flows (ADR 0047): each taken
 		// once under its id. run is the flow run it was given to, "" while
 		// it is kept for a wait to come; seq is the order they came in.
