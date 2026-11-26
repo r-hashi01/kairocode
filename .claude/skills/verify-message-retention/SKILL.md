@@ -84,7 +84,7 @@ By hand: each `State n: <Action line ...>` is one step; name it through the cove
 
 Files `stale.sh` watches (`forkMu` is declared in `internal/runtime/runtime.go`, which is not watched; its uses are): `internal/runtime/sweep.go`, `internal/store/sweep.go`, `internal/store/store.go`, `internal/runtime/fork.go`, `internal/runtime/send.go`, `internal/runtime/declare.go`, `internal/workflows/session.go`, `internal/workflows/turn.go`, and the kairo line of `go.mod` (the model relies on how kairo's `List`, `Children` and `RemoveFinished` behave in v0.5.0).
 
-sync commit: `b3ba509eed7961c8892ff6a703f63c4e3864e583` (2026-11-26, branch `kairo-0.5`, kairo v0.5.0)
+sync commit: `1ebe157c39be862c8c271715c6e33a90572d55cd` (2026-11-26, branch `fork-sweep-lock`, kairo v0.5.0, with `forkMu`)
 
 ## Scope
 
