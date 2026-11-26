@@ -82,9 +82,9 @@ By hand: each `State n: <Action line ...>` is one step; name it through the cove
 | `Tick` | time passing (`time.Now`) |
 | `Crash` | the daemon stopping: a sweep cut off begins again; an unrecorded `history.extend` runs again |
 
-Files `stale.sh` watches (`forkMu` is declared in `internal/runtime/runtime.go`, which is not watched; its uses are): `internal/runtime/sweep.go`, `internal/store/sweep.go`, `internal/store/store.go`, `internal/runtime/fork.go`, `internal/runtime/send.go`, `internal/runtime/declare.go`, `internal/workflows/session.go`, `internal/workflows/turn.go`, and the kairo line of `go.mod` (the model relies on how kairo's `List`, `Children` and `RemoveFinished` behave in v0.5.0).
+Files `stale.sh` watches (`forkMu` is declared in `internal/runtime/runtime.go`, which is not watched; its uses are): `internal/runtime/sweep.go`, `internal/store/sweep.go`, `internal/store/store.go`, `internal/runtime/fork.go`, `internal/runtime/send.go`, `internal/runtime/declare.go`, `internal/workflows/session.go`, `internal/workflows/turn.go`, and the kairo line of `go.mod` (the model relies on how kairo's `List`, `Children` and `RemoveFinished` behave, as of v0.5.1).
 
-sync commit: `1ebe157c39be862c8c271715c6e33a90572d55cd` (2026-11-26, branch `fork-sweep-lock`, kairo v0.5.0, with `forkMu`)
+sync commit: `347293de613fc5671ae1fd934bef21af90258f30` (2026-11-26, `forkMu` merged with main on kairo v0.5.1, whose changes (a signal's logical id kept with its wait) touch nothing the model relies on)
 
 ## Scope
 
