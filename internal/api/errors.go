@@ -41,6 +41,10 @@ var (
 	ErrItemsNoGit  = errors.New("a line runs in a worktree: the conversation's folder is in no git repository with a commit")
 )
 
+// ErrEventEnded: an event sent to a session or work item that has ended
+// (ADR 0047): nothing will wait for it.
+var ErrEventEnded = errors.New("it has ended: no wait will take the event")
+
 // ErrFolderGone: the session's folder was removed (ADR 0037).
 var ErrFolderGone = errors.New("the session's folder was removed: it takes no more turns")
 

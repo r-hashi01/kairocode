@@ -414,7 +414,9 @@ func dirSize(dir string) int64 {
 }
 
 // sweepSessionRows removes the rows about sessions kairo no longer holds:
-// gone, their tree removed once KeepFinished passed after they closed.
+// gone, their tree removed once KeepFinished passed after they closed. A
+// queued work item's session is not made yet: its rows (the outside events
+// kept for its line, ADR 0047) stay.
 func (r *Runtime) sweepSessionRows(ctx context.Context, dry bool, rep *api.SweepReport) error {
 	rows, err := r.Store.SessionRows(ctx)
 	if err != nil {
@@ -424,6 +426,14 @@ func (r *Runtime) sweepSessionRows(ctx context.Context, dry bool, rep *api.Sweep
 		session := sessionOfRun(row.Run)
 		if session == "" {
 			continue
+		}
+		// The item first: one made between the two looks is in kairo then.
+		it, err := r.Store.Item(ctx, session)
+		if err != nil && !errors.Is(err, store.ErrNoItem) {
+			return err
+		}
+		if err == nil && !it.Made && it.Ended == "" {
+			continue // to be made
 		}
 		if _, err := r.K.Get(ctx, session); !errors.Is(err, kairo.ErrUnknownRun) {
 			if err != nil {

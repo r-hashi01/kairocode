@@ -36,6 +36,7 @@ What it can call (each returns a value with ok, output, error and value, never r
 - parallel([{"agent": "...", "prompt": "..."}, ...]) runs agents at once; a list of results, in order.
 - tool("bash", command = "..."), tool("read", path = "..."), and the other tools; the user's permission rules apply. Your MCP servers' and plugins' tools too, by the names you have them (tool("github_list_issues", owner = "...", repo = "...")), with the arguments their schemas take; .output is their result's text.
 - ask("question", options = ["...", "..."]) asks the user and waits for the answer; .value is the option chosen.
+- wait("ci.result", timeout = "2h") waits for an event from outside (kairocode event sends it: a CI result, say); .value is its JSON as a dict, .timed_out is True past the timeout.
 - decide("question", type = "bool" | "number" | "choice", choices = [...]) has the model decide; .value is True/False, a number, or one of the choices.
 - phase("name") names the part of the flow that follows. Give each part of the flow a phase.
 

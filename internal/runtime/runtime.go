@@ -130,6 +130,13 @@ type Runtime struct {
 	itemMu sync.Mutex
 	// queueMu: one pass over a repository's queue at a time (ADR 0044).
 	queueMu sync.Mutex
+	// intakeMu: one sending in from outside at a time, so of two that
+	// send the same key at once one makes the item (ADR 0047).
+	intakeMu sync.Mutex
+	// eventMu: an outside event is given to the flow that waits for it, or
+	// kept for the wait to come, one at a time with a wait's start, so none
+	// falls between (ADR 0047).
+	eventMu sync.Mutex
 	// forkMu: a fork (read) and a sweep (write) do not overlap (ADR 0045,
 	// addendum 2026-11-26). A fork names, in the session it makes, a head
 	// and a snapshot tree it read from another session, without writing

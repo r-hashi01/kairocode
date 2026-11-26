@@ -113,6 +113,24 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 			session TEXT NOT NULL,
 			top TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS kc_kept_session ON kc_kept (session)`,
+		// Events from outside for a session's flows (ADR 0047): each taken
+		// once under its id. run is the flow run it was given to, "" while
+		// it is kept for a wait to come; seq is the order they came in.
+		`CREATE TABLE IF NOT EXISTS kc_event (
+			session TEXT NOT NULL,
+			id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			value BLOB NOT NULL,
+			seq INTEGER NOT NULL,
+			run TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (session, id))`,
+		// The flow run of a session that waits for its events of a name:
+		// the last to wait for them.
+		`CREATE TABLE IF NOT EXISTS kc_event_wait (
+			session TEXT NOT NULL,
+			name TEXT NOT NULL,
+			run TEXT NOT NULL,
+			PRIMARY KEY (session, name))`,
 		// The ledger of usage (ADR 0039): one row for each model call, by its
 		// step's attempt (a call made again is spent again). cost is what
 		// the engine reported (Claude Code), NULL if it reported none:

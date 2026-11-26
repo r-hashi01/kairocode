@@ -98,3 +98,10 @@ type LineInfo struct {
 	Queued     int `json:"queued"`
 	Wip        int `json:"wip,omitempty"`
 }
+
+// Intake is what taking work in from outside came to (ADR 0047): the item
+// its key names, and whether this sending made it (false: it was there).
+type Intake struct {
+	Item Item `json:"item"`
+	New  bool `json:"new"`
+}

@@ -79,7 +79,7 @@ func Overview(c *Chart, in OverviewInput) (string, []Lines) {
 					phaseOrder = append(phaseOrder, phase)
 					phases[phase] = n.Src
 				}
-			case Agent, Tool, Decide, Parallel:
+			case Agent, Tool, Decide, Parallel, Wait:
 				steps = append(steps, step{n: n, phase: phase, asked: st.asked, loop: loop, askers: st.askers})
 			case Ask:
 				steps = append(steps, step{n: n, phase: phase, loop: loop})

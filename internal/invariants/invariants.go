@@ -263,6 +263,7 @@ func Secrets(roots ...string) ([]string, error) {
 var commandStarters = []string{"internal/sandbox/", "internal/agents/", "internal/runtime/claude.go", "internal/runtime/cliengines.go", "internal/runtime/acpengine.go", "internal/tui/login.go", "internal/daemon/spawn.go",
 	"internal/secrets/secrets.go",     // the key store's commands, security and secret-tool (ADR 0025)
 	"internal/cli/plugin.go",          // the browser, for a plugin's OAuth (ADR 0025)
+	"internal/cli/intake.go",          // gh, with the user's own credentials, to take in issues (ADR 0047)
 	"internal/plugins/marketplace.go", // git, to install and update plugins and marketplaces (ADR 0025, 0027)
 	"internal/runtime/worktree.go",    // git, to make, list and remove worktrees for sessions, the user's own command (ADR 0037)
 	"scripts/envcheck/",               // check.sh's look at whether a sandbox can be started here

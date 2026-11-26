@@ -81,6 +81,8 @@ var sessionTables = []struct{ table, key, run string }{
 	{"kc_kept", "run", "session"},
 	{"kc_switch", "session", "session"},
 	{"kc_claude_proc", "session", "session"},
+	{"kc_event", "session || char(0) || id", "session"},
+	{"kc_event_wait", "session || char(0) || name", "session"},
 }
 
 // SessionRows is the rows of the tables about sessions.

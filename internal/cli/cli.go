@@ -52,6 +52,9 @@ const usage = `usage:
   kairocode line [-dir DIR] [-data DIR] -restart <name>   start a line again after it stopped itself (ADR 0044)
   kairocode line [-dir DIR] [-data DIR] [-session ID] -improve <name>   send a draft that improves a line from its items (ADR 0046)
   kairocode lines [-dir DIR] [-data DIR] [-json]      the project's lines: in progress, queued, stopped
+  kairocode intake [-dir DIR] [-data DIR] -line <line> -key <key> [-json] "<request>"   take work in from outside, once per key (ADR 0047; exit 6: the line stopped)
+  kairocode intake github [-dir DIR] [-data DIR] -line <line> [-label kairo] [-json]   take in the repository's open issues with the label, through gh
+  kairocode event [-dir DIR] [-data DIR] -item <item> -name <name> [-id ID] '<JSON>'   give an outside event to an item's flow, waiting in wait(name)
   kairocode items [-data DIR] [-json] [-drop ITEM [-force]] <session>   the work items a session sent down lines
   kairocode approve [-data DIR] [-deny] [-reason R] <key>   answer one
   kairocode answer [-data DIR] <key> <answer>         answer a flow's question
@@ -124,6 +127,11 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 130
 	case errors.Is(err, flag.ErrHelp): // -h: the flags were shown
 		return 0
+	}
+	var code exitWith
+	if errors.As(err, &code) {
+		fmt.Fprintf(stderr, "kairocode: %v\n", code.error)
+		return code.code
 	}
 	if errors.Is(err, errUnknownCommand) {
 		fmt.Fprintf(stderr, "kairocode: unknown command %q\n\n%s", args[0], usage)
@@ -227,6 +235,10 @@ func command(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		err = lineCommand(ctx, args, stdout, stderr)
 	case "items":
 		err = itemsCommand(ctx, args, stdout, stderr)
+	case "intake":
+		err = intakeCommand(ctx, args, stdout, stderr)
+	case "event":
+		err = eventCommand(ctx, args, stdout, stderr)
 	case "lines":
 		err = linesCommand(ctx, args, stdout, stderr)
 	case "approve":

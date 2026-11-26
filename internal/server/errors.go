@@ -45,6 +45,7 @@ var wireErrors = []struct {
 	{"line_stopped", api.ErrLineStopped},
 	{"not_an_item", api.ErrNotAnItem},
 	{"items_no_git", api.ErrItemsNoGit},
+	{"event_ended", api.ErrEventEnded},
 }
 
 // ErrorCode is err's code on the wire ("" for an error a client does not

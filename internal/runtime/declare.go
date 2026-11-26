@@ -122,6 +122,12 @@ func (r *Runtime) declare() {
 	kairo.Action(r.K, workflows.ActFlowAsk, kairo.Unprotected,
 		func(*kairo.TaskContext, workflows.FlowAskInput) (bool, error) { return true, nil }) // recorded: Pending reads it
 	kairo.Action(r.K, workflows.ActFlowDecide, kairo.Unprotected, r.flowDecide, modelRetry...)
+	// flow.wait (ADR 0047): notes the run as waiting and gives it what was
+	// kept; done again, it notes the same and gives nothing twice. It
+	// signals from inside a step, as flow.step does: in suspend mode (not
+	// used: ADR 0012), kairo's SendSignal settles first, which would wait
+	// for this step itself.
+	kairo.Action(r.K, workflows.ActFlowWait, kairo.Unprotected, r.flowWait)
 	kairo.Action(r.K, workflows.ActHookTrust, kairo.Unprotected, r.hookTrustAction) // a record, written once
 	kairo.Action(r.K, workflows.ActHookCheck, kairo.Unprotected, r.hookCheckAction)
 	kairo.Action(r.K, workflows.ActHookDecide, kairo.Unprotected, r.hookDecideAction) // a record, written once
