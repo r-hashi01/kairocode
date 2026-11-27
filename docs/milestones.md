@@ -118,7 +118,7 @@ Acceptance criteria:
 
 Status: in progress (ADR 0012 is on hold by the user's decision (2026-10-21). The HTTP(S) tools are done (ADR 0013))
 
-Contents: the flow's `wait(event, timeout=)` (ADR 0003), PostgreSQL, suspend mode (`kairo.Suspend`, `/tick` of `k.Handler()`), the HTTP(S) tools, starting from GitHub.
+Contents: the flow's `wait(event, timeout=)` (ADR 0003; done in M20, 2026-11-26, as ADR 0047 has it), PostgreSQL, suspend mode (`kairo.Suspend`, `/tick` of `k.Handler()`), the HTTP(S) tools, starting from GitHub.
 
 Acceptance criteria:
 
@@ -326,8 +326,8 @@ Left for after M6 to M12: a VS Code extension, Windows, GitHub and serverless (A
 
 - **(Done 2026-11-26: ADR 0047, implementation) Update to kairo v0.5.0**: the fixes of kairo#2 to #7 and #49, with their workarounds removed but for kairo#4's (the user's choice). `SignalID` is sent; kairo 0.5.0's embedded runtime did not keep it (r-hashi01/kairo#102).
 - **(Done 2026-11-26) Update to kairo v0.5.1**: kairo keeps a notice's `SignalID` with the wait that takes it (r-hashi01/kairo#102), so a notice sent again after a crash comes once (`TestToldOnce`).
-- **How long what KairoCode keeps is kept** (the user's question, 2026-11-13): sessions left open keep their records for ever; messages (`kc_message`) are never removed; snapshot stores are never pruned (`gc.auto 0`). Measured then: 36MB of records and messages, 112MB of snapshots. Needs an ADR of its own: closing sessions long unused, removing messages nothing refers to (invariant 5 says they are never rewritten, not that they are kept for ever), and thinning old snapshots.
-- **Make a flow from a session's contents** (the user's idea, 2026-10-22): from the record of a session that went well (what was asked, the tools called, where approvals were given), write a flow (`.kairocode/workflows`) that can repeat the same procedure.
+- **(Done 2026-11-16: ADR 0045, M17) How long what KairoCode keeps is kept** (the user's question, 2026-11-13): sessions left open keep their records for ever; messages (`kc_message`) are never removed; snapshot stores are never pruned (`gc.auto 0`). Measured then: 36MB of records and messages, 112MB of snapshots. Needs an ADR of its own: closing sessions long unused, removing messages nothing refers to (invariant 5 says they are never rewritten, not that they are kept for ever), and thinning old snapshots.
+- **(Done 2026-11-09: ADR 0036, M9) Make a flow from a session's contents** (the user's idea, 2026-10-22): from the record of a session that went well (what was asked, the tools called, where approvals were given), write a flow (`.kairocode/workflows`) that can repeat the same procedure.
   - The material is the browsing record (`Runtime.Log`, `kairocode log -json`). We are thinking of having the model read it and write the flow with the same mechanism as `/flow new` (the review screen, try).
   - Decide with an ADR when building it.
 
