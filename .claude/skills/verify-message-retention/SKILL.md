@@ -84,7 +84,7 @@ By hand: each `State n: <Action line ...>` is one step; name it through the cove
 
 Files `stale.sh` watches (`forkMu` is declared in `internal/runtime/runtime.go`, which is not watched; its uses are): `internal/runtime/sweep.go`, `internal/store/sweep.go`, `internal/store/store.go`, `internal/runtime/fork.go`, `internal/runtime/send.go`, `internal/runtime/declare.go`, `internal/workflows/session.go`, `internal/workflows/turn.go`, and the kairo line of `go.mod` (the model relies on how kairo's `List`, `Children` and `RemoveFinished` behave, as of v0.5.1).
 
-sync commit: `7ecf96ca8683697c9352955783b2efe27041efa2` (2026-11-26, M20 merged: CreateSession's choice of provider and model, and the outside events' tables, touch nothing the model relies on) touch nothing the model relies on)
+sync commit: `40f80e8df992f2b54bb2372ceed057583d0cb9ac` (2026-11-27, #45 merged: a notice's event kept in kc_told before it is sent, and kc_told and kc_restore_prior read as roots; each only adds to what the sweep keeps) touch nothing the model relies on)
 
 ## Scope
 
