@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 )
 
 // ClaudeProc is the pid of the claude process last started for session, or 0.
@@ -38,10 +39,14 @@ func (s *Store) Switch(ctx context.Context, session string) (body []byte, seq in
 	return body, seq, err
 }
 
-// SetSwitch keeps body as session's switch not yet sent.
+// SetSwitch keeps body as session's switch not yet sent. Its seq only
+// grows, a switch removed and set again included (it is the time it was
+// set, or one past the one before): a seq kept from an old switch (a
+// notice's, kc_told) never removes a newer one.
 func (s *Store) SetSwitch(ctx context.Context, session string, body []byte) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_switch (session, body, seq) VALUES (?, ?, 1)
-		ON CONFLICT (session) DO UPDATE SET body = excluded.body, seq = kc_switch.seq + 1`, session, body)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kc_switch (session, body, seq) VALUES (?, ?, ?)
+		ON CONFLICT (session) DO UPDATE SET body = excluded.body, seq = MAX(kc_switch.seq + 1, excluded.seq)`,
+		session, body, time.Now().UnixNano())
 	return err
 }
 

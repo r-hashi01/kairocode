@@ -816,8 +816,9 @@ func crashUndoChild() {
 
 // TestCrashUndo: the process dies once an undo has put the files back,
 // before that is recorded. Resumed, the restore runs again to the same
-// files, the undo is recorded once, and the next undo goes on from it
-// (design 7).
+// files, the undo is recorded once, a redo puts back the files as they
+// were before the undo (not as the cut-off restore left them), and the
+// next undo goes on from it (design 7).
 func TestCrashUndo(t *testing.T) {
 	t.Parallel()
 	needSnapshots(t)
@@ -860,6 +861,17 @@ func TestCrashUndo(t *testing.T) {
 	}
 	if got := files(t, ws); got != "a.txt=A" {
 		t.Fatalf("after resuming: %q", got)
+	}
+	// The redo puts back what the undo took away: the files as they were
+	// before the undo ran, not as the restore cut off left them.
+	if say := undoTurn(t, r, s, true); !strings.Contains(say, "redid turn 1") {
+		t.Fatalf("the redo: %q", say)
+	}
+	if got := files(t, ws); got != "a.txt=A b.txt=B" {
+		t.Fatalf("after the redo: %q", got)
+	}
+	if say := undoTurn(t, r, s, false); !strings.Contains(say, "undid turn 1") {
+		t.Fatalf("the undo after the redo: %q", say)
 	}
 	if say := undoTurn(t, r, s, false); !strings.Contains(say, "undid turn 0") {
 		t.Fatalf("the next undo: %q", say)

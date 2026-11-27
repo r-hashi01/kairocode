@@ -81,6 +81,8 @@ var sessionTables = []struct{ table, key, run string }{
 	{"kc_kept", "run", "session"},
 	{"kc_switch", "session", "session"},
 	{"kc_claude_proc", "session", "session"},
+	{"kc_restore_prior", "run", "run"},
+	{"kc_told", "session || char(0) || id", "session"},
 	{"kc_event", "session || char(0) || id", "session"},
 	{"kc_event_wait", "session || char(0) || name", "session"},
 }
@@ -129,6 +131,8 @@ func (s *Store) RootTexts(ctx context.Context, each func([]byte) error) error {
 		`SELECT def FROM kc_item`,
 		`SELECT result FROM kc_item WHERE result IS NOT NULL`,
 		`SELECT body FROM kc_switch`,
+		`SELECT tree FROM kc_restore_prior`,
+		`SELECT event FROM kc_told`,
 	} {
 		rows, err := s.db.QueryContext(ctx, q)
 		if err != nil {

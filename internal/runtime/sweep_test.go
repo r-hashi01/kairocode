@@ -294,7 +294,7 @@ func TestSweepRootsCoverTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Read by Store.RootTexts.
-	roots := []string{"kc_flow_run", "kc_item", "kc_switch"}
+	roots := []string{"kc_flow_run", "kc_item", "kc_restore_prior", "kc_switch", "kc_told"}
 	// Naming no message: settings, runs, counts and times; outside events,
 	// whose values come from outside (ADR 0047).
 	none := []string{"kc_claude_proc", "kc_engine_session", "kc_event", "kc_event_wait", "kc_kept", "kc_line", "kc_mcp_call", "kc_mcp_grant",
